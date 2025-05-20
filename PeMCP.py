@@ -1954,8 +1954,6 @@ async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
     await ctx.info(f"Attempting to deobfuscate Base64 from hex string: {hex_string[:60]}...")
     try:
         base64_encoded_bytes = bytes.fromhex(hex_string)
-        # The original script used codecs.decode(..., 'base64').
-        # Standard library base64.b64decode is also common. Sticking to 'codecs' as per original.
         decoded_payload_bytes = codecs.decode(base64_encoded_bytes, 'base64')
         result = decoded_payload_bytes.decode('utf-8', 'ignore')
         await ctx.info("Base64 deobfuscation successful.")
