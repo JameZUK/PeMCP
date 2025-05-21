@@ -8,9 +8,10 @@ It can operate in two modes:
 1. CLI Mode: Analyzes a PE file and prints a detailed report to the console.
    Supports PEiD-like signature scanning, YARA scanning, capa capability detection,
    string extraction/searching, and hex dumping.
-2. MCP Server Mode: Runs as a Model-Context-Protocol (MCP) server, exposing
-   its analysis capabilities as callable tools. This allows programmatic
-   interaction and integration into larger systems.
+2. MCP Server Mode: Runs as a Model-Context-Protocol (MCP) server.
+   When starting in MCP server mode, it pre-analyzes a single PE file specified
+   at startup via --input-file. All MCP tools then operate on this pre-loaded file's data.
+   A tool is provided to re-trigger analysis on this pre-loaded file.
 
 Key Features:
 - Parses all major PE structures (relies on 'pefile' library).
@@ -29,15 +30,8 @@ Key Features:
 - Support for capa library identification signatures.
 - Exposes general deobfuscation utilities (base64, XOR, printable check) via MCP.
 
-Refactoring based on review 'pe_analyzer_review_v2', focusing on modularity,
-asynchronous safety for MCP, data completeness, and documentation.
-Includes a check for missing optional dependencies with an installation prompt.
-ssdeep integration replaces the external ssdeep library dependency.
-Error handling for mmap objects in ssdeep hash function added.
-Capa integration for capability analysis.
-SyntaxError in ensure_peid_db_exists fixed.
-Capa dependency name corrected to flare-capa.
-Capa library signature support added.
+Simplified MCP mode to analyze only the --input-file provided at server startup.
+The load_and_analyze_pe_file tool is repurposed to re-analyze the pre-loaded file.
 """
 
 # Standard library imports - Group them at the top
@@ -61,56 +55,51 @@ import subprocess # For calling pip
 import mmap # Added for handling mmap objects in ssdeep
 import zipfile # For extracting capa rules
 import shutil # For removing directories
+from pathlib import Path
+import copy # For deepcopy in MCP tool limiting
 
 # Crucial: Import typing early, as it's used for global type hints and throughout the script
 from typing import Dict, Any, Optional, List, Tuple, Set, Union
 
 # --- Ensure pefile is available (Critical Dependency) ---
-# This check is performed early because 'pefile' is essential for the script's core functionality.
 try:
     import pefile
 except ImportError:
     print("[!] CRITICAL ERROR: The 'pefile' library is not found.", file=sys.stderr)
     print("[!] This library is essential for the script to function.", file=sys.stderr)
-    # Attempt to guide installation
-    if not sys.stdin.isatty(): # Check if in non-interactive mode
+    if not sys.stdin.isatty():
         print("[!] Non-interactive environment. Please install 'pefile' manually (e.g., 'pip install pefile') and re-run the script.", file=sys.stderr)
         sys.exit(1)
-    else: # Interactive mode
+    else:
         try:
             answer = input("Do you want to attempt to install 'pefile' now? (yes/no): ").strip().lower()
             if answer == 'yes' or answer == 'y':
                 print("[*] Attempting to install 'pefile' (pip install pefile)...")
                 try:
-                    # Use sys.executable to ensure pip is called for the correct Python interpreter
                     subprocess.check_call([sys.executable, "-m", "pip", "install", "pefile"])
                     print("[*] 'pefile' installed successfully. Please re-run the script for the changes to take effect.")
-                    sys.exit(0) # Exit cleanly for the user to re-run
+                    sys.exit(0)
                 except subprocess.CalledProcessError as e_pip:
                     print(f"[!] Error installing 'pefile' via pip: {e_pip}", file=sys.stderr)
                     print("[!] Please install 'pefile' manually (e.g., 'pip install pefile') and re-run.", file=sys.stderr)
                     sys.exit(1)
-                except FileNotFoundError: # Indicates pip or python executable might not be found
+                except FileNotFoundError:
                     print("[!] Error: 'pip' command or Python executable not found. Is Python and pip installed correctly and in PATH?", file=sys.stderr)
                     print("[!] Please install 'pefile' manually (e.g., 'pip install pefile') and re-run.", file=sys.stderr)
                     sys.exit(1)
             else:
                 print("[!] 'pefile' was not installed. The script cannot continue. Exiting.")
                 sys.exit(1)
-        except EOFError: # Handle cases where input is expected but not provided (e.g. piped input ends)
+        except EOFError:
             print("[!] No input received for the installation prompt. Please install 'pefile' manually and re-run.", file=sys.stderr)
             sys.exit(1)
         except KeyboardInterrupt:
-             print("\n[*] Installation of 'pefile' cancelled by user. This library is required. Exiting.", file=sys.stderr)
-             sys.exit(1)
-# If we reach here, pefile should have been successfully imported in the initial 'try' block.
+            print("\n[*] Installation of 'pefile' cancelled by user. This library is required. Exiting.", file=sys.stderr)
+            sys.exit(1)
+
+SCRIPT_DIR = Path(__file__).resolve().parent
 
 class SSDeep:
-    """
-    Encapsulates the ssdeep fuzzy hashing logic.
-    This class structure helps to keep the ssdeep code organized
-    when integrated into a larger script.
-    """
     BLOCKSIZE_MIN = 3
     SPAMSUM_LENGTH = 64
     STREAM_BUFF_SIZE = 8192
@@ -120,7 +109,7 @@ class SSDeep:
     B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
     class _RollState(object):
-        ROLL_WINDOW = 7 # Matches SSDeep.ROLL_WINDOW
+        ROLL_WINDOW = 7
 
         def __init__(self):
             self.win = bytearray(self.ROLL_WINDOW)
@@ -142,7 +131,7 @@ class SSDeep:
         roll_win = bytearray(self.ROLL_WINDOW)
         roll_h1 = int()
         roll_h2 = int()
-        roll_h3 = int()
+        roll_h3_val = int()
         roll_n = int()
         block_size = int()
         hash_string1 = str()
@@ -151,19 +140,16 @@ class SSDeep:
         block_hash2 = int(self.HASH_INIT)
 
         bs = self.BLOCKSIZE_MIN
-        # Ensure slen is not zero to prevent issues with bs calculation, though hash() handles empty buf_data.
         if slen > 0:
             while (bs * self.SPAMSUM_LENGTH) < slen:
                 bs = bs * 2
         block_size = bs
 
-
         while True:
             stream.seek(0)
-            # Reset states for potential retry with smaller block_size
-            roll_h1 = roll_h2 = roll_h3 = 0
+            roll_h1 = roll_h2 = roll_h3_val = 0
             roll_n = 0
-            roll_win = bytearray(self.ROLL_WINDOW) # Reset window
+            roll_win = bytearray(self.ROLL_WINDOW)
             block_hash1 = self.HASH_INIT
             block_hash2 = self.HASH_INIT
             hash_string1 = ""
@@ -171,7 +157,7 @@ class SSDeep:
 
             buf = stream.read(self.STREAM_BUFF_SIZE)
             while buf:
-                for b_val in buf: # Renamed b to b_val to avoid conflict with class B64
+                for b_val in buf:
                     block_hash1 = ((block_hash1 * self.HASH_PRIME) & 0xFFFFFFFF) ^ b_val
                     block_hash2 = ((block_hash2 * self.HASH_PRIME) & 0xFFFFFFFF) ^ b_val
 
@@ -179,22 +165,21 @@ class SSDeep:
                     roll_h1 = roll_h1 + b_val - roll_win[roll_n % self.ROLL_WINDOW]
                     roll_win[roll_n % self.ROLL_WINDOW] = b_val
                     roll_n += 1
-                    roll_h3 = (self.h3 << 5) & 0xFFFFFFFF
-                    roll_h3 ^= b_val
+                    roll_h3_val = (roll_h3_val << 5) & 0xFFFFFFFF
+                    roll_h3_val ^= b_val
 
-                    rh = roll_h1 + self.h2 + self.h3 # Corrected: was roll_h1 + self.h2 + self.h3
+                    rh = roll_h1 + roll_h2 + roll_h3_val
 
                     if (rh % block_size) == (block_size - 1):
                         if len(hash_string1) < (self.SPAMSUM_LENGTH - 1):
                             hash_string1 += self.B64[block_hash1 % 64]
                             block_hash1 = self.HASH_INIT
-                        if (rh % (block_size * 2)) == ((block_size * 2) - 1): # Check for second hash string trigger
+                        if (rh % (block_size * 2)) == ((block_size * 2) - 1):
                             if len(hash_string2) < ((self.SPAMSUM_LENGTH // 2) - 1):
                                 hash_string2 += self.B64[block_hash2 % 64]
                                 block_hash2 = self.HASH_INIT
                 buf = stream.read(self.STREAM_BUFF_SIZE)
 
-            # Check if we need to reduce block_size and retry
             if block_size > self.BLOCKSIZE_MIN and len(hash_string1) < (self.SPAMSUM_LENGTH // 2):
                 block_size = (block_size // 2)
             else:
@@ -267,12 +252,12 @@ class SSDeep:
             return 0
         if not s1 and not s2: return 100 if block_size >= self.BLOCKSIZE_MIN else 0
         if not s1 or not s2:
-            pass # Score will be low due to Levenshtein distance
+            pass
 
         lev_score = self._levenshtein(s1, s2)
         sum_len = len(s1) + len(s2)
         if sum_len == 0:
-            return 100 # Should be caught by "not s1 and not s2"
+            return 100
 
         score = (lev_score * self.SPAMSUM_LENGTH) // sum_len
         score = (100 * score) // self.SPAMSUM_LENGTH
@@ -285,7 +270,7 @@ class SSDeep:
                 score = cap_val
         elif not s1 and not s2:
             score = 100
-        else: # One empty, one not
+        else:
             score = 0
         return score
 
@@ -297,7 +282,7 @@ class SSDeep:
                 r += s[i]
         return r
 
-    def compare(self, hash1_str, hash2_str): # This method remains unused in the script
+    def compare(self, hash1_str, hash2_str):
         if not (isinstance(hash1_str, str) and isinstance(hash2_str, str)):
             raise TypeError('Arguments must be of string type')
         try:
@@ -368,24 +353,56 @@ try:
 except ImportError as e:
     YARA_IMPORT_ERROR = e
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# --- START MODIFIED CAPA IMPORT SECTION ---
+class CapaError(Exception):
+    def __init__(self, msg="Generic Capa Error", status_code=None):
+        super().__init__(msg)
+        self.status_code = status_code
+
+class InvalidRule(CapaError): pass
+class RulesAccessError(CapaError): pass
+class FreezingError(CapaError): pass
+
 CAPA_AVAILABLE = False
 CAPA_IMPORT_ERROR = None
+
 try:
+    import capa
     import capa.main
     import capa.rules
+    import capa.loader
+    import capa.capabilities.common
+    import capa.render.result_document as rd
     import capa.engine
     import capa.render.json as capa_json_render
     import capa.features.extractors.pefile as capa_pefile_extractor
-    from capa.exceptions import CapaError, InvalidRule, RulesAccessError, FreezingError
-    CAPA_AVAILABLE = True
-except ImportError as e:
-    CAPA_IMPORT_ERROR = e
-    # Define dummy exceptions if capa is not available to prevent NameError later
-    class CapaError(Exception): pass
-    class InvalidRule(CapaError): pass
-    class RulesAccessError(CapaError): pass
-    class FreezingError(CapaError): pass
+    import capa.features.common
 
+    from capa.exceptions import (
+        InvalidArgument,
+        EmptyReportError,
+        UnsupportedOSError,
+        UnsupportedArchError,
+        UnsupportedFormatError,
+        UnsupportedRuntimeError,
+    )
+
+    CAPA_AVAILABLE = True
+    CAPA_IMPORT_ERROR = None
+    logger.info("Successfully imported capa modules and new-style exceptions. PeMCP.py will attempt to use this capa API.")
+
+except ImportError as e:
+    CAPA_IMPORT_ERROR = str(e)
+    CAPA_AVAILABLE = False
+    logger.warning(f"Failed to import necessary capa modules: {CAPA_IMPORT_ERROR}. Capa analysis will be skipped.")
+except Exception as e_generic:
+    CAPA_IMPORT_ERROR = f"An unexpected error occurred during capa import attempts: {str(e_generic)}"
+    CAPA_AVAILABLE = False
+    logger.error(CAPA_IMPORT_ERROR, exc_info=True)
+# --- END MODIFIED CAPA IMPORT SECTION ---
 
 MCP_SDK_AVAILABLE = False
 try:
@@ -407,51 +424,46 @@ except ImportError:
 ANALYZED_PE_FILE_PATH: Optional[str] = None
 ANALYZED_PE_DATA: Optional[Dict[str, Any]] = None
 PEFILE_VERSION_USED: Optional[str] = None
-PE_OBJECT_FOR_MCP: Optional[pefile.PE] = None
+PE_OBJECT_FOR_MCP: Optional[pefile.PE] = None # This will hold the single pre-loaded PE object
 
 # --- Constants ---
 PEID_USERDB_URL = "https://raw.githubusercontent.com/GerkNL/PEid/master/userdb.txt"
-CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/releases/latest/download/capa-rules.zip"
-CAPA_RULES_DEFAULT_DIR = "capa_rules_store" # Base directory to store downloaded/extracted capa rules
-CAPA_RULES_SUBDIR_NAME = "rules" # The name of the subdirectory within the zip that contains the actual rules
+DEFAULT_PEID_DB_PATH = SCRIPT_DIR / "userdb.txt"
 
-# Note: 'pefile' is handled by a check at the script's start.
+CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.1.0.zip"
+CAPA_RULES_DEFAULT_DIR_NAME = "capa_rules_store"
+CAPA_RULES_SUBDIR_NAME = "rules"
+
+
 DEPENDENCIES = [
     ("cryptography", "cryptography", "Cryptography (for digital signatures)", False),
     ("requests", "requests", "Requests (for PEiD DB download & capa rules)", False),
-    ("signify.authenticode", "signify", "Signify (for Authenticode validation)", False), # pip_name is 'signify'
+    ("signify.authenticode", "signify", "Signify (for Authenticode validation)", False),
     ("yara", "yara-python", "Yara (for YARA scanning)", False),
     ("capa.main", "flare-capa", "Capa (for capability detection)", False),
-    ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True) # True means critical for MCP mode
+    ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True)
 ]
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
-logger = logging.getLogger(__name__)
-
 def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
-    """
-    Checks for optional dependencies and prompts for installation if missing.
-    'pefile' is considered a core dependency and is checked separately at script startup.
-    """
     missing_deps_info = []
-    critical_mcp_missing_for_current_mode = False 
+    critical_mcp_missing_for_current_mode = False
 
     for spec_name, pip_name, friendly_name, is_critical_for_mcp_mode in DEPENDENCIES:
         is_missing = False
-        if spec_name == "mcp.server": 
+        if spec_name == "mcp.server":
             if not MCP_SDK_AVAILABLE:
                 is_missing = True
-        elif spec_name == "capa.main": 
+        elif spec_name == "capa.main":
             if not CAPA_AVAILABLE:
                 is_missing = True
-        elif spec_name == "signify.authenticode": # Special handling for signify
+        elif spec_name == "signify.authenticode":
             if not SIGNIFY_AVAILABLE:
                 is_missing = True
-        else: # Other general dependencies checked with find_spec
+        else:
             spec = importlib.util.find_spec(spec_name)
             if spec is None:
                 is_missing = True
-        
+
         if is_missing:
             missing_deps_info.append({"pip": pip_name, "friendly": friendly_name, "is_critical_mcp": is_critical_for_mcp_mode})
             if is_critical_for_mcp_mode and is_mcp_server_mode_arg:
@@ -463,7 +475,7 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
     print("\n[!] Some optional libraries are missing or could not be imported:", file=sys.stderr)
     for dep in missing_deps_info:
         print(f"     - {dep['friendly']} (Python package: {dep['pip']})", file=sys.stderr)
-    
+
     if critical_mcp_missing_for_current_mode:
         print("[!] One or more libraries critical for --mcp-server mode are missing.", file=sys.stderr)
     print("[!] These libraries enhance the script's functionality or are required for specific modes.", file=sys.stderr)
@@ -473,15 +485,15 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
             print("[!] Non-interactive environment detected. Cannot prompt for installation of optional libraries.", file=sys.stderr)
             if critical_mcp_missing_for_current_mode:
                 print("[!] Please install the required MCP SDK ('pip install \"mcp[cli]\"') and/or other critical optional libraries manually and re-run.", file=sys.stderr)
-                sys.exit(1) 
+                sys.exit(1)
             print("[!] Please install other missing optional libraries manually if needed.", file=sys.stderr)
             return
 
         answer = input("Do you want to attempt to install the missing optional libraries now? (yes/no): ").strip().lower()
         if answer == 'yes' or answer == 'y':
             installed_any = False
-            
-            for dep_to_install in missing_deps_info: 
+
+            for dep_to_install in missing_deps_info:
                 print(f"[*] Attempting to install {dep_to_install['friendly']} (pip install \"{dep_to_install['pip']}\")...")
                 try:
                     subprocess.check_call([sys.executable, "-m", "pip", "install", dep_to_install['pip']])
@@ -491,17 +503,17 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
                     print(f"[!] Error installing {dep_to_install['friendly']}: {e}", file=sys.stderr)
                 except FileNotFoundError:
                     print("[!] Error: 'pip' command not found. Is Python and pip installed correctly and in PATH?", file=sys.stderr)
-                    break 
-            
+                    break
+
             if installed_any:
                 print("\n[*] Optional library installation process finished. Please re-run the script for changes to take full effect.")
-                sys.exit(0) 
+                sys.exit(0)
             else:
                 print("[*] No optional libraries were successfully installed.")
                 if critical_mcp_missing_for_current_mode:
                     print("[!] Critical MCP dependencies were not installed. MCP server mode may not function as expected. Exiting.")
                     sys.exit(1)
-        else: 
+        else:
             print("[*] Skipping installation of optional libraries.")
             if critical_mcp_missing_for_current_mode:
                 print("[!] Critical MCP dependencies were not installed because installation was skipped. MCP server mode cannot function. Exiting.", file=sys.stderr)
@@ -517,7 +529,6 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
             print("[!] Critical MCP dependencies were not installed. Exiting.", file=sys.stderr)
             sys.exit(1)
 
-# Post-dependency check logging
 if MCP_SDK_AVAILABLE: logger.info("MCP SDK found.")
 else: logger.warning("MCP SDK not found. MCP server functionality will be mocked or unavailable if critical.")
 if CAPA_AVAILABLE: logger.info("Capa library found.")
@@ -645,7 +656,7 @@ def _dump_aux_symbol_to_dict(parent_symbol_struct, aux_symbol_struct, aux_idx: i
 
 def ensure_peid_db_exists(url: str, local_path: str, verbose: bool = False) -> bool:
     if os.path.exists(local_path):
-        if verbose: safe_print(f"  [VERBOSE] PEiD database already exists at: {local_path}", verbose_prefix=" ")
+        if verbose: safe_print(f"   [VERBOSE] PEiD database already exists at: {local_path}", verbose_prefix=" ")
         return True
     if not REQUESTS_AVAILABLE:
         safe_print("[!] 'requests' library not found. Cannot download PEiD database.", verbose_prefix=" ")
@@ -653,12 +664,13 @@ def ensure_peid_db_exists(url: str, local_path: str, verbose: bool = False) -> b
     safe_print(f"[*] PEiD database not found at {local_path}. Attempting download from {url}...", verbose_prefix=" ")
     try:
         response = requests.get(url, timeout=15); response.raise_for_status()
+        Path(local_path).parent.mkdir(parents=True, exist_ok=True)
         with open(local_path, 'wb') as f: f.write(response.content)
         safe_print(f"[*] PEiD database successfully downloaded to: {local_path}", verbose_prefix=" ")
         return True
     except requests.exceptions.RequestException as e:
         safe_print(f"[!] Error downloading PEiD database: {e}", verbose_prefix=" ")
-        if os.path.exists(local_path): # Corrected block
+        if os.path.exists(local_path):
             try:
                 os.remove(local_path)
             except OSError:
@@ -669,24 +681,21 @@ def ensure_peid_db_exists(url: str, local_path: str, verbose: bool = False) -> b
         return False
 
 def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bool = False) -> Optional[str]:
-    """
-    Ensures capa rules are present in rules_base_dir, downloading and extracting if necessary.
-    Returns the path to the actual rules directory (e.g., rules_base_dir/rules) or None on failure.
-    """
-    actual_rules_path = os.path.join(rules_base_dir, CAPA_RULES_SUBDIR_NAME)
+    final_rules_target_path = os.path.join(rules_base_dir, CAPA_RULES_SUBDIR_NAME)
 
-    if os.path.isdir(actual_rules_path) and os.listdir(actual_rules_path):
-        if verbose: logger.info(f"Capa rules found at: {actual_rules_path}")
-        return actual_rules_path
+    if os.path.isdir(final_rules_target_path) and os.listdir(final_rules_target_path):
+        if verbose: logger.info(f"Capa rules already available at: {final_rules_target_path}")
+        return final_rules_target_path
 
     if not REQUESTS_AVAILABLE:
         logger.error("'requests' library not found. Cannot download capa rules.")
         return None
 
-    logger.info(f"Capa rules not found or directory empty at '{actual_rules_path}'. Attempting to download and extract to '{rules_base_dir}'...")
+    logger.info(f"Capa rules not found at '{final_rules_target_path}'. Attempting to download and extract to '{rules_base_dir}'...")
 
     os.makedirs(rules_base_dir, exist_ok=True)
     zip_path = os.path.join(rules_base_dir, "capa-rules.zip")
+    extracted_top_level_dir_path = None
 
     try:
         logger.info(f"Downloading capa rules from {rules_zip_url} to {zip_path}...")
@@ -697,39 +706,81 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
                 f.write(chunk)
         logger.info("Capa rules zip downloaded successfully.")
 
-        logger.info(f"Extracting capa rules from {zip_path} to {rules_base_dir}...")
+        logger.info(f"Extracting capa rules from {zip_path} into {rules_base_dir}...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(rules_base_dir)
-        logger.info("Capa rules extracted successfully.")
+        logger.info("Capa rules extracted successfully from zip.")
 
-        if os.path.isdir(actual_rules_path) and os.listdir(actual_rules_path):
-            logger.info(f"Capa rules now available at: {actual_rules_path}")
-            return actual_rules_path
+        extracted_dir_name_found = None
+        expected_prefix = "capa-rules-"
+        for item in os.listdir(rules_base_dir):
+            if item.startswith(expected_prefix) and os.path.isdir(os.path.join(rules_base_dir, item)):
+                extracted_dir_name_found = item
+                break
+
+        if not extracted_dir_name_found:
+            logger.error(f"Could not find the main '{expected_prefix}*' directory within '{rules_base_dir}' after extraction. Contents: {os.listdir(rules_base_dir)}")
+            if os.path.exists(zip_path):
+                try: os.remove(zip_path)
+                except OSError: pass
+            return None
+
+        extracted_top_level_dir_path = os.path.join(rules_base_dir, extracted_dir_name_found)
+
+        if os.path.exists(final_rules_target_path):
+            logger.warning(f"Target rules directory '{final_rules_target_path}' already exists. Removing it before placing newly extracted rules.")
+            try:
+                shutil.rmtree(final_rules_target_path)
+            except Exception as e_rm:
+                logger.error(f"Failed to remove existing target rules directory '{final_rules_target_path}': {e_rm}")
+                if os.path.isdir(extracted_top_level_dir_path):
+                    try: shutil.rmtree(extracted_top_level_dir_path)
+                    except Exception: pass
+                if os.path.exists(zip_path):
+                    try: os.remove(zip_path)
+                    except OSError: pass
+                return None
+
+        logger.info(f"Moving rules from '{extracted_top_level_dir_path}' to '{final_rules_target_path}'...")
+        try:
+            shutil.move(extracted_top_level_dir_path, final_rules_target_path)
+        except Exception as e_mv:
+            logger.error(f"Failed to move rules from '{extracted_top_level_dir_path}' to '{final_rules_target_path}': {e_mv}")
+            if os.path.isdir(extracted_top_level_dir_path):
+                 try: shutil.rmtree(extracted_top_level_dir_path)
+                 except Exception: pass
+            if os.path.exists(zip_path):
+                try: os.remove(zip_path)
+                except OSError: pass
+            return None
+
+        if os.path.isdir(final_rules_target_path) and os.listdir(final_rules_target_path):
+            logger.info(f"Capa rules now correctly organized at: {final_rules_target_path}")
+            return final_rules_target_path
         else:
-            logger.error(f"Capa rules extracted, but the expected subdirectory '{CAPA_RULES_SUBDIR_NAME}' was not found or is empty in '{rules_base_dir}'.")
-            if os.path.isdir(actual_rules_path) and not os.listdir(actual_rules_path):
-                try: shutil.rmtree(actual_rules_path)
-                except Exception as e_rm: logger.warning(f"Could not remove empty rules dir {actual_rules_path}: {e_rm}")
+            logger.error(f"Capa rules were processed, but the final target directory '{final_rules_target_path}' is still not found or is empty.")
+            if os.path.exists(zip_path):
+                try: os.remove(zip_path)
+                except OSError: pass
             return None
 
     except requests.exceptions.RequestException as e:
         logger.error(f"Error downloading capa rules: {e}")
-        return None
     except zipfile.BadZipFile:
         logger.error(f"Error: Downloaded capa rules file '{zip_path}' is not a valid zip file or is corrupted.")
-        return None
     except Exception as e:
-        logger.error(f"An unexpected error occurred during capa rules download/extraction: {e}", exc_info=verbose)
-        return None
+        logger.error(f"An unexpected error occurred during capa rules download/extraction/organization: {e}", exc_info=verbose)
+        if extracted_top_level_dir_path and os.path.isdir(extracted_top_level_dir_path):
+            try: shutil.rmtree(extracted_top_level_dir_path)
+            except Exception: pass
     finally:
         if os.path.exists(zip_path):
             try: os.remove(zip_path)
             except OSError as e_rm_zip: logger.warning(f"Could not remove downloaded zip {zip_path}: {e_rm_zip}")
     return None
 
-
 def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, Any]]:
-    if verbose: safe_print(f"  [VERBOSE-PEID] Starting to parse signature file: {db_path}", verbose_prefix=" ")
+    if verbose: safe_print(f"   [VERBOSE-PEID] Starting to parse signature file: {db_path}", verbose_prefix=" ")
     signatures = []
     current_signature: Optional[Dict[str, Any]] = None
     try:
@@ -757,8 +808,8 @@ def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, 
                         if valid and regex_b_list:
                             current_signature['pattern_bytes']=byte_pat_list
                             try:current_signature['regex_pattern']=re.compile(b''.join(regex_b_list))
-                            except re.error:current_signature=None # Invalidate
-                        else:current_signature=None # Invalidate
+                            except re.error:current_signature=None
+                        else:current_signature=None
                         continue
                     ep_match=re.match(r'^ep_only\s*=\s*(true|false)',line,re.IGNORECASE)
                     if ep_match:current_signature['ep_only']=ep_match.group(1).lower()=='true'
@@ -766,7 +817,7 @@ def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, 
             signatures.append(current_signature)
     except FileNotFoundError: safe_print(f"[!] PEiD DB not found: {db_path}"); return []
     except Exception as e: safe_print(f"[!] Error parsing PEiD DB {db_path}: {e}"); return []
-    if verbose: safe_print(f"  [VERBOSE-PEID] Loaded {len(signatures)} PEiD signatures.", verbose_prefix=" ")
+    if verbose: safe_print(f"   [VERBOSE-PEID] Loaded {len(signatures)} PEiD signatures.", verbose_prefix=" ")
     return signatures
 
 def find_pattern_in_data_regex(data_block: bytes, signature_dict: Dict[str, Any], verbose: bool = False, section_name_for_log: str = "UnknownSection") -> Optional[str]:
@@ -776,34 +827,34 @@ def find_pattern_in_data_regex(data_block: bytes, signature_dict: Dict[str, Any]
     try:
         match = regex_pattern.search(data_block)
         if match:
-            if verbose: safe_print(f"      [VERBOSE-PEID-MATCH-REGEX] Pattern '{pattern_name}' matched at offset {hex(match.start())} in {section_name_for_log}.", verbose_prefix=" ")
+            if verbose: safe_print(f"       [VERBOSE-PEID-MATCH-REGEX] Pattern '{pattern_name}' matched at offset {hex(match.start())} in {section_name_for_log}.", verbose_prefix=" ")
             return pattern_name
     except Exception as e_re_search:
-        if verbose: safe_print(f"      [VERBOSE-PEID-REGEX-ERROR] Error searching for pattern '{pattern_name}': {e_re_search}", verbose_prefix=" ")
+        if verbose: safe_print(f"       [VERBOSE-PEID-REGEX-ERROR] Error searching for pattern '{pattern_name}': {e_re_search}", verbose_prefix=" ")
     return None
 
 def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional[str], yara_available_flag: bool, verbose: bool = False) -> List[Dict[str, Any]]:
     scan_results: List[Dict[str, Any]] = []
     if not yara_available_flag:
-        logger.warning("  'yara-python' library not found. Skipping YARA scan.")
-        if verbose and YARA_IMPORT_ERROR: logger.debug(f"        [VERBOSE-DEBUG] YARA import error: {YARA_IMPORT_ERROR}")
+        logger.warning("   'yara-python' library not found. Skipping YARA scan.")
+        if verbose and YARA_IMPORT_ERROR: logger.debug(f"         [VERBOSE-DEBUG] YARA import error: {YARA_IMPORT_ERROR}")
         return scan_results
-    if not yara_rules_path:
-        logger.info("  No YARA rules path provided. Skipping YARA scan.")
+    if not yara_rules_path: # yara_rules_path is expected to be absolute if provided
+        logger.info("   No YARA rules path provided. Skipping YARA scan.")
         return scan_results
     try:
-        if verbose: logger.info(f"  [VERBOSE-YARA] Loading rules from: {yara_rules_path}")
+        if verbose: logger.info(f"   [VERBOSE-YARA] Loading rules from: {yara_rules_path}")
         rules = None
         if os.path.isdir(yara_rules_path):
             filepaths = {f_name: os.path.join(dirname, f_name) for dirname, _, files in os.walk(yara_rules_path) for f_name in files if f_name.lower().endswith(('.yar', '.yara'))}
-            if not filepaths: logger.warning(f"  No .yar or .yara files in dir: {yara_rules_path}"); return scan_results
+            if not filepaths: logger.warning(f"   No .yar or .yara files in dir: {yara_rules_path}"); return scan_results
             rules = yara.compile(filepaths=filepaths)
         elif os.path.isfile(yara_rules_path): rules = yara.compile(filepath=yara_rules_path)
-        else: logger.warning(f"  YARA rules path not valid: {yara_rules_path}"); return scan_results
+        else: logger.warning(f"   YARA rules path not valid: {yara_rules_path}"); return scan_results
 
         matches = rules.match(data=file_data)
         if matches:
-            logger.info(f"  YARA Matches Found ({len(matches)}):")
+            logger.info(f"   YARA Matches Found ({len(matches)}):")
             for match in matches:
                 match_detail:Dict[str,Any]={"rule":match.rule,"namespace":match.namespace if match.namespace!='default'else None,"tags":list(match.tags)if match.tags else None,"meta":dict(match.meta)if match.meta else None,"strings":[]}
                 if match.strings:
@@ -813,94 +864,193 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                         if len(str_data_repr)>80:str_data_repr=str_data_repr[:77]+"..."
                         match_detail["strings"].append({"offset":hex(s_match[0]),"identifier":s_match[1],"data":str_data_repr})
                 scan_results.append(match_detail)
-        else: logger.info("  No YARA matches found.")
-    except yara.Error as e: logger.error(f"  YARA Error: {e}"); scan_results.append({"error":f"YARA Error: {str(e)}"})
-    except Exception as e: logger.error(f"  Unexpected YARA scan error: {e}",exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {str(e)}"})
+        else: logger.info("   No YARA matches found.")
+    except yara.Error as e: logger.error(f"   YARA Error: {e}"); scan_results.append({"error":f"YARA Error: {str(e)}"})
+    except Exception as e: logger.error(f"   Unexpected YARA scan error: {e}",exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {str(e)}"})
     return scan_results
 
 def _parse_capa_analysis(pe_obj: pefile.PE,
+                         pe_filepath_original: str,
                          capa_rules_dir_path: Optional[str],
-                         capa_sigs_dir_path: Optional[str], 
+                         capa_sigs_dir_path: Optional[str],
                          verbose: bool) -> Dict[str, Any]:
-    """Performs capa analysis on the PE file, optionally using library signatures."""
     capa_results: Dict[str, Any] = {"status": "Not performed", "error": None, "results": None}
+
     if not CAPA_AVAILABLE:
-        capa_results["status"] = "Capa library not available."
+        capa_results["status"] = "Capa library components not available."
         capa_results["error"] = f"Capa import error: {CAPA_IMPORT_ERROR}"
-        logger.warning("Capa library not found. Skipping capa analysis.")
+        logger.warning(f"Capa components not available. Error: {CAPA_IMPORT_ERROR}")
         return capa_results
 
-    effective_rules_path = capa_rules_dir_path
+    effective_rules_path_str = capa_rules_dir_path
+    if not effective_rules_path_str:
+        default_rules_base = str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
+        logger.info(f"Capa rules directory not specified, using default script-relative base: '{default_rules_base}'")
+        effective_rules_path_str = ensure_capa_rules_exist(default_rules_base, CAPA_RULES_ZIP_URL, verbose)
+    elif not os.path.isdir(effective_rules_path_str) or not os.listdir(effective_rules_path_str):
+        logger.warning(f"Provided capa_rules_dir_path '{capa_rules_dir_path}' is invalid. Attempting script-relative default.")
+        default_rules_base = str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
+        effective_rules_path_str = ensure_capa_rules_exist(default_rules_base, CAPA_RULES_ZIP_URL, verbose)
 
-    if not effective_rules_path or not os.path.isdir(effective_rules_path) or not os.listdir(effective_rules_path):
-        logger.warning(f"Provided capa rules path '{capa_rules_dir_path}' is invalid or empty.")
-        default_rules_base = os.path.join(os.getcwd(), CAPA_RULES_DEFAULT_DIR)
-        logger.info(f"Attempting to ensure/download capa rules to default location: {default_rules_base}")
-        effective_rules_path = ensure_capa_rules_exist(default_rules_base, CAPA_RULES_ZIP_URL, verbose)
-        if not effective_rules_path:
-            capa_results["status"] = "Capa rules not found or download/extraction failed."
-            capa_results["error"] = f"Capa rules directory '{capa_rules_dir_path or default_rules_base}' is invalid, and default download failed."
-            logger.error(capa_results["error"])
-            return capa_results
+    if not effective_rules_path_str:
+        err_path_msg_part = capa_rules_dir_path if capa_rules_dir_path else str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / CAPA_RULES_SUBDIR_NAME)
+        capa_results["status"] = "Capa rules not found or download/extraction failed."
+        capa_results["error"] = f"Failed to ensure capa rules at '{err_path_msg_part}'."
+        logger.error(capa_results["error"])
+        return capa_results
+    else:
+        logger.info(f"Using capa rules from: {effective_rules_path_str}")
+
+
+    class MockCapaCliArgs: pass
+    mock_args = MockCapaCliArgs()
+    mock_args.input_file = Path(pe_filepath_original)
+
+    logger.info(f"Attempting capa analysis using capa.main workflow for: {mock_args.input_file}")
+
+    setattr(mock_args, 'rules', [Path(effective_rules_path_str)])
+    if hasattr(mock_args, 'is_default_rules'): setattr(mock_args, 'is_default_rules', False)
+
+    effective_capa_sigs_path_str_for_mock_args = ""
+    if capa_sigs_dir_path and Path(capa_sigs_dir_path).is_dir():
+        effective_capa_sigs_path_str_for_mock_args = str(capa_sigs_dir_path)
+        logger.info(f"Using user-provided Capa signatures directory: {effective_capa_sigs_path_str_for_mock_args}")
+    else:
+        if capa_sigs_dir_path:
+            logger.warning(f"User-provided capa_sigs_dir '{capa_sigs_dir_path}' is not a valid directory.")
         else:
-            logger.info(f"Using capa rules from: {effective_rules_path}")
+            logger.info("Capa signatures directory not explicitly provided by user.")
+
+        potential_script_relative_sigs = SCRIPT_DIR / "capa_sigs"
+        if potential_script_relative_sigs.is_dir():
+             effective_capa_sigs_path_str_for_mock_args = str(potential_script_relative_sigs.resolve())
+             logger.info(f"Found and using script-relative 'capa_sigs' directory: {effective_capa_sigs_path_str_for_mock_args}")
+        elif (SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").is_dir():
+             effective_capa_sigs_path_str_for_mock_args = str((SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").resolve())
+             logger.info(f"Found 'sigs' directory near default rules store: {effective_capa_sigs_path_str_for_mock_args}")
+        else:
+            logger.warning("Capa signatures directory not found locally (e.g., ./capa_sigs or next to default rules). Explicitly telling Capa to load no library function signatures to prevent potential errors if Capa's internal default path is problematic.")
+            effective_capa_sigs_path_str_for_mock_args = ""
+
+    setattr(mock_args, 'signatures', effective_capa_sigs_path_str_for_mock_args)
+    if hasattr(mock_args, 'is_default_signatures'):
+        is_capa_internal_default_path = False
+        if hasattr(capa.main, 'SIGNATURES_PATH_DEFAULT_STRING'):
+             is_capa_internal_default_path = (effective_capa_sigs_path_str_for_mock_args == getattr(capa.main, 'SIGNATURES_PATH_DEFAULT_STRING'))
+        setattr(mock_args, 'is_default_signatures', (not bool(capa_sigs_dir_path)) and is_capa_internal_default_path and effective_capa_sigs_path_str_for_mock_args != "")
+
+
+    setattr(mock_args, 'format', getattr(capa.features.common, 'FORMAT_PE', 'pe'))
+    setattr(mock_args, 'backend', getattr(capa.loader, 'BACKEND_AUTO', 'auto'))
+    setattr(mock_args, 'os', getattr(capa.features.common, 'OS_WINDOWS', 'windows'))
+    setattr(mock_args, 'tag', None)
+    setattr(mock_args, 'verbose', verbose)
+    setattr(mock_args, 'vverbose', False)
+    setattr(mock_args, 'json', True)
+    setattr(mock_args, 'color', "never")
+    setattr(mock_args, 'debug', verbose)
+    setattr(mock_args, 'quiet', not verbose)
+
+    if not hasattr(mock_args, 'restrict_to_functions'): setattr(mock_args, 'restrict_to_functions', [])
+    if not hasattr(mock_args, 'restrict_to_processes'): setattr(mock_args, 'restrict_to_processes', [])
 
     try:
-        # Handle library signatures if path is provided
-        if capa_sigs_dir_path and os.path.isdir(capa_sigs_dir_path):
-            if verbose: logger.info(f"  [VERBOSE-CAPA] Attempting to set global capa signatures from: {capa_sigs_dir_path}")
-            try:
-                capa.main.set_global_signatures(capa_sigs_dir_path) # Use the function to set signatures
-                if verbose: logger.info(f"  [VERBOSE-CAPA] Successfully set global signatures.")
-            except Exception as e_sigs:
-                logger.warning(f"  [VERBOSE-CAPA] Failed to set capa global signatures from '{capa_sigs_dir_path}': {e_sigs}")
-        elif capa_sigs_dir_path: # Path provided but not valid
-                logger.warning(f"  [VERBOSE-CAPA] Capa signatures directory '{capa_sigs_dir_path}' is not a valid directory. Signatures will not be loaded.")
+        if verbose:
+            sig_val = getattr(mock_args, 'signatures', 'N/A')
+            if isinstance(sig_val, Path): sig_val = str(sig_val)
+            rules_val_str_list = [str(r) for r in getattr(mock_args, 'rules', [])]
+            logger.info(f"   [VERBOSE-CAPA] Mocked CLI args for capa.main: input_file='{mock_args.input_file}', rules={rules_val_str_list}, format='{mock_args.format}', backend='{mock_args.backend}', os='{mock_args.os}', signatures='{sig_val}'")
+
+        if hasattr(capa.main, 'handle_common_args'):
+            capa.main.handle_common_args(mock_args)
+
+        if hasattr(capa.main, 'ensure_input_exists_from_cli'):
+            capa.main.ensure_input_exists_from_cli(mock_args)
+
+        input_format = mock_args.format
+        if hasattr(capa.main, 'get_input_format_from_cli'):
+            input_format = capa.main.get_input_format_from_cli(mock_args)
+        mock_args.format = input_format
+
+        rules = capa.main.get_rules_from_cli(mock_args)
+        logger.info(f"Rules loaded via capa.main.get_rules_from_cli. Rule count: {len(rules.rules) if hasattr(rules, 'rules') and hasattr(rules.rules, '__len__') else 'N/A'}")
+
+        backend = mock_args.backend
+        if hasattr(capa.main, 'get_backend_from_cli'):
+            backend = capa.main.get_backend_from_cli(mock_args, input_format)
+        mock_args.backend = backend
+
+        if hasattr(capa.main, 'get_os_from_cli'):
+            mock_args.os = capa.main.get_os_from_cli(mock_args, backend)
+
+        extractor = capa.main.get_extractor_from_cli(mock_args, input_format, backend)
+        logger.info(f"Extractor obtained via capa.main.get_extractor_from_cli: {type(extractor).__name__}")
+
+        capabilities = capa.capabilities.common.find_capabilities(rules, extractor, disable_progress=True)
+        logger.info("Capabilities search complete.")
+
+        simulated_argv_for_meta = ["PeMCP.py", str(mock_args.input_file)]
+
+        actual_rule_paths_for_meta = mock_args.rules
+        if not (isinstance(actual_rule_paths_for_meta, list) and \
+                all(isinstance(p, Path) for p in actual_rule_paths_for_meta)):
+            logger.warning(f"Rules paths for capa.loader.collect_metadata ('mock_args.rules': {actual_rule_paths_for_meta}) are not List[Path] as expected. Metadata might be incomplete.")
+            temp_paths = []
+            all_valid = True
+            if isinstance(actual_rule_paths_for_meta, list):
+                for p_item in actual_rule_paths_for_meta:
+                    if isinstance(p_item, Path): temp_paths.append(p_item)
+                    elif isinstance(p_item, str) and os.path.exists(p_item): temp_paths.append(Path(p_item))
+                    else: all_valid = False; break
+            else: all_valid = False
+            actual_rule_paths_for_meta = temp_paths if all_valid else []
 
 
-        if verbose: logger.info(f"  [VERBOSE-CAPA] Loading capa rules from: {effective_rules_path}")
-        rules = capa.rules.RuleSet.from_directory(effective_rules_path)
-        if verbose: logger.info(f"  [VERBOSE-CAPA] Loaded {len(rules.rules)} capa rules.")
+        meta = capa.loader.collect_metadata(
+            simulated_argv_for_meta,
+            mock_args.input_file,
+            input_format,
+            mock_args.os,
+            actual_rule_paths_for_meta,
+            extractor,
+            capabilities
+        )
+        if hasattr(meta, 'analysis') and hasattr(capabilities, 'matches') and hasattr(meta.analysis, 'layout') and hasattr(capa.loader, 'compute_layout'):
+            meta.analysis.layout = capa.loader.compute_layout(rules, extractor, capabilities.matches)
 
-        extractor = capa.features.extractors.pefile.PefileFeatureExtractor(pe_obj)
-        if verbose: logger.info(f"  [VERBOSE-CAPA] PefileFeatureExtractor created for {pe_obj.OPTIONAL_HEADER.ImageBase:#x}.")
+        doc = rd.ResultDocument.from_capa(meta, rules, capabilities.matches)
+        json_output_str = doc.model_dump_json(exclude_none=True)
 
-        capabilities, meta = capa.main.find_capabilities(rules, extractor, pe_obj.__data__)
-        if verbose: logger.info(f"  [VERBOSE-CAPA] Found {len(capabilities)} capabilities.")
-
-        doc = capa.main.get_result_document(meta, rules, capabilities)
-        json_output_str = capa_json_render.render_json(doc)
         capa_results["results"] = json.loads(json_output_str)
-        capa_results["status"] = "Analysis complete"
+        capa_results["status"] = "Analysis complete (adapted workflow)"
 
-    except InvalidRule as e:
-        error_msg = f"Invalid capa rule encountered: {e}"
+    except (InvalidArgument, EmptyReportError, UnsupportedOSError, UnsupportedArchError, UnsupportedFormatError, UnsupportedRuntimeError) as e_specific_api:
+        error_msg = f"Capa analysis failed with specific API exception: {type(e_specific_api).__name__} - {str(e_specific_api)}"
         logger.error(error_msg, exc_info=verbose)
-        capa_results["status"] = "Error during analysis"
+        capa_results["status"] = "Error during analysis (API specific)"
         capa_results["error"] = error_msg
-    except RulesAccessError as e:
-        error_msg = f"Error accessing capa rules at '{effective_rules_path}': {e}"
+    except AttributeError as e_attr:
+        error_msg = f"Capa API call failed (AttributeError): {e_attr}. This may indicate an API incompatibility or missing component in the capa version."
         logger.error(error_msg, exc_info=verbose)
-        capa_results["status"] = "Error loading rules"
+        capa_results["status"] = "Error during analysis (API incompatibility)"
         capa_results["error"] = error_msg
-    except FreezingError as e:
-        error_msg = f"Capa freezing error: {e}"
+    except FileNotFoundError as e_fnf:
+        error_msg = f"Capa analysis failed (FileNotFoundError): {e_fnf}."
         logger.error(error_msg, exc_info=verbose)
-        capa_results["status"] = "Error during analysis"
-        capa_results["error"] = error_msg
-    except CapaError as e:
-        error_msg = f"Capa analysis error: {e}"
-        logger.error(error_msg, exc_info=verbose)
-        capa_results["status"] = "Error during analysis"
+        capa_results["status"] = "Error during analysis (File Not Found for capa)"
         capa_results["error"] = error_msg
     except Exception as e:
-        error_msg = f"Unexpected error during capa analysis: {e}"
+        should_exit_error_type = getattr(capa.main, 'ShouldExitError', None)
+        if should_exit_error_type and isinstance(e, should_exit_error_type):
+            error_msg = f"Capa analysis aborted ({type(e).__name__}): {e} (status_code: {getattr(e, 'status_code', 'N/A')})"
+            capa_results["status"] = f"Error during analysis ({type(e).__name__})"
+        else:
+            error_msg = f"Unexpected error during adapted capa analysis: {type(e).__name__} - {e}"
+            capa_results["status"] = "Unexpected error"
         logger.error(error_msg, exc_info=verbose)
-        capa_results["status"] = "Unexpected error"
         capa_results["error"] = error_msg
 
     return capa_results
-
 
 # --- String Utilities ---
 def _extract_strings_from_data(data_bytes: bytes, min_length: int = 5) -> List[Tuple[int, str]]:
@@ -1150,15 +1300,25 @@ def _parse_digital_signature(pe: pefile.PE, filepath: str, cryptography_availabl
 
 def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool, skip_full_peid_scan: bool, peid_scan_all_sigs_heuristically: bool) -> Dict[str, Any]:
     peid_results: Dict[str, Any] = {"ep_matches": [], "heuristic_matches": [], "status": "Not performed"}
-    if not peid_db_path: peid_results["status"] = "PEiD DB path not provided."; return peid_results
-    if not os.path.exists(peid_db_path):
-        logger.info(f"PEiD DB '{peid_db_path}' not found. Attempting download...")
-        if not ensure_peid_db_exists(PEID_USERDB_URL, peid_db_path, verbose):
-            peid_results["status"] = f"PEiD DB '{peid_db_path}' not found/download failed."; return peid_results
-    if not os.path.exists(peid_db_path): peid_results["status"] = f"PEiD DB '{peid_db_path}' not found."; return peid_results
 
-    custom_sigs = parse_signature_file(peid_db_path, verbose)
-    if not custom_sigs: peid_results["status"] = "No PEiD signatures loaded."; return peid_results
+    if not peid_db_path:
+        logger.error("PEiD scan called without a database path (this indicates an issue with path defaulting).")
+        peid_results["status"] = "PEiD DB path was not resolved prior to scan."
+        return peid_results
+
+    str_peid_db_path = str(peid_db_path)
+
+    if not os.path.exists(str_peid_db_path):
+        logger.info(f"PEiD DB '{str_peid_db_path}' not found. Attempting download...")
+        if not ensure_peid_db_exists(PEID_USERDB_URL, str_peid_db_path, verbose):
+            peid_results["status"] = f"PEiD DB '{str_peid_db_path}' not found and download failed."
+            return peid_results
+
+    custom_sigs = parse_signature_file(str_peid_db_path, verbose)
+    if not custom_sigs:
+        peid_results["status"] = f"No PEiD signatures loaded from '{str_peid_db_path}' (file might be empty or malformed)."
+        return peid_results
+
     peid_results["status"] = "Scan performed."
     if hasattr(pe,'OPTIONAL_HEADER')and pe.OPTIONAL_HEADER.AddressOfEntryPoint:
         ep_rva=pe.OPTIONAL_HEADER.AddressOfEntryPoint
@@ -1176,10 +1336,17 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
         scan_tasks_args=[]
         for sec in secs_to_scan:
             try:
-                sec_data=sec.get_data();sec_name=sec.Name.decode('utf-8','ignore').rstrip('\x00')
+                section_name_cleaned = sec.Name.decode('utf-8','ignore').rstrip('\x00')
+                sec_data=sec.get_data()
                 for sig in custom_sigs:
-                    if peid_scan_all_sigs_heuristically or not sig['ep_only']:scan_tasks_args.append((sec_data,sig,verbose,sec_name))
-            except Exception as e:logger.warning(f"PEiD section data error {sec.Name.decode('utf-8','ignore').rstrip('\x00')}: {e}")
+                    if peid_scan_all_sigs_heuristically or not sig['ep_only']:scan_tasks_args.append((sec_data,sig,verbose,section_name_cleaned))
+            except Exception as e:
+                section_name_cleaned_for_log = "UnknownSection"
+                try:
+                    section_name_cleaned_for_log = sec.Name.decode('utf-8','ignore').rstrip('\x00')
+                except: pass
+                logger.warning(f"PEiD section data error {section_name_cleaned_for_log}: {e}")
+
         if scan_tasks_args:
             with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()or 1)as executor:
                 futures=[executor.submit(find_pattern_in_data_regex,*args)for args in scan_tasks_args]
@@ -1199,6 +1366,9 @@ def _parse_rich_header(pe: pefile.PE) -> Optional[Dict[str, Any]]:
     return None
 
 def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[str, Any]]:
+    IMG_ORDINAL_FLAG64 = 0x8000000000000000
+    IMG_ORDINAL_FLAG32 = 0x80000000
+
     delay_imports_list=[]
     if hasattr(pe,'DIRECTORY_ENTRY_DELAY_IMPORT'):
         for entry in pe.DIRECTORY_ENTRY_DELAY_IMPORT:
@@ -1208,19 +1378,34 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
                 except:pass
             delay_syms=[]
             if entry.struct.pINT and hasattr(pe,'OPTIONAL_HEADER'):
-                thunk_rva=entry.struct.pINT;ptr_size=8 if magic_type_str=="PE32+ (64-bit)"else 4;addr_mask=0x7FFFFFFFFFFFFFFF if ptr_size==8 else 0x7FFFFFFF;ord_flag=pefile.IMAGE_ORDINAL_FLAG64 if ptr_size==8 else pefile.IMAGE_ORDINAL_FLAG32
+                thunk_rva=entry.struct.pINT
+                ptr_size=8 if magic_type_str=="PE32+ (64-bit)"else 4
+                ord_flag = IMG_ORDINAL_FLAG64 if ptr_size==8 else IMG_ORDINAL_FLAG32
+
                 while True:
                     try:
-                        thunk_val=pe.get_qword_at_rva(thunk_rva)if ptr_size==8 else pe.get_dword_at_rva(thunk_rva)
-                        if thunk_val==0:break
-                        s_name,s_ord=None,None
-                        if thunk_val&ord_flag:s_ord=thunk_val&0xFFFF
+                        thunk_val_raw = pe.get_qword_at_rva(thunk_rva) if ptr_size==8 else pe.get_dword_at_rva(thunk_rva)
+                        if thunk_val_raw == 0: break
+
+                        s_name, s_ord = None, None
+                        if thunk_val_raw & ord_flag:
+                            s_ord = thunk_val_raw & 0xFFFF
                         else:
-                            name_rva=thunk_val&addr_mask
-                            try:s_name=pe.get_string_at_rva(name_rva+2).decode('utf-8','ignore')
-                            except:pass
-                        delay_syms.append({'name':s_name,'ordinal':s_ord,'thunk_rva':hex(thunk_rva)});thunk_rva+=ptr_size
-                    except:break
+                            name_rva = thunk_val_raw
+                            try:
+                                s_name = pe.get_string_at_rva(name_rva + 2).decode('utf-8','ignore')
+                            except Exception as e_str:
+                                logger.debug(f"Delay-load import string fetch error at RVA {hex(name_rva+2)}: {e_str}")
+                                s_name = "ErrorFetchingName"
+
+                        delay_syms.append({'name':s_name,'ordinal':s_ord,'thunk_rva':hex(thunk_rva)})
+                        thunk_rva += ptr_size
+                    except pefile.PEFormatError as e_pe:
+                        logger.debug(f"Delay-load import table parsing error (PEFormatError): {e_pe}")
+                        break
+                    except Exception as e_gen:
+                        logger.warning(f"Unexpected error parsing delay-load import entry: {e_gen}")
+                        break
             delay_imports_list.append({'dll_name':dll_name,'struct':entry.struct.dump_dict(),'symbols':delay_syms})
     return delay_imports_list
 
@@ -1231,10 +1416,13 @@ def _parse_tls_info(pe: pefile.PE, magic_type_str: str) -> Optional[Dict[str, An
             cb_va=tls_struct.AddressOfCallBacks;ptr_size=8 if magic_type_str=="PE32+ (64-bit)"else 4;max_cb=20;count=0
             while cb_va!=0 and count<max_cb:
                 try:
-                    func_va_ptr_rva=pe.get_rva_from_offset(pe.get_offset_from_virtual_address(cb_va))
-                    func_va=pe.get_qword_from_data(pe.get_data(func_va_ptr_rva,ptr_size),0)if ptr_size==8 else pe.get_dword_from_data(pe.get_data(func_va_ptr_rva,ptr_size),0)
+                    func_va_ptr_offset = pe.get_offset_from_virtual_address(cb_va)
+                    func_va=pe.get_qword_from_data(pe.get_data(func_va_ptr_offset,ptr_size),0)if ptr_size==8 else pe.get_dword_from_data(pe.get_data(func_va_ptr_offset,ptr_size),0)
                     if func_va==0:break
                     callbacks.append({'va':hex(func_va),'rva':hex(func_va-pe.OPTIONAL_HEADER.ImageBase)});cb_va+=ptr_size;count+=1
+                except AttributeError as e_pefile_va:
+                    logger.debug(f"TLS callback VA {hex(cb_va)}->RVA/offset conversion error: {e_pefile_va} (likely VA out of mapped range)")
+                    break
                 except Exception as e:logger.debug(f"TLS callback parse error VA {hex(cb_va)}: {e}");break
         tls_info['callbacks']=callbacks;return tls_info
     return None
@@ -1243,7 +1431,7 @@ def _parse_load_config(pe: pefile.PE) -> Optional[Dict[str, Any]]:
     if hasattr(pe,'DIRECTORY_ENTRY_LOAD_CONFIG')and pe.DIRECTORY_ENTRY_LOAD_CONFIG and pe.DIRECTORY_ENTRY_LOAD_CONFIG.struct:
         lc=pe.DIRECTORY_ENTRY_LOAD_CONFIG.struct;load_config_dict:Dict[str,Any]={'struct':lc.dump_dict()}
         if hasattr(lc,'GuardFlags'):
-            gf_list=[];gf_map={0x100:"CF_INSTRUMENTED",0x200:"CFW_INSTRUMENTED",0x400:"CF_FUNCTION_TABLE_PRESENT",0x800:"SECURITY_COOKIE_UNUSED",0x1000:"PROTECT_DELAYLOAD_IAT",0x2000:"DELAYLOAD_IAT_IN_ITS_OWN_SECTION",0x4000:"CF_EXPORT_SUPPRESSION_INFO_PRESENT",0x8000:"CF_ENABLE_EXPORT_SUPPRESSION",0x10000:"CF_LONGJUMP_TABLE_PRESENT",0x100000:"RETPOLINE_PRESENT",0x1000000:"EH_CONTINUATION_TABLE_PRESENT",0x2000000:"XFG_ENABLED"}
+            gf_list=[];gf_map={0x100:"CF_INSTRUMENTED",0x200:"CFW_INSTRUMENTED",0x400:"CF_FUNCTION_TABLE_PRESENT",0x800:"SECURITY_COOKIE_UNUSED",0x1000:"PROTECT_DELAYLOAD_IAT",0x2000:"DELAYLOAD_IAT_IN_ITS_OWN_SECTION",0x4000:"CF_EXPORT_SUPPRESSION_INFO_PRESENT",0x8000:"CF_ENABLE_EXPORT_SUPPRESSION",0x10000:"CF_LONGJUMP_TABLE_PRESENT",0x100000:"RETPOLINE_PRESENT",0x1000000:"EH_CONTINUATION_TABLE_PRESENT",0x2000000:"XFG_ENABLED",0x4000000:"MEMTAG_PRESENT",0x8000000:"CET_SHADOW_STACK_PRESENT"}
             for flag_val,flag_name in gf_map.items():
                 if lc.GuardFlags&flag_val:gf_list.append(f"IMAGE_GUARD_{flag_name}")
             load_config_dict['guard_flags_list']=gf_list
@@ -1300,8 +1488,8 @@ def _parse_exception_data(pe: pefile.PE) -> List[Dict[str, Any]]:
         for entry in pe.DIRECTORY_ENTRY_EXCEPTION:
             if hasattr(entry,'struct'):
                 entry_dump=entry.struct.dump_dict();machine=pe.FILE_HEADER.Machine
-                if machine==pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_AMD64']:entry_dump['note']="x64 RUNTIME_FUNCTION"
-                elif machine==pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_I386']and hasattr(entry.struct,'ExceptionHandler'):entry_dump['note']="x86 SEH Frame"
+                if machine==pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_AMD64']:entry_dump['note']="x64 RUNTIME_FUNCTION ( unwind info at UnwindInfoAddressRVA )"
+                elif machine==pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_I386']and hasattr(entry.struct,'ExceptionHandler'):entry_dump['note']="x86 SEH Frame (uncommon, usually handled by OS)"
                 elif machine in[pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_ARMNT'],pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_ARM64']]:entry_dump['note']="ARM/ARM64 RUNTIME_FUNCTION"
                 ex_list.append(entry_dump)
     return ex_list
@@ -1318,8 +1506,7 @@ def _parse_coff_symbols(pe: pefile.PE) -> List[Dict[str, Any]]:
                 for aux_i in range(symbol.NumberOfAuxSymbols):
                     if idx<len(pe.SYMBOLS):
                         aux_obj=None
-                        if hasattr(symbol,'auxiliary_symbols')and aux_i<len(symbol.auxiliary_symbols):aux_obj=symbol.auxiliary_symbols[aux_i]
-                        elif hasattr(pe.SYMBOLS[idx],'struct'):aux_obj=pe.SYMBOLS[idx].struct
+                        if hasattr(pe.SYMBOLS[idx],'struct'):aux_obj=pe.SYMBOLS[idx].struct
                         if aux_obj:sym_dict['auxiliary_symbols'].append(_dump_aux_symbol_to_dict(symbol.struct,aux_obj,aux_i))
                         idx+=1
                     else:break
@@ -1337,13 +1524,20 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                       peid_db_path: Optional[str],
                       yara_rules_path: Optional[str],
                       capa_rules_path: Optional[str],
-                      capa_sigs_path: Optional[str], 
+                      capa_sigs_path: Optional[str],
                       verbose: bool,
                       skip_full_peid_scan: bool,
-                      peid_scan_all_sigs_heuristically: bool) -> Dict[str, Any]:
+                      peid_scan_all_sigs_heuristically: bool,
+                      analyses_to_skip: Optional[List[str]] = None
+                      ) -> Dict[str, Any]:
     global PEFILE_VERSION_USED
     try: PEFILE_VERSION_USED = pefile.__version__
     except AttributeError: PEFILE_VERSION_USED = "Unknown"
+
+    if analyses_to_skip is None:
+        analyses_to_skip = []
+    analyses_to_skip = [analysis.lower() for analysis in analyses_to_skip]
+
 
     pe_info_dict: Dict[str, Any] = {"filepath": filepath, "pefile_version": PEFILE_VERSION_USED}
     nt_headers_info, magic_type_str = _parse_nt_headers(pe)
@@ -1370,16 +1564,32 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
     pe_info_dict['exception_data'] = _parse_exception_data(pe)
     pe_info_dict['coff_symbols'] = _parse_coff_symbols(pe)
     pe_info_dict['checksum_verification'] = _verify_checksum(pe)
-    pe_info_dict['peid_matches'] = _perform_peid_scan(pe, peid_db_path, verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically)
-    pe_info_dict['yara_matches'] = perform_yara_scan(filepath, pe.__data__, yara_rules_path, YARA_AVAILABLE, verbose)
 
-    # Add capa analysis
-    pe_info_dict['capa_analysis'] = _parse_capa_analysis(pe, capa_rules_path, capa_sigs_path, verbose)
+    if "peid" not in analyses_to_skip:
+        pe_info_dict['peid_matches'] = _perform_peid_scan(pe, peid_db_path, verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically)
+    else:
+        pe_info_dict['peid_matches'] = {"status": "Skipped by user request", "ep_matches": [], "heuristic_matches": []}
+        logger.info("PEiD analysis skipped by request.")
+
+    if "yara" not in analyses_to_skip:
+        pe_info_dict['yara_matches'] = perform_yara_scan(filepath, pe.__data__, yara_rules_path, YARA_AVAILABLE, verbose)
+    else:
+        pe_info_dict['yara_matches'] = [{"status": "Skipped by user request"}]
+        logger.info("YARA analysis skipped by request.")
+
+    if "capa" not in analyses_to_skip:
+        pe_info_dict['capa_analysis'] = _parse_capa_analysis(pe, filepath, capa_rules_path, capa_sigs_path, verbose)
+    else:
+        pe_info_dict['capa_analysis'] = {"status": "Skipped by user request", "results": None, "error": None}
+        logger.info("Capa analysis skipped by request.")
+
 
     pe_info_dict['pefile_warnings'] = pe.get_warnings()
     return pe_info_dict
 
 # --- CLI Printing Helper Functions ---
+VERBOSE_CLI_OUTPUT_FLAG = False # Global to control verbosity in print helpers
+
 def _print_dict_structure_cli(data_dict: Dict[str, Any], indent: int = 1, title: Optional[str] = None):
     prefix = "  " * indent
     if title: safe_print(f"{prefix}{title}:")
@@ -1387,14 +1597,22 @@ def _print_dict_structure_cli(data_dict: Dict[str, Any], indent: int = 1, title:
         if key == "Structure": continue
         if isinstance(value, dict) and "Value" in value and isinstance(value["Value"], dict):
             _print_dict_structure_cli(value["Value"], indent + 1, title=key)
-        elif isinstance(value, list) and value and isinstance(value[0], dict) and "Value" in value[0]:
+        elif isinstance(value, list) and value and isinstance(value[0], dict) and "Value" in value[0] and "Structure" in value[0]:
             safe_print(f"{prefix}  {key}:")
             for i, item_struct_container in enumerate(value):
-                _print_dict_structure_cli(item_struct_container["Value"], indent + 2, title=f"Item {i+1}")
+                if isinstance(item_struct_container, dict) and "Value" in item_struct_container:
+                     _print_dict_structure_cli(item_struct_container["Value"], indent + 2, title=f"Item {i+1}")
+                else:
+                    safe_print(f"{prefix}    Item {i+1}: {item_struct_container}")
         elif isinstance(value, list) or isinstance(value, tuple):
-            safe_print(f"{prefix}  {key:<30} {', '.join(map(str, value)) if value else '[]'}")
+            val_str = ', '.join(map(str, value)) if value else '[]'
+            if len(val_str) > 120 and not VERBOSE_CLI_OUTPUT_FLAG : val_str = val_str[:117] + "..."
+            safe_print(f"{prefix}  {key:<30} {val_str}")
         else:
-            safe_print(f"{prefix}  {key:<30} {value}")
+            val_str = str(value)
+            if len(val_str) > 120 and not VERBOSE_CLI_OUTPUT_FLAG: val_str = val_str[:117] + "..."
+            safe_print(f"{prefix}  {key:<30} {val_str}")
+
 
 def _print_file_hashes_cli(hashes: Dict[str, Any]):
     safe_print("\n--- File Hashes ---")
@@ -1411,21 +1629,21 @@ def _print_nt_headers_cli(nt_headers: Dict[str, Any]):
     if "error" in nt_headers: safe_print(f"  {nt_headers['error']}"); return
     safe_print(f"  Signature: {nt_headers.get('signature')}")
     if 'file_header' in nt_headers:
-        safe_print("\n  --- File Header (IMAGE_FILE_HEADER) ---")
+        safe_print("\n   --- File Header (IMAGE_FILE_HEADER) ---")
         fh = nt_headers['file_header']
-        if "error" in fh: safe_print(f"    {fh['error']}")
+        if "error" in fh: safe_print(f"     {fh['error']}")
         elif "Value" in fh:
             _print_dict_structure_cli(fh["Value"], indent=2)
-            safe_print(f"    TimeDateStamp (Formatted):       {fh.get('TimeDateStamp_ISO')}")
-            safe_print(f"    Characteristics Flags:         {', '.join(fh.get('characteristics_list',[]))}")
+            safe_print(f"     TimeDateStamp (Formatted):        {fh.get('TimeDateStamp_ISO')}")
+            safe_print(f"     Characteristics Flags:            {', '.join(fh.get('characteristics_list',[]))}")
     if 'optional_header' in nt_headers:
-        safe_print("\n  --- Optional Header (IMAGE_OPTIONAL_HEADER) ---")
+        safe_print("\n   --- Optional Header (IMAGE_OPTIONAL_HEADER) ---")
         oh = nt_headers['optional_header']
-        if "error" in oh: safe_print(f"    {oh['error']}")
+        if "error" in oh: safe_print(f"     {oh['error']}")
         elif "Value" in oh:
             _print_dict_structure_cli(oh["Value"], indent=2)
-            safe_print(f"    PE Type:                       {oh.get('pe_type')}")
-            safe_print(f"    DllCharacteristics Flags:      {', '.join(oh.get('dll_characteristics_list',[]))}")
+            safe_print(f"     PE Type:                          {oh.get('pe_type')}")
+            safe_print(f"     DllCharacteristics Flags:         {', '.join(oh.get('dll_characteristics_list',[]))}")
 
 def _print_data_directories_cli(data_dirs: List[Dict[str, Any]]):
     safe_print("\n--- Data Directories (IMAGE_DATA_DIRECTORY) ---")
@@ -1441,10 +1659,10 @@ def _print_sections_cli(sections_data: List[Dict[str, Any]], pe_obj: Optional[pe
     for section_dict in sections_data:
         safe_print(f"\n  Section: {section_dict.get('name_str', 'Unknown Section')}")
         if "Value" in section_dict: _print_dict_structure_cli(section_dict["Value"], indent=2)
-        safe_print(f"    Characteristics Flags:         {', '.join(section_dict.get('characteristics_list',[]))}")
-        safe_print(f"    Entropy:                       {section_dict.get('entropy', 0.0):.4f}")
-        if section_dict.get('md5'): safe_print(f"    MD5:                           {section_dict.get('md5')}")
-        if section_dict.get('ssdeep'): safe_print(f"    SSDeep:                        {section_dict.get('ssdeep')}")
+        safe_print(f"    Characteristics Flags:           {', '.join(section_dict.get('characteristics_list',[]))}")
+        safe_print(f"    Entropy:                         {section_dict.get('entropy', 0.0):.4f}")
+        if section_dict.get('md5'): safe_print(f"    MD5:                             {section_dict.get('md5')}")
+        if section_dict.get('ssdeep'): safe_print(f"    SSDeep:                          {section_dict.get('ssdeep')}")
         if pe_obj and VERBOSE_CLI_OUTPUT_FLAG:
             try:
                 pe_sec = next((s for s in pe_obj.sections if s.Name.decode('utf-8','ignore').rstrip('\x00') == section_dict.get('name_str')), None)
@@ -1469,7 +1687,7 @@ def _print_exports_cli(exports_data: Dict[str, Any]):
     safe_print("\n--- Export Table ---")
     if not exports_data or "error" in exports_data or not exports_data.get('struct'): safe_print("  No export table found or empty."); return
     if "struct" in exports_data and "Value" in exports_data["struct"]: _print_dict_structure_cli(exports_data["struct"]["Value"], indent=1, title="Descriptor")
-    safe_print(f"  Exported DLL Name:               {exports_data.get('name', 'N/A')}")
+    safe_print(f"  Exported DLL Name:                 {exports_data.get('name', 'N/A')}")
     for exp_sym in exports_data.get('symbols', []):
         name_str = exp_sym.get('name', "N/A (Exported by Ordinal)")
         forwarder_str = f" -> {exp_sym.get('forwarder')}" if exp_sym.get('forwarder') else ""
@@ -1548,31 +1766,41 @@ def _print_yara_matches_cli(yara_res: List[Dict[str, Any]], yara_rules_path: Opt
     safe_print("\n--- YARA Scan Results ---")
     if not yara_rules_path: safe_print("  No YARA rules path. Scan skipped."); return
     if not yara_res: safe_print("  No YARA matches or scan not performed."); return
-    if yara_res and "error" in yara_res[0]: safe_print(f"  YARA Error: {yara_res[0]['error']}"); return
+
+    if yara_res and isinstance(yara_res[0], dict) and yara_res[0].get("status") == "Skipped by user request":
+        safe_print(f"  YARA Status: {yara_res[0]['status']}")
+        return
+    if yara_res and isinstance(yara_res[0], dict) and "error" in yara_res[0]:
+        safe_print(f"  YARA Error: {yara_res[0]['error']}")
+        return
+
     if yara_res:
         safe_print(f"  YARA Matches Found ({len(yara_res)}):")
         for match in yara_res:
-            safe_print(f"    Rule: {match.get('rule')}")
-            if match.get('namespace'): safe_print(f"      Namespace: {match.get('namespace')}")
-            if match.get('tags'): safe_print(f"      Tags: {', '.join(match.get('tags',[]))}")
-            if match.get('meta'):
-                safe_print(f"      Meta:"); [safe_print(f"        {mk}: {mv}") for mk,mv in match.get('meta',{}).items()]
-            if match.get('strings'):
-                safe_print(f"      Strings ({len(match.get('strings',[]))}):")
-                for idx,sm in enumerate(match.get('strings',[])):
-                    if idx>=5 and not VERBOSE_CLI_OUTPUT_FLAG: safe_print(f"          ... ({len(match.get('strings',[]))-idx} more strings not shown)");break
-                    safe_print(f"          Offset: {sm.get('offset')}, ID: {sm.get('identifier')}, Data: {sm.get('data')}")
+            if isinstance(match, dict):
+                safe_print(f"    Rule: {match.get('rule')}")
+                if match.get('namespace'): safe_print(f"      Namespace: {match.get('namespace')}")
+                if match.get('tags'): safe_print(f"      Tags: {', '.join(match.get('tags',[]))}")
+                if match.get('meta'):
+                    safe_print(f"      Meta:"); [safe_print(f"        {mk}: {mv}") for mk,mv in match.get('meta',{}).items()]
+                if match.get('strings'):
+                    safe_print(f"      Strings ({len(match.get('strings',[]))}):")
+                    for idx,sm in enumerate(match.get('strings',[])):
+                        if idx>=5 and not VERBOSE_CLI_OUTPUT_FLAG: safe_print(f"          ... ({len(match.get('strings',[]))-idx} more strings not shown)");break
+                        safe_print(f"          Offset: {sm.get('offset')}, ID: {sm.get('identifier')}, Data: {sm.get('data')}")
+            else:
+                safe_print(f"    Unexpected YARA match format: {type(match)}")
     else: safe_print("  No YARA matches found.")
 
+
 def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: bool):
-    """Prints capa analysis results to the CLI."""
     safe_print("\n--- Capa Capability Analysis ---")
     if not capa_analysis_data:
         safe_print("  Capa analysis data not available.")
         return
 
     status = capa_analysis_data.get("status", "Unknown status")
-    if status != "Analysis complete":
+    if status != "Analysis complete (adapted workflow)" and status != "Analysis complete":
         safe_print(f"  Capa Status: {status}")
         if capa_analysis_data.get("error"):
             safe_print(f"  Capa Error: {capa_analysis_data['error']}")
@@ -1606,16 +1834,33 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
     for rule_name, rule_details in rules_data.items():
         capability_count +=1
         rule_meta = rule_details.get("meta", {})
-        matches = rule_details.get("matches", {})
 
         safe_print(f"\n  Capability: {rule_meta.get('name', rule_name)}")
         if rule_meta.get('namespace'):
             safe_print(f"    Namespace: {rule_meta.get('namespace')}")
 
-        if rule_meta.get('att&ck'):
-            safe_print(f"    ATT&CK: {', '.join(rule_meta.get('att&ck', []))}")
-        if rule_meta.get('mbc'):
-            safe_print(f"    MBC: {', '.join(rule_meta.get('mbc', []))}")
+        attck_entries = rule_meta.get('att&ck', [])
+        if attck_entries:
+            attck_display_list = []
+            for entry in attck_entries:
+                if isinstance(entry, dict):
+                    display_str = entry.get('id', entry.get('name', str(entry)))
+                    attck_display_list.append(str(display_str))
+                else:
+                    attck_display_list.append(str(entry))
+            safe_print(f"    ATT&CK: {', '.join(attck_display_list)}")
+
+        mbc_entries = rule_meta.get('mbc', [])
+        if mbc_entries:
+            mbc_display_list = []
+            for entry in mbc_entries:
+                if isinstance(entry, dict):
+                    display_str = entry.get('id', entry.get('objective', entry.get('name', str(entry))))
+                    mbc_display_list.append(str(display_str))
+                else:
+                    mbc_display_list.append(str(entry))
+            safe_print(f"    MBC: {', '.join(mbc_display_list)}")
+
 
         if verbose_flag:
             if rule_meta.get('description'):
@@ -1623,20 +1868,43 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
             if rule_meta.get('authors'):
                 safe_print(f"    Authors: {', '.join(rule_meta.get('authors',[]))}")
 
-        if matches:
-            safe_print(f"    Matches ({len(matches)}):")
-            match_count = 0
-            for addr_hex, match_list in matches.items():
-                if not verbose_flag and match_count >=3:
-                    safe_print(f"      ... (additional matches for this rule omitted, use --verbose)")
-                    break
-                safe_print(f"      At Address: {addr_hex}")
-                if verbose_flag:
-                    for match_idx, match_item in enumerate(match_list):
-                        safe_print(f"        Match Detail #{match_idx+1}: Type - {match_item.get('type')}")
-                match_count +=1
+        matches_data = rule_details.get("matches")
+
+        if isinstance(matches_data, dict):
+            if matches_data:
+                safe_print(f"    Matches ({len(matches_data)}):")
+                match_count_on_cli = 0
+                for addr_hex, match_list_at_addr in matches_data.items():
+                    if not verbose_flag and match_count_on_cli >=3:
+                        safe_print(f"      ... (additional matches for this rule omitted, use --verbose)")
+                        break
+                    safe_print(f"      At Address: {addr_hex}")
+                    if verbose_flag and isinstance(match_list_at_addr, list):
+                        for match_idx, match_item_detail in enumerate(match_list_at_addr):
+                            feature_desc = "N/A"
+                            if isinstance(match_item_detail, dict):
+                                feature_dict = match_item_detail.get('feature', {})
+                                if isinstance(feature_dict, dict):
+                                    feature_type = feature_dict.get('type', 'N/A')
+                                    feature_value = feature_dict.get('value', '')
+                                    feature_description = feature_dict.get('description', '')
+                                    parts = [f"Type: {feature_type}"]
+                                    if feature_value: parts.append(f"Value: {str(feature_value)[:50]}")
+                                    if feature_description: parts.append(f"Desc: {str(feature_description)[:50]}")
+                                    feature_desc = ", ".join(parts)
+                                else:
+                                    feature_desc = f"Feature: {str(feature_dict)[:100]}"
+                            else:
+                                feature_desc = f"Match item: {str(match_item_detail)[:100]}"
+                            safe_print(f"        Match Detail #{match_idx+1}: {feature_desc}")
+                    match_count_on_cli +=1
+            else:
+                safe_print("    No specific address match locations found (matches field was an empty dictionary).")
+        elif matches_data is None or (isinstance(matches_data, list) and not matches_data):
+            safe_print("    No specific address match locations found (matches field was empty or not present).")
         else:
-            safe_print("    No specific match locations found (possibly meta rule or subscope match).")
+             safe_print(f"    Matches field has unexpected structure: {type(matches_data)}. Data (first 100 chars): {str(matches_data)[:100]}")
+
 
         if not verbose_flag and capability_count >= 10:
             safe_print("\n  ... (additional capabilities omitted, use --verbose to see all)")
@@ -1680,13 +1948,11 @@ def _print_pefile_warnings_cli(warnings_list: List[str]):
     if warnings_list: [safe_print(f"  - {w}") for w in warnings_list]
     else: safe_print("  No warnings from pefile.")
 
-VERBOSE_CLI_OUTPUT_FLAG = False
-
 # --- Main CLI Printing Function ---
 def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
                               yara_rules_path: Optional[str],
                               capa_rules_dir: Optional[str],
-                              capa_sigs_dir: Optional[str], 
+                              capa_sigs_dir: Optional[str],
                               verbose: bool,
                               skip_full_peid_scan: bool, peid_scan_all_sigs_heuristically: bool,
                               extract_strings_cli: bool, min_str_len_cli: int,
@@ -1703,8 +1969,9 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
 
     cli_pe_info_dict = _parse_pe_to_dict(pe_obj_for_cli, filepath, peid_db_path, yara_rules_path,
                                          capa_rules_dir,
-                                         capa_sigs_dir, 
-                                         verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically)
+                                         capa_sigs_dir,
+                                         verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically,
+                                         analyses_to_skip=None)
 
     _print_file_hashes_cli(cli_pe_info_dict.get('file_hashes',{}))
     _print_dos_header_cli(cli_pe_info_dict.get('dos_header',{}))
@@ -1717,22 +1984,28 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
     _print_version_info_cli(cli_pe_info_dict.get('version_info',{}))
     _print_digital_signatures_cli(cli_pe_info_dict.get('digital_signature',{}))
     _print_peid_matches_cli(cli_pe_info_dict.get('peid_matches',{}))
-    _print_yara_matches_cli(cli_pe_info_dict.get('yara_matches',[]),yara_rules_path)
+    _print_yara_matches_cli(cli_pe_info_dict.get('yara_matches',[]), yara_rules_path)
     _print_capa_analysis_cli(cli_pe_info_dict.get('capa_analysis',{}), verbose)
     _print_rich_header_cli(cli_pe_info_dict.get('rich_header'))
 
-    remaining_keys=["delay_load_imports","tls_info","load_config","com_descriptor","overlay_data","base_relocations","bound_imports","exception_data","checksum_verification"]
-    for key in remaining_keys:
-        data_item=cli_pe_info_dict.get(key)
-        if data_item is not None:
-            safe_print(f"\n--- {key.replace('_',' ').title()} ---")
-            if isinstance(data_item,list)and data_item:
-                for i,item in enumerate(data_item):
-                    if isinstance(item,dict):_print_dict_structure_cli(item,indent=1,title=f"Entry {i+1}")
-                    else:safe_print(f"  Entry {i+1}: {item}")
-            elif isinstance(data_item,dict):_print_dict_structure_cli(data_item,indent=1)
-            else:safe_print(f"  {data_item}")
-        else:safe_print(f"\n--- {key.replace('_',' ').title()} ---\n  No {key.replace('_',' ')} information found.")
+    remaining_keys_to_print_generic = [
+        ("delay_load_imports","Delay-Load Imports"), ("tls_info", "TLS Information"),
+        ("load_config", "Load Configuration"), ("com_descriptor", ".NET COM Descriptor"),
+        ("overlay_data", "Overlay Data"), ("base_relocations", "Base Relocations"),
+        ("bound_imports", "Bound Imports"), ("exception_data", "Exception Data"),
+        ("checksum_verification", "Checksum Verification")
+    ]
+    for key, title_str in remaining_keys_to_print_generic:
+        data_item = cli_pe_info_dict.get(key)
+        safe_print(f"\n--- {title_str} ---")
+        if data_item is not None and data_item != {} and data_item != []:
+            if isinstance(data_item, list) and data_item:
+                for i, item_in_list in enumerate(data_item):
+                    if isinstance(item_in_list, dict):_print_dict_structure_cli(item_in_list, indent=1, title=f"Entry {i+1}")
+                    else:safe_print(f"  Entry {i+1}: {item_in_list}")
+            elif isinstance(data_item, dict):_print_dict_structure_cli(data_item, indent=1)
+            else: safe_print(f"  {data_item}")
+        else: safe_print(f"  No {title_str.lower()} information found.")
 
     _print_coff_symbols_cli(cli_pe_info_dict.get('coff_symbols',[]),verbose)
     _print_pefile_warnings_cli(cli_pe_info_dict.get('pefile_warnings',[]))
@@ -1752,7 +2025,7 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
                 safe_print(f"  Found '{term}' at offsets (limit {strings_limit_cli} per term shown):")
                 for i,offset_val in enumerate(offsets):
                     if i>=strings_limit_cli:safe_print(f"    ... (further occurrences of '{term}' omitted)");break
-                    safe_print(f"    - {hex(offset_val)}")
+                    safe_print(f"      - {hex(offset_val)}")
             else:safe_print(f"  String '{term}' not found.")
     if hexdump_offset_cli is not None and hexdump_length_cli is not None:
         safe_print(f"\n--- Hex Dump (Offset: {hex(hexdump_offset_cli)}, Length: {hexdump_length_cli}, Max Lines: {hexdump_lines_cli}) ---")
@@ -1768,76 +2041,142 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
     pe_obj_for_cli.close()
 
 # --- MCP Server Setup ---
-mcp_server = FastMCP("PEFileAnalyzerMCP", description="MCP Server for PE file analysis, including deobfuscation tools.")
+mcp_server = FastMCP("PEFileAnalyzerMCP", description="MCP Server for PE file analysis. Pre-analyzes the --input-file at startup. Tools operate on this pre-loaded file.")
 tool_decorator = mcp_server.tool()
 
 # --- MCP Tools ---
 @tool_decorator
-async def load_and_analyze_pe_file(
-    ctx: Context, filepath: str,
+async def reanalyze_loaded_pe_file(
+    ctx: Context,
+    # No filepath parameter here anymore
     peid_db_path: Optional[str] = None,
     yara_rules_path: Optional[str] = None,
     capa_rules_dir: Optional[str] = None,
-    capa_sigs_dir: Optional[str] = None, 
+    capa_sigs_dir: Optional[str] = None,
+    analyses_to_skip: Optional[List[str]] = None,
     verbose_mcp_output: bool = False,
     skip_full_peid_scan: bool = False,
     peid_scan_all_sigs_heuristically: bool = False
 ) -> Dict[str, Any]:
-    global ANALYZED_PE_FILE_PATH, ANALYZED_PE_DATA, PEFILE_VERSION_USED, PE_OBJECT_FOR_MCP
-    await ctx.info(f"Request to load/analyze PE: {filepath}")
-    if not os.path.exists(filepath): raise FileNotFoundError(f"PE file not found: {filepath}")
-    if not os.path.isfile(filepath): raise ValueError(f"Path is not a file: {filepath}")
+    """
+    Re-triggers a full or partial analysis of the PE file that was pre-loaded at server startup.
+    Allows skipping heavy analyses (PEiD, YARA, Capa) via 'analyses_to_skip'.
+    The analysis results are updated globally.
 
-    if peid_db_path and not os.path.exists(peid_db_path):
-        await ctx.info(f"PEiD DB '{peid_db_path}' not found. Attempting download...")
-        dl_ok = await asyncio.to_thread(ensure_peid_db_exists, PEID_USERDB_URL, peid_db_path, verbose_mcp_output)
-        if not dl_ok: await ctx.warning(f"Failed to download PEiD DB to '{peid_db_path}'.")
-        else: await ctx.info(f"PEiD DB ensured at '{peid_db_path}'.")
+    Args:
+        ctx: The MCP Context object.
+        peid_db_path: (Optional[str]) Path to PEiD userdb.txt. Defaults to script-relative 'userdb.txt'. Downloaded if not found.
+        yara_rules_path: (Optional[str]) Path to YARA rule file/directory. Resolved to absolute if provided.
+        capa_rules_dir: (Optional[str]) Path to capa rule directory. Resolved to absolute if provided. If None, uses script-relative default.
+        capa_sigs_dir: (Optional[str]) Path to capa library ID signature files (*.sig). Resolved to absolute if provided. If None, script attempts to find a default or tells Capa to load no library sigs.
+        analyses_to_skip: (Optional[List[str]]) List of analyses to skip. Valid: "peid", "yara", "capa". Defaults to None (run all).
+        verbose_mcp_output: (bool) Enables detailed logging for the analysis. Defaults to False.
+        skip_full_peid_scan: (bool) If True and PEiD is not skipped, PEiD scan is entry point only. Defaults to False.
+        peid_scan_all_sigs_heuristically: (bool) If True (PEiD not skipped, full scan not skipped), all PEiD sigs are used heuristically. Defaults to False.
 
-    effective_capa_rules_dir = capa_rules_dir
-    if not capa_rules_dir: # If no capa_rules_dir is provided, try to download to default
-        default_capa_base = os.path.join(os.getcwd(), CAPA_RULES_DEFAULT_DIR)
-        await ctx.info(f"Capa rules directory not specified, attempting default download to '{default_capa_base}'.")
-        effective_capa_rules_dir = await asyncio.to_thread(ensure_capa_rules_exist, default_capa_base, CAPA_RULES_ZIP_URL, verbose_mcp_output)
-        if not effective_capa_rules_dir:
-            await ctx.warning(f"Failed to ensure capa rules at default location. Capa analysis may fail or use limited/no rules.")
-        else:
-            await ctx.info(f"Capa rules ensured/downloaded to: {effective_capa_rules_dir}")
-    # capa_sigs_dir is passed directly; no default download for it.
+    Returns:
+        A dictionary indicating status: {"status": "success", "message": "File '...' re-analyzed.", "filepath": "..."}
+
+    Raises:
+        RuntimeError: If no PE file was successfully pre-loaded at startup, or if re-analysis fails.
+        asyncio.CancelledError: If the underlying analysis task is cancelled by the MCP framework.
+    """
+    global ANALYZED_PE_FILE_PATH, ANALYZED_PE_DATA, PE_OBJECT_FOR_MCP
+
+    if ANALYZED_PE_FILE_PATH is None or not os.path.exists(ANALYZED_PE_FILE_PATH) :
+        await ctx.error("No PE file was successfully pre-loaded at server startup, or path is invalid. Cannot re-analyze.")
+        raise RuntimeError("No PE file pre-loaded or pre-loaded file path is invalid. Cannot re-analyze.")
+
+    await ctx.info(f"Request to re-analyze pre-loaded PE: {ANALYZED_PE_FILE_PATH}")
+
+    normalized_analyses_to_skip = []
+    if analyses_to_skip:
+        normalized_analyses_to_skip = [analysis.lower() for analysis in analyses_to_skip]
+        await ctx.info(f"Skipping analyses during re-analysis: {', '.join(normalized_analyses_to_skip)}")
+
+    current_peid_db_path = str(Path(peid_db_path).resolve()) if peid_db_path else str(DEFAULT_PEID_DB_PATH)
+    current_yara_rules_path = str(Path(yara_rules_path).resolve()) if yara_rules_path else None
+    current_capa_rules_dir = str(Path(capa_rules_dir).resolve()) if capa_rules_dir else None
+    current_capa_sigs_dir = str(Path(capa_sigs_dir).resolve()) if capa_sigs_dir else None
+
+    # Define the synchronous work that might be cancelled
+    def perform_analysis_in_thread():
+        temp_pe_obj = None
+        try:
+            # Re-open from path to ensure a fresh object, especially if PE_OBJECT_FOR_MCP was closed.
+            temp_pe_obj = pefile.PE(ANALYZED_PE_FILE_PATH, fast_load=False)
+            
+            # The _parse_pe_to_dict function will handle the actual parsing.
+            # True cooperative cancellation would require _parse_pe_to_dict
+            # and its sub-functions to periodically check an event.
+            # For now, cancellation is handled by the asyncio.Task wrapper.
+            new_parsed_data = _parse_pe_to_dict(
+                temp_pe_obj, ANALYZED_PE_FILE_PATH, current_peid_db_path, current_yara_rules_path,
+                current_capa_rules_dir, current_capa_sigs_dir,
+                verbose_mcp_output, skip_full_peid_scan, peid_scan_all_sigs_heuristically,
+                normalized_analyses_to_skip
+            )
+            return temp_pe_obj, new_parsed_data
+        except Exception: # Catch all from PE parsing or _parse_pe_to_dict
+            if temp_pe_obj:
+                temp_pe_obj.close()
+            raise # Re-raise to be caught by the outer handler in the async tool
 
     try:
-        if PE_OBJECT_FOR_MCP: PE_OBJECT_FOR_MCP.close() # Close previously loaded PE object if any
-        pe_obj = pefile.PE(filepath, fast_load=False)
-        parsed_data = await asyncio.to_thread(
-            _parse_pe_to_dict, pe_obj, filepath, peid_db_path, yara_rules_path,
-            effective_capa_rules_dir, # Use the potentially downloaded path
-            capa_sigs_dir, 
-            verbose_mcp_output, skip_full_peid_scan, peid_scan_all_sigs_heuristically
-        )
-        PE_OBJECT_FOR_MCP = pe_obj; ANALYZED_PE_FILE_PATH = filepath; ANALYZED_PE_DATA = parsed_data
-        await ctx.info(f"Successfully loaded/analyzed PE: {filepath}")
-        return {"status":"success", "message":f"File '{filepath}' loaded and analyzed.", "filepath":filepath}
-    except Exception as e:
-        ANALYZED_PE_DATA=None; ANALYZED_PE_FILE_PATH=None
-        # Ensure PE_OBJECT_FOR_MCP is also cleared and closed if it was this specific object
-        if 'pe_obj' in locals() and PE_OBJECT_FOR_MCP == pe_obj: 
+        # The `asyncio.to_thread` call itself can be cancelled if the task running this tool method is cancelled.
+        new_pe_obj, new_parsed_data = await asyncio.to_thread(perform_analysis_in_thread)
+        
+        # If successful and not cancelled, update global state
+        if PE_OBJECT_FOR_MCP: 
             PE_OBJECT_FOR_MCP.close()
-            PE_OBJECT_FOR_MCP = None
-        elif PE_OBJECT_FOR_MCP and not 'pe_obj' in locals(): # Should not happen if logic is correct
-            PE_OBJECT_FOR_MCP.close()
-            PE_OBJECT_FOR_MCP = None
+        PE_OBJECT_FOR_MCP = new_pe_obj 
+        ANALYZED_PE_DATA = new_parsed_data 
 
-        await ctx.error(f"Error analyzing PE '{filepath}': {str(e)}"); 
-        logger.error(f"MCP: Error analyzing PE '{filepath}': {str(e)}", exc_info=True)
-        # Re-raise as a more generic runtime error for MCP to handle
-        raise RuntimeError(f"Failed to analyze PE file '{filepath}': {str(e)}") from e
+        await ctx.info(f"Successfully re-analyzed PE: {ANALYZED_PE_FILE_PATH}")
+        return {"status":"success", "message":f"File '{ANALYZED_PE_FILE_PATH}' re-analyzed (skipped: {normalized_analyses_to_skip if normalized_analyses_to_skip else 'None'}).", "filepath":ANALYZED_PE_FILE_PATH}
+
+    except asyncio.CancelledError: 
+        await ctx.warning(f"Re-analysis task for {ANALYZED_PE_FILE_PATH} was cancelled by MCP framework.")
+        # If PE_OBJECT_FOR_MCP was replaced by temp_pe_obj from a partially successful thread 
+        # before cancellation, it should be closed if it's the new one.
+        # However, if perform_analysis_in_thread raises CancelledError, it might not return new_pe_obj.
+        # The primary PE_OBJECT_FOR_MCP from startup should remain untouched if re-analysis fails or is cancelled.
+        # The logic in perform_analysis_in_thread attempts to close its temporary object on error.
+        logger.info(f"Re-analysis of {ANALYZED_PE_FILE_PATH} cancelled. Global PE data remains from previous successful load.")
+        raise # Re-raise for the MCP framework to handle (typically means no response sent)
+    except Exception as e:
+        await ctx.error(f"Error re-analyzing PE '{ANALYZED_PE_FILE_PATH}': {str(e)}");
+        logger.error(f"MCP: Error re-analyzing PE '{ANALYZED_PE_FILE_PATH}': {str(e)}", exc_info=verbose_mcp_output)
+        # Don't update global state on error during re-analysis
+        raise RuntimeError(f"Failed to re-analyze PE file '{ANALYZED_PE_FILE_PATH}': {str(e)}") from e
+
 
 @tool_decorator
-async def get_analyzed_file_summary(ctx: Context, limit: Optional[int] = None) -> Dict[str, Any]:
+async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
+    """
+    Retrieves a high-level summary of the pre-loaded and analyzed PE file.
+
+    Prerequisites:
+    - A PE file must have been successfully pre-loaded at server startup.
+
+    Args:
+        ctx: The MCP Context object.
+        limit: (int) Mandatory. Limits the number of top-level key-value pairs returned. Must be positive.
+
+    Returns:
+        A dictionary containing summary information.
+    Raises:
+        RuntimeError: If no PE file is currently loaded.
+        ValueError: If limit is not a positive integer.
+    """
     await ctx.info(f"Request for analyzed file summary. Limit: {limit}")
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("Parameter 'limit' must be a positive integer.")
+        
     if ANALYZED_PE_DATA is None or ANALYZED_PE_FILE_PATH is None:
-        raise RuntimeError("No PE file loaded. Call 'load_and_analyze_pe_file' first.")
-    summary = {
+        raise RuntimeError("No PE file loaded. Server may not have pre-loaded the input file successfully.")
+
+    full_summary = {
         "filepath":ANALYZED_PE_FILE_PATH,"pefile_version_used":PEFILE_VERSION_USED,
         "has_dos_header":'dos_header'in ANALYZED_PE_DATA and ANALYZED_PE_DATA['dos_header']is not None and"error"not in ANALYZED_PE_DATA['dos_header'],
         "has_nt_headers":'nt_headers'in ANALYZED_PE_DATA and ANALYZED_PE_DATA['nt_headers']is not None and"error"not in ANALYZED_PE_DATA['nt_headers'],
@@ -1846,97 +2185,403 @@ async def get_analyzed_file_summary(ctx: Context, limit: Optional[int] = None) -
         "export_symbol_count":len(ANALYZED_PE_DATA.get('exports',{}).get('symbols',[])),
         "peid_ep_match_count":len(ANALYZED_PE_DATA.get('peid_matches',{}).get('ep_matches',[])),
         "peid_heuristic_match_count":len(ANALYZED_PE_DATA.get('peid_matches',{}).get('heuristic_matches',[])),
-        "yara_match_count":len([m for m in ANALYZED_PE_DATA.get('yara_matches',[])if"error"not in m]),
-        "capa_status": ANALYZED_PE_DATA.get('capa_analysis',{}).get('status',"Not run"),
-        "capa_capability_count": len(ANALYZED_PE_DATA.get('capa_analysis',{}).get('results',{}).get('rules',{})) if ANALYZED_PE_DATA.get('capa_analysis',{}).get('status')=="Analysis complete" else 0,
+        "peid_status": ANALYZED_PE_DATA.get('peid_matches',{}).get('status',"Not run/Skipped"),
+        "yara_match_count":len([m for m in ANALYZED_PE_DATA.get('yara_matches',[])if isinstance(m, dict) and "error" not in m and "status" not in m]),
+        "yara_status": ANALYZED_PE_DATA.get('yara_matches',[{}])[0].get('status', "Run/No Matches or Not Run/Skipped") if ANALYZED_PE_DATA.get('yara_matches') and isinstance(ANALYZED_PE_DATA.get('yara_matches'), list) and ANALYZED_PE_DATA.get('yara_matches')[0] else "Not run/Skipped",
+        "capa_status": ANALYZED_PE_DATA.get('capa_analysis',{}).get('status',"Not run/Skipped"),
+        "capa_capability_count": len(ANALYZED_PE_DATA.get('capa_analysis',{}).get('results',{}).get('rules',{})) if ANALYZED_PE_DATA.get('capa_analysis',{}).get('status')=="Analysis complete (adapted workflow)" else 0,
         "has_embedded_signature":ANALYZED_PE_DATA.get('digital_signature',{}).get('embedded_signature_present',False)
     }
-    await ctx.info(f"Summary for {ANALYZED_PE_FILE_PATH} provided.")
-    return summary
+    await ctx.info(f"Summary for {ANALYZED_PE_FILE_PATH} generated.")
+    return dict(list(full_summary.items())[:limit])
+
 
 @tool_decorator
-async def get_full_analysis_results(ctx: Context, limit: Optional[int] = None) -> Dict[str, Any]:
+async def get_full_analysis_results(ctx: Context, limit: int) -> Dict[str, Any]:
+    """
+    Retrieves the complete analysis results for the pre-loaded PE file.
+
+    Prerequisites:
+    - A PE file must have been successfully pre-loaded at server startup.
+
+    Args:
+        ctx: The MCP Context object.
+        limit: (int) Mandatory. Limits the number of top-level key-value pairs. Must be positive.
+
+    Returns:
+        A potentially large dictionary containing all parsed PE structures, hashes, scan results, etc.
+    Raises:
+        RuntimeError: If no PE file is currently loaded.
+        ValueError: If limit is not a positive integer.
+    """
     await ctx.info(f"Request for full PE analysis. Limit: {limit}")
-    if ANALYZED_PE_DATA is None: raise RuntimeError("No PE file loaded.")
-    if limit is not None and isinstance(ANALYZED_PE_DATA,dict):
-        return dict(list(ANALYZED_PE_DATA.items())[:limit])
-    return ANALYZED_PE_DATA
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("Parameter 'limit' must be a positive integer.")
+
+    if ANALYZED_PE_DATA is None: raise RuntimeError("No PE file loaded. Server may not have pre-loaded the input file successfully.")
+    
+    return dict(list(ANALYZED_PE_DATA.items())[:limit])
 
 def _create_mcp_tool_for_key(key_name: str, tool_description: str):
-    async def _tool_func(ctx: Context, limit: Optional[int] = None) -> Any:
-        await ctx.info(f"Request for '{key_name}'. Limit: {limit}")
-        if ANALYZED_PE_DATA is None: raise RuntimeError(f"No PE file loaded to get '{key_name}'.")
-        data_to_return = ANALYZED_PE_DATA.get(key_name)
-        if data_to_return is None: await ctx.warning(f"Data for '{key_name}' not found. Returning empty."); return {}
-        if limit is not None:
-            if isinstance(data_to_return,list): return data_to_return[:limit]
-            elif isinstance(data_to_return,dict)and key_name!="nt_headers": # Avoid limiting the complex NT_Headers structure unintentionally
-                try: return dict(list(data_to_return.items())[:limit])
-                except: await ctx.warning(f"Could not limit dict for '{key_name}'. Returning full.")
-            else: await ctx.warning(f"Limit not applicable for '{key_name}' type ({type(data_to_return).__name__}).")
-        return data_to_return
-    _tool_func.__name__ = f"get_{key_name}_info"; _tool_func.__doc__ = tool_description + " Optionally use 'limit' (int) for lists/dicts."
+    async def _tool_func(ctx: Context, limit: int, offset: Optional[int] = 0) -> Any:
+        await ctx.info(f"Request for '{key_name}'. Limit: {limit}, Offset: {offset}")
+        if not (isinstance(limit, int) and limit > 0):
+            raise ValueError(f"Parameter 'limit' for '{key_name}' must be a positive integer.")
+
+        if ANALYZED_PE_DATA is None:
+            raise RuntimeError(f"No PE file loaded. Server may not have pre-loaded the input file successfully. Cannot get '{key_name}'.")
+
+        original_data = ANALYZED_PE_DATA.get(key_name)
+        if original_data is None:
+            await ctx.warning(f"Data for '{key_name}' not found in analyzed results. Returning empty structure.")
+            return {}
+
+        # Apply offset first if data is a list
+        processed_data = original_data
+        if isinstance(original_data, list) and offset is not None:
+            if not (isinstance(offset, int) and offset >= 0):
+                await ctx.warning(f"Invalid 'offset' value '{offset}' for '{key_name}'. Using offset 0.")
+                offset = 0
+            if offset > 0:
+                 processed_data = original_data[offset:]
+        elif offset != 0 and offset is not None: # Offset provided but not applicable
+             await ctx.warning(f"Parameter 'offset' is provided but not applicable for data type '{type(original_data).__name__}' of key '{key_name}'. Ignoring offset.")
+        
+        # Apply limit
+        if isinstance(processed_data, list):
+            return processed_data[:limit]
+        if isinstance(processed_data, dict): # Offset doesn't apply to dicts in this simple way
+            try:
+                return dict(list(processed_data.items())[:limit])
+            except Exception as e_dict_limit:
+                await ctx.warning(f"Could not apply generic dictionary limit for '{key_name}': {e_dict_limit}. Returning full data for this key (up to internal Pydantic limits).")
+                return processed_data
+
+        await ctx.info(f"Data for key '{key_name}' is type '{type(processed_data).__name__}'. 'limit' parameter acknowledged but not directly used for slicing this type.")
+        return processed_data
+
+    _tool_func.__name__ = f"get_{key_name}_info"
+    doc = f"""Retrieves the '{key_name}' portion of the PE analysis results for the pre-loaded file.
+
+Prerequisites:
+- A PE file must have been successfully pre-loaded at server startup.
+
+Args:
+    ctx: The MCP Context object.
+    limit: (int) Mandatory. Limits the number of items returned. Must be a positive integer.
+           For lists, it's the number of elements. For dictionaries, it's the number of top-level key-value pairs.
+    offset: (Optional[int], default 0) Specifies the starting index for lists. Ignored for dictionaries.
+
+Returns:
+    The data associated with '{key_name}'. Structure depends on the key:
+    - {tool_description}
+    The return type is typically a dictionary or a list of dictionaries.
+
+Raises:
+    RuntimeError: If no PE file is currently loaded.
+    ValueError: If limit is not a positive integer.
+"""
+    _tool_func.__doc__ = doc
     return tool_decorator(_tool_func)
 
+
 TOOL_DEFINITIONS = {
-    "file_hashes":"File hashes.","dos_header":"DOS_HEADER.","nt_headers":"NT_HEADERS.","data_directories":"Data Directories.",
-    "sections":"PE sections.","imports":"Imported DLLs/symbols.","exports":"Exported symbols.","resources_summary":"Resource summary.",
-    "version_info":"Version Information.","debug_info":"Debug directory.","digital_signature":"Digital signature.",
-    "peid_matches":"PEiD matches.","yara_matches":"YARA matches.","capa_analysis":"Capa capability analysis results.",
-    "rich_header":"Rich Header.","delay_load_imports":"Delay-Load Imports.","tls_info":"TLS Directory.",
-    "load_config":"Load Configuration.","com_descriptor":".NET COM Descriptor.","overlay_data":"Overlay data.",
-    "base_relocations":"Base Relocations.","bound_imports":"Bound Imports.","exception_data":"Exception Data.",
-    "coff_symbols":"COFF Symbols.","checksum_verification":"PE checksum.","pefile_warnings":"pefile warnings."
+    "file_hashes":"Cryptographic hashes (MD5, SHA1, SHA256, ssdeep) for the entire loaded PE file. Output is a dictionary.",
+    "dos_header":"Detailed breakdown of the DOS_HEADER structure from the PE file. Output is a dictionary.",
+    "nt_headers":"Detailed breakdown of NT_HEADERS, including File Header and Optional Header. Output is a dictionary.",
+    "data_directories":"Information on all Data Directories (e.g., import, export, resource tables), including their RVAs and sizes. Output is a list of dictionaries.",
+    "sections":"Detailed information for each section in the PE file (name, RVA, size, characteristics, entropy, hashes). Output is a list of dictionaries.",
+    "imports":"List of imported DLLs and, for each DLL, the imported symbols (functions/ordinals). Output is a list of dictionaries.",
+    "exports":"Information on exported symbols from the PE file, including name, RVA, ordinal, and any forwarders. Output is a dictionary.",
+    "resources_summary":"A summary list of resources found in the PE file, detailing type, ID/name, language, RVA, and size. Output is a list of dictionaries.",
+    "version_info":"Version information extracted from the PE file's version resource (e.g., FileVersion, ProductName). Output is a dictionary.",
+    "debug_info":"Details from the debug directory, which may include PDB paths or CodeView information. Output is a list of dictionaries.",
+    "digital_signature":"Information about the PE file's Authenticode digital signature, including certificate details and validation status (if 'cryptography' and 'signify' libs are available). Output is a dictionary.",
+    "peid_matches":"Results from PEiD-like signature scanning, indicating potential packers or compilers. Includes entry-point and heuristic matches. Output is a dictionary.",
+    "yara_matches":"Results from YARA scanning, listing any matched rules, tags, metadata, and string identifiers. Output is a list of dictionaries.",
+    "rich_header":"Decoded Microsoft Rich Header information, often indicating compiler/linker versions. Output is a dictionary.",
+    "delay_load_imports":"Information on delay-loaded imported DLLs and their symbols. Output is a list of dictionaries.",
+    "tls_info":"Details from the Thread Local Storage (TLS) directory, including any callback function addresses. Output is a dictionary.",
+    "load_config":"Information from the Load Configuration directory, including flags like Control Flow Guard (CFG) status. Output is a dictionary.",
+    "com_descriptor":"Information from the .NET COM Descriptor (IMAGE_COR20_HEADER) if the PE is a .NET assembly. Output is a dictionary.",
+    "overlay_data":"Information about any data appended to the end of the PE file (overlay), including offset, size, and hashes. Output is a dictionary.",
+    "base_relocations":"Details of base relocations within the PE file. Output is a list of dictionaries.",
+    "bound_imports":"Information on bound imports, if present. Output is a list of dictionaries.",
+    "exception_data":"Data from the exception directory (e.g., RUNTIME_FUNCTION entries for x64). Output is a list of dictionaries.",
+    "coff_symbols":"COFF (Common Object File Format) symbol table entries, if present. Output is a list of dictionaries.",
+    "checksum_verification":"Verification of the PE file's checksum against the value in the Optional Header. Output is a dictionary.",
+    "pefile_warnings":"Any warnings generated by the 'pefile' library during parsing. Output is a list of strings."
 }
 for key, desc in TOOL_DEFINITIONS.items(): globals()[f"get_{key}_info"] = _create_mcp_tool_for_key(key, desc)
 
 @tool_decorator
-async def extract_strings_from_binary(ctx: Context, min_length: int = 5, limit: Optional[int] = 1000) -> List[Dict[str, Any]]:
+async def get_capa_analysis_info(ctx: Context,
+                                 limit: int, 
+                                 offset: Optional[int] = 0,
+                                 filter_rule_name: Optional[str] = None,
+                                 filter_namespace: Optional[str] = None,
+                                 filter_attck_id: Optional[str] = None,
+                                 filter_mbc_id: Optional[str] = None,
+                                 fields_per_rule: Optional[List[str]] = None,
+                                 get_report_metadata_only: bool = False
+                                 ) -> Dict[str, Any]:
+    """
+    Retrieves detailed Capa capability analysis results for the pre-loaded file, with filtering and pagination.
+    
+    Args:
+        ctx: The MCP Context object.
+        limit: (int) Mandatory. Maximum capability rules to return. Must be positive.
+        offset: (Optional[int]) Starting index for pagination. Defaults to 0.
+        filter_rule_name: (Optional[str]) Filter rules by name/ID (case-insensitive substring).
+        filter_namespace: (Optional[str]) Filter rules by namespace (exact match, case-insensitive).
+        filter_attck_id: (Optional[str]) Filter rules by ATT&CK ID/tactic (case-insensitive substring).
+        filter_mbc_id: (Optional[str]) Filter rules by MBC ID/objective (case-insensitive substring).
+        fields_per_rule: (Optional[List[str]]) Specific top-level fields per rule to return.
+        get_report_metadata_only: (bool) If True, returns only the top-level 'meta' section.
+
+    Returns:
+        A dictionary with Capa results or report metadata.
+    Raises:
+        RuntimeError: If no PE file loaded or Capa analysis skipped/failed.
+        ValueError: If 'limit' is not a positive integer.
+    """
+    await ctx.info(f"Request for 'capa_analysis'. Limit: {limit}, Offset: {offset}, Filters: rule_name='{filter_rule_name}', ns='{filter_namespace}', att&ck='{filter_attck_id}', mbc='{filter_mbc_id}', Fields: {fields_per_rule}, MetaOnly: {get_report_metadata_only}")
+
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("Parameter 'limit' for Capa analysis must be a positive integer.")
+
+    if ANALYZED_PE_DATA is None or 'capa_analysis' not in ANALYZED_PE_DATA:
+        await ctx.error("Capa analysis data not found. Pre-loaded file might not have been analyzed with Capa.")
+        raise RuntimeError("No Capa analysis data found. Ensure Capa analysis ran at startup or via re-analyze.")
+
+    capa_data_block = ANALYZED_PE_DATA.get('capa_analysis', {})
+    capa_full_results = capa_data_block.get('results')
+    capa_status = capa_data_block.get("status", "Unknown")
+
+    if capa_status == "Skipped by user request":
+        await ctx.warning("Capa analysis was skipped for the loaded file.")
+        return {"error": "Capa analysis was skipped for the loaded file.", "rules": {}, "pagination": {'offset': offset or 0, 'limit': limit, 'current_items_count': 0, 'total_items_after_filtering': 0, 'total_capabilities_in_report': 0}}
+    
+    if capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete" or not capa_full_results:
+        await ctx.warning(f"Capa analysis was not successfully completed or results are missing. Status: {capa_status}")
+        return {"error": f"Capa analysis not complete or results missing. Status: {capa_status}", "rules": {}, "pagination": {
+             'offset': offset if isinstance(offset, int) else 0, 'limit': limit,
+             'current_items_count': 0, 'total_items_after_filtering': 0, 'total_capabilities_in_report': 0
+        }}
+
+
+    if get_report_metadata_only:
+        report_meta = capa_full_results.get('meta', {})
+        await ctx.info("Returning only Capa report metadata.")
+        return {"report_metadata": report_meta}
+
+
+    current_offset = 0
+    if offset is not None:
+        if not (isinstance(offset, int) and offset >= 0):
+            await ctx.warning(f"Invalid 'offset' parameter, defaulting to 0. Received: {offset}")
+        else:
+            current_offset = offset
+
+    all_rules_dict = capa_full_results.get('rules', {})
+    if not isinstance(all_rules_dict, dict):
+        await ctx.warning("Capa 'rules' data is not in the expected dictionary format.")
+        return {"error": "Capa 'rules' data malformed.", "rules": {}, "pagination": {
+            'offset': current_offset, 'limit': limit, 'current_items_count': 0,
+            'total_items_after_filtering': 0, 'total_capabilities_in_report': 0
+        }}
+
+    filtered_rule_items = []
+    for rule_id, rule_details in all_rules_dict.items():
+        if not isinstance(rule_details, dict): continue
+        meta = rule_details.get("meta", {})
+        if not isinstance(meta, dict): meta = {}
+
+        passes_filter = True
+        if filter_rule_name:
+            name_to_check = meta.get("name", rule_id)
+            if filter_rule_name.lower() not in name_to_check.lower():
+                passes_filter = False
+        if passes_filter and filter_namespace:
+            if meta.get("namespace", "").lower() != filter_namespace.lower():
+                passes_filter = False
+        if passes_filter and filter_attck_id:
+            attck_ids = meta.get("att&ck", [])
+            if not any(filter_attck_id.lower() in str(aid).lower() for aid in attck_ids):
+                passes_filter = False
+        if passes_filter and filter_mbc_id:
+            mbc_ids = meta.get("mbc", [])
+            if not any(filter_mbc_id.lower() in str(mid).lower() for mid in mbc_ids):
+                passes_filter = False
+
+        if passes_filter:
+            filtered_rule_items.append((rule_id, rule_details))
+
+    total_filtered_count = len(filtered_rule_items)
+    paginated_rule_items = filtered_rule_items[current_offset : current_offset + limit]
+
+    final_rules_output = {}
+    for rule_id, rule_details in paginated_rule_items:
+        if fields_per_rule:
+            selected_data = {field: rule_details[field] for field in fields_per_rule if field in rule_details}
+            final_rules_output[rule_id] = selected_data
+        else:
+            final_rules_output[rule_id] = rule_details
+
+    pagination_info = {
+        'offset': current_offset,
+        'limit': limit,
+        'current_items_count': len(final_rules_output),
+        'total_items_after_filtering': total_filtered_count,
+        'total_capabilities_in_report': len(all_rules_dict)
+    }
+
+    await ctx.info(f"Returning capa_analysis. Filters applied. Page: offset {current_offset}, limit {limit}. Items on page: {len(final_rules_output)} of {total_filtered_count} filtered items.")
+    return {"rules": final_rules_output, "pagination": pagination_info}
+
+
+@tool_decorator
+async def extract_strings_from_binary(ctx: Context, limit: int, min_length: int = 5) -> List[Dict[str, Any]]:
+    """
+    Extracts printable ASCII strings from the pre-loaded PE file's binary data.
+
+    Prerequisites:
+    - A PE file must have been successfully pre-loaded at server startup.
+
+    Args:
+        ctx: The MCP Context object.
+        limit: (int) Mandatory. The maximum number of strings to return. Must be positive.
+        min_length: (int) The minimum length for a sequence of characters to be considered a string. Defaults to 5.
+
+    Returns:
+        A list of dictionaries, where each dictionary contains:
+        - "offset": (str) The hexadecimal offset of the string within the file.
+        - "string": (str) The extracted string.
+        Returns an empty list if no PE file is loaded or no strings are found.
+
+    Raises:
+        RuntimeError: If no PE file is currently loaded or an extraction error occurs.
+        ValueError: If limit is not a positive integer.
+    """
     await ctx.info(f"Request to extract strings. Min_len: {min_length}, Limit: {limit}")
-    if PE_OBJECT_FOR_MCP is None: raise RuntimeError("No PE file loaded. Call 'load_and_analyze_pe_file' first.")
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("Parameter 'limit' must be a positive integer.")
+
+    if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
+        raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
     try:
         file_data=PE_OBJECT_FOR_MCP.__data__; found=_extract_strings_from_data(file_data,min_length)
         results=[{"offset":hex(offset),"string":s}for offset,s in found]
-        return results[:limit] if limit is not None and len(results)>limit else results
-    except Exception as e: await ctx.error(f"String extraction error: {e}"); raise RuntimeError(f"Failed: {e}")from e
+        return results[:limit]
+
+    except Exception as e: await ctx.error(f"String extraction error: {e}"); raise RuntimeError(f"Failed during string extraction: {e}")from e
 
 @tool_decorator
-async def search_for_specific_strings(ctx: Context, search_terms: List[str], limit: Optional[int] = 100) -> Dict[str, List[str]]:
-    await ctx.info(f"Request to search strings: {search_terms}. Limit: {limit}")
-    if PE_OBJECT_FOR_MCP is None: raise RuntimeError("No PE file loaded. Call 'load_and_analyze_pe_file' first.")
-    if not search_terms or not isinstance(search_terms,list): raise ValueError("search_terms must be non-empty list.")
+async def search_for_specific_strings(ctx: Context, search_terms: List[str], limit_per_term: Optional[int] = 100) -> Dict[str, List[str]]:
+    """
+    Searches for occurrences of specific ASCII strings within the pre-loaded PE file's binary data.
+    'limit_per_term' controls occurrences per search term.
+
+    Prerequisites:
+    - A PE file must have been successfully pre-loaded at server startup.
+
+    Args:
+        ctx: The MCP Context object.
+        search_terms: (List[str]) A list of ASCII strings to search for. Case-sensitive.
+        limit_per_term: (Optional[int]) The maximum number of occurrences to report for each search term.
+                        Defaults to 100. If None or 0 or negative, a default internal limit may apply.
+
+    Returns:
+        A dictionary where keys are the search terms and values are lists of hexadecimal offsets.
+    Raises:
+        RuntimeError: If no PE file is currently loaded or a search error occurs.
+        ValueError: If `search_terms` is empty or not a list.
+    """
+    await ctx.info(f"Request to search strings: {search_terms}. Limit per term: {limit_per_term}")
+    if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
+        raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
+    if not search_terms or not isinstance(search_terms,list): raise ValueError("search_terms must be a non-empty list of strings.")
+
+    effective_limit_pt = 100
+    if limit_per_term is not None and isinstance(limit_per_term, int) and limit_per_term > 0:
+        effective_limit_pt = limit_per_term
+    elif limit_per_term is not None:
+        await ctx.warning(f"Invalid limit_per_term value '{limit_per_term}'. Using default of {effective_limit_pt}.")
+
     try:
-        file_data=PE_OBJECT_FOR_MCP.__data__; found=_search_specific_strings_in_data(file_data,search_terms)
-        limited_res:Dict[str,List[str]]={};total_found=0
-        for term,offsets in found.items():
-            if not offsets:continue
-            can_add=(limit-total_found)if limit is not None else len(offsets)
-            if can_add<=0 and limit is not None:break
-            limited_offsets=[hex(off)for off in offsets[:can_add]]
-            if limited_offsets:limited_res[term]=limited_offsets;total_found+=len(limited_offsets)
-        return limited_res
-    except Exception as e: await ctx.error(f"String search error: {e}"); raise RuntimeError(f"Failed: {e}")from e
+        file_data=PE_OBJECT_FOR_MCP.__data__; found_offsets_dict=_search_specific_strings_in_data(file_data,search_terms)
+
+        limited_results:Dict[str,List[str]]={}
+        for term, offsets_list_int in found_offsets_dict.items():
+            limited_results[term] = [hex(off) for off in offsets_list_int[:effective_limit_pt]]
+        return limited_results
+    except Exception as e: await ctx.error(f"String search error: {e}"); raise RuntimeError(f"Failed during specific string search: {e}")from e
 
 @tool_decorator
 async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_line: Optional[int]=16, limit_lines: Optional[int]=256) -> List[str]:
-    await ctx.info(f"Hex dump: Offset {hex(start_offset)}, Len {length}, BPL {bytes_per_line}, LimitLines {limit_lines}")
-    if PE_OBJECT_FOR_MCP is None: raise RuntimeError("No PE file loaded. Call 'load_and_analyze_pe_file' first.")
-    if not isinstance(start_offset,int)or start_offset<0:raise ValueError("start_offset must be non-negative int.")
-    if not isinstance(length,int)or length<=0:raise ValueError("length must be positive int.")
-    bpl=bytes_per_line if bytes_per_line is not None and isinstance(bytes_per_line,int)and bytes_per_line>0 else 16
-    ll=limit_lines if limit_lines is not None and isinstance(limit_lines,int)and limit_lines>0 else 256
+    """
+    Retrieves a hex dump of a specified region from the pre-loaded PE file.
+    'limit_lines' controls the number of lines in the output.
+
+    Prerequisites:
+    - A PE file must have been successfully pre-loaded at server startup.
+
+    Args:
+        ctx: The MCP Context object.
+        start_offset: (int) The starting offset (0-based) in the file from which to begin the hex dump.
+        length: (int) The number of bytes to include in the hex dump. Must be positive.
+        bytes_per_line: (Optional[int]) The number of bytes to display per line. Defaults to 16. Must be positive.
+        limit_lines: (Optional[int]) The maximum number of lines to return. Defaults to 256. Must be positive.
+
+    Returns:
+        A list of strings, where each string is a formatted line of the hex dump.
+    Raises:
+        RuntimeError: If no PE file is currently loaded or a hex dump error occurs.
+        ValueError: If inputs are invalid.
+    """
+    await ctx.info(f"Hex dump requested: Offset {hex(start_offset)}, Length {length}, Bytes/Line {bytes_per_line}, Limit Lines {limit_lines}")
+    if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
+        raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
+    if not isinstance(start_offset,int)or start_offset<0:raise ValueError("start_offset must be a non-negative integer.")
+    if not isinstance(length,int)or length<=0:raise ValueError("length must be a positive integer.")
+
+    bpl = 16
+    if bytes_per_line is not None:
+        if isinstance(bytes_per_line, int) and bytes_per_line > 0: bpl = bytes_per_line
+        else: raise ValueError("bytes_per_line must be a positive integer.")
+
+    ll = 256
+    if limit_lines is not None:
+        if isinstance(limit_lines, int) and limit_lines > 0: ll = limit_lines
+        else: raise ValueError("limit_lines must be a positive integer.")
+
     try:
         file_data=PE_OBJECT_FOR_MCP.__data__
-        if start_offset>=len(file_data):return["Error: Start offset beyond file size."]
+        if start_offset>=len(file_data):return["Error: Start offset is beyond the file size."]
         actual_len=min(length,len(file_data)-start_offset)
-        if actual_len<=0:return["Error: Calculated length is zero or negative."]
+        if actual_len<=0:return["Error: Calculated length for hex dump is zero or negative (start_offset might be at or past EOF)."]
+
         data_chunk=file_data[start_offset:start_offset+actual_len]
         hex_lines=await asyncio.to_thread(_format_hex_dump_lines,data_chunk,start_offset,bpl)
-        return hex_lines[:ll] if ll is not None and len(hex_lines)>ll else hex_lines
-    except Exception as e:await ctx.error(f"Hex dump error: {e}");raise RuntimeError(f"Failed: {e}")from e
+
+        return hex_lines[:ll]
+    except Exception as e:await ctx.error(f"Hex dump error: {e}");raise RuntimeError(f"Failed during hex dump generation: {e}")from e
 
 @tool_decorator
-async def get_current_datetime(ctx: Context, limit: Optional[int]=None)->Dict[str,str]: # limit is unused but kept for signature consistency if desired
+async def get_current_datetime(ctx: Context) -> Dict[str,str]:
+    """
+    Retrieves the current date and time in UTC and the server's local timezone.
+    This tool does not depend on a PE file being loaded.
+
+    Args:
+        ctx: The MCP Context object.
+
+    Returns:
+        A dictionary containing:
+        - "utc_datetime": (str) Current UTC date and time in ISO 8601 format.
+        - "local_datetime": (str) Current local date and time in ISO 8601 format (includes timezone offset).
+        - "local_timezone_name": (str) Name of the server's local timezone.
+    """
     await ctx.info("Request for current datetime.")
     now_utc=datetime.datetime.now(datetime.timezone.utc);now_local=datetime.datetime.now().astimezone()
     return{"utc_datetime":now_utc.isoformat(),"local_datetime":now_local.isoformat(),"local_timezone_name":str(now_local.tzinfo)}
@@ -1946,32 +2591,54 @@ async def get_current_datetime(ctx: Context, limit: Optional[int]=None)->Dict[st
 @tool_decorator
 async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
     """
-    Deobfuscates a hex-encoded string that represents base64 encoded data.
-    The input 'hex_string' should be the hex representation of a base64 string.
-    Example: If original data is "test", base64 is "dGVzdA==",
-    hex of "dGVzdA==" is "6447567a64413d3d". This function takes "6447567a64413d3d".
+    Deobfuscates a hex-encoded string that is presumed to represent Base64 encoded data.
+    The input 'hex_string' should be the hexadecimal representation of a Base64 string.
+    Example: If original data is "test", its Base64 is "dGVzdA==", and the hex of "dGVzdA==" is "6447567a64413d3d".
+             This function expects "6447567a64413d3d" as input.
+
+    Args:
+        ctx: The MCP Context object.
+        hex_string: (str) The hex-encoded string of the Base64 data.
+
+    Returns:
+        (Optional[str]) The deobfuscated string (UTF-8 decoded, errors ignored).
+        Returns None if deobfuscation fails (e.g., invalid hex, not valid Base64).
     """
     await ctx.info(f"Attempting to deobfuscate Base64 from hex string: {hex_string[:60]}...")
     try:
         base64_encoded_bytes = bytes.fromhex(hex_string)
-        decoded_payload_bytes = codecs.decode(base64_encoded_bytes, 'base64')
+        decoded_payload_bytes = codecs.decode(base64_encoded_bytes, 'base64') # pyright: ignore [reportUnknownMemberType]
         result = decoded_payload_bytes.decode('utf-8', 'ignore')
         await ctx.info("Base64 deobfuscation successful.")
         return result
-    except ValueError as e: # Handles errors from bytes.fromhex
+    except ValueError as e:
         await ctx.error(f"Invalid hex string provided for Base64 deobfuscation: {str(e)}")
         logger.warning(f"MCP: Invalid hex string for Base64 deobfuscation: {hex_string[:60]}... - {str(e)}")
-        return None # Or raise ValueError(f"Invalid hex string: {str(e)}")
+        return None
     except Exception as e:
         await ctx.error(f"Base64 deobfuscation error: {str(e)}")
         logger.error(f"MCP: Base64 deobfuscation error for {hex_string[:60]}... - {str(e)}", exc_info=True)
-        return None # Or raise RuntimeError(f"Base64 deobfuscation failed: {str(e)}")
+        return None
 
 @tool_decorator
 async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> Dict[str, Optional[str]]:
     """
-    Deobfuscates a hex-encoded data string using a single byte XOR key.
-    Returns a dictionary with 'deobfuscated_hex' and 'deobfuscated_printable_string'.
+    Deobfuscates a hex-encoded data string using a single-byte XOR key.
+
+    Args:
+        ctx: The MCP Context object.
+        data_hex: (str) The hex-encoded data string to be XORed.
+        key: (int) The single byte (0-255) to use as the XOR key.
+
+    Returns:
+        A dictionary containing:
+        - "deobfuscated_hex": (str) The hex representation of the XORed data.
+        - "deobfuscated_printable_string": (Optional[str]) A printable representation of the XORed data
+          (UTF-8 or Latin-1 decoded if possible, otherwise dot-replaced non-printables).
+          Can be None if an error occurs during string representation.
+
+    Raises:
+        ValueError: If `key` is not between 0-255 or `data_hex` is not valid hex.
     """
     await ctx.info(f"Attempting to deobfuscate hex data '{data_hex[:60]}...' with XOR key: {key:#04x} ({key})")
     if not (0 <= key <= 255):
@@ -1983,56 +2650,63 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
         data_bytes = bytes.fromhex(data_hex)
         deobfuscated_bytes = bytes([b ^ key for b in data_bytes])
         deobfuscated_hex_output = deobfuscated_bytes.hex()
-        
-        printable_representation = ""
+
+        printable_representation = None
         try:
-            # Attempt to decode as UTF-8, then Latin-1, then do a safe representation
-            try:
-                printable_representation = deobfuscated_bytes.decode('utf-8')
+            try: printable_representation = deobfuscated_bytes.decode('utf-8')
             except UnicodeDecodeError:
-                try:
-                    printable_representation = deobfuscated_bytes.decode('latin-1')
-                except UnicodeDecodeError: # Fallback for truly binary data
-                    printable_representation = "".join(chr(b) if 32 <= b <= 126 or b in [9,10,13] else '.' for b in deobfuscated_bytes)
-        except Exception as e_decode: # Catch any error during string representation attempt
+                try: printable_representation = deobfuscated_bytes.decode('latin-1')
+                except UnicodeDecodeError: printable_representation = "".join(chr(b) if 32 <= b <= 126 or b in [9,10,13] else '.' for b in deobfuscated_bytes)
+        except Exception as e_decode:
             logger.warning(f"MCP: Error creating printable string for XOR result (key {key}): {e_decode}")
-            printable_representation = "[Decoding error for printable string]"
+            printable_representation = "[Error creating printable string]"
 
         await ctx.info("XOR deobfuscation successful.")
         return {
             "deobfuscated_hex": deobfuscated_hex_output,
             "deobfuscated_printable_string": printable_representation
         }
-    except ValueError as e: # Specifically for bytes.fromhex
-        await ctx.error(f"Invalid hex string provided for data_hex in XOR deobfuscation: {str(e)}")
-        logger.warning(f"MCP: Invalid hex string for XOR data_hex: {data_hex[:60]}... - {str(e)}")
-        raise 
-    except Exception as e:
-        await ctx.error(f"XOR deobfuscation error: {str(e)}")
-        logger.error(f"MCP: XOR deobfuscation error for data_hex {data_hex[:60]}..., key {key} - {str(e)}", exc_info=True)
+    except ValueError as e_val:
+        await ctx.error(f"Invalid hex string provided for data_hex in XOR deobfuscation: {str(e_val)}")
+        logger.warning(f"MCP: Invalid hex string for XOR data_hex: {data_hex[:60]}... - {str(e_val)}")
         raise
+    except Exception as e_gen:
+        await ctx.error(f"XOR deobfuscation error: {str(e_gen)}")
+        logger.error(f"MCP: XOR deobfuscation error for data_hex {data_hex[:60]}..., key {key} - {str(e_gen)}", exc_info=True)
+        raise RuntimeError(f"XOR deobfuscation failed: {str(e_gen)}") from e_gen
 
 @tool_decorator
 async def is_mostly_printable_ascii(ctx: Context, text_input: str, threshold: float = 0.8) -> bool:
     """
     Checks if the given string 'text_input' consists mostly of printable ASCII characters.
-    Printable includes standard ASCII (space to ~) and common whitespace (newline, tab, CR).
+    Printable includes standard ASCII (space to '~') and common whitespace (newline, tab, carriage return).
+
+    Args:
+        ctx: The MCP Context object.
+        text_input: (str) The string to check.
+        threshold: (float) The minimum ratio (0.0 to 1.0) of printable characters to total characters
+                   for the string to be considered "mostly printable". Defaults to 0.8 (80%).
+
+    Returns:
+        (bool) True if the ratio of printable ASCII characters meets or exceeds the threshold, False otherwise.
+               Returns False for an empty input string.
+
+    Raises:
+        ValueError: If `threshold` is not between 0.0 and 1.0.
     """
     await ctx.info(f"Checking if string is mostly printable ASCII. Threshold: {threshold}, String length: {len(text_input)}")
-    if not text_input: # Check for empty string
+    if not text_input:
         await ctx.info("Input string for printable check is empty, returning False.")
         return False
-    
+
     if not (0.0 <= threshold <= 1.0):
         await ctx.error(f"Threshold for printable check must be between 0.0 and 1.0. Received: {threshold}")
         logger.warning(f"MCP: Invalid threshold {threshold} for printable check.")
         raise ValueError("Threshold must be between 0.0 and 1.0.")
 
-    # This logic is from the original _is_mostly_printable_ascii
     printable_char_in_string_count = sum(1 for char_in_s in text_input
                                          if (' ' <= char_in_s <= '~') or char_in_s in '\n\r\t')
-    
-    # len(text_input) will be 0 if text_input is empty, which is handled by the first 'if'
+
     ratio = printable_char_in_string_count / len(text_input)
     result = ratio >= threshold
     await ctx.info(f"Printable character ratio: {ratio:.2f}. Result: {result}")
@@ -2041,87 +2715,85 @@ async def is_mostly_printable_ascii(ctx: Context, text_input: str, threshold: fl
 # --- Main Execution Block ---
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Comprehensive PE File Analyzer.",formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("--input-file", type=str, required=True, help="REQUIRED: Path to the PE file.")
-    parser.add_argument("-d", "--db", dest="peid_db", default=None, help="Path to PEiD userdb.txt. Downloads if not found.")
+    parser.add_argument("--input-file", type=str, required=True, help="REQUIRED: Path to the PE file to be analyzed at server startup (for MCP mode) or for CLI analysis.")
+    parser.add_argument("-d", "--db", dest="peid_db", default=None, help=f"Path to PEiD userdb.txt. If not specified, defaults to '{DEFAULT_PEID_DB_PATH}'. Downloads if not found.")
     parser.add_argument("-y", "--yara-rules", dest="yara_rules", default=None, help="Path to YARA rule file or directory.")
-    parser.add_argument("--capa-rules-dir", default=None, help=f"Directory containing capa rule files. If not provided or empty, attempts download to '{os.path.join(os.getcwd(), CAPA_RULES_DEFAULT_DIR, CAPA_RULES_SUBDIR_NAME)}'.")
-    parser.add_argument("--capa-sigs-dir", default=None, help="Directory containing capa library identification signature files (e.g., sigs/*.sig). Optional.")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output.")
-    parser.add_argument("--skip-full-peid-scan",action="store_true",help="Skip full PEiD scan.")
-    parser.add_argument("--psah","--peid-scan-all-sigs-heuristically",action="store_true",dest="peid_scan_all_sigs_heuristically",help="Full heuristic PEiD scan with ALL signatures.")
-    cli_group=parser.add_argument_group('CLI Mode Specific Options')
-    cli_group.add_argument("--extract-strings",action="store_true",help="Extract strings.")
-    cli_group.add_argument("--min-str-len",type=int,default=5,help="Min length for extracted strings (def:5).")
-    cli_group.add_argument("--search-string",action="append",help="String to search for (multiple allowed).")
-    cli_group.add_argument("--strings-limit",type=int,default=100,help="Limit for string results (def:100).")
-    cli_group.add_argument("--hexdump-offset",type=lambda x:int(x,0),help="Hex dump start offset (e.g. 0x1000).")
-    cli_group.add_argument("--hexdump-length",type=int,help="Hex dump length.")
-    cli_group.add_argument("--hexdump-lines",type=int,default=16,help="Max hex dump lines (def:16).")
+    parser.add_argument("--capa-rules-dir", default=None, help=f"Directory containing capa rule files. If not provided or empty/invalid, attempts download to '{SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / CAPA_RULES_SUBDIR_NAME}'.")
+    parser.add_argument("--capa-sigs-dir", default=None, help="Directory containing capa library identification signature files (e.g., sigs/*.sig). Optional. If not provided, attempts to find a script-relative 'capa_sigs' or uses Capa's internal default (which may require `capa download sigs`).")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for CLI mode and more detailed MCP logging.")
+    parser.add_argument("--skip-full-peid-scan",action="store_true",help="Skip full PEiD scan (only scan entry point).")
+    parser.add_argument("--psah","--peid-scan-all-sigs-heuristically",action="store_true",dest="peid_scan_all_sigs_heuristically",help="During full heuristic PEiD scan, use ALL signatures (not just non-EP_only).")
+
+    cli_group=parser.add_argument_group('CLI Mode Specific Options (ignored if --mcp-server is used)')
+    cli_group.add_argument("--extract-strings",action="store_true",help="Extract and print strings from the PE file.")
+    cli_group.add_argument("--min-str-len",type=int,default=5,help="Minimum length for extracted strings (default: 5).")
+    cli_group.add_argument("--search-string",action="append",help="String to search for within the PE file (multiple allowed).")
+    cli_group.add_argument("--strings-limit",type=int,default=100,help="Limit for string extraction and search results display (default: 100).")
+    cli_group.add_argument("--hexdump-offset",type=lambda x:int(x,0),help="Hex dump start offset (e.g., 0x1000 or 4096).")
+    cli_group.add_argument("--hexdump-length",type=int,help="Hex dump length in bytes.")
+    cli_group.add_argument("--hexdump-lines",type=int,default=16,help="Maximum number of lines to display for hex dump (default: 16).")
+
     mcp_group=parser.add_argument_group('MCP Server Mode Specific Options')
-    mcp_group.add_argument("--mcp-server",action="store_true",help="Run in MCP server mode.")
-    mcp_group.add_argument("--mcp-host",type=str,default="127.0.0.1",help="MCP server host (def:127.0.0.1).")
-    mcp_group.add_argument("--mcp-port",type=int,default=8082,help="MCP server port (def:8082).")
-    mcp_group.add_argument("--mcp-transport",type=str,default="stdio",choices=["stdio","sse"],help="MCP transport (def:stdio).")
+    mcp_group.add_argument("--mcp-server",action="store_true",help="Run in MCP server mode. The --input-file is pre-analyzed, and tools operate on this file.")
+    mcp_group.add_argument("--mcp-host",type=str,default="127.0.0.1",help="MCP server host (default: 127.0.0.1).")
+    mcp_group.add_argument("--mcp-port",type=int,default=8082,help="MCP server port (default: 8082).")
+    mcp_group.add_argument("--mcp-transport",type=str,default="stdio",choices=["stdio","sse"],help="MCP transport protocol (default: stdio).")
     args=parser.parse_args()
-    
-    # Call dependency check for optional libraries (pefile is checked at startup)
-    check_and_install_dependencies(args.mcp_server) 
+
+    check_and_install_dependencies(args.mcp_server)
 
     log_level=logging.DEBUG if args.verbose else logging.INFO;logger.setLevel(log_level)
-    logging.getLogger('mcp').setLevel(log_level) # Set MCP library logging level
-    if args.mcp_transport=='sse': # Adjust Uvicorn logging for SSE transport
+    logging.getLogger('mcp').setLevel(log_level)
+    if args.mcp_transport=='sse':
         logging.getLogger('uvicorn').setLevel(log_level)
         logging.getLogger('uvicorn.error').setLevel(log_level)
         logging.getLogger('uvicorn.access').setLevel(logging.WARNING if not args.verbose else logging.DEBUG)
 
-    cli_capa_rules_path_to_use = args.capa_rules_dir
-    # For CLI mode, if capa rules dir is not provided or invalid, attempt download
-    if not args.mcp_server and (not cli_capa_rules_path_to_use or not os.path.isdir(cli_capa_rules_path_to_use) or not os.listdir(cli_capa_rules_path_to_use)):
-        if CAPA_AVAILABLE: # Only attempt download if capa library itself is present
-            logger.info(f"CLI Mode: Capa rules dir '{args.capa_rules_dir}' not valid/provided. Attempting download to default.")
-            default_capa_base_cli = os.path.join(os.getcwd(), CAPA_RULES_DEFAULT_DIR)
-            cli_capa_rules_path_to_use = ensure_capa_rules_exist(default_capa_base_cli, CAPA_RULES_ZIP_URL, args.verbose)
-            if not cli_capa_rules_path_to_use:
-                logger.error("CLI Mode: Failed to ensure capa rules. Capa analysis will be skipped or may fail.")
-            else:
-                logger.info(f"CLI Mode: Using capa rules from downloaded location: {cli_capa_rules_path_to_use}")
-        else: # Capa library not available, so don't bother with rules
-            logger.warning("CLI Mode: Capa library not available, capa rule download/check skipped.")
-            cli_capa_rules_path_to_use = None # Ensure it's None if capa isn't available
+    abs_input_file = str(Path(args.input_file).resolve())
+    abs_peid_db_path = str(Path(args.peid_db).resolve()) if args.peid_db else str(DEFAULT_PEID_DB_PATH)
+    abs_yara_rules_path = str(Path(args.yara_rules).resolve()) if args.yara_rules else None
+    abs_capa_rules_dir_arg = str(Path(args.capa_rules_dir).resolve()) if args.capa_rules_dir else None
+    abs_capa_sigs_dir_arg = str(Path(args.capa_sigs_dir).resolve()) if args.capa_sigs_dir else None
 
-    cli_capa_sigs_path_to_use = args.capa_sigs_dir # For CLI mode, directly use the provided path
 
     if args.mcp_server:
         if not MCP_SDK_AVAILABLE:
             logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.");
             sys.exit(1)
-            
-        logger.info(f"MCP Server: Pre-loading PE file for analysis: {args.input_file}")
+
+        logger.info(f"MCP Server: Pre-loading and analyzing PE file: {abs_input_file}")
+        logger.info("The MCP server will become available once this initial analysis is complete.")
         try:
-            # Pre-load and analyze the PE file for MCP mode
-            # Note: ensure_capa_rules_exist might be called again inside load_and_analyze_pe_file if args.capa_rules_dir is None
-            # This is acceptable as it checks for existence first.
-            PE_OBJECT_FOR_MCP = pefile.PE(args.input_file, fast_load=False) 
-            ANALYZED_PE_FILE_PATH = args.input_file
-            
-            # Determine capa rules path for MCP pre-load
-            mcp_preload_capa_rules_dir = args.capa_rules_dir
-            if not mcp_preload_capa_rules_dir: # If not specified, ensure_capa_rules_exist will be called by load_and_analyze_pe_file
-                 pass # It will be handled by load_and_analyze_pe_file's logic
+            if not os.path.exists(abs_input_file):
+                logger.critical(f"Input PE file for MCP server not found: {abs_input_file}")
+                sys.exit(1)
+            if not os.path.isfile(abs_input_file):
+                logger.critical(f"Input path for MCP server is not a file: {abs_input_file}")
+                sys.exit(1)
+
+            temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
+            ANALYZED_PE_FILE_PATH = abs_input_file
 
             ANALYZED_PE_DATA = _parse_pe_to_dict(
-                PE_OBJECT_FOR_MCP, args.input_file, args.peid_db, args.yara_rules,
-                mcp_preload_capa_rules_dir, # Pass the user-specified or None (to trigger download in _parse_pe_to_dict via load_and_analyze_pe_file)
-                args.capa_sigs_dir, # Pass user-specified sigs dir
-                args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically
+                temp_pe_obj_for_preload, abs_input_file, abs_peid_db_path, abs_yara_rules_path,
+                abs_capa_rules_dir_arg,
+                abs_capa_sigs_dir_arg,
+                args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
+                analyses_to_skip=None
             )
-            logger.info(f"MCP: Successfully pre-loaded and analyzed: {args.input_file}")
+            PE_OBJECT_FOR_MCP = temp_pe_obj_for_preload
+            logger.info(f"MCP: Successfully pre-loaded and fully analyzed: {abs_input_file}. Server is ready.")
+
         except Exception as e:
-            logger.critical(f"MCP: Failed to pre-load/analyze PE file '{args.input_file}': {str(e)}", exc_info=True)
-            if PE_OBJECT_FOR_MCP:
-                PE_OBJECT_FOR_MCP.close()
+            logger.critical(f"MCP: Failed to pre-load/analyze PE file '{abs_input_file}': {str(e)}", exc_info=True)
+            if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
+                temp_pe_obj_for_preload.close()
+            ANALYZED_PE_FILE_PATH = None
+            ANALYZED_PE_DATA = None
+            PE_OBJECT_FOR_MCP = None
+            logger.error("MCP server will not start due to pre-load analysis failure.")
             sys.exit(1)
-            
+
         if args.mcp_transport=="sse":
             mcp_server.settings.host=args.mcp_host
             mcp_server.settings.port=args.mcp_port
@@ -2129,7 +2801,7 @@ if __name__ == '__main__':
             logger.info(f"Starting MCP server (SSE) on http://{mcp_server.settings.host}:{mcp_server.settings.port}")
         else:
             logger.info("Starting MCP server (stdio).")
-        
+
         server_exc=None
         try:
             mcp_server.run(transport=args.mcp_transport)
@@ -2141,16 +2813,29 @@ if __name__ == '__main__':
         finally:
             if PE_OBJECT_FOR_MCP:
                 PE_OBJECT_FOR_MCP.close()
-                logger.info("MCP: Closed pre-loaded PE object.")
+                logger.info("MCP: Closed pre-loaded PE object upon server exit.")
             sys.exit(1 if server_exc else 0)
     else: # CLI Mode
+        cli_capa_rules_to_use = abs_capa_rules_dir_arg
+        if not cli_capa_rules_to_use:
+            if CAPA_AVAILABLE:
+                logger.info(f"CLI Mode: Capa rules dir not specified or invalid. Attempting download to script-relative default.")
+                default_capa_base_cli = str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
+                cli_capa_rules_to_use = ensure_capa_rules_exist(default_capa_base_cli, CAPA_RULES_ZIP_URL, args.verbose)
+                if not cli_capa_rules_to_use:
+                    logger.error("CLI Mode: Failed to ensure capa rules. Capa analysis will be skipped or may fail.")
+                else:
+                    logger.info(f"CLI Mode: Using capa rules from: {cli_capa_rules_to_use}")
+            else:
+                logger.warning("CLI Mode: Capa library not available, capa rule download/check skipped.")
+                cli_capa_rules_to_use = None
+
         _cli_analyze_and_print_pe(
-            args.input_file, args.peid_db, args.yara_rules,
-            cli_capa_rules_path_to_use, # Use the resolved capa rules path for CLI
-            cli_capa_sigs_path_to_use,  # Use the resolved capa sigs path for CLI
+            abs_input_file, abs_peid_db_path, abs_yara_rules_path,
+            cli_capa_rules_to_use,
+            abs_capa_sigs_dir_arg,
             args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
             args.extract_strings, args.min_str_len, args.search_string, args.strings_limit,
             args.hexdump_offset, args.hexdump_length, args.hexdump_lines
         )
     sys.exit(0)
-
