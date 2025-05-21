@@ -175,7 +175,7 @@ python PeMCP.py --mcp-server --input-file <path_to_pe_file> [server_options] [an
 
 1.  **Clone the repository or download `PeMCP.py`:**
     ```bash
-    git clone <your_repository_url> # Replace with your actual repository URL
+    git clone https://github.com/JameZUK/PeMCP/ # Replace with your actual repository URL
     cd PeMCP
     ```
 2.  **Install `pefile` (critical dependency):**
