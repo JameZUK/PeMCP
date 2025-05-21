@@ -1,4 +1,4 @@
-    # PeMCP Toolkit - Comprehensive Portable Executable Analysis Suite
+# PeMCP Toolkit - Comprehensive Portable Executable Analysis Suite
 
     The PeMCP Toolkit is a Python-based script designed for in-depth analysis of Portable Executable (PE) files. It provides functionalities for parsing PE structures, examining raw file content, extracting embedded information, and performing advanced heuristic analysis. The script can be run directly from the command-line for interactive analysis or as a Model-Context-Protocol (MCP) server for programmatic integration. This toolkit is invaluable for malware analysis, reverse engineering, digital forensics, and software auditing.
 
