@@ -1,0 +1,38 @@
+# requirements.txt
+#
+# This file lists the Python packages required by the PE File Analyzer script.
+#
+# To install these dependencies, run: pip install -r requirements.txt
+#
+# Versions are suggested; you might want to pin exact versions (e.g., ==X.Y.Z)
+# for production environments after testing.
+
+# --- Core Dependency ---
+# Essential for PE file parsing
+pefile
+
+# --- Optional Dependencies (Highly Recommended for Full Functionality) ---
+# For parsing digital signatures
+cryptography
+
+# For downloading PEiD DB and Capa rules
+requests
+
+# For Authenticode signature validation
+signify
+
+# For YARA scanning
+yara-python
+
+# For capa capability detection.
+# Note: 'flare-capa' is the pip package name for the 'capa' library.
+flare-capa
+
+# For running in MCP server mode
+# Note: The script uses 'mcp[cli]' for installation purposes, but 'mcp' is the core package.
+mcp
+
+# --- Development/Testing Dependencies (Optional, for project maintenance) ---
+# If you plan to add tests, consider these (often in a dev-requirements.txt)
+# pytest
+# pytest-cov
