@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 """
-Comprehensive PE File Analyzer (Refactored with Integrated ssdeep and capa)
+Comprehensive PE File Analyzer (Refactored with Integrated ssdeep, capa, and FLOSS)
 
 This script provides extensive analysis of Portable Executable (PE) files.
 It can operate in two modes:
 1. CLI Mode: Analyzes a PE file and prints a detailed report to the console.
    Supports PEiD-like signature scanning, YARA scanning, capa capability detection,
-   string extraction/searching, and hex dumping.
+   FLOSS string extraction (static, stack, tight, decoded),
+   general string extraction/searching, and hex dumping.
 2. MCP Server Mode: Runs as a Model-Context-Protocol (MCP) server.
    When starting in MCP server mode, it pre-analyzes a single PE file specified
    at startup via --input-file. All MCP tools then operate on this pre-loaded file's data.
@@ -24,6 +25,7 @@ Key Features:
   - `signify` for Authenticode signature validation.
   - `yara-python` for YARA scanning.
   - `flare-capa` (capa) for capability detection.
+  - `flare-floss` (FLOSS) for advanced string extraction.
   - `mcp` for MCP server functionality.
 - Includes integrated pure-Python ssdeep (ssdeep) for fuzzy hashing.
 - Automatic download and management of capa rules.
@@ -65,7 +67,7 @@ from pathlib import Path
 import copy # For deepcopy in MCP tool limiting
 
 # Crucial: Import typing early, as it's used for global type hints and throughout the script
-from typing import Dict, Any, Optional, List, Tuple, Set, Union
+from typing import Dict, Any, Optional, List, Tuple, Set, Union, Type # Added Type for FLOSS
 
 # --- Ensure pefile is available (Critical Dependency) ---
 try:
@@ -418,12 +420,95 @@ except Exception as e_generic:
     logger.error(CAPA_IMPORT_ERROR, exc_info=True)
 # --- END MODIFIED CAPA IMPORT SECTION ---
 
+# --- START FLOSS IMPORT SECTION ---
+# Fallback values for FLOSS components if the library is not fully available
+MIN_STR_LEN_FALLBACK_FLOSS = 4
+class DebugLevelFallbackFloss: NONE, DEFAULT, TRACE, SUPERTRACE = 0, 1, 2, 3
+class StringTypeFallbackFloss: STATIC, STACK, TIGHT, DECODED = "static", "stack", "tight", "decoded"
+
+# Global variables to hold actual FLOSS components or fallbacks
+FLOSS_MIN_LENGTH_DEFAULT = MIN_STR_LEN_FALLBACK_FLOSS
+Actual_DebugLevel_Floss: Type = DebugLevelFallbackFloss # Will hold floss.logging_.DebugLevel or fallback
+Actual_StringType_Floss: Type = StringTypeFallbackFloss # Will hold floss.main.StringType or fallback
+Floss_ColorFormatter_Class: Type = logging.Formatter # Will hold floss.logging_.ColorFormatter or fallback
+FLOSS_TRACE_LEVEL_CONST = logging.DEBUG # Fallback for floss.logging_.TRACE
+
+# Flags to track FLOSS availability
+FLOSS_SETUP_OK = False # Basic components like logging, main, const
+FLOSS_ANALYSIS_OK = False # Analysis functions like string extractors, vivisect utils
+FLOSS_AVAILABLE = False # True if both SETUP and ANALYSIS are OK
+FLOSS_IMPORT_ERROR_SETUP = None
+FLOSS_IMPORT_ERROR_ANALYSIS = None
+
+# Attempt to import basic FLOSS components
+try:
+    import floss.logging_ as floss_logging
+    import floss.main as floss_main
+    from floss.const import MIN_STRING_LENGTH as FLOSS_MIN_LENGTH_FROM_LIB
+
+    Actual_DebugLevel_Floss = floss_logging.DebugLevel
+    Actual_StringType_Floss = floss_main.StringType
+    FLOSS_MIN_LENGTH_DEFAULT = FLOSS_MIN_LENGTH_FROM_LIB
+    Floss_ColorFormatter_Class = floss_logging.ColorFormatter
+    FLOSS_TRACE_LEVEL_CONST = floss_logging.TRACE
+    FLOSS_SETUP_OK = True
+    logger.info("Successfully imported basic FLOSS components (logging, main, const).")
+except ImportError as e_floss_setup:
+    FLOSS_IMPORT_ERROR_SETUP = str(e_floss_setup)
+    logger.warning(f"Warning: Error importing basic FLOSS components (logging, main, const): {e_floss_setup}")
+    logger.warning("Using fallback values for FLOSS script setup. Full FLOSS functionality may be impaired.")
+except Exception as e_floss_setup_generic:
+    FLOSS_IMPORT_ERROR_SETUP = f"Generic error during FLOSS setup import: {str(e_floss_setup_generic)}"
+    logger.error(f"FLOSS setup import failed unexpectedly: {e_floss_setup_generic}", exc_info=True)
+
+
+# Attempt to import FLOSS analysis functions if setup was OK
+if FLOSS_SETUP_OK:
+    try:
+        import viv_utils # Dependency for FLOSS analysis
+        from vivisect import VivWorkspace # Dependency for FLOSS analysis
+        from floss.utils import get_static_strings, set_vivisect_log_level, get_imagebase
+        from floss.identify import (
+            find_decoding_function_features, get_top_functions, get_function_fvas,
+            get_tight_function_fvas, append_unique, get_functions_with_tightloops
+        )
+        from floss.stackstrings import extract_stackstrings
+        from floss.tightstrings import extract_tightstrings
+        from floss.string_decoder import decode_strings
+        # MODIFIED IMPORT: Only import ResultDocument, Metadata, and Analysis from floss.results
+        # The specific string types like StringTypeOffset are not meant for direct import.
+        from floss.results import ResultDocument, Metadata as FlossMetadata, Analysis as FlossAnalysis
+        FLOSS_ANALYSIS_OK = True
+        logger.info("Successfully imported FLOSS analysis functions and vivisect/viv_utils.")
+    except ImportError as e_floss_analysis:
+        FLOSS_IMPORT_ERROR_ANALYSIS = str(e_floss_analysis)
+        logger.error(f"Error importing FLOSS analysis functions (or their dependencies like vivisect): {e_floss_analysis}")
+        FLOSS_ANALYSIS_OK = False
+    except Exception as e_floss_analysis_generic:
+        FLOSS_IMPORT_ERROR_ANALYSIS = f"Generic error during FLOSS analysis import: {str(e_floss_analysis_generic)}"
+        logger.error(f"FLOSS analysis import failed unexpectedly: {e_floss_analysis_generic}", exc_info=True)
+        FLOSS_ANALYSIS_OK = False
+else:
+    logger.warning("Skipping import of FLOSS analysis functions due to earlier FLOSS setup import errors.")
+
+FLOSS_AVAILABLE = FLOSS_SETUP_OK and FLOSS_ANALYSIS_OK
+
+# List of FLOSS-related loggers to configure
+FLOSS_LOGGERS_LIST = [
+    "floss", "floss.utils", "floss.identify", "floss.stackstrings",
+    "floss.tightstrings", "floss.string_decoder", "EmulatorDriver", "Monitor",
+    "envi", "envi.codeflow", "vtrace", "vtrace.platforms.win32",
+    "vivisect", "vivisect.parsers.pe", "viv_utils.emulator_drivers",
+]
+# --- END FLOSS IMPORT SECTION ---
+
+
 MCP_SDK_AVAILABLE = False
 try:
     from mcp.server.fastmcp import FastMCP, Context
     MCP_SDK_AVAILABLE = True
 except ImportError:
-    class MockSettings: host = "127.0.0.1"; port = 8081; log_level = "INFO"
+    class MockSettings: host = "127.0.0.1"; port = 8081; log_level = "INFO" # Port was 8081, changed to 8082 later
     class MockMCP:
         def __init__(self, name, description=""): self.name = name; self.description = description; self.app = object(); self.settings = MockSettings(); self._run_called_with_transport = None
         def tool(self): decorator = lambda func: func; return decorator
@@ -444,17 +529,19 @@ PE_OBJECT_FOR_MCP: Optional[pefile.PE] = None # This will hold the single pre-lo
 PEID_USERDB_URL = "https://raw.githubusercontent.com/GerkNL/PEid/master/userdb.txt"
 DEFAULT_PEID_DB_PATH = SCRIPT_DIR / "userdb.txt"
 
-CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.1.0.zip"
+CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.1.0.zip" # Example, use a recent stable tag
 CAPA_RULES_DEFAULT_DIR_NAME = "capa_rules_store"
 CAPA_RULES_SUBDIR_NAME = "rules"
 
 
 DEPENDENCIES = [
     ("cryptography", "cryptography", "Cryptography (for digital signatures)", False),
-    ("requests", "requests", "Requests (for PEiD DB download & capa rules)", False),
+    ("requests", "requests", "Requests (for PEiD DB download & capa/FLOSS support)", False), # FLOSS might need requests if it downloads things
     ("signify.authenticode", "signify", "Signify (for Authenticode validation)", False),
     ("yara", "yara-python", "Yara (for YARA scanning)", False),
     ("capa.main", "flare-capa", "Capa (for capability detection)", False),
+    ("floss.main", "flare-floss", "FLOSS (for advanced string extraction)", False), # Added FLOSS
+    ("viv_utils", "vivisect", "Vivisect & Viv-Utils (for FLOSS analysis backend)", False), # Added Vivisect as FLOSS dependency
     ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True)
 ]
 
@@ -462,6 +549,7 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
     missing_deps_info = []
     critical_mcp_missing_for_current_mode = False
 
+    # Determine missing dependencies
     for spec_name, pip_name, friendly_name, is_critical_for_mcp_mode in DEPENDENCIES:
         is_missing = False
         if spec_name == "mcp.server":
@@ -473,26 +561,48 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
         elif spec_name == "signify.authenticode":
             if not SIGNIFY_AVAILABLE:
                 is_missing = True
-        else:
+        elif spec_name == "yara": 
+            if not YARA_AVAILABLE:
+                is_missing = True
+        elif spec_name == "floss.main": 
+            if not FLOSS_SETUP_OK: 
+                is_missing = True
+        elif spec_name == "viv_utils": 
+            if FLOSS_SETUP_OK and not FLOSS_ANALYSIS_OK:
+                is_missing = True 
+            elif not FLOSS_SETUP_OK:
+                pass 
+        else: 
             spec = importlib.util.find_spec(spec_name)
             if spec is None:
                 is_missing = True
 
         if is_missing:
-            missing_deps_info.append({"pip": pip_name, "friendly": friendly_name, "is_critical_mcp": is_critical_for_mcp_mode})
+            missing_reason = ""
+            if spec_name == "floss.main" and FLOSS_IMPORT_ERROR_SETUP:
+                missing_reason = f" (FLOSS Setup Error: {FLOSS_IMPORT_ERROR_SETUP})"
+            elif spec_name == "viv_utils" and FLOSS_SETUP_OK and not FLOSS_ANALYSIS_OK and FLOSS_IMPORT_ERROR_ANALYSIS:
+                 missing_reason = f" (FLOSS Analysis/Vivisect Error: {FLOSS_IMPORT_ERROR_ANALYSIS})"
+            
+            missing_deps_info.append({
+                "pip": pip_name, 
+                "friendly": f"{friendly_name}{missing_reason}", 
+                "is_critical_mcp": is_critical_for_mcp_mode
+            })
             if is_critical_for_mcp_mode and is_mcp_server_mode_arg:
                 critical_mcp_missing_for_current_mode = True
 
     if not missing_deps_info:
-        return
+        return # No missing dependencies, just return.
 
+    # All prints from here onward go to stderr for better visibility
     print("\n[!] Some optional libraries are missing or could not be imported:", file=sys.stderr)
     for dep in missing_deps_info:
         print(f"     - {dep['friendly']} (Python package: {dep['pip']})", file=sys.stderr)
 
     if critical_mcp_missing_for_current_mode:
         print("[!] One or more libraries critical for --mcp-server mode are missing.", file=sys.stderr)
-    print("[!] These libraries enhance the script's functionality or are required for specific modes.", file=sys.stderr)
+    print("[!] These libraries enhance the script's functionality or are required for specific modes/features.", file=sys.stderr)
 
     try:
         if not sys.stdin.isatty():
@@ -503,42 +613,49 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
             print("[!] Please install other missing optional libraries manually if needed.", file=sys.stderr)
             return
 
-        answer = input("Do you want to attempt to install the missing optional libraries now? (yes/no): ").strip().lower()
+        # Interactive prompt
+        answer = ""
+        try:
+            answer = input("Do you want to attempt to install the missing optional libraries now? (yes/no): ").strip().lower()
+        except RuntimeError as e_input: # Catch potential errors if input() fails (e.g. stdin closed)
+             print(f"[!] Error during input prompt: {e_input}. Assuming 'no' for installation.", file=sys.stderr)
+             answer = "no"
+
+
         if answer == 'yes' or answer == 'y':
             installed_any = False
-
             for dep_to_install in missing_deps_info:
-                print(f"[*] Attempting to install {dep_to_install['friendly']} (pip install \"{dep_to_install['pip']}\")...")
+                print(f"[*] Attempting to install {dep_to_install['friendly']} (pip install \"{dep_to_install['pip']}\")...", file=sys.stderr)
                 try:
                     subprocess.check_call([sys.executable, "-m", "pip", "install", dep_to_install['pip']])
-                    print(f"[*] Successfully installed {dep_to_install['friendly']}.")
+                    print(f"[*] Successfully installed {dep_to_install['friendly']}.", file=sys.stderr)
                     installed_any = True
-                except subprocess.CalledProcessError as e:
-                    print(f"[!] Error installing {dep_to_install['friendly']}: {e}", file=sys.stderr)
+                except subprocess.CalledProcessError as e_pip_install:
+                    print(f"[!] Error installing {dep_to_install['friendly']}: {e_pip_install}", file=sys.stderr)
                 except FileNotFoundError:
                     print("[!] Error: 'pip' command not found. Is Python and pip installed correctly and in PATH?", file=sys.stderr)
-                    break
+                    break 
 
             if installed_any:
-                print("\n[*] Optional library installation process finished. Please re-run the script for changes to take full effect.")
-                sys.exit(0)
+                print("\n[*] Optional library installation process finished. Please re-run the script for changes to take full effect.", file=sys.stderr)
+                sys.exit(0) 
             else:
-                print("[*] No optional libraries were successfully installed.")
+                print("[*] No optional libraries were successfully installed.", file=sys.stderr)
                 if critical_mcp_missing_for_current_mode:
-                    print("[!] Critical MCP dependencies were not installed. MCP server mode may not function as expected. Exiting.")
+                    print("[!] Critical MCP dependencies were not installed. MCP server mode may not function as expected. Exiting.", file=sys.stderr)
                     sys.exit(1)
-        else:
-            print("[*] Skipping installation of optional libraries.")
+        else: # User answered 'no' or input failed and defaulted to 'no'
+            print("[*] Skipping installation of optional libraries.", file=sys.stderr)
             if critical_mcp_missing_for_current_mode:
                 print("[!] Critical MCP dependencies were not installed because installation was skipped. MCP server mode cannot function. Exiting.", file=sys.stderr)
                 sys.exit(1)
-    except EOFError:
-        print("[!] No input received for optional library installation. Skipping.", file=sys.stderr)
+    except EOFError: # If input stream is closed during input()
+        print("[!] No input received for optional library installation. Assuming 'no'. Skipping.", file=sys.stderr)
         if critical_mcp_missing_for_current_mode:
             print("[!] Critical MCP dependencies were not installed. Exiting.", file=sys.stderr)
             sys.exit(1)
     except KeyboardInterrupt:
-        print("\n[*] Optional library installation cancelled.", file=sys.stderr)
+        print("\n[*] Optional library installation cancelled by user.", file=sys.stderr)
         if critical_mcp_missing_for_current_mode:
             print("[!] Critical MCP dependencies were not installed. Exiting.", file=sys.stderr)
             sys.exit(1)
@@ -549,6 +666,9 @@ if CAPA_AVAILABLE: logger.info("Capa library found.")
 else: logger.warning(f"Capa library (flare-capa) not found. Capability analysis will be skipped. Import error: {CAPA_IMPORT_ERROR}")
 if SIGNIFY_AVAILABLE: logger.info("Signify library found.")
 else: logger.warning(f"Signify library not found. Authenticode validation will be skipped. Import error: {SIGNIFY_IMPORT_ERROR}")
+if FLOSS_AVAILABLE: logger.info("FLOSS library and analysis components found.")
+elif FLOSS_SETUP_OK: logger.warning(f"FLOSS basic setup OK, but analysis components (or vivisect) failed to import. FLOSS analysis will be limited/skipped. Analysis import error: {FLOSS_IMPORT_ERROR_ANALYSIS}")
+else: logger.warning(f"FLOSS library (flare-floss) not found or basic setup failed. FLOSS analysis will be skipped. Setup import error: {FLOSS_IMPORT_ERROR_SETUP}")
 
 
 def safe_print(text_to_print, verbose_prefix=""):
@@ -726,20 +846,49 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
         logger.info("Capa rules extracted successfully from zip.")
 
         extracted_dir_name_found = None
-        expected_prefix = "capa-rules-"
+        expected_prefix = "capa-rules-" # Default prefix for capa-rules releases
+        # Try to find the directory that starts with the expected prefix.
+        # GitHub zip files usually create a top-level directory like 'capa-rules-vX.Y.Z'.
         for item in os.listdir(rules_base_dir):
             if item.startswith(expected_prefix) and os.path.isdir(os.path.join(rules_base_dir, item)):
                 extracted_dir_name_found = item
                 break
+        
+        # If not found with prefix, try to find *any* directory that contains a 'rules' subdir
+        # This is a fallback for differently structured zips, though less common for capa-rules.
+        if not extracted_dir_name_found:
+            for item in os.listdir(rules_base_dir):
+                potential_path = os.path.join(rules_base_dir, item)
+                if os.path.isdir(potential_path) and os.path.isdir(os.path.join(potential_path, CAPA_RULES_SUBDIR_NAME)):
+                    extracted_dir_name_found = item # The parent dir of 'rules'
+                    # In this case, the 'rules' subdir is already what we want, or we need to move its contents.
+                    # For simplicity, let's assume if we find 'item/rules', we want 'item/rules'
+                    # The original logic moves 'item' to 'final_rules_target_path' if 'item' is 'capa-rules-X.Y.Z'
+                    # If 'item' is just 'rules', then we might need to adjust.
+                    # The current logic expects to move the *container* of the rules.
+                    # If the zip extracts directly as 'rules', this needs adjustment.
+                    # However, capa-rules zips from GitHub are `capa-rules-TAG/rules/...`
+                    break
+
 
         if not extracted_dir_name_found:
-            logger.error(f"Could not find the main '{expected_prefix}*' directory within '{rules_base_dir}' after extraction. Contents: {os.listdir(rules_base_dir)}")
+            logger.error(f"Could not find the main '{expected_prefix}*' directory or a directory containing '{CAPA_RULES_SUBDIR_NAME}' within '{rules_base_dir}' after extraction. Contents: {os.listdir(rules_base_dir)}")
             if os.path.exists(zip_path):
                 try: os.remove(zip_path)
                 except OSError: pass
             return None
 
         extracted_top_level_dir_path = os.path.join(rules_base_dir, extracted_dir_name_found)
+        
+        # Determine the actual source of rules: either the extracted_top_level_dir_path itself (if it's the 'rules' dir)
+        # or the 'rules' subdirectory within it.
+        source_rules_content_path = extracted_top_level_dir_path
+        if os.path.isdir(os.path.join(extracted_top_level_dir_path, CAPA_RULES_SUBDIR_NAME)):
+            source_rules_content_path = os.path.join(extracted_top_level_dir_path, CAPA_RULES_SUBDIR_NAME)
+            logger.info(f"Found rules content within subdirectory: {source_rules_content_path}")
+        else:
+             logger.info(f"Using extracted directory as rules content source: {source_rules_content_path}")
+
 
         if os.path.exists(final_rules_target_path):
             logger.warning(f"Target rules directory '{final_rules_target_path}' already exists. Removing it before placing newly extracted rules.")
@@ -747,7 +896,7 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
                 shutil.rmtree(final_rules_target_path)
             except Exception as e_rm:
                 logger.error(f"Failed to remove existing target rules directory '{final_rules_target_path}': {e_rm}")
-                if os.path.isdir(extracted_top_level_dir_path):
+                if os.path.isdir(extracted_top_level_dir_path): # Clean up the originally extracted folder
                     try: shutil.rmtree(extracted_top_level_dir_path)
                     except Exception: pass
                 if os.path.exists(zip_path):
@@ -755,11 +904,19 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
                     except OSError: pass
                 return None
 
-        logger.info(f"Moving rules from '{extracted_top_level_dir_path}' to '{final_rules_target_path}'...")
+        logger.info(f"Moving rules from '{source_rules_content_path}' to '{final_rules_target_path}'...")
         try:
-            shutil.move(extracted_top_level_dir_path, final_rules_target_path)
-        except Exception as e_mv:
-            logger.error(f"Failed to move rules from '{extracted_top_level_dir_path}' to '{final_rules_target_path}': {e_mv}")
+            # shutil.move might fail if src is a subdir of a dir we want to remove later.
+            # It's safer to copy and then remove the original extracted structure.
+            shutil.copytree(source_rules_content_path, final_rules_target_path)
+            logger.info(f"Successfully copied rules to '{final_rules_target_path}'.")
+        except Exception as e_mv_cp: # Changed from move to copytree
+            logger.error(f"Failed to copy rules from '{source_rules_content_path}' to '{final_rules_target_path}': {e_mv_cp}")
+            # Clean up potentially partially copied target
+            if os.path.isdir(final_rules_target_path):
+                try: shutil.rmtree(final_rules_target_path) 
+                except Exception: pass
+            # Clean up the originally extracted folder in any case
             if os.path.isdir(extracted_top_level_dir_path):
                  try: shutil.rmtree(extracted_top_level_dir_path)
                  except Exception: pass
@@ -767,13 +924,22 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
                 try: os.remove(zip_path)
                 except OSError: pass
             return None
+        finally:
+            # Clean up the entire originally extracted top-level directory after successful copy
+            if os.path.isdir(extracted_top_level_dir_path):
+                try: 
+                    shutil.rmtree(extracted_top_level_dir_path)
+                    logger.info(f"Cleaned up temporary extraction directory: {extracted_top_level_dir_path}")
+                except Exception as e_rm_extracted:
+                    logger.warning(f"Could not remove temporary extraction directory {extracted_top_level_dir_path}: {e_rm_extracted}")
+
 
         if os.path.isdir(final_rules_target_path) and os.listdir(final_rules_target_path):
             logger.info(f"Capa rules now correctly organized at: {final_rules_target_path}")
             return final_rules_target_path
         else:
             logger.error(f"Capa rules were processed, but the final target directory '{final_rules_target_path}' is still not found or is empty.")
-            if os.path.exists(zip_path):
+            if os.path.exists(zip_path): # Ensure zip is removed if process failed here
                 try: os.remove(zip_path)
                 except OSError: pass
             return None
@@ -784,8 +950,8 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
         logger.error(f"Error: Downloaded capa rules file '{zip_path}' is not a valid zip file or is corrupted.")
     except Exception as e:
         logger.error(f"An unexpected error occurred during capa rules download/extraction/organization: {e}", exc_info=verbose)
-        if extracted_top_level_dir_path and os.path.isdir(extracted_top_level_dir_path):
-            try: shutil.rmtree(extracted_top_level_dir_path)
+        if extracted_top_level_dir_path and os.path.isdir(extracted_top_level_dir_path): # If top level was created
+            try: shutil.rmtree(extracted_top_level_dir_path) # Clean it up
             except Exception: pass
     finally:
         if os.path.exists(zip_path):
@@ -822,9 +988,9 @@ def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, 
                         if valid and regex_b_list:
                             current_signature['pattern_bytes']=byte_pat_list
                             try:current_signature['regex_pattern']=re.compile(b''.join(regex_b_list))
-                            except re.error:current_signature=None
-                        else:current_signature=None
-                        continue
+                            except re.error:current_signature=None # Invalid regex pattern
+                        else:current_signature=None # Invalid hex byte pattern
+                        continue # Processed signature line
                     ep_match=re.match(r'^ep_only\s*=\s*(true|false)',line,re.IGNORECASE)
                     if ep_match:current_signature['ep_only']=ep_match.group(1).lower()=='true'
         if current_signature and 'name' in current_signature and ('pattern_bytes' in current_signature or 'regex_pattern' in current_signature):
@@ -872,11 +1038,17 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
             for match in matches:
                 match_detail:Dict[str,Any]={"rule":match.rule,"namespace":match.namespace if match.namespace!='default'else None,"tags":list(match.tags)if match.tags else None,"meta":dict(match.meta)if match.meta else None,"strings":[]}
                 if match.strings:
-                    for s_match in match.strings:
-                        try:str_data_repr=s_match[2].decode('latin-1').encode('unicode_escape').decode('ascii')
-                        except:str_data_repr=s_match[2].hex()
+                    for s_match_offset, s_match_id, s_match_data_bytes in match.strings: # Unpack tuple
+                        try:
+                            # Attempt to decode as UTF-8 first, then latin-1, then fall back to hex
+                            try: str_data_repr = s_match_data_bytes.decode('utf-8')
+                            except UnicodeDecodeError:
+                                try: str_data_repr = s_match_data_bytes.decode('latin-1')
+                                except UnicodeDecodeError: str_data_repr = s_match_data_bytes.hex()
+                        except Exception: str_data_repr = s_match_data_bytes.hex() # Final fallback
+
                         if len(str_data_repr)>80:str_data_repr=str_data_repr[:77]+"..."
-                        match_detail["strings"].append({"offset":hex(s_match[0]),"identifier":s_match[1],"data":str_data_repr})
+                        match_detail["strings"].append({"offset":hex(s_match_offset),"identifier":s_match_id,"data":str_data_repr})
                 scan_results.append(match_detail)
         else: logger.info("   No YARA matches found.")
     except yara.Error as e: logger.error(f"   YARA Error: {e}"); scan_results.append({"error":f"YARA Error: {str(e)}"})
@@ -944,27 +1116,28 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
              logger.info(f"Found 'sigs' directory near default rules store: {effective_capa_sigs_path_str_for_mock_args}")
         else:
             logger.warning("Capa signatures directory not found locally (e.g., ./capa_sigs or next to default rules). Explicitly telling Capa to load no library function signatures to prevent potential errors if Capa's internal default path is problematic.")
-            effective_capa_sigs_path_str_for_mock_args = ""
+            effective_capa_sigs_path_str_for_mock_args = "" # Tell capa to load no library sigs
 
     setattr(mock_args, 'signatures', effective_capa_sigs_path_str_for_mock_args)
     if hasattr(mock_args, 'is_default_signatures'):
         is_capa_internal_default_path = False
-        if hasattr(capa.main, 'SIGNATURES_PATH_DEFAULT_STRING'):
+        if hasattr(capa.main, 'SIGNATURES_PATH_DEFAULT_STRING'): # Check if this attribute exists in the capa version
              is_capa_internal_default_path = (effective_capa_sigs_path_str_for_mock_args == getattr(capa.main, 'SIGNATURES_PATH_DEFAULT_STRING'))
         setattr(mock_args, 'is_default_signatures', (not bool(capa_sigs_dir_path)) and is_capa_internal_default_path and effective_capa_sigs_path_str_for_mock_args != "")
 
 
-    setattr(mock_args, 'format', getattr(capa.features.common, 'FORMAT_PE', 'pe'))
-    setattr(mock_args, 'backend', getattr(capa.loader, 'BACKEND_AUTO', 'auto'))
-    setattr(mock_args, 'os', getattr(capa.features.common, 'OS_WINDOWS', 'windows'))
-    setattr(mock_args, 'tag', None)
-    setattr(mock_args, 'verbose', verbose)
-    setattr(mock_args, 'vverbose', False)
-    setattr(mock_args, 'json', True)
-    setattr(mock_args, 'color', "never")
-    setattr(mock_args, 'debug', verbose)
-    setattr(mock_args, 'quiet', not verbose)
+    setattr(mock_args, 'format', getattr(capa.features.common, 'FORMAT_PE', 'pe')) # Default to PE
+    setattr(mock_args, 'backend', getattr(capa.loader, 'BACKEND_AUTO', 'auto')) # Default to auto backend
+    setattr(mock_args, 'os', getattr(capa.features.common, 'OS_WINDOWS', 'windows')) # Default to Windows
+    setattr(mock_args, 'tag', None) # No specific tag filtering by default
+    setattr(mock_args, 'verbose', verbose) # Propagate verbosity
+    setattr(mock_args, 'vverbose', False) # Not super verbose by default
+    setattr(mock_args, 'json', True) # We want JSON output internally
+    setattr(mock_args, 'color', "never") # No color codes in internal JSON
+    setattr(mock_args, 'debug', verbose) # Propagate debug
+    setattr(mock_args, 'quiet', not verbose) # Quiet if not verbose
 
+    # Ensure these exist for newer capa versions if they are checked by capa.main functions
     if not hasattr(mock_args, 'restrict_to_functions'): setattr(mock_args, 'restrict_to_functions', [])
     if not hasattr(mock_args, 'restrict_to_processes'): setattr(mock_args, 'restrict_to_processes', [])
 
@@ -975,6 +1148,7 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
             rules_val_str_list = [str(r) for r in getattr(mock_args, 'rules', [])]
             logger.info(f"   [VERBOSE-CAPA] Mocked CLI args for capa.main: input_file='{mock_args.input_file}', rules={rules_val_str_list}, format='{mock_args.format}', backend='{mock_args.backend}', os='{mock_args.os}', signatures='{sig_val}'")
 
+        # Call capa's main argument handling and setup functions if they exist
         if hasattr(capa.main, 'handle_common_args'):
             capa.main.handle_common_args(mock_args)
 
@@ -984,7 +1158,7 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         input_format = mock_args.format
         if hasattr(capa.main, 'get_input_format_from_cli'):
             input_format = capa.main.get_input_format_from_cli(mock_args)
-        mock_args.format = input_format
+        mock_args.format = input_format # Update mock_args with potentially deduced format
 
         rules = capa.main.get_rules_from_cli(mock_args)
         logger.info(f"Rules loaded via capa.main.get_rules_from_cli. Rule count: {len(rules.rules) if hasattr(rules, 'rules') and hasattr(rules.rules, '__len__') else 'N/A'}")
@@ -992,9 +1166,9 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         backend = mock_args.backend
         if hasattr(capa.main, 'get_backend_from_cli'):
             backend = capa.main.get_backend_from_cli(mock_args, input_format)
-        mock_args.backend = backend
+        mock_args.backend = backend # Update mock_args
 
-        if hasattr(capa.main, 'get_os_from_cli'):
+        if hasattr(capa.main, 'get_os_from_cli'): # os might be deduced
             mock_args.os = capa.main.get_os_from_cli(mock_args, backend)
 
         extractor = capa.main.get_extractor_from_cli(mock_args, input_format, backend)
@@ -1003,12 +1177,16 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         capabilities = capa.capabilities.common.find_capabilities(rules, extractor, disable_progress=True)
         logger.info("Capabilities search complete.")
 
-        simulated_argv_for_meta = ["PeMCP.py", str(mock_args.input_file)]
+        # Prepare metadata for the ResultDocument
+        # Simulate argv for capa's metadata collection
+        simulated_argv_for_meta = ["PeMCP.py", str(mock_args.input_file)] # Basic argv
 
         actual_rule_paths_for_meta = mock_args.rules
+        # Ensure actual_rule_paths_for_meta is List[Path] for collect_metadata
         if not (isinstance(actual_rule_paths_for_meta, list) and \
                 all(isinstance(p, Path) for p in actual_rule_paths_for_meta)):
             logger.warning(f"Rules paths for capa.loader.collect_metadata ('mock_args.rules': {actual_rule_paths_for_meta}) are not List[Path] as expected. Metadata might be incomplete.")
+            # Attempt to convert if they are strings, otherwise use empty list
             temp_paths = []
             all_valid = True
             if isinstance(actual_rule_paths_for_meta, list):
@@ -1022,18 +1200,21 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
 
         meta = capa.loader.collect_metadata(
             simulated_argv_for_meta,
-            mock_args.input_file,
-            input_format,
-            mock_args.os,
-            actual_rule_paths_for_meta,
-            extractor,
-            capabilities
+            mock_args.input_file, # sample_path (Path object)
+            input_format,         # format (str)
+            mock_args.os,         # analysis_os (str)
+            actual_rule_paths_for_meta, # rules_paths (List[Path])
+            extractor,            # extractor (FeatureExtractor)
+            capabilities          # capabilities (RuleSetCapabilities)
         )
+        # Compute layout if necessary (newer capa versions handle this internally or via ResultDocument)
         if hasattr(meta, 'analysis') and hasattr(capabilities, 'matches') and hasattr(meta.analysis, 'layout') and hasattr(capa.loader, 'compute_layout'):
             meta.analysis.layout = capa.loader.compute_layout(rules, extractor, capabilities.matches)
 
+        # Create the ResultDocument and render to JSON
         doc = rd.ResultDocument.from_capa(meta, rules, capabilities.matches)
-        json_output_str = doc.model_dump_json(exclude_none=True)
+        # Render to JSON string, then parse back to dict to ensure consistent structure
+        json_output_str = doc.model_dump_json(exclude_none=True) # exclude_none=True is good practice
 
         capa_results["results"] = json.loads(json_output_str)
         capa_results["status"] = "Analysis complete (adapted workflow)"
@@ -1048,13 +1229,14 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         logger.error(error_msg, exc_info=verbose)
         capa_results["status"] = "Error during analysis (API incompatibility)"
         capa_results["error"] = error_msg
-    except FileNotFoundError as e_fnf:
+    except FileNotFoundError as e_fnf: # Catch if capa tries to access a file that's not there (e.g. during extraction)
         error_msg = f"Capa analysis failed (FileNotFoundError): {e_fnf}."
         logger.error(error_msg, exc_info=verbose)
         capa_results["status"] = "Error during analysis (File Not Found for capa)"
         capa_results["error"] = error_msg
     except Exception as e:
-        should_exit_error_type = getattr(capa.main, 'ShouldExitError', None)
+        # Check if it's a capa-defined exit error
+        should_exit_error_type = getattr(capa.main, 'ShouldExitError', None) # Gracefully check if this exists
         if should_exit_error_type and isinstance(e, should_exit_error_type):
             error_msg = f"Capa analysis aborted ({type(e).__name__}): {e} (status_code: {getattr(e, 'status_code', 'N/A')})"
             capa_results["status"] = f"Error during analysis ({type(e).__name__})"
@@ -1073,19 +1255,19 @@ def _extract_strings_from_data(data_bytes: bytes, min_length: int = 5) -> List[T
     current_offset = -1
     for i, byte_val in enumerate(data_bytes):
         char = chr(byte_val)
-        if ' ' <= char <= '~':
+        if ' ' <= char <= '~': # Printable ASCII range
             if not current_string: current_offset = i
             current_string += char
         else:
             if len(current_string) >= min_length: strings_found.append((current_offset, current_string))
             current_string = ""; current_offset = -1
-    if len(current_string) >= min_length: strings_found.append((current_offset, current_string))
+    if len(current_string) >= min_length: strings_found.append((current_offset, current_string)) # Catch trailing string
     return strings_found
 
 def _search_specific_strings_in_data(data_bytes: bytes, search_terms: List[str]) -> Dict[str, List[int]]:
     results: Dict[str, List[int]] = {term: [] for term in search_terms}
     for term in search_terms:
-        term_bytes = term.encode('ascii', 'ignore')
+        term_bytes = term.encode('ascii', 'ignore') # Assume ASCII search terms for simplicity
         offset = 0
         while True:
             found_at = data_bytes.find(term_bytes, offset)
@@ -1100,7 +1282,8 @@ def _format_hex_dump_lines(data_chunk: bytes, start_address: int = 0, bytes_per_
         chunk = data_chunk[i:i+bytes_per_line]
         hex_part = ' '.join(f"{b:02x}" for b in chunk)
         ascii_part = ''.join(chr(b) if 32 <= b <= 126 else '.' for b in chunk)
-        hex_part_padded = hex_part.ljust(bytes_per_line * 3 -1)
+        # Ensure hex_part is padded to align the ASCII part correctly
+        hex_part_padded = hex_part.ljust(bytes_per_line * 3 -1) # (byte_hex + space) * count - last_space
         lines.append(f"{start_address + i:08x}  {hex_part_padded}  |{ascii_part}|")
     return lines
 
@@ -1172,7 +1355,7 @@ def _parse_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
         for entry in pe.DIRECTORY_ENTRY_IMPORT:
             dll_info:Dict[str,Any]={'dll_name':"Unknown"};
             try:dll_info['dll_name']=entry.dll.decode('utf-8','ignore')if entry.dll else"N/A"
-            except:pass
+            except:pass # Keep 'Unknown' or 'N/A' if decoding fails
             dll_info['struct']=entry.struct.dump_dict();dll_info['symbols']=[]
             if hasattr(entry,'imports'):
                 for imp in entry.imports:
@@ -1200,13 +1383,13 @@ def _parse_resources_summary(pe: pefile.PE) -> List[Dict[str, Any]]:
             type_name_val=getattr(res_type_entry,'id',None);type_name_str=pefile.RESOURCE_TYPE.get(type_name_val,str(type_name_val))
             if hasattr(res_type_entry,'name')and res_type_entry.name is not None:
                 try:type_name_str=f"{res_type_entry.name.decode('utf-16le','ignore')} ({type_name_str})"
-                except:type_name_str=f"{res_type_entry.name.decode('latin-1','ignore')} ({type_name_str})"
+                except:type_name_str=f"{res_type_entry.name.decode('latin-1','ignore')} ({type_name_str})" # Fallback
             if hasattr(res_type_entry,'directory'):
                 for res_id_entry in res_type_entry.directory.entries:
                     id_val=getattr(res_id_entry,'id',None);id_name_str=str(id_val)
                     if hasattr(res_id_entry,'name')and res_id_entry.name is not None:
                         try:id_name_str=f"{res_id_entry.name.decode('utf-16le','ignore')} (ID: {id_val if id_val is not None else 'N/A'})"
-                        except:id_name_str=f"{res_id_entry.name.decode('latin-1','ignore')} (ID: {id_val if id_val is not None else 'N/A'})"
+                        except:id_name_str=f"{res_id_entry.name.decode('latin-1','ignore')} (ID: {id_val if id_val is not None else 'N/A'})" # Fallback
                     elif id_val is not None:id_name_str=f"ID: {id_val}"
                     else:id_name_str="Unnamed/ID-less"
                     if hasattr(res_id_entry,'directory'):
@@ -1231,15 +1414,15 @@ def _parse_version_info(pe: pefile.PE) -> Dict[str, Any]:
         fi_blocks=[]
         for fi_block in pe.FileInfo:
             block_detail:Dict[str,Any]={}
-            if hasattr(fi_block,'entries'):
+            if hasattr(fi_block,'entries'): # StringFileInfo
                 block_detail['type']="StringFileInfo";st_tables=[]
-                for item in fi_block.entries:
+                for item in fi_block.entries: # StringTable
                     st_entry:Dict[str,Any]={'lang_codepage':f"{item.Lang}/{item.CodePage}",'entries':{}}
-                    if hasattr(item,'entries')and isinstance(item.entries,dict):
+                    if hasattr(item,'entries')and isinstance(item.entries,dict): # String entries
                         for k,v in item.entries.items():st_entry['entries'][k.decode('utf-8','ignore')if isinstance(k,bytes)else str(k)]=v.decode('utf-8','ignore')if isinstance(v,bytes)else str(v)
                     st_tables.append(st_entry)
                 block_detail['string_tables']=st_tables
-            elif hasattr(fi_block,'Var')and hasattr(fi_block.Var,'entry'):
+            elif hasattr(fi_block,'Var')and hasattr(fi_block.Var,'entry'): # VarFileInfo
                 block_detail['type']="VarFileInfo";var_entry=fi_block.Var.entry;var_key=var_entry.szKey.decode('utf-8','ignore')if isinstance(var_entry.szKey,bytes)else str(var_entry.szKey);var_val=var_entry.Value;var_val_str=var_val
                 if isinstance(var_val,bytes)and len(var_val)==4:lang_id=struct.unpack('<H',var_val[:2])[0];charset_id=struct.unpack('<H',var_val[2:])[0];var_val_str=f"LangID={hex(lang_id)}, CharsetID={hex(charset_id)}"
                 elif isinstance(var_val,bytes):var_val_str=var_val.hex()
@@ -1253,7 +1436,7 @@ def _parse_debug_info(pe: pefile.PE) -> List[Dict[str, Any]]:
     if hasattr(pe,'DIRECTORY_ENTRY_DEBUG'):
         for entry in pe.DIRECTORY_ENTRY_DEBUG:
             dbg_item:Dict[str,Any]={'struct':entry.struct.dump_dict()};dbg_item['type_str']=pefile.DEBUG_TYPE.get(entry.struct.Type,"UNKNOWN")
-            if entry.entry:
+            if entry.entry: # The parsed debug entry (e.g., CV_INFO_PDB70)
                 dbg_item['entry_details']=entry.entry.dump_dict()
                 if entry.struct.Type==pefile.DEBUG_TYPE['IMAGE_DEBUG_TYPE_CODEVIEW']and hasattr(entry.entry,'PdbFileName'):
                     try:dbg_item['pdb_filename']=entry.entry.PdbFileName.decode('utf-8','ignore').rstrip('\x00')
@@ -1270,14 +1453,18 @@ def _parse_digital_signature(pe: pefile.PE, filepath: str, cryptography_availabl
         sig_info['security_directory'] = {'offset': hex(sig_offset), 'size': hex(sig_size)}
         if sig_offset != 0 and sig_size != 0:
             sig_info['embedded_signature_present'] = True
-            raw_sig_block = pe.get_data(sig_offset, sig_size)
+            raw_sig_block = pe.get_data(sig_offset, sig_size) # This can raise PEFormatError if offset/size invalid
             if cryptography_available_flag:
                 crypto_certs=[]
                 try:
                     pkcs7_blob=None
+                    # The PKCS#7 data starts 8 bytes into the security directory data block
+                    # after the WIN_CERTIFICATE structure header.
                     if len(raw_sig_block)>8:
-                        cert_type=struct.unpack_from('<H',raw_sig_block,6)[0]
-                        if cert_type==0x0002:pkcs7_blob=raw_sig_block[8:]
+                        # dwLength = struct.unpack_from('<I', raw_sig_block, 0)[0] # Total length of WIN_CERTIFICATE
+                        # wRevision = struct.unpack_from('<H', raw_sig_block, 4)[0] # Revision
+                        cert_type=struct.unpack_from('<H',raw_sig_block,6)[0] # wCertificateType
+                        if cert_type==0x0002:pkcs7_blob=raw_sig_block[8:] # WIN_CERT_TYPE_PKCS_SIGNED_DATA
                     if pkcs7_blob:
                         with warnings.catch_warnings():warnings.simplefilter("ignore",UserWarning);warnings.simplefilter("ignore",DeprecationWarning);parsed=pkcs7.load_der_pkcs7_certificates(pkcs7_blob)
                         for idx,cert in enumerate(parsed):crypto_certs.append({"cert_index":idx+1,"subject":str(cert.subject.rfc4514_string()),"issuer":str(cert.issuer.rfc4514_string()),"serial_number":str(cert.serial_number),"version":str(cert.version),"not_valid_before_utc":str(cert.not_valid_before_utc),"not_valid_after_utc":str(cert.not_valid_after_utc)})
@@ -1287,18 +1474,19 @@ def _parse_digital_signature(pe: pefile.PE, filepath: str, cryptography_availabl
             if signify_available_flag:
                 signify_res=[]
                 try:
+                    # Signify expects a file-like object or path. Since we have pe.__data__, use BytesIO.
                     with io.BytesIO(pe.__data__)as f_mem:
-                        signed_pe=SignedPEFile(f_mem)
+                        signed_pe=SignedPEFile(f_mem) # Pass the file-like object
                         if not signed_pe.signed_datas:signify_res.append({"status":"No signature blocks found by signify."})
                         else:
-                            for i,sdo in enumerate(signed_pe.signed_datas):
+                            for i,sdo in enumerate(signed_pe.signed_datas): # AuthenticodeSignedData object
                                 vr_enum,vr_exc=sdo.explain_verify()
                                 item:Dict[str,Any]={"block":i+1,"status_description":str(vr_enum),"is_valid":vr_enum==AuthenticodeVerificationResult.OK,"exception":str(vr_exc)if vr_exc else None}
-                                if sdo.signer_info:
+                                if sdo.signer_info: # SignerInfo object
                                     si=sdo.signer_info;ident_parts=[]
-                                    if hasattr(si,'issuer')and si.issuer:
+                                    if hasattr(si,'issuer')and si.issuer: # Name object
                                         try:ident_parts.append(f"Issuer: {si.issuer.rfc4514_string()}")
-                                        except:ident_parts.append(f"Issuer: {str(si.issuer)}")
+                                        except:ident_parts.append(f"Issuer: {str(si.issuer)}") # Fallback
                                     else:ident_parts.append("Issuer: N/A")
                                     if hasattr(si,'serial_number')and si.serial_number is not None:ident_parts.append(f"Serial: {si.serial_number}")
                                     else:ident_parts.append("Serial: N/A")
@@ -1334,19 +1522,22 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
         return peid_results
 
     peid_results["status"] = "Scan performed."
+    # Entry Point Scan
     if hasattr(pe,'OPTIONAL_HEADER')and pe.OPTIONAL_HEADER.AddressOfEntryPoint:
         ep_rva=pe.OPTIONAL_HEADER.AddressOfEntryPoint
         try:
             ep_sec=pe.get_section_by_rva(ep_rva)
             if ep_sec:
-                ep_offset_sec=ep_rva-ep_sec.VirtualAddress;ep_data=ep_sec.get_data(ep_offset_sec,2048)
+                ep_offset_sec=ep_rva-ep_sec.VirtualAddress;ep_data=ep_sec.get_data(ep_offset_sec,2048) # Read 2KB from EP
                 for sig in custom_sigs:
                     if sig['ep_only']:match_name=find_pattern_in_data_regex(ep_data,sig,verbose,"Entry Point Area");_ = peid_results["ep_matches"].append(match_name) if match_name else None
         except Exception as e:logger.warning(f"PEiD EP scan error: {e}",exc_info=verbose)
+    # Full File / Heuristic Scan
     if not skip_full_peid_scan:
         heuristic_matches_list:List[str]=[]
+        # Scan executable sections, or first section if none are marked executable
         secs_to_scan=[s for s in pe.sections if hasattr(s,'Characteristics')and bool(s.Characteristics&pefile.SECTION_CHARACTERISTICS['IMAGE_SCN_MEM_EXECUTE'])]
-        if not secs_to_scan and pe.sections:secs_to_scan=[pe.sections[0]]
+        if not secs_to_scan and pe.sections:secs_to_scan=[pe.sections[0]] # Fallback to first section
         scan_tasks_args=[]
         for sec in secs_to_scan:
             try:
@@ -1367,19 +1558,20 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
                 for future in concurrent.futures.as_completed(futures):
                     try:res_name=future.result();_ = heuristic_matches_list.append(res_name) if res_name else None
                     except Exception as e:logger.warning(f"PEiD scan thread error: {e}",exc_info=verbose)
-        peid_results["heuristic_matches"]=list(set(heuristic_matches_list))
-    peid_results["ep_matches"]=list(set(peid_results["ep_matches"]))
+        peid_results["heuristic_matches"]=list(set(heuristic_matches_list)) # Unique matches
+    peid_results["ep_matches"]=list(set(peid_results["ep_matches"])) # Unique EP matches
     return peid_results
 
 def _parse_rich_header(pe: pefile.PE) -> Optional[Dict[str, Any]]:
     if hasattr(pe,'RICH_HEADER')and pe.RICH_HEADER:
         decoded=[];raw_vals=list(pe.RICH_HEADER.values)if pe.RICH_HEADER.values else[]
-        for i in range(0,len(raw_vals),2):
+        for i in range(0,len(raw_vals),2): # Iterate in pairs (CompID, Count)
             if i+1<len(raw_vals):comp_id=raw_vals[i];count=raw_vals[i+1];prod_id=comp_id>>16;build_num=comp_id&0xFFFF;decoded.append({"product_id_hex":hex(prod_id),"product_id_dec":prod_id,"build_number":build_num,"count":count,"raw_comp_id":hex(comp_id)})
         return {'key_hex':pe.RICH_HEADER.key.hex()if isinstance(pe.RICH_HEADER.key,bytes)else str(pe.RICH_HEADER.key),'checksum':hex(pe.RICH_HEADER.checksum)if pe.RICH_HEADER.checksum is not None else None,'raw_values':raw_vals,'decoded_values':decoded,'raw_data_hex':pe.RICH_HEADER.raw_data.hex()if pe.RICH_HEADER.raw_data else None,'clear_data_hex':pe.RICH_HEADER.clear_data.hex()if pe.RICH_HEADER.clear_data else None}
     return None
 
 def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[str, Any]]:
+    # Constants for ordinal flags
     IMG_ORDINAL_FLAG64 = 0x8000000000000000
     IMG_ORDINAL_FLAG32 = 0x80000000
 
@@ -1387,10 +1579,11 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
     if hasattr(pe,'DIRECTORY_ENTRY_DELAY_IMPORT'):
         for entry in pe.DIRECTORY_ENTRY_DELAY_IMPORT:
             dll_name="N/A"
-            if entry.struct.szName:
+            if entry.struct.szName: # RVA to DLL name string
                 try:dll_name=pe.get_string_at_rva(entry.struct.szName).decode('utf-8','ignore')
-                except:pass
+                except:pass # Keep N/A if error
             delay_syms=[]
+            # pINT (PointerToINT) points to the Import Name Table for this DLL
             if entry.struct.pINT and hasattr(pe,'OPTIONAL_HEADER'):
                 thunk_rva=entry.struct.pINT
                 ptr_size=8 if magic_type_str=="PE32+ (64-bit)"else 4
@@ -1398,23 +1591,25 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
 
                 while True:
                     try:
+                        # Read the thunk value (RVA to import name or ordinal)
                         thunk_val_raw = pe.get_qword_at_rva(thunk_rva) if ptr_size==8 else pe.get_dword_at_rva(thunk_rva)
-                        if thunk_val_raw == 0: break
+                        if thunk_val_raw == 0: break # End of table
 
                         s_name, s_ord = None, None
-                        if thunk_val_raw & ord_flag:
-                            s_ord = thunk_val_raw & 0xFFFF
-                        else:
-                            name_rva = thunk_val_raw
+                        if thunk_val_raw & ord_flag: # Import by ordinal
+                            s_ord = thunk_val_raw & 0xFFFF # Ordinal is lower 16 bits for PE32, lower 16 for PE32+ too (though flag is 64-bit)
+                        else: # Import by name
+                            name_rva = thunk_val_raw # This is an RVA to an IMAGE_IMPORT_BY_NAME structure
                             try:
-                                s_name = pe.get_string_at_rva(name_rva + 2).decode('utf-8','ignore')
+                                # IMAGE_IMPORT_BY_NAME: Hint (WORD), Name (NULL-terminated string)
+                                s_name = pe.get_string_at_rva(name_rva + 2).decode('utf-8','ignore') # Skip Hint
                             except Exception as e_str:
                                 logger.debug(f"Delay-load import string fetch error at RVA {hex(name_rva+2)}: {e_str}")
                                 s_name = "ErrorFetchingName"
 
                         delay_syms.append({'name':s_name,'ordinal':s_ord,'thunk_rva':hex(thunk_rva)})
                         thunk_rva += ptr_size
-                    except pefile.PEFormatError as e_pe:
+                    except pefile.PEFormatError as e_pe: # Reading past valid data
                         logger.debug(f"Delay-load import table parsing error (PEFormatError): {e_pe}")
                         break
                     except Exception as e_gen:
@@ -1426,15 +1621,18 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
 def _parse_tls_info(pe: pefile.PE, magic_type_str: str) -> Optional[Dict[str, Any]]:
     if hasattr(pe,'DIRECTORY_ENTRY_TLS')and pe.DIRECTORY_ENTRY_TLS and pe.DIRECTORY_ENTRY_TLS.struct:
         tls_struct=pe.DIRECTORY_ENTRY_TLS.struct;tls_info:Dict[str,Any]={'struct':tls_struct.dump_dict()};callbacks=[]
+        # AddressOfCallBacks is a VA (Virtual Address)
         if tls_struct.AddressOfCallBacks and hasattr(pe,'OPTIONAL_HEADER'):
-            cb_va=tls_struct.AddressOfCallBacks;ptr_size=8 if magic_type_str=="PE32+ (64-bit)"else 4;max_cb=20;count=0
-            while cb_va!=0 and count<max_cb:
+            cb_va=tls_struct.AddressOfCallBacks;ptr_size=8 if magic_type_str=="PE32+ (64-bit)"else 4;max_cb=20;count=0 # Limit callbacks parsed
+            while cb_va!=0 and count<max_cb: # Callbacks are VA pointers, array terminated by a NULL pointer
                 try:
+                    # Convert VA of the callback pointer to file offset
                     func_va_ptr_offset = pe.get_offset_from_virtual_address(cb_va)
+                    # Read the actual callback function's VA from that offset
                     func_va=pe.get_qword_from_data(pe.get_data(func_va_ptr_offset,ptr_size),0)if ptr_size==8 else pe.get_dword_from_data(pe.get_data(func_va_ptr_offset,ptr_size),0)
-                    if func_va==0:break
+                    if func_va==0:break # End of callback array
                     callbacks.append({'va':hex(func_va),'rva':hex(func_va-pe.OPTIONAL_HEADER.ImageBase)});cb_va+=ptr_size;count+=1
-                except AttributeError as e_pefile_va:
+                except AttributeError as e_pefile_va: # get_offset_from_virtual_address can fail if VA is not mapped
                     logger.debug(f"TLS callback VA {hex(cb_va)}->RVA/offset conversion error: {e_pefile_va} (likely VA out of mapped range)")
                     break
                 except Exception as e:logger.debug(f"TLS callback parse error VA {hex(cb_va)}: {e}");break
@@ -1445,7 +1643,7 @@ def _parse_load_config(pe: pefile.PE) -> Optional[Dict[str, Any]]:
     if hasattr(pe,'DIRECTORY_ENTRY_LOAD_CONFIG')and pe.DIRECTORY_ENTRY_LOAD_CONFIG and pe.DIRECTORY_ENTRY_LOAD_CONFIG.struct:
         lc=pe.DIRECTORY_ENTRY_LOAD_CONFIG.struct;load_config_dict:Dict[str,Any]={'struct':lc.dump_dict()}
         if hasattr(lc,'GuardFlags'):
-            gf_list=[];gf_map={0x100:"CF_INSTRUMENTED",0x200:"CFW_INSTRUMENTED",0x400:"CF_FUNCTION_TABLE_PRESENT",0x800:"SECURITY_COOKIE_UNUSED",0x1000:"PROTECT_DELAYLOAD_IAT",0x2000:"DELAYLOAD_IAT_IN_ITS_OWN_SECTION",0x4000:"CF_EXPORT_SUPPRESSION_INFO_PRESENT",0x8000:"CF_ENABLE_EXPORT_SUPPRESSION",0x10000:"CF_LONGJUMP_TABLE_PRESENT",0x100000:"RETPOLINE_PRESENT",0x1000000:"EH_CONTINUATION_TABLE_PRESENT",0x2000000:"XFG_ENABLED",0x4000000:"MEMTAG_PRESENT",0x8000000:"CET_SHADOW_STACK_PRESENT"}
+            gf_list=[];gf_map={0x100:"CF_INSTRUMENTED",0x200:"CFW_INSTRUMENTED",0x400:"CF_FUNCTION_TABLE_PRESENT",0x800:"SECURITY_COOKIE_UNUSED",0x1000:"PROTECT_DELAYLOAD_IAT",0x2000:"DELAYLOAD_IAT_IN_ITS_OWN_SECTION",0x4000:"CF_EXPORT_SUPPRESSION_INFO_PRESENT",0x8000:"CF_ENABLE_EXPORT_SUPPRESSION",0x10000:"CF_LONGJUMP_TABLE_PRESENT",0x100000:"RETPOLINE_PRESENT",0x1000000:"EH_CONTINUATION_TABLE_PRESENT",0x2000000:"XFG_ENABLED",0x4000000:"MEMTAG_PRESENT",0x8000000:"CET_SHADOW_STACK_PRESENT"} # From winnt.h
             for flag_val,flag_name in gf_map.items():
                 if lc.GuardFlags&flag_val:gf_list.append(f"IMAGE_GUARD_{flag_name}")
             load_config_dict['guard_flags_list']=gf_list
@@ -1453,10 +1651,12 @@ def _parse_load_config(pe: pefile.PE) -> Optional[Dict[str, Any]]:
     return None
 
 def _parse_com_descriptor(pe: pefile.PE) -> Optional[Dict[str, Any]]:
+    # IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR is index 14
     com_desc_idx=pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR']
     if hasattr(pe.OPTIONAL_HEADER,'DATA_DIRECTORY')and len(pe.OPTIONAL_HEADER.DATA_DIRECTORY)>com_desc_idx and pe.OPTIONAL_HEADER.DATA_DIRECTORY[com_desc_idx].VirtualAddress!=0 and hasattr(pe,'DIRECTORY_ENTRY_COM_DESCRIPTOR')and pe.DIRECTORY_ENTRY_COM_DESCRIPTOR and hasattr(pe.DIRECTORY_ENTRY_COM_DESCRIPTOR,'struct'):
         com_desc=pe.DIRECTORY_ENTRY_COM_DESCRIPTOR.struct;com_dict:Dict[str,Any]={'struct':com_desc.dump_dict()};flags_list=[]
-        flags_map={0x1:"ILONLY",0x2:"32BITREQUIRED",0x4:"IL_LIBRARY",0x8:"STRONGNAMESIGNED",0x10:"NATIVE_ENTRYPOINT",0x10000:"TRACKDEBUGDATA",0x20000:"32BITPREFERRED"}
+        # Flags from CorHdr.h (COMIMAGE_FLAGS_...)
+        flags_map={0x1:"ILONLY",0x2:"32BITREQUIRED",0x4:"IL_LIBRARY",0x8:"STRONGNAMESIGNED",0x10:"NATIVE_ENTRYPOINT",0x10000:"TRACKDEBUGDATA",0x20000:"32BITPREFERRED"} # Some common flags
         if hasattr(com_desc,'Flags'):
             for val,name in flags_map.items():
                 if com_desc.Flags&val:flags_list.append(f"COMIMAGE_FLAGS_{name}")
@@ -1473,9 +1673,9 @@ def _parse_overlay_data(pe: pefile.PE) -> Optional[Dict[str, Any]]:
 def _parse_base_relocations(pe: pefile.PE) -> List[Dict[str, Any]]:
     relocs_list=[]
     if hasattr(pe,'DIRECTORY_ENTRY_BASERELOC'):
-        for base_reloc in pe.DIRECTORY_ENTRY_BASERELOC:
+        for base_reloc in pe.DIRECTORY_ENTRY_BASERELOC: # IMAGE_BASE_RELOCATION blocks
             block:Dict[str,Any]={'struct':base_reloc.struct.dump_dict(),'entries':[]}
-            if hasattr(base_reloc,'entries'):
+            if hasattr(base_reloc,'entries'): # Relocation entries within this block
                 for entry in base_reloc.entries:block['entries'].append({'rva':hex(entry.rva),'type':entry.type,'type_str':get_relocation_type_str(entry.type),'is_padding':getattr(entry,'is_padding',False)})
             relocs_list.append(block)
     return relocs_list
@@ -1483,15 +1683,15 @@ def _parse_base_relocations(pe: pefile.PE) -> List[Dict[str, Any]]:
 def _parse_bound_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
     bound_list=[]
     if hasattr(pe,'DIRECTORY_ENTRY_BOUND_IMPORT'):
-        for desc in pe.DIRECTORY_ENTRY_BOUND_IMPORT:
+        for desc in pe.DIRECTORY_ENTRY_BOUND_IMPORT: # IMAGE_BOUND_IMPORT_DESCRIPTOR
             d_dict:Dict[str,Any]={'struct':desc.struct.dump_dict(),'name':None,'forwarder_refs':[]}
             try:d_dict['name']=desc.name.decode('utf-8','ignore')if desc.name else"N/A"
-            except:pass
-            if hasattr(desc,'entries'):
+            except:pass # Keep N/A if error
+            if hasattr(desc,'entries'): # IMAGE_BOUND_FORWARDER_REF entries
                 for ref in desc.entries:
                     r_dict:Dict[str,Any]={'struct':ref.struct.dump_dict(),'name':None}
                     try:r_dict['name']=ref.name.decode('utf-8','ignore')if ref.name else"N/A"
-                    except:pass
+                    except:pass # Keep N/A
                     d_dict['forwarder_refs'].append(r_dict)
             bound_list.append(d_dict)
     return bound_list
@@ -1499,6 +1699,8 @@ def _parse_bound_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
 def _parse_exception_data(pe: pefile.PE) -> List[Dict[str, Any]]:
     ex_list=[]
     if hasattr(pe,'DIRECTORY_ENTRY_EXCEPTION')and pe.DIRECTORY_ENTRY_EXCEPTION:
+        # For x64, these are RUNTIME_FUNCTION entries. For x86, it's different (SEH).
+        # pefile parses them generically based on arch.
         for entry in pe.DIRECTORY_ENTRY_EXCEPTION:
             if hasattr(entry,'struct'):
                 entry_dump=entry.struct.dump_dict();machine=pe.FILE_HEADER.Machine
@@ -1515,15 +1717,16 @@ def _parse_coff_symbols(pe: pefile.PE) -> List[Dict[str, Any]]:
         while idx<len(pe.SYMBOLS):
             symbol=pe.SYMBOLS[idx]
             sym_dict={'name_str':symbol.name.decode('utf-8','ignore').rstrip('\x00')if isinstance(symbol.name,bytes)else str(symbol.name),'value':symbol.Value,'section_number':symbol.SectionNumber,'type':symbol.Type,'storage_class':symbol.StorageClass,'number_of_aux_symbols':symbol.NumberOfAuxSymbols,'type_str':get_symbol_type_str(symbol.Type),'storage_class_str':get_symbol_storage_class_str(symbol.StorageClass),'raw_struct':symbol.struct.dump_dict(),'auxiliary_symbols':[]}
-            idx+=1
+            idx+=1 # Move to next symbol index
             if symbol.NumberOfAuxSymbols>0:
                 for aux_i in range(symbol.NumberOfAuxSymbols):
                     if idx<len(pe.SYMBOLS):
                         aux_obj=None
+                        # The auxiliary symbol data is directly in pe.SYMBOLS[idx].struct
                         if hasattr(pe.SYMBOLS[idx],'struct'):aux_obj=pe.SYMBOLS[idx].struct
                         if aux_obj:sym_dict['auxiliary_symbols'].append(_dump_aux_symbol_to_dict(symbol.struct,aux_obj,aux_i))
-                        idx+=1
-                    else:break
+                        idx+=1 # Consume auxiliary symbol
+                    else:break # Should not happen if NumberOfAuxSymbols is correct
             coff_list.append(sym_dict)
     return coff_list
 
@@ -1533,15 +1736,355 @@ def _verify_checksum(pe: pefile.PE) -> Dict[str, Any]:
         return {'header_checksum':hex(hdr_sum),'calculated_checksum':hex(calc_sum),'matches':hdr_sum==calc_sum if hdr_sum!=0 else"Header checksum is 0 (not verified)"}
     return {"error":"Checksum info not available."}
 
+# --- FLOSS Analysis Helper Functions ---
+def _setup_floss_logging(script_verbose_level: int, floss_internal_verbose_level: int):
+    """
+    Configures FLOSS internal loggers based on script's verbosity settings.
+    script_verbose_level: Corresponds to FLOSS DebugLevel (NONE, DEFAULT, TRACE, SUPERTRACE)
+    floss_internal_verbose_level: Corresponds to FLOSS's own -v, -vv flags (0, 1, 2)
+                                   This is primarily for the verbosity of string output, not general logging.
+                                   The script's general --verbose controls FLOSS's internal loggers.
+    """
+    if not FLOSS_SETUP_OK: # If basic FLOSS logging components aren't even available
+        logger.debug("FLOSS setup not OK, skipping FLOSS logger configuration.")
+        return
+
+    # Determine the overall logging level for FLOSS components
+    # This maps the script's --verbose/--debug type flags to FLOSS's internal logger levels
+    floss_log_level_setting = logging.WARNING # Default to WARNING to keep FLOSS quiet unless specified
+    if script_verbose_level >= Actual_DebugLevel_Floss.SUPERTRACE: # e.g. script --floss-debug-level SUPERTRACE
+        floss_log_level_setting = FLOSS_TRACE_LEVEL_CONST # Show TRACE and above from FLOSS
+    elif script_verbose_level >= Actual_DebugLevel_Floss.TRACE: # e.g. script --floss-debug-level TRACE
+        floss_log_level_setting = FLOSS_TRACE_LEVEL_CONST
+    elif script_verbose_level >= Actual_DebugLevel_Floss.DEFAULT: # e.g. script --floss-debug-level DEBUG
+        floss_log_level_setting = logging.DEBUG
+    elif script_verbose_level > Actual_DebugLevel_Floss.NONE : # A general verbose flag for the script might imply INFO for FLOSS
+        floss_log_level_setting = logging.INFO
+
+
+    logger.info(f"Setting FLOSS-related loggers to: {logging.getLevelName(floss_log_level_setting)}")
+    for logger_name_floss in FLOSS_LOGGERS_LIST:
+        # Special handling for very verbose loggers in FLOSS if needed
+        if logger_name_floss in ("floss.api_hooks", "floss.function_argument_getter") and \
+           script_verbose_level < Actual_DebugLevel_Floss.SUPERTRACE:
+            logging.getLogger(logger_name_floss).setLevel(logging.WARNING) # Keep these quieter unless SUPERTRACE
+        else:
+            logging.getLogger(logger_name_floss).setLevel(floss_log_level_setting)
+
+    # Configure Vivisect log level based on FLOSS debug level
+    if FLOSS_ANALYSIS_OK: # set_vivisect_log_level is in floss.utils
+        if script_verbose_level < Actual_DebugLevel_Floss.TRACE:
+            set_vivisect_log_level(logging.CRITICAL)
+            logging.getLogger("viv_utils.emulator_drivers").setLevel(logging.ERROR)
+        else: # TRACE or SUPERTRACE for FLOSS
+            set_vivisect_log_level(logging.DEBUG)
+            logging.getLogger("viv_utils.emulator_drivers").setLevel(logging.DEBUG)
+        logger.info(f"Vivisect loggers configured based on FLOSS debug level {script_verbose_level}.")
+    else:
+        logger.debug("FLOSS analysis components (like floss.utils) not available, cannot set Vivisect log level via FLOSS.")
+
+def _load_floss_vivisect_workspace(sample_path_obj: Path, format_hint: str) -> Optional[VivWorkspace]:
+    """Loads a Vivisect workspace for FLOSS analysis."""
+    if not FLOSS_ANALYSIS_OK or not viv_utils: # Check if viv_utils was imported
+        logger.error("Vivisect utilities (viv_utils) required by FLOSS are not available. Cannot load workspace.")
+        return None
+    
+    logger.info(f"FLOSS: Loading Vivisect workspace for: {sample_path_obj} (format: {format_hint})")
+    vw = None
+    try:
+        if format_hint == "auto":
+            # Basic auto-detection based on suffix, FLOSS might do more internally
+            if sample_path_obj.suffix.lower() in (".sc32", ".raw32"): format_hint = "sc32"
+            elif sample_path_obj.suffix.lower() in (".sc64", ".raw64"): format_hint = "sc64"
+            # else, it will be treated as 'pe' by default by viv_utils.getWorkspace
+
+        if format_hint == "sc32":
+            vw = viv_utils.getShellcodeWorkspaceFromFile(str(sample_path_obj), arch="i386", analyze=True)
+        elif format_hint == "sc64":
+            vw = viv_utils.getShellcodeWorkspaceFromFile(str(sample_path_obj), arch="amd64", analyze=True)
+        else: # "pe" or other formats viv_utils can handle
+            vw = viv_utils.getWorkspace(str(sample_path_obj), analyze=True, should_save=False)
+        
+        if vw: logger.info("FLOSS: Vivisect workspace analysis complete.")
+        else: logger.warning("FLOSS: Vivisect workspace loading returned None.")
+        return vw
+    except Exception as e:
+        logger.error(f"FLOSS: Error loading Vivisect workspace: {e}", exc_info=True)
+        return None
+
+def _parse_floss_analysis(
+    pe_filepath_str: str,
+    min_length: int,
+    floss_verbose_level: int, # This is FLOSS's own -v, -vv for string output (0,1,2)
+    floss_script_debug_level: int, # This is this script's verbosity mapped to FLOSS DebugLevel enum
+    floss_format_hint: str,
+    floss_disabled_types: List[str],
+    floss_only_types: List[str],
+    floss_functions_to_analyze: List[int], # List of function RVAs/VAs
+    quiet_mode_for_floss_progress: bool # For disabling FLOSS's own progress bars
+    ) -> Dict[str, Any]:
+    """
+    Performs string extraction using FLOSS and returns a structured result.
+    """
+    floss_results_dict: Dict[str, Any] = {
+        "status": "Not performed", "error": None,
+        "metadata": {}, "analysis_config": {},
+        "strings": {
+            "static_strings": [], "stack_strings": [],
+            "tight_strings": [], "decoded_strings": []
+        }
+    }
+
+    if not FLOSS_AVAILABLE:
+        floss_results_dict["status"] = "FLOSS library not available."
+        floss_results_dict["error"] = f"Setup: {FLOSS_IMPORT_ERROR_SETUP}, Analysis: {FLOSS_IMPORT_ERROR_ANALYSIS}"
+        logger.warning("FLOSS analysis requested but FLOSS is not fully available.")
+        return floss_results_dict
+
+    _setup_floss_logging(floss_script_debug_level, floss_verbose_level)
+
+    log_progress = floss_script_debug_level >= Actual_DebugLevel_Floss.DEFAULT
+
+    if log_progress:
+        logger.info(f"--- Starting FLOSS Analysis for: {pe_filepath_str} ---")
+    sample_path = Path(pe_filepath_str)
+
+    analysis_conf = FlossAnalysis( 
+        enable_static_strings=Actual_StringType_Floss.STATIC not in floss_disabled_types,
+        enable_stack_strings=Actual_StringType_Floss.STACK not in floss_disabled_types,
+        enable_tight_strings=Actual_StringType_Floss.TIGHT not in floss_disabled_types,
+        enable_decoded_strings=Actual_StringType_Floss.DECODED not in floss_disabled_types,
+    )
+    if floss_only_types: 
+        analysis_conf.enable_static_strings = Actual_StringType_Floss.STATIC in floss_only_types
+        analysis_conf.enable_stack_strings = Actual_StringType_Floss.STACK in floss_only_types
+        analysis_conf.enable_tight_strings = Actual_StringType_Floss.TIGHT in floss_only_types
+        analysis_conf.enable_decoded_strings = Actual_StringType_Floss.DECODED in floss_only_types
+    
+    floss_results_dict["analysis_config"] = {
+        "static_enabled": analysis_conf.enable_static_strings,
+        "stack_enabled": analysis_conf.enable_stack_strings,
+        "tight_enabled": analysis_conf.enable_tight_strings,
+        "decoded_enabled": analysis_conf.enable_decoded_strings,
+        "min_length": min_length,
+        "format_hint": floss_format_hint,
+        "functions_to_analyze_count": len(floss_functions_to_analyze),
+        "floss_internal_verbosity": floss_verbose_level,
+    }
+    
+    if analysis_conf.enable_static_strings:
+        if log_progress: logger.info("FLOSS: Extracting static strings...")
+        try:
+            static_strings_gen = get_static_strings(sample_path, min_length)
+            static_list = []
+            for s_obj in static_strings_gen: 
+                static_list.append({"offset": hex(s_obj.offset), "string": s_obj.string})
+            floss_results_dict["strings"]["static_strings"] = static_list
+            logger.info(f"FLOSS: Found {len(static_list)} static strings.") 
+        except Exception as e:
+            logger.error(f"FLOSS: Error extracting static strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+            floss_results_dict["strings"]["static_strings"] = [{"error": str(e)}]
+
+    vw: Optional[VivWorkspace] = None
+    selected_functions_fvas_set: Set[int] = set()
+    needs_vivisect = (analysis_conf.enable_stack_strings or \
+                      analysis_conf.enable_tight_strings or \
+                      analysis_conf.enable_decoded_strings)
+
+    if needs_vivisect:
+        if log_progress: logger.info("FLOSS: Preparing Vivisect workspace for deeper analysis...")
+        vw = _load_floss_vivisect_workspace(sample_path, floss_format_hint)
+        if vw:
+            try:
+                imagebase = get_imagebase(vw)
+                floss_results_dict["metadata"]["imagebase"] = hex(imagebase) if imagebase is not None else None
+                all_vw_functions_vas = set(vw.getFunctions()) 
+                if floss_functions_to_analyze: 
+                    valid_user_functions = set()
+                    for fva_or_rva in floss_functions_to_analyze:
+                        fva = fva_or_rva
+                        if imagebase is not None and fva < imagebase : 
+                            fva = imagebase + fva_or_rva
+                        if fva in all_vw_functions_vas:
+                            valid_user_functions.add(fva)
+                        else:
+                            logger.warning(f"FLOSS: Requested function 0x{fva_or_rva:x} (resolved to VA 0x{fva:x}) not found in Vivisect workspace.")
+                    selected_functions_fvas_set = valid_user_functions
+                    if log_progress: logger.info(f"FLOSS: User specified {len(valid_user_functions)} valid functions for analysis.")
+                else: 
+                    selected_functions_fvas_set = all_vw_functions_vas
+                    if log_progress: logger.info(f"FLOSS: Will analyze all {len(all_vw_functions_vas)} functions found in Vivisect workspace.")
+            except Exception as e_vw_setup:
+                logger.error(f"FLOSS: Error during Vivisect workspace post-processing: {e_vw_setup}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                vw = None 
+        else:
+            logger.error("FLOSS: Failed to load Vivisect workspace. Stack, tight, and decoded string analysis will be skipped.")
+            floss_results_dict["status"] = "Vivisect workspace load failed"
+            floss_results_dict["error"] = "Failed to load Vivisect workspace for FLOSS advanced analysis."
+
+    if vw and FLOSS_ANALYSIS_OK: 
+        decoding_features_map: Dict[int, Any] = {} 
+        if analysis_conf.enable_decoded_strings or analysis_conf.enable_tight_strings:
+            if log_progress: logger.info("FLOSS: Identifying decoding function features...")
+            try:
+                decoding_features_map, _ = find_decoding_function_features(vw, list(selected_functions_fvas_set), disable_progress=quiet_mode_for_floss_progress)
+                if log_progress: logger.info(f"FLOSS: Found decoding features for {len(decoding_features_map)} functions.")
+            except Exception as e:
+                logger.error(f"FLOSS: Error finding decoding features: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                err_msg_feat = {"error": f"Feature identification error: {str(e)}"}
+                if analysis_conf.enable_decoded_strings: floss_results_dict["strings"]["decoded_strings"] = [err_msg_feat]
+                if analysis_conf.enable_tight_strings: floss_results_dict["strings"]["tight_strings"] = [err_msg_feat]
+
+
+        if analysis_conf.enable_stack_strings:
+            if log_progress: logger.info("FLOSS: Extracting stack strings...")
+            try:
+                stack_strings_gen = extract_stackstrings(
+                    vw, list(selected_functions_fvas_set), min_length,
+                    verbosity=floss_verbose_level, 
+                    disable_progress=quiet_mode_for_floss_progress
+                )
+                stack_list = []
+                for s_obj in stack_strings_gen: 
+                    stack_list.append({
+                        "function_va": hex(s_obj.function_address),
+                        "string_va": hex(s_obj.address), 
+                        "string": s_obj.string
+                    })
+                floss_results_dict["strings"]["stack_strings"] = stack_list
+                logger.info(f"FLOSS: Found {len(stack_list)} stack strings.") 
+            except Exception as e:
+                logger.error(f"FLOSS: Error extracting stack strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                floss_results_dict["strings"]["stack_strings"] = [{"error": str(e)}]
+
+        if analysis_conf.enable_tight_strings:
+            if log_progress: logger.info("FLOSS: Extracting tight strings...")
+            try:
+                if not decoding_features_map and (analysis_conf.enable_decoded_strings or analysis_conf.enable_tight_strings):
+                    logger.warning("FLOSS: Decoding features map is empty, cannot identify functions with tight loops.")
+                    floss_results_dict["strings"]["tight_strings"] = [{"error": "Decoding features map was empty, prerequisite for tight strings."}]
+                else:
+                    if floss_script_debug_level >= Actual_DebugLevel_Floss.TRACE: 
+                        logger.debug(f"FLOSS_DEBUG (Tight Strings): Type of decoding_features_map: {type(decoding_features_map)}")
+                        if isinstance(decoding_features_map, dict):
+                            sample_keys = list(decoding_features_map.keys())[:3]
+                            logger.debug(f"FLOSS_DEBUG (Tight Strings): Sample keys from decoding_features_map: {sample_keys}")
+                            for key_sample in sample_keys:
+                                try:
+                                    value_sample = decoding_features_map[key_sample]
+                                    value_repr = repr(value_sample)
+                                    logger.debug(f"FLOSS_DEBUG (Tight Strings): Sample value for key {hex(key_sample)} (type {type(value_sample)}): {value_repr[:200]}{'...' if len(value_repr) > 200 else ''}")
+                                except Exception as e_debug_log:
+                                    logger.debug(f"FLOSS_DEBUG (Tight Strings): Error logging sample value for key {hex(key_sample)}: {e_debug_log}")
+                        elif decoding_features_map is not None:
+                             logger.debug(f"FLOSS_DEBUG (Tight Strings): decoding_features_map is not a dict, it's a {type(decoding_features_map)}. Value (repr): {repr(decoding_features_map)[:200]}")
+
+                    tightloop_fvas_set = get_functions_with_tightloops(decoding_features_map)
+                    
+                    # --- Additional Debugging for tightloop_fvas_set ---
+                    if floss_script_debug_level >= Actual_DebugLevel_Floss.TRACE:
+                        logger.debug(f"FLOSS_DEBUG (Tight Strings): Type of tightloop_fvas_set (returned by get_functions_with_tightloops): {type(tightloop_fvas_set)}")
+                        logger.debug(f"FLOSS_DEBUG (Tight Strings): Content of tightloop_fvas_set (sample of first 10): {list(tightloop_fvas_set)[:10]}")
+                        logger.debug(f"FLOSS_DEBUG (Tight Strings): Length of tightloop_fvas_set: {len(tightloop_fvas_set)}")
+
+
+                    if log_progress: logger.info(f"FLOSS: Identified {len(tightloop_fvas_set)} functions with tight loops for tight string analysis.")
+                    
+                    if tightloop_fvas_set: 
+                        # The error occurs inside extract_tightstrings when it calls .items()
+                        # on the fvas list/set it receives.
+                        tight_strings_gen = extract_tightstrings(
+                            vw, list(tightloop_fvas_set), min_length, # Pass as list
+                            verbosity=floss_verbose_level,
+                            disable_progress=quiet_mode_for_floss_progress
+                        )
+                        tight_list = []
+                        for s_obj in tight_strings_gen: 
+                            tight_list.append({
+                                "function_va": hex(s_obj.function_address),
+                                "address_or_offset": hex(s_obj.address if hasattr(s_obj, 'address') else s_obj.offset),
+                                "string": s_obj.string
+                            })
+                        floss_results_dict["strings"]["tight_strings"] = tight_list
+                        logger.info(f"FLOSS: Found {len(tight_list)} tight strings.") 
+                    else:
+                        if log_progress: logger.info("FLOSS: No functions with tight loops identified from features. Skipping tight string extraction.")
+                        floss_results_dict["strings"]["tight_strings"] = []
+            except Exception as e:
+                logger.error(f"FLOSS: Error extracting tight strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                if floss_script_debug_level >= Actual_DebugLevel_Floss.TRACE: # Check if TRACE or higher
+                    logger.error(f"FLOSS_DEBUG (Tight Strings): The above error occurred after processing decoding_features_map and tightloop_fvas_set (details logged if TRACE was enabled).")
+                logger.info("FLOSS: This error might be internal to FLOSS's tight loop identification with the current sample/vivisect version.")
+                floss_results_dict["strings"]["tight_strings"] = [{"error": str(e)}]
+
+        if analysis_conf.enable_decoded_strings:
+            if log_progress: logger.info("FLOSS: Extracting decoded strings...")
+            try:
+                if not decoding_features_map and (analysis_conf.enable_decoded_strings or analysis_conf.enable_tight_strings):
+                    logger.warning("FLOSS: Decoding features map is empty, cannot identify top candidate functions for decoding.")
+                    floss_results_dict["strings"]["decoded_strings"] = [{"error": "Decoding features map was empty, prerequisite for decoded strings."}]
+                else:
+                    top_candidate_funcs_features = get_top_functions(decoding_features_map, 20)
+                    fvas_to_emulate_set = get_function_fvas(top_candidate_funcs_features)
+                    if log_progress: logger.info(f"FLOSS: Identified {len(fvas_to_emulate_set)} top candidate functions for decoded string emulation.")
+                    if fvas_to_emulate_set:
+                        decoded_strings_gen = decode_strings(
+                            vw, list(fvas_to_emulate_set), min_length,
+                            verbosity=floss_verbose_level,
+                            disable_progress=quiet_mode_for_floss_progress
+                        )
+                        decoded_list = []
+                        for s_obj in decoded_strings_gen: 
+                            decoded_list.append({
+                                "string_va": hex(s_obj.address),
+                                "string": s_obj.string,
+                                "decoding_routine_va": hex(s_obj.decoding_routine) 
+                            })
+                        floss_results_dict["strings"]["decoded_strings"] = decoded_list
+                        logger.info(f"FLOSS: Found {len(decoded_list)} decoded strings.") 
+                    else:
+                        if log_progress: logger.info("FLOSS: No candidate functions found for decoded string emulation from features.")
+                        floss_results_dict["strings"]["decoded_strings"] = []
+            except Exception as e:
+                logger.error(f"FLOSS: Error extracting decoded strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                floss_results_dict["strings"]["decoded_strings"] = [{"error": str(e)}]
+        
+        floss_results_dict["status"] = "FLOSS analysis complete."
+
+    elif needs_vivisect and not vw: 
+        floss_results_dict["status"] = "FLOSS analysis incomplete due to Vivisect workspace load failure."
+        floss_results_dict["error"] = floss_results_dict.get("error", "Vivisect workspace could not be loaded.")
+        err_msg_vw = {"error": "Vivisect workspace load failed"}
+        if analysis_conf.enable_stack_strings: floss_results_dict["strings"]["stack_strings"] = [err_msg_vw]
+        if analysis_conf.enable_tight_strings: floss_results_dict["strings"]["tight_strings"] = [err_msg_vw]
+        if analysis_conf.enable_decoded_strings: floss_results_dict["strings"]["decoded_strings"] = [err_msg_vw]
+    elif not needs_vivisect: 
+         floss_results_dict["status"] = "FLOSS analysis complete (only static strings requested/enabled)."
+    else: 
+        floss_results_dict["status"] = "FLOSS analysis status unclear."
+
+    if log_progress or "complete" not in floss_results_dict["status"].lower():
+        logger.info(f"--- FLOSS Analysis for: {pe_filepath_str} Finished (Status: {floss_results_dict['status']}) ---")
+    return floss_results_dict
+
 # --- Main PE Parsing Logic ---
 def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                       peid_db_path: Optional[str],
                       yara_rules_path: Optional[str],
                       capa_rules_path: Optional[str],
                       capa_sigs_path: Optional[str],
-                      verbose: bool,
-                      skip_full_peid_scan: bool,
+                      verbose: bool, # General script verbosity
+                      skip_full_peid_scan: bool, 
                       peid_scan_all_sigs_heuristically: bool,
+                      # FLOSS specific args
+                      floss_min_len_arg: int,
+                      floss_verbose_level_arg: int, # FLOSS's own -v, -vv (0,1,2)
+                      floss_script_debug_level_arg: int, # Script's verbosity for FLOSS loggers (DebugLevel enum)
+                      floss_format_hint_arg: str,
+                      floss_disabled_types_arg: List[str],
+                      floss_only_types_arg: List[str],
+                      floss_functions_to_analyze_arg: List[int],
+                      floss_quiet_mode_arg: bool, # For FLOSS progress bars
                       analyses_to_skip: Optional[List[str]] = None
                       ) -> Dict[str, Any]:
     global PEFILE_VERSION_USED
@@ -1596,6 +2139,22 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
     else:
         pe_info_dict['capa_analysis'] = {"status": "Skipped by user request", "results": None, "error": None}
         logger.info("Capa analysis skipped by request.")
+    
+    if "floss" not in analyses_to_skip:
+        pe_info_dict['floss_analysis'] = _parse_floss_analysis(
+            filepath,
+            floss_min_len_arg,
+            floss_verbose_level_arg,
+            floss_script_debug_level_arg,
+            floss_format_hint_arg,
+            floss_disabled_types_arg,
+            floss_only_types_arg,
+            floss_functions_to_analyze_arg,
+            floss_quiet_mode_arg
+        )
+    else:
+        pe_info_dict['floss_analysis'] = {"status": "Skipped by user request", "strings": {}}
+        logger.info("FLOSS analysis skipped by request.")
 
 
     pe_info_dict['pefile_warnings'] = pe.get_warnings()
@@ -1608,15 +2167,15 @@ def _print_dict_structure_cli(data_dict: Dict[str, Any], indent: int = 1, title:
     prefix = "  " * indent
     if title: safe_print(f"{prefix}{title}:")
     for key, value in data_dict.items():
-        if key == "Structure": continue
-        if isinstance(value, dict) and "Value" in value and isinstance(value["Value"], dict):
+        if key == "Structure": continue # Skip the "Structure" key if present from pefile dump_dict
+        if isinstance(value, dict) and "Value" in value and isinstance(value["Value"], dict): # Nested pefile structure
             _print_dict_structure_cli(value["Value"], indent + 1, title=key)
-        elif isinstance(value, list) and value and isinstance(value[0], dict) and "Value" in value[0] and "Structure" in value[0]:
+        elif isinstance(value, list) and value and isinstance(value[0], dict) and "Value" in value[0] and "Structure" in value[0]: # List of pefile structures
             safe_print(f"{prefix}  {key}:")
             for i, item_struct_container in enumerate(value):
                 if isinstance(item_struct_container, dict) and "Value" in item_struct_container:
                      _print_dict_structure_cli(item_struct_container["Value"], indent + 2, title=f"Item {i+1}")
-                else:
+                else: # Should not happen if format is consistent
                     safe_print(f"{prefix}    Item {i+1}: {item_struct_container}")
         elif isinstance(value, list) or isinstance(value, tuple):
             val_str = ', '.join(map(str, value)) if value else '[]'
@@ -1664,7 +2223,8 @@ def _print_data_directories_cli(data_dirs: List[Dict[str, Any]]):
     if not data_dirs: safe_print("  Data Directories not found or empty."); return
     for entry_dict in data_dirs:
         entry_value = entry_dict.get('Value', {}); entry_name = entry_dict.get('name', 'Unknown')
-        if entry_value.get('Size',0)>0 or entry_value.get('VirtualAddress',0)>0:
+        # Only print if directory has size or address, or if verbose
+        if entry_value.get('Size',0)>0 or entry_value.get('VirtualAddress',0)>0 or VERBOSE_CLI_OUTPUT_FLAG:
             safe_print(f"  {entry_name:<30} {'Offset' if entry_name=='IMAGE_DIRECTORY_ENTRY_SECURITY' else 'RVA'}: {hex(entry_value.get('VirtualAddress',0)):<12} Size: {hex(entry_value.get('Size',0))}")
 
 def _print_sections_cli(sections_data: List[Dict[str, Any]], pe_obj: Optional[pefile.PE]):
@@ -1677,11 +2237,12 @@ def _print_sections_cli(sections_data: List[Dict[str, Any]], pe_obj: Optional[pe
         safe_print(f"    Entropy:                         {section_dict.get('entropy', 0.0):.4f}")
         if section_dict.get('md5'): safe_print(f"    MD5:                             {section_dict.get('md5')}")
         if section_dict.get('ssdeep'): safe_print(f"    SSDeep:                          {section_dict.get('ssdeep')}")
-        if pe_obj and VERBOSE_CLI_OUTPUT_FLAG:
+        if pe_obj and VERBOSE_CLI_OUTPUT_FLAG: # Only print data sample if verbose
             try:
+                # Find the pefile.Section() object corresponding to this dict
                 pe_sec = next((s for s in pe_obj.sections if s.Name.decode('utf-8','ignore').rstrip('\x00') == section_dict.get('name_str')), None)
                 if pe_sec:
-                    data_sample = pe_sec.get_data()[:32]
+                    data_sample = pe_sec.get_data()[:32] # Get first 32 bytes
                     safe_print(f"    Data Sample (first 32 bytes):")
                     for line in _format_hex_dump_lines(data_sample,0,16): safe_print(f"        {line}")
             except Exception as e: logger.debug(f"Section sample error {section_dict.get('name_str')}: {e}")
@@ -1718,7 +2279,7 @@ def _print_version_info_cli(ver_info: Dict[str, Any]):
     if ver_info.get('vs_fixedfileinfo'):
         for fixed_info in ver_info['vs_fixedfileinfo']:
             safe_print(f"  File Version: {fixed_info.get('FileVersion_str')}, Product Version: {fixed_info.get('ProductVersion_str')}")
-            if "Value" in fixed_info:
+            if "Value" in fixed_info: # Print other fixed file info if verbose or structure is simple
                 for k,v in fixed_info["Value"].items():
                     if k not in ['Structure','FileVersionMS','FileVersionLS','ProductVersionMS','ProductVersionLS','Signature','StrucVersion']: safe_print(f"    {k}: {v}")
     if ver_info.get('file_info_blocks'):
@@ -1756,7 +2317,7 @@ def _print_digital_signatures_cli(sig_info: Dict[str, Any]):
                     if item.get('signer_identification_string'):safe_print(f"      Signer Identification: {item.get('signer_identification_string')}")
                     if item.get('program_name'):safe_print(f"        Program Name: {item.get('program_name')}")
                     if item.get('timestamp_time'):safe_print(f"      Timestamp Signature: Valid, Time: {item.get('timestamp_time')}")
-            else:safe_print(f"    Signify Info: {val_res}")
+            else:safe_print(f"    Signify Info: {val_res}") # Should be a list or error string
     else:
         safe_print("  No embedded digital signature data found.")
         safe_print("  This file may be signed using a Windows Catalog (.cat) file (not checked by this script).")
@@ -1833,9 +2394,9 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
         analysis_meta = meta["analysis"]
         safe_print(f"    Format: {analysis_meta.get('format')}, Arch: {analysis_meta.get('arch')}, OS: {analysis_meta.get('os')}")
         safe_print(f"    Extractor: {analysis_meta.get('extractor')}")
-        if verbose_flag and analysis_meta.get('rules'):
+        if verbose_flag and analysis_meta.get('rules'): # Only show rules paths if verbose
             safe_print(f"    Rules Paths Used: {', '.join(analysis_meta.get('rules', []))}")
-    if verbose_flag and meta.get("version"):
+    if verbose_flag and meta.get("version"): # Only show capa version if verbose
         safe_print(f"    Capa Version: {meta.get('version')}")
 
 
@@ -1857,10 +2418,10 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
         if attck_entries:
             attck_display_list = []
             for entry in attck_entries:
-                if isinstance(entry, dict):
+                if isinstance(entry, dict): # Newer capa might have dicts here
                     display_str = entry.get('id', entry.get('name', str(entry)))
                     attck_display_list.append(str(display_str))
-                else:
+                else: # Older capa might have simple strings
                     attck_display_list.append(str(entry))
             safe_print(f"    ATT&CK: {', '.join(attck_display_list)}")
 
@@ -1876,24 +2437,24 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
             safe_print(f"    MBC: {', '.join(mbc_display_list)}")
 
 
-        if verbose_flag:
+        if verbose_flag: # Only show these if verbose
             if rule_meta.get('description'):
                 safe_print(f"    Description: {rule_meta.get('description')}")
             if rule_meta.get('authors'):
                 safe_print(f"    Authors: {', '.join(rule_meta.get('authors',[]))}")
 
-        matches_data = rule_details.get("matches")
+        matches_data = rule_details.get("matches") # This is a dict: {address_hex: [match_details_list]}
 
         if isinstance(matches_data, dict):
             if matches_data:
                 safe_print(f"    Matches ({len(matches_data)}):")
                 match_count_on_cli = 0
                 for addr_hex, match_list_at_addr in matches_data.items():
-                    if not verbose_flag and match_count_on_cli >=3:
+                    if not verbose_flag and match_count_on_cli >=3: # Limit matches shown per rule if not verbose
                         safe_print(f"      ... (additional matches for this rule omitted, use --verbose)")
                         break
                     safe_print(f"      At Address: {addr_hex}")
-                    if verbose_flag and isinstance(match_list_at_addr, list):
+                    if verbose_flag and isinstance(match_list_at_addr, list): # Only show feature details if verbose
                         for match_idx, match_item_detail in enumerate(match_list_at_addr):
                             feature_desc = "N/A"
                             if isinstance(match_item_detail, dict):
@@ -1903,28 +2464,28 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
                                     feature_value = feature_dict.get('value', '')
                                     feature_description = feature_dict.get('description', '')
                                     parts = [f"Type: {feature_type}"]
-                                    if feature_value: parts.append(f"Value: {str(feature_value)[:50]}")
-                                    if feature_description: parts.append(f"Desc: {str(feature_description)[:50]}")
+                                    if feature_value: parts.append(f"Value: {str(feature_value)[:50]}") # Truncate long values
+                                    if feature_description: parts.append(f"Desc: {str(feature_description)[:50]}") # Truncate
                                     feature_desc = ", ".join(parts)
-                                else:
+                                else: # feature might not be a dict in some rare cases
                                     feature_desc = f"Feature: {str(feature_dict)[:100]}"
-                            else:
+                            else: # match_item_detail might not be a dict
                                 feature_desc = f"Match item: {str(match_item_detail)[:100]}"
                             safe_print(f"        Match Detail #{match_idx+1}: {feature_desc}")
                     match_count_on_cli +=1
             else:
                 safe_print("    No specific address match locations found (matches field was an empty dictionary).")
-        elif matches_data is None or (isinstance(matches_data, list) and not matches_data):
+        elif matches_data is None or (isinstance(matches_data, list) and not matches_data): # Handle if 'matches' is None or empty list
             safe_print("    No specific address match locations found (matches field was empty or not present).")
-        else:
+        else: # Unexpected structure for 'matches'
              safe_print(f"    Matches field has unexpected structure: {type(matches_data)}. Data (first 100 chars): {str(matches_data)[:100]}")
 
 
-        if not verbose_flag and capability_count >= 10:
+        if not verbose_flag and capability_count >= 10: # Limit total capabilities shown if not verbose
             safe_print("\n  ... (additional capabilities omitted, use --verbose to see all)")
             break
 
-    if capability_count == 0:
+    if capability_count == 0: # If loop didn't run
         safe_print("\n  No capabilities detected by capa.")
 
 
@@ -1941,7 +2502,7 @@ def _print_rich_header_cli(rich_header_data: Optional[Dict[str, Any]]):
 def _print_coff_symbols_cli(coff_symbols: List[Dict[str, Any]], verbose_flag: bool):
     safe_print("\n--- COFF Symbol Table ---")
     if not coff_symbols: safe_print("  No COFF Symbol Table found or empty."); return
-    limit = None if verbose_flag else 50; displayed_count = 0
+    limit = None if verbose_flag else 50; displayed_count = 0 # Limit if not verbose
     safe_print(f"  Total Symbol Records: {len(coff_symbols)}")
     for i,sym_data in enumerate(coff_symbols):
         if limit is not None and displayed_count>=limit: safe_print(f"  ... (omitting remaining {len(coff_symbols)-displayed_count} symbols, use --verbose)");break
@@ -1962,14 +2523,80 @@ def _print_pefile_warnings_cli(warnings_list: List[str]):
     if warnings_list: [safe_print(f"  - {w}") for w in warnings_list]
     else: safe_print("  No warnings from pefile.")
 
+def _print_floss_analysis_cli(floss_data: Dict[str, Any], verbose_flag: bool):
+    """Prints FLOSS analysis results to the console."""
+    safe_print("\n--- FLOSS Advanced String Analysis ---")
+    if not floss_data or "status" not in floss_data:
+        safe_print("  FLOSS analysis data not available or malformed.")
+        return
+
+    status = floss_data.get("status", "Unknown status")
+    safe_print(f"  Status: {status}")
+    if floss_data.get("error"):
+        safe_print(f"  Error: {floss_data['error']}")
+    
+    if verbose_flag and floss_data.get("metadata"):
+        safe_print("  FLOSS Metadata:")
+        for k, v in floss_data["metadata"].items():
+            safe_print(f"    {k.replace('_', ' ').title()}: {v}")
+            
+    if verbose_flag and floss_data.get("analysis_config"):
+        safe_print("  FLOSS Analysis Configuration:")
+        for k, v in floss_data["analysis_config"].items():
+            safe_print(f"    {k.replace('_', ' ').title()}: {v}")
+
+    strings_results = floss_data.get("strings", {})
+    if not strings_results and status == "FLOSS library not available.": # If FLOSS wasn't available, strings will be empty.
+        return # Already printed status.
+
+    for str_type, str_list in strings_results.items():
+        type_name_pretty = str_type.replace("_", " ").title()
+        safe_print(f"\n  --- {type_name_pretty} ---")
+        if isinstance(str_list, list) and str_list:
+            if isinstance(str_list[0], dict) and "error" in str_list[0]:
+                safe_print(f"    Error during extraction: {str_list[0]['error']}")
+                continue
+
+            limited_str_list = str_list[:20] if not verbose_flag and len(str_list) > 20 else str_list
+            for item_idx, item_dict in enumerate(limited_str_list):
+                if str_type == "static_strings":
+                    safe_print(f"    Offset: {item_dict.get('offset', 'N/A')}, String: \"{item_dict.get('string', '')}\"")
+                elif str_type == "stack_strings":
+                    safe_print(f"    Function VA: {item_dict.get('function_va', 'N/A')}, String VA: {item_dict.get('string_va', 'N/A')}, String: \"{item_dict.get('string', '')}\"")
+                elif str_type == "tight_strings":
+                    safe_print(f"    Function VA: {item_dict.get('function_va', 'N/A')}, Addr/Offset: {item_dict.get('address_or_offset', 'N/A')}, String: \"{item_dict.get('string', '')}\"")
+                elif str_type == "decoded_strings":
+                    char_str = f" (Characteristics: {', '.join(item_dict.get('characteristics',[]))})" if item_dict.get('characteristics') else ""
+                    safe_print(f"    String VA: {item_dict.get('string_va', 'N/A')}, Routine VA: {item_dict.get('decoding_routine_va', 'N/A')}, String: \"{item_dict.get('string', '')}\"{char_str}")
+                else: # Should not happen
+                    safe_print(f"    {item_dict}")
+            
+            if not verbose_flag and len(str_list) > 20:
+                safe_print(f"    ... ({len(str_list) - 20} more strings omitted, use --verbose for all {type_name_pretty})")
+        elif not str_list: # Empty list
+             safe_print(f"    No {type_name_pretty.lower()} found.")
+        else: # Should be a list
+            safe_print(f"    Unexpected data format for {type_name_pretty}: {type(str_list)}")
+
+
 # --- Main CLI Printing Function ---
 def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
                               yara_rules_path: Optional[str],
-                              capa_rules_dir: Optional[str], # This is the effectively resolved path
+                              capa_rules_dir: Optional[str], 
                               capa_sigs_dir: Optional[str],
                               verbose: bool,
                               skip_full_peid_scan: bool, 
                               peid_scan_all_sigs_heuristically: bool,
+                              # FLOSS args
+                              floss_min_len_cli: int,
+                              floss_verbose_level_cli: int,
+                              floss_script_debug_level_cli: int,
+                              floss_format_hint_cli: str,
+                              floss_disabled_types_cli: List[str],
+                              floss_only_types_cli: List[str],
+                              floss_functions_to_analyze_cli: List[int],
+                              floss_quiet_mode_cli: bool,
+                              # General CLI args
                               extract_strings_cli: bool, 
                               min_str_len_cli: int,
                               search_strings_cli: Optional[List[str]], 
@@ -1977,32 +2604,27 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
                               hexdump_offset_cli: Optional[int], 
                               hexdump_length_cli: Optional[int],
                               hexdump_lines_cli: int,
-                              analyses_to_skip_cli_arg: Optional[List[str]] = None # New parameter
+                              analyses_to_skip_cli_arg: Optional[List[str]] = None 
                               ):
     global PEFILE_VERSION_USED, VERBOSE_CLI_OUTPUT_FLAG
-    VERBOSE_CLI_OUTPUT_FLAG = verbose # Set global for helper print functions
+    VERBOSE_CLI_OUTPUT_FLAG = verbose 
     
-    # Resolve pefile version for logging/reporting
     pefile_version_str = "unknown"
-    try:
-        pefile_version_str = pefile.__version__
-    except AttributeError:
-        pass # Keep as "unknown"
+    try: pefile_version_str = pefile.__version__
+    except AttributeError: pass
 
     if verbose: 
         logger.info(f"Starting CLI analysis for: {filepath}. pefile version: {pefile_version_str}")
     
     safe_print(f"[*] Analyzing PE file: {filepath}\n")
     
-    pe_obj_for_cli = None # Initialize to ensure it's closable in finally
+    pe_obj_for_cli = None 
     try:
-        # Load the PE file. fast_load=False is generally good for full analysis.
         pe_obj_for_cli = pefile.PE(filepath, fast_load=False)
     except pefile.PEFormatError as e_pe_format:
         safe_print(f"[!] Error: Not a valid PE file or PE format error: {e_pe_format}")
         logger.error(f"PEFormatError for CLI file '{filepath}': {e_pe_format}", exc_info=verbose)
-        # No sys.exit here, allow main to handle exit if this is critical
-        raise # Re-raise for main to catch and exit gracefully
+        raise 
     except FileNotFoundError:
         safe_print(f"[!] Error: Input file not found: {filepath}")
         logger.error(f"FileNotFoundError for CLI file '{filepath}'")
@@ -2012,31 +2634,36 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
         logger.error(f"Generic error loading PE file '{filepath}' for CLI: {e_load}", exc_info=verbose)
         raise
 
-    # Ensure analyses_to_skip_cli_arg is a list, even if None was passed
     effective_analyses_to_skip = analyses_to_skip_cli_arg if analyses_to_skip_cli_arg is not None else []
 
-    # Perform the core parsing using the helper that returns a dictionary
     cli_pe_info_dict = _parse_pe_to_dict(
         pe_obj_for_cli, filepath, peid_db_path, yara_rules_path,
-        capa_rules_dir, # Pass the already resolved/checked capa_rules_dir
+        capa_rules_dir, 
         capa_sigs_dir,
         verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically,
-        analyses_to_skip=effective_analyses_to_skip # Pass the skip list
+        # FLOSS args
+        floss_min_len_cli,
+        floss_verbose_level_cli,
+        floss_script_debug_level_cli,
+        floss_format_hint_cli,
+        floss_disabled_types_cli,
+        floss_only_types_cli,
+        floss_functions_to_analyze_cli,
+        floss_quiet_mode_cli,
+        analyses_to_skip=effective_analyses_to_skip 
     )
 
-    # Print all the standard PE information sections
     _print_file_hashes_cli(cli_pe_info_dict.get('file_hashes',{}))
     _print_dos_header_cli(cli_pe_info_dict.get('dos_header',{}))
     _print_nt_headers_cli(cli_pe_info_dict.get('nt_headers',{}))
     _print_data_directories_cli(cli_pe_info_dict.get('data_directories',[]))
-    _print_sections_cli(cli_pe_info_dict.get('sections',[]),pe_obj_for_cli) # Pass pe_obj for verbose data sample
+    _print_sections_cli(cli_pe_info_dict.get('sections',[]),pe_obj_for_cli) 
     _print_imports_cli(cli_pe_info_dict.get('imports',[]))
     _print_exports_cli(cli_pe_info_dict.get('exports',{}))
     _print_resources_summary_cli(cli_pe_info_dict.get('resources_summary',[]))
     _print_version_info_cli(cli_pe_info_dict.get('version_info',{}))
     _print_digital_signatures_cli(cli_pe_info_dict.get('digital_signature',{}))
     
-    # Print analysis results (PEiD, YARA, Capa)
     if "peid" not in effective_analyses_to_skip:
         _print_peid_matches_cli(cli_pe_info_dict.get('peid_matches',{}))
     else:
@@ -2055,7 +2682,12 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
         safe_print("\n--- Capa Capability Analysis ---")
         safe_print("  Skipped by user request.")
 
-    # Print other PE structures
+    if "floss" not in effective_analyses_to_skip:
+        _print_floss_analysis_cli(cli_pe_info_dict.get('floss_analysis',{}), verbose)
+    else:
+        safe_print("\n--- FLOSS Advanced String Analysis ---")
+        safe_print("  Skipped by user request.")
+
     _print_rich_header_cli(cli_pe_info_dict.get('rich_header'))
 
     remaining_keys_to_print_generic = [
@@ -2068,16 +2700,16 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
     for key, title_str in remaining_keys_to_print_generic:
         data_item = cli_pe_info_dict.get(key)
         safe_print(f"\n--- {title_str} ---")
-        if data_item is not None and data_item != {} and data_item != []: # Check if data exists and is not empty
-            if isinstance(data_item, list) and data_item: # If it's a non-empty list
+        if data_item is not None and data_item != {} and data_item != []: 
+            if isinstance(data_item, list) and data_item: 
                 for i, item_in_list in enumerate(data_item):
                     if isinstance(item_in_list, dict):
                         _print_dict_structure_cli(item_in_list, indent=1, title=f"Entry {i+1}")
                     else:
                         safe_print(f"  Entry {i+1}: {item_in_list}")
-            elif isinstance(data_item, dict): # If it's a dictionary (possibly non-empty)
+            elif isinstance(data_item, dict): 
                  _print_dict_structure_cli(data_item, indent=1)
-            else: # Other types (e.g. string, number - unlikely for these keys but handle)
+            else: 
                 safe_print(f"  {data_item}")
         else:
             safe_print(f"  No {title_str.lower()} information found.")
@@ -2085,11 +2717,9 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
     _print_coff_symbols_cli(cli_pe_info_dict.get('coff_symbols',[]),verbose)
     _print_pefile_warnings_cli(cli_pe_info_dict.get('pefile_warnings',[]))
 
-    # Handle string extraction and search if requested
     if extract_strings_cli:
         safe_print(f"\n--- Extracted Strings (min_length={min_str_len_cli}, limit={strings_limit_cli}) ---")
         try:
-            # Use the internal helper directly with the PE object's data
             extracted_strings_list = _extract_strings_from_data(pe_obj_for_cli.__data__, min_str_len_cli)
             if not extracted_strings_list:
                 safe_print("  No strings found matching criteria.")
@@ -2106,7 +2736,6 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
     if search_strings_cli:
         safe_print(f"\n--- Searched Strings (limit {strings_limit_cli} per term) ---")
         try:
-            # Use the internal helper directly
             search_results_dict = _search_specific_strings_in_data(pe_obj_for_cli.__data__, search_strings_cli)
             found_any_terms = False
             for term, offsets_list in search_results_dict.items():
@@ -2120,23 +2749,20 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
                         safe_print(f"      - {hex(offset_val)}")
                 else:
                     safe_print(f"  String '{term}' not found.")
-            if not found_any_terms and not search_results_dict: # Should not happen if search_terms is not empty
+            if not found_any_terms and not search_results_dict: 
                  safe_print("  No specified strings found or search terms were empty.")
 
         except Exception as e_search:
             safe_print(f"  Error during specific string search: {e_search}")
             logger.warning("CLI: Error during specific string search", exc_info=verbose)
 
-    # Handle hex dump if requested
     if hexdump_offset_cli is not None and hexdump_length_cli is not None:
         safe_print(f"\n--- Hex Dump (Offset: {hex(hexdump_offset_cli)}, Length: {hexdump_length_cli}, Max Lines: {hexdump_lines_cli}) ---")
         try:
-            # Ensure offset and length are valid with respect to file size
             file_size = len(pe_obj_for_cli.__data__)
             if hexdump_offset_cli >= file_size:
                 safe_print("  Error: Start offset is beyond the file size.")
             else:
-                # Adjust length if it goes beyond file end
                 actual_dump_length = min(hexdump_length_cli, file_size - hexdump_offset_cli)
                 if actual_dump_length <= 0:
                     safe_print("  Error: Calculated length for hex dump is zero or negative (start_offset might be at or past EOF).")
@@ -2151,7 +2777,7 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
                             if i >= hexdump_lines_cli:
                                 safe_print(f"  ... (output limited to {hexdump_lines_cli} lines)")
                                 break
-                            safe_print(f"  {line_str}") # Added indent for consistency
+                            safe_print(f"  {line_str}") 
         except IndexError:
              safe_print("  Error: Hex dump range is invalid or out of bounds for the file data.")
         except Exception as e_dump:
@@ -2160,7 +2786,6 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
             
     safe_print("\n[*] CLI Analysis complete.")
 
-    # Ensure PE object is closed if it was successfully opened
     if pe_obj_for_cli:
         pe_obj_for_cli.close()
 
@@ -2318,30 +2943,61 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
 @tool_decorator
 async def reanalyze_loaded_pe_file(
     ctx: Context,
-    # No filepath parameter here anymore
     peid_db_path: Optional[str] = None,
     yara_rules_path: Optional[str] = None,
     capa_rules_dir: Optional[str] = None,
     capa_sigs_dir: Optional[str] = None,
-    analyses_to_skip: Optional[List[str]] = None, # Existing list-based skip
-    skip_capa_analysis: Optional[bool] = None, # New specific flag for capa
+    analyses_to_skip: Optional[List[str]] = None,
+    skip_capa_analysis: Optional[bool] = None,
+    skip_floss_analysis: Optional[bool] = None, # New FLOSS skip flag
+    # FLOSS specific args for re-analysis
+    floss_min_length: Optional[int] = None,
+    floss_verbose_level: Optional[int] = None, # FLOSS's own -v, -vv (0,1,2)
+    floss_script_debug_level_for_floss_loggers: Optional[str] = None, # Script's verbosity for FLOSS (e.g. "INFO", "DEBUG", "TRACE", "SUPERTRACE")
+    floss_format: Optional[str] = None,
+    floss_no_static: Optional[bool] = None,
+    floss_no_stack: Optional[bool] = None,
+    floss_no_tight: Optional[bool] = None,
+    floss_no_decoded: Optional[bool] = None,
+    floss_only_static: Optional[bool] = None,
+    floss_only_stack: Optional[bool] = None,
+    floss_only_tight: Optional[bool] = None,
+    floss_only_decoded: Optional[bool] = None,
+    floss_functions: Optional[List[str]] = None, # Hex strings for function VAs/RVAs
+    floss_quiet: Optional[bool] = None, # For FLOSS progress bars
+    # General args
     verbose_mcp_output: bool = False,
     skip_full_peid_scan: bool = False,
     peid_scan_all_sigs_heuristically: bool = False
-) -> Dict[str, Any]:
+    ) -> Dict[str, Any]:
     """
     Re-triggers a full or partial analysis of the PE file that was pre-loaded at server startup.
-    Allows skipping heavy analyses (PEiD, YARA, Capa) via 'analyses_to_skip' list or specific flags.
-    The analysis results are updated globally.
+    Allows skipping heavy analyses (PEiD, YARA, Capa, FLOSS) via 'analyses_to_skip' list or specific flags.
+    The analysis results are updated globally. FLOSS specific parameters can also be provided.
 
     Args:
         ctx: The MCP Context object.
-        peid_db_path: (Optional[str]) Path to PEiD userdb.txt. Defaults to script-relative 'userdb.txt'. Downloaded if not found.
-        yara_rules_path: (Optional[str]) Path to YARA rule file/directory. Resolved to absolute if provided.
-        capa_rules_dir: (Optional[str]) Path to capa rule directory. Resolved to absolute if provided. If None, uses script-relative default.
-        capa_sigs_dir: (Optional[str]) Path to capa library ID signature files (*.sig). Resolved to absolute if provided. If None, script attempts to find a default or tells Capa to load no library sigs.
-        analyses_to_skip: (Optional[List[str]]) List of analyses to skip. Valid: "peid", "yara", "capa". Defaults to None (run all).
-        skip_capa_analysis: (Optional[bool]) If True, capa analysis will be skipped. This overrides 'analyses_to_skip' for capa. Defaults to None.
+        peid_db_path: (Optional[str]) Path to PEiD userdb.txt.
+        yara_rules_path: (Optional[str]) Path to YARA rule file/directory.
+        capa_rules_dir: (Optional[str]) Path to capa rule directory.
+        capa_sigs_dir: (Optional[str]) Path to capa library ID signature files.
+        analyses_to_skip: (Optional[List[str]]) Analyses to skip ("peid", "yara", "capa", "floss").
+        skip_capa_analysis: (Optional[bool]) If True, capa analysis will be skipped.
+        skip_floss_analysis: (Optional[bool]) If True, FLOSS analysis will be skipped.
+        floss_min_length: (Optional[int]) Min string length for FLOSS.
+        floss_verbose_level: (Optional[int]) FLOSS's internal verbosity (0,1,2).
+        floss_script_debug_level_for_floss_loggers: (Optional[str]) Logging level for FLOSS loggers (e.g. "INFO", "TRACE").
+        floss_format: (Optional[str]) File format hint for FLOSS (auto, pe, sc32, sc64).
+        floss_no_static: (Optional[bool]) Disable static string extraction in FLOSS.
+        floss_no_stack: (Optional[bool]) Disable stack string extraction in FLOSS.
+        floss_no_tight: (Optional[bool]) Disable tight string extraction in FLOSS.
+        floss_no_decoded: (Optional[bool]) Disable decoded string extraction in FLOSS.
+        floss_only_static: (Optional[bool]) Only extract static strings with FLOSS.
+        floss_only_stack: (Optional[bool]) Only extract stack strings with FLOSS.
+        floss_only_tight: (Optional[bool]) Only extract tight strings with FLOSS.
+        floss_only_decoded: (Optional[bool]) Only extract decoded strings with FLOSS.
+        floss_functions: (Optional[List[str]]) Hex addresses of functions for FLOSS to analyze.
+        floss_quiet: (Optional[bool]) Suppress FLOSS progress indicators.
         verbose_mcp_output: (bool) Enables detailed logging for the analysis. Defaults to False.
         skip_full_peid_scan: (bool) If True and PEiD is not skipped, PEiD scan is entry point only. Defaults to False.
         peid_scan_all_sigs_heuristically: (bool) If True (PEiD not skipped, full scan not skipped), all PEiD sigs are used heuristically. Defaults to False.
@@ -2357,110 +3013,127 @@ async def reanalyze_loaded_pe_file(
 
     if ANALYZED_PE_FILE_PATH is None or not os.path.exists(ANALYZED_PE_FILE_PATH) :
         await ctx.error("No PE file was successfully pre-loaded at server startup, or path is invalid. Cannot re-analyze.")
-        # logger.error("MCP: Re-analysis requested but no valid pre-loaded PE file path.") # Already logged by ctx
         raise RuntimeError("No PE file pre-loaded or pre-loaded file path is invalid. Cannot re-analyze.")
 
     await ctx.info(f"Request to re-analyze pre-loaded PE: {ANALYZED_PE_FILE_PATH}")
 
-    # Initialize normalized_analyses_to_skip from the list parameter
     normalized_analyses_to_skip = []
     if analyses_to_skip:
         normalized_analyses_to_skip = [analysis.lower() for analysis in analyses_to_skip]
     
-    # Handle the specific skip_capa_analysis flag
-    # If skip_capa_analysis is True, ensure "capa" is in the skip list.
-    # If skip_capa_analysis is False, ensure "capa" is NOT in the skip list (if it was added by `analyses_to_skip`).
-    if skip_capa_analysis is True:
-        if "capa" not in normalized_analyses_to_skip:
-            normalized_analyses_to_skip.append("capa")
-            await ctx.info("Capa analysis will be skipped due to 'skip_capa_analysis=True'.")
-    elif skip_capa_analysis is False:
-        if "capa" in normalized_analyses_to_skip:
-            normalized_analyses_to_skip.remove("capa")
-            await ctx.info("Capa analysis will be performed as 'skip_capa_analysis=False' (overriding 'analyses_to_skip' list if 'capa' was present).")
+    if skip_capa_analysis is True and "capa" not in normalized_analyses_to_skip:
+        normalized_analyses_to_skip.append("capa")
+        await ctx.info("Capa analysis will be skipped due to 'skip_capa_analysis=True'.")
+    elif skip_capa_analysis is False and "capa" in normalized_analyses_to_skip:
+        normalized_analyses_to_skip.remove("capa")
+        await ctx.info("Capa analysis will be performed as 'skip_capa_analysis=False'.")
+
+    if skip_floss_analysis is True and "floss" not in normalized_analyses_to_skip:
+        normalized_analyses_to_skip.append("floss")
+        await ctx.info("FLOSS analysis will be skipped due to 'skip_floss_analysis=True'.")
+    elif skip_floss_analysis is False and "floss" in normalized_analyses_to_skip:
+        normalized_analyses_to_skip.remove("floss")
+        await ctx.info("FLOSS analysis will be performed as 'skip_floss_analysis=False'.")
             
-    if normalized_analyses_to_skip: # Log only if there's something to skip
+    if normalized_analyses_to_skip:
         await ctx.info(f"Final list of analyses to skip during re-analysis: {', '.join(normalized_analyses_to_skip) if normalized_analyses_to_skip else 'None'}")
 
-
-    # Resolve paths: Use provided if valid, otherwise default.
     current_peid_db_path = str(Path(peid_db_path).resolve()) if peid_db_path and Path(peid_db_path).exists() else str(DEFAULT_PEID_DB_PATH)
-    current_yara_rules_path = str(Path(yara_rules_path).resolve()) if yara_rules_path and Path(yara_rules_path).exists() else None # Can be None
+    current_yara_rules_path = str(Path(yara_rules_path).resolve()) if yara_rules_path and Path(yara_rules_path).exists() else None
     
-    # Capa rules path resolution (similar to ensure_capa_rules_exist logic but for re-analysis)
     current_capa_rules_dir_to_use = None
-    if "capa" not in normalized_analyses_to_skip and CAPA_AVAILABLE: # Only resolve if capa is to be run
+    if "capa" not in normalized_analyses_to_skip and CAPA_AVAILABLE:
         if capa_rules_dir and Path(capa_rules_dir).is_dir() and os.listdir(Path(capa_rules_dir)):
             current_capa_rules_dir_to_use = str(Path(capa_rules_dir).resolve())
         else:
-            if capa_rules_dir: # User provided a path, but it was invalid
-                await ctx.warning(f"Provided capa_rules_dir '{capa_rules_dir}' is invalid/empty for re-analysis. Attempting default.")
-            default_rules_base_mcp = str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
-            # ensure_capa_rules_exist is synchronous, call in thread or make async helper
-            # For simplicity here, assume ensure_capa_rules_exist can be called if needed, or use pre-resolved path
-            # This part might need careful handling if ensure_capa_rules_exist does network I/O
-            # Let's assume for re-analysis, if not provided or invalid, it might try the default path if it already exists.
-            # Or, the user is expected to have valid paths for re-analysis if overriding.
-            # For now, let's simplify: if not valid, it might fail or capa might use its own default.
-            # The _parse_capa_analysis function itself has logic to ensure rules.
-            current_capa_rules_dir_to_use = capa_rules_dir # Pass it to _parse_capa_analysis to handle
-            if not current_capa_rules_dir_to_use:
-                 await ctx.info("Capa rules directory not specified for re-analysis, _parse_capa_analysis will use its default logic.")
-
+            if capa_rules_dir: await ctx.warning(f"Provided capa_rules_dir '{capa_rules_dir}' is invalid/empty. Capa will use its default logic.")
+            current_capa_rules_dir_to_use = capa_rules_dir 
 
     current_capa_sigs_dir_to_use = None
     if "capa" not in normalized_analyses_to_skip and CAPA_AVAILABLE:
         if capa_sigs_dir and Path(capa_sigs_dir).is_dir():
             current_capa_sigs_dir_to_use = str(Path(capa_sigs_dir).resolve())
         else:
-            # _parse_capa_analysis handles default sigs path logic if this is None
-            current_capa_sigs_dir_to_use = capa_sigs_dir 
-            if not current_capa_sigs_dir_to_use:
-                await ctx.info("Capa signatures directory not specified for re-analysis, _parse_capa_analysis will use its default logic.")
+            current_capa_sigs_dir_to_use = capa_sigs_dir
+
+    # FLOSS specific argument preparation for _parse_pe_to_dict
+    # Use provided values if not None, otherwise use defaults or previously established values (e.g. from initial load)
+    # For simplicity in re-analysis, if a FLOSS arg is None, it implies "use default for this run"
+    # rather than trying to fetch from ANALYZED_PE_DATA (which might be complex).
+    # The _parse_pe_to_dict will use FLOSS_MIN_LENGTH_DEFAULT if floss_min_length is None.
+
+    mcp_floss_min_len = floss_min_length if floss_min_length is not None else FLOSS_MIN_LENGTH_DEFAULT
+    mcp_floss_verbose_level = floss_verbose_level if floss_verbose_level is not None else 0 # Default to 0 (non-verbose FLOSS output)
+    
+    # Map FLOSS script debug level string to enum value
+    mcp_floss_script_debug_level_enum_val = Actual_DebugLevel_Floss.NONE # Default
+    if floss_script_debug_level_for_floss_loggers:
+        floss_debug_map = {
+            "NONE": Actual_DebugLevel_Floss.NONE, "DEFAULT": Actual_DebugLevel_Floss.DEFAULT,
+            "DEBUG": Actual_DebugLevel_Floss.DEFAULT, # Map general "DEBUG" to FLOSS "DEFAULT"
+            "TRACE": Actual_DebugLevel_Floss.TRACE, "SUPERTRACE": Actual_DebugLevel_Floss.SUPERTRACE
+        }
+        mcp_floss_script_debug_level_enum_val = floss_debug_map.get(floss_script_debug_level_for_floss_loggers.upper(), Actual_DebugLevel_Floss.NONE)
+    
+    mcp_floss_format_hint = floss_format if floss_format is not None else "auto"
+    
+    mcp_floss_disabled_types = []
+    if floss_no_static: mcp_floss_disabled_types.append(Actual_StringType_Floss.STATIC)
+    if floss_no_stack: mcp_floss_disabled_types.append(Actual_StringType_Floss.STACK)
+    if floss_no_tight: mcp_floss_disabled_types.append(Actual_StringType_Floss.TIGHT)
+    if floss_no_decoded: mcp_floss_disabled_types.append(Actual_StringType_Floss.DECODED)
+
+    mcp_floss_only_types = []
+    if floss_only_static: mcp_floss_only_types.append(Actual_StringType_Floss.STATIC)
+    if floss_only_stack: mcp_floss_only_types.append(Actual_StringType_Floss.STACK)
+    if floss_only_tight: mcp_floss_only_types.append(Actual_StringType_Floss.TIGHT)
+    if floss_only_decoded: mcp_floss_only_types.append(Actual_StringType_Floss.DECODED)
+
+    mcp_floss_functions_to_analyze = []
+    if floss_functions:
+        for func_str in floss_functions:
+            try: mcp_floss_functions_to_analyze.append(int(func_str, 0)) # Auto-detect base (0x for hex)
+            except ValueError: await ctx.warning(f"Invalid FLOSS function address '{func_str}', skipping.")
+    
+    mcp_floss_quiet_mode = floss_quiet if floss_quiet is not None else (not verbose_mcp_output)
 
 
-    # Define the synchronous work that might be cancelled
     def perform_analysis_in_thread():
-        temp_pe_obj = None # Temporary PE object for this analysis run
+        temp_pe_obj = None 
         try:
-            # Re-open from path to ensure a fresh object, especially if PE_OBJECT_FOR_MCP was closed or state is complex.
-            # This ensures thread-safety for the pefile object instance during this specific analysis.
             temp_pe_obj = pefile.PE(ANALYZED_PE_FILE_PATH, fast_load=False) 
             
-            # The _parse_pe_to_dict function will handle the actual parsing.
-            # True cooperative cancellation would require _parse_pe_to_dict
-            # and its sub-functions to periodically check an event.
-            # For now, cancellation is handled by the asyncio.Task wrapper.
             new_parsed_data = _parse_pe_to_dict(
                 temp_pe_obj, ANALYZED_PE_FILE_PATH, current_peid_db_path, current_yara_rules_path,
-                current_capa_rules_dir_to_use, # Pass the resolved or None path
-                current_capa_sigs_dir_to_use,  # Pass the resolved or None path
+                current_capa_rules_dir_to_use, 
+                current_capa_sigs_dir_to_use,  
                 verbose_mcp_output, skip_full_peid_scan, peid_scan_all_sigs_heuristically,
-                normalized_analyses_to_skip # Pass the final combined skip list
+                # FLOSS args for _parse_pe_to_dict
+                floss_min_len_arg=mcp_floss_min_len,
+                floss_verbose_level_arg=mcp_floss_verbose_level,
+                floss_script_debug_level_arg=mcp_floss_script_debug_level_enum_val,
+                floss_format_hint_arg=mcp_floss_format_hint,
+                floss_disabled_types_arg=mcp_floss_disabled_types,
+                floss_only_types_arg=mcp_floss_only_types,
+                floss_functions_to_analyze_arg=mcp_floss_functions_to_analyze,
+                floss_quiet_mode_arg=mcp_floss_quiet_mode,
+                analyses_to_skip=normalized_analyses_to_skip 
             )
-            # Return both the new PE object and the parsed data
-            # The caller (async tool method) will be responsible for updating globals and closing old PE_OBJECT_FOR_MCP
             return temp_pe_obj, new_parsed_data
         except Exception as e_thread: 
-            # If an error occurs within the thread, close the temporary PE object if it was opened
             if temp_pe_obj:
                 temp_pe_obj.close()
-            # Re-raise the exception to be caught by the outer handler in the async tool
-            # This ensures the error is propagated correctly.
             logger.error(f"Error during threaded re-analysis of {ANALYZED_PE_FILE_PATH}: {e_thread}", exc_info=verbose_mcp_output)
             raise 
 
     try:
-        # The `asyncio.to_thread` call itself can be cancelled if the task running this tool method is cancelled.
         new_pe_obj_from_thread, new_parsed_data_from_thread = await asyncio.to_thread(perform_analysis_in_thread)
         
-        # If successful and not cancelled, update global state
-        # Close the old global PE object before replacing it
         if PE_OBJECT_FOR_MCP: 
             PE_OBJECT_FOR_MCP.close()
         
-        PE_OBJECT_FOR_MCP = new_pe_obj_from_thread # Store the new PE object
-        ANALYZED_PE_DATA = new_parsed_data_from_thread # Update the global data
+        PE_OBJECT_FOR_MCP = new_pe_obj_from_thread 
+        ANALYZED_PE_DATA = new_parsed_data_from_thread 
 
         await ctx.info(f"Successfully re-analyzed PE: {ANALYZED_PE_FILE_PATH}")
         skipped_msg_part = f" (Skipped: {', '.join(normalized_analyses_to_skip) if normalized_analyses_to_skip else 'None'})"
@@ -2468,15 +3141,11 @@ async def reanalyze_loaded_pe_file(
 
     except asyncio.CancelledError: 
         await ctx.warning(f"Re-analysis task for {ANALYZED_PE_FILE_PATH} was cancelled by MCP framework.")
-        # The `perform_analysis_in_thread`'s finally block should have closed its temp_pe_obj if it got that far.
-        # The global PE_OBJECT_FOR_MCP and ANALYZED_PE_DATA should remain from the *previous successful load*
-        # as they are only updated upon successful completion of the thread.
         logger.info(f"Re-analysis of {ANALYZED_PE_FILE_PATH} cancelled. Global PE data remains from previous successful load/analysis.")
-        raise # Re-raise for the MCP framework to handle (typically means no response sent)
-    except Exception as e_outer: # Catch errors from perform_analysis_in_thread or other issues
+        raise 
+    except Exception as e_outer: 
         await ctx.error(f"Error re-analyzing PE '{ANALYZED_PE_FILE_PATH}': {str(e_outer)}");
         logger.error(f"MCP: Error re-analyzing PE '{ANALYZED_PE_FILE_PATH}': {str(e_outer)}", exc_info=verbose_mcp_output)
-        # Don't update global state on error during re-analysis. The old PE_OBJECT_FOR_MCP and ANALYZED_PE_DATA remain.
         raise RuntimeError(f"Failed to re-analyze PE file '{ANALYZED_PE_FILE_PATH}': {str(e_outer)}") from e_outer
 
 @tool_decorator
@@ -2504,6 +3173,9 @@ async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
     if ANALYZED_PE_DATA is None or ANALYZED_PE_FILE_PATH is None:
         raise RuntimeError("No PE file loaded. Server may not have pre-loaded the input file successfully.")
 
+    floss_analysis_summary = ANALYZED_PE_DATA.get('floss_analysis', {})
+    floss_strings_summary = floss_analysis_summary.get('strings', {})
+
     full_summary = {
         "filepath":ANALYZED_PE_FILE_PATH,"pefile_version_used":PEFILE_VERSION_USED,
         "has_dos_header":'dos_header'in ANALYZED_PE_DATA and ANALYZED_PE_DATA['dos_header']is not None and"error"not in ANALYZED_PE_DATA['dos_header'],
@@ -2518,6 +3190,11 @@ async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
         "yara_status": ANALYZED_PE_DATA.get('yara_matches',[{}])[0].get('status', "Run/No Matches or Not Run/Skipped") if ANALYZED_PE_DATA.get('yara_matches') and isinstance(ANALYZED_PE_DATA.get('yara_matches'), list) and ANALYZED_PE_DATA.get('yara_matches')[0] else "Not run/Skipped",
         "capa_status": ANALYZED_PE_DATA.get('capa_analysis',{}).get('status',"Not run/Skipped"),
         "capa_capability_count": len(ANALYZED_PE_DATA.get('capa_analysis',{}).get('results',{}).get('rules',{})) if ANALYZED_PE_DATA.get('capa_analysis',{}).get('status')=="Analysis complete (adapted workflow)" else 0,
+        "floss_status": floss_analysis_summary.get('status', "Not run/Skipped"),
+        "floss_static_string_count": len(floss_strings_summary.get('static_strings', [])),
+        "floss_stack_string_count": len(floss_strings_summary.get('stack_strings', [])),
+        "floss_tight_string_count": len(floss_strings_summary.get('tight_strings', [])),
+        "floss_decoded_string_count": len(floss_strings_summary.get('decoded_strings', [])),
         "has_embedded_signature":ANALYZED_PE_DATA.get('digital_signature',{}).get('embedded_signature_present',False)
     }
     await ctx.info(f"Summary for {ANALYZED_PE_FILE_PATH} generated.")
@@ -2676,6 +3353,7 @@ TOOL_DEFINITIONS = {
     "digital_signature":"Information about the PE file's Authenticode digital signature, including certificate details and validation status (if 'cryptography' and 'signify' libs are available). Output is a dictionary.",
     "peid_matches":"Results from PEiD-like signature scanning, indicating potential packers or compilers. Includes entry-point and heuristic matches. Output is a dictionary.",
     "yara_matches":"Results from YARA scanning, listing any matched rules, tags, metadata, and string identifiers. Output is a list of dictionaries.",
+    # "floss_analysis" will have its own dedicated tool due to complexity.
     "rich_header":"Decoded Microsoft Rich Header information, often indicating compiler/linker versions. Output is a dictionary.",
     "delay_load_imports":"Information on delay-loaded imported DLLs and their symbols. Output is a list of dictionaries.",
     "tls_info":"Details from the Thread Local Storage (TLS) directory, including any callback function addresses. Output is a dictionary.",
@@ -2690,6 +3368,94 @@ TOOL_DEFINITIONS = {
     "pefile_warnings":"Any warnings generated by the 'pefile' library during parsing. Output is a list of strings."
 }
 for key, desc in TOOL_DEFINITIONS.items(): globals()[f"get_{key}_info"] = _create_mcp_tool_for_key(key, desc)
+
+@tool_decorator
+async def get_floss_analysis_info(ctx: Context,
+                                  string_type: Optional[str] = None,
+                                  limit: int = 100,
+                                  offset: Optional[int] = 0
+                                 ) -> Dict[str, Any]:
+    """
+    Retrieves FLOSS (FireEye Labs Obfuscated String Solver) analysis results for the pre-loaded file.
+    Allows filtering by string type (static_strings, stack_strings, tight_strings, decoded_strings)
+    and pagination for the selected string type. If no string_type is specified, returns metadata
+    and analysis configuration from FLOSS.
+
+    Args:
+        ctx: The MCP Context object.
+        string_type: (Optional[str]) The type of FLOSS strings to retrieve.
+                     Valid values: "static_strings", "stack_strings", "tight_strings", "decoded_strings".
+                     If None, returns FLOSS metadata and config.
+        limit: (int) Max number of strings to return if string_type is specified. Defaults to 100. Must be positive.
+        offset: (Optional[int]) Starting index for string pagination if string_type is specified. Defaults to 0.
+
+    Returns:
+        A dictionary containing the requested FLOSS information or an error status.
+        If string_type is specified, includes "strings" (list) and "pagination_info".
+        Otherwise, includes "metadata" and "analysis_config".
+
+    Raises:
+        RuntimeError: If no PE file is loaded or FLOSS analysis data is unavailable.
+        ValueError: If parameters are invalid, or if the response size exceeds the server limit.
+    """
+    await ctx.info(f"Request for FLOSS analysis info. String Type: {string_type}, Limit: {limit}, Offset: {offset}")
+
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("Parameter 'limit' must be a positive integer.")
+    if offset is not None and not (isinstance(offset, int) and offset >= 0):
+        raise ValueError("Parameter 'offset' must be a non-negative integer if provided.")
+
+    valid_string_types = ["static_strings", "stack_strings", "tight_strings", "decoded_strings"]
+    if string_type is not None and string_type not in valid_string_types:
+        raise ValueError(f"Invalid 'string_type'. Must be one of: {', '.join(valid_string_types)} or None.")
+
+    if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
+        raise RuntimeError("No PE file loaded or FLOSS analysis data unavailable.")
+
+    floss_data_block = ANALYZED_PE_DATA.get('floss_analysis', {})
+    status = floss_data_block.get("status", "Unknown")
+
+    if status == "Skipped by user request":
+        data_to_send = {"status": status, "message": "FLOSS analysis was skipped by user request.", "data": {}}
+        return await _check_mcp_response_size(ctx, data_to_send, "get_floss_analysis_info")
+    if status != "FLOSS analysis complete." and status != "FLOSS analysis complete (only static strings requested/enabled)." and status != "FLOSS analysis incomplete due to Vivisect workspace load failure.": # Allow incomplete if some static strings were found
+        data_to_send = {"status": status, "error": floss_data_block.get("error", "FLOSS analysis did not complete successfully."), "data": {}}
+        return await _check_mcp_response_size(ctx, data_to_send, "get_floss_analysis_info")
+
+    response_data: Dict[str, Any] = {"status": status}
+    if floss_data_block.get("error"): response_data["error_details"] = floss_data_block.get("error")
+
+
+    if string_type is None: # Return metadata and config
+        response_data["metadata"] = floss_data_block.get("metadata", {})
+        response_data["analysis_config"] = floss_data_block.get("analysis_config", {})
+        await ctx.info("Returning FLOSS metadata and analysis configuration.")
+    else: # Return specific string type with pagination
+        all_strings_of_type = floss_data_block.get("strings", {}).get(string_type, [])
+        
+        if isinstance(all_strings_of_type, list) and all_strings_of_type and isinstance(all_strings_of_type[0], dict) and "error" in all_strings_of_type[0]:
+            response_data["strings"] = []
+            response_data["error_in_type"] = f"Error during {string_type} extraction: {all_strings_of_type[0]['error']}"
+            response_data["pagination_info"] = {'offset': 0, 'limit': limit, 'current_items_count': 0, 'total_items_for_type': 0}
+        elif isinstance(all_strings_of_type, list):
+            current_offset_val = offset if offset is not None else 0
+            paginated_strings = all_strings_of_type[current_offset_val : current_offset_val + limit]
+            response_data["strings"] = paginated_strings
+            response_data["pagination_info"] = {
+                'offset': current_offset_val,
+                'limit': limit,
+                'current_items_count': len(paginated_strings),
+                'total_items_for_type': len(all_strings_of_type)
+            }
+            await ctx.info(f"Returning {len(paginated_strings)} {string_type} (total: {len(all_strings_of_type)}).")
+        else: # Should not happen if _parse_floss_analysis is correct
+            response_data["strings"] = []
+            response_data["error_in_type"] = f"Data for {string_type} is not in the expected list format."
+            response_data["pagination_info"] = {'offset': 0, 'limit': limit, 'current_items_count': 0, 'total_items_for_type': 0}
+            
+    limit_info_str = f"parameters like 'limit' or 'offset' for string_type '{string_type}'" if string_type else "parameters (none for metadata)"
+    return await _check_mcp_response_size(ctx, response_data, "get_floss_analysis_info", limit_info_str)
+
 
 @tool_decorator 
 async def get_capa_analysis_info(ctx: Context,
@@ -3314,7 +4080,7 @@ def _is_mostly_printable_ascii_sync(text_input: str, threshold: float = 0.8) -> 
     printable_char_in_string_count = sum(1 for char_in_s in text_input
                                          if (' ' <= char_in_s <= '~') or char_in_s in '\n\r\t')
     
-    if not text_input: return False 
+    if not text_input: return False # Should be caught by the first check, but defensive.
 
     ratio = printable_char_in_string_count / len(text_input)
     return ratio >= threshold
@@ -3394,12 +4160,15 @@ async def find_and_decode_encoded_strings(
     file_data = PE_OBJECT_FOR_MCP.__data__
     found_decoded_strings = []
 
+    # Regex for Base64: allows for padding, requires min length.
+    # This regex is a common one, but might need refinement for edge cases or specific Base64 variants.
     base64_char_set = rb"[A-Za-z0-9+/]"
     base64_pattern_core = rb"(?:%s{4})*(?:%s{4}|%s{2}==|%s{3}=)" % (
         base64_char_set, base64_char_set, base64_char_set, base64_char_set
     )
     base64_pattern = re.compile(base64_pattern_core)
     
+    # Regex for Base32 (RFC 4648): A-Z, 2-7 characters, padding with '='
     base32_char_set = rb"[A-Z2-7]"
     base32_pattern_core = rb"(?:%s{8})*(?:%s{8}|%s{2}={6}|%s{4}={4}|%s{5}={3}|%s{7}=)" % (
         base32_char_set, base32_char_set, base32_char_set, 
@@ -3407,10 +4176,15 @@ async def find_and_decode_encoded_strings(
     )
     base32_pattern = re.compile(base32_pattern_core)
 
-    hex_pattern = re.compile(rb"(?:[0-9a-fA-F]{2})+") 
+    # Regex for Hex: sequence of hex characters (pairs)
+    hex_pattern = re.compile(rb"(?:[0-9a-fA-F]{2})+") # Must be even length for bytes.fromhex
 
-    url_char_set_no_percent = rb"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=]"
-    percent_encoded_group = rb"(?:%[0-9a-fA-F]{2})+" 
+    # Regex for URL encoding: %xx sequences, possibly mixed with other URL-safe chars
+    # This is a simplified regex; full URL validation is complex.
+    # It looks for at least one %xx sequence.
+    url_char_set_no_percent = rb"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=]" # Common URL characters NOT percent encoded
+    percent_encoded_group = rb"(?:%[0-9a-fA-F]{2})+" # One or more %xx
+    # A sequence that must contain at least one percent-encoded part, possibly surrounded by other URL chars.
     url_pattern_core = rb"(?:%s*%s%s*)+" % (
         url_char_set_no_percent, percent_encoded_group, url_char_set_no_percent
     )
@@ -3419,12 +4193,13 @@ async def find_and_decode_encoded_strings(
     decoding_attempts = [
         ("base64", base64_pattern, min_candidate_len_b64, lambda b: codecs.decode(b, 'base64')),
         ("base32", base32_pattern, min_candidate_len_b32, lambda b: codecs.decode(b, 'base32')),
-        ("hex", hex_pattern, min_candidate_len_hex, lambda b: bytes.fromhex(b.decode('ascii'))),
-        ("url", url_pattern, min_candidate_len_url, lambda b: urllib.parse.unquote_to_bytes(b)) 
+        ("hex", hex_pattern, min_candidate_len_hex, lambda b: bytes.fromhex(b.decode('ascii'))), # Hex needs to be decoded from ascii first
+        ("url", url_pattern, min_candidate_len_url, lambda b: urllib.parse.unquote_to_bytes(b)) # Handles bytes directly
     ]
 
-    processed_offsets = set() 
+    processed_offsets = set() # To avoid processing overlapping matches from different regexes if they yield same core data
 
+    # Ensure the helper is available (it should be, defined in this script)
     if '_is_mostly_printable_ascii_sync' not in globals():
         error_msg = "Critical: Helper function '_is_mostly_printable_ascii_sync' is not defined in the global scope."
         await ctx.error(error_msg)
@@ -3440,6 +4215,7 @@ async def find_and_decode_encoded_strings(
                 if len(found_decoded_strings) >= limit: break
                 
                 start_offset, end_offset = match.start(), match.end()
+                # Check if this exact span has been processed (e.g. if a hex string was also a valid b64 string part)
                 if (start_offset, end_offset) in processed_offsets:
                     continue
 
@@ -3448,50 +4224,62 @@ async def find_and_decode_encoded_strings(
                 if len(encoded_bytes) < min_len:
                     continue
                 
+                # For hex, ensure it's an even number of characters before trying bytes.fromhex
+                if encoding_name == "hex" and len(encoded_bytes) % 2 != 0:
+                    continue
+                
                 try:
+                    # Perform the actual decoding in a thread to avoid blocking asyncio event loop
+                    # if a decode_func is unexpectedly slow (though these are usually fast)
                     decoded_bytes = await asyncio.to_thread(decode_func, encoded_bytes)
                     
-                    if not decoded_bytes: 
+                    if not decoded_bytes: # Some decode functions might return None or empty on failure
                         continue
 
+                    # Attempt to decode the bytes into a string (UTF-8, then fallback)
                     decoded_text = decoded_bytes.decode('utf-8', errors='replace')
                     
                     passes_len_check = len(decoded_text) >= min_decoded_printable_length
                     passes_printable_check = _is_mostly_printable_ascii_sync(decoded_text, printable_threshold)
 
                     if passes_len_check and passes_printable_check:
+                        # Apply custom regex patterns if provided
                         matches_custom_regex = False
-                        if not compiled_decoded_regexes: 
+                        if not compiled_decoded_regexes: # If no patterns, it's a match by default
                             matches_custom_regex = True
                         else:
                             for compiled_regex in compiled_decoded_regexes:
                                 if compiled_regex.search(decoded_text):
                                     matches_custom_regex = True
-                                    break 
+                                    break # Found a match with one of the patterns
 
-                        if matches_custom_regex: 
+                        if matches_custom_regex: # Only add if it passes all filters
+                            # Get a snippet of the original data around the match for context
                             snippet_start = max(0, start_offset - 16)
                             snippet_end = min(len(file_data), end_offset + 16)
                             
                             found_decoded_strings.append({
                                 "original_match_offset": hex(start_offset),
-                                "original_match_snippet_hex": file_data[snippet_start:snippet_end].hex(),
-                                "encoded_substring_repr": encoded_bytes.decode('ascii', 'replace')[:200], 
+                                "original_match_snippet_hex": file_data[snippet_start:snippet_end].hex(), # Context snippet
+                                "encoded_substring_repr": encoded_bytes.decode('ascii', 'replace')[:200], # Truncate long raw strings
                                 "detected_encoding": encoding_name,
                                 "decoded_string": decoded_text,
                                 "decoded_length": len(decoded_text)
                             })
-                            processed_offsets.add((start_offset, end_offset)) 
+                            processed_offsets.add((start_offset, end_offset)) # Mark this span as processed
 
                             if len(found_decoded_strings) >= limit: break
                 
-                except (binascii.Error, ValueError, TypeError) as e_decode: 
+                except (binascii.Error, ValueError, TypeError) as e_decode: # Common errors from decode funcs
+                    # These are expected for non-matching byte sequences, so just pass
                     pass 
-                except NameError as e_name: 
+                except NameError as e_name: # Should not happen if _is_mostly_printable_ascii_sync is defined
                     await ctx.error(f"Internal error: NameError encountered: {e_name}.")
                     logger.error(f"MCP: NameError in find_and_decode_encoded_strings: {e_name}", exc_info=True)
                     raise RuntimeError(f"Internal tool error: A required helper function was not found ({e_name}).") from e_name
-                except Exception as e_generic_decode: 
+                except Exception as e_generic_decode: # Catch any other unexpected error during decoding a specific match
+                    # Log this as it might indicate an issue with a decode_func or pattern
+                    logger.warning(f"MCP: Unexpected error decoding candidate for {encoding_name} at offset {start_offset}: {e_generic_decode}", exc_info=verbose_mcp_output)
                     pass
 
 
@@ -3499,7 +4287,7 @@ async def find_and_decode_encoded_strings(
         limit_info_str = "the 'limit' parameter, or by adjusting minimum candidate lengths or decoded length/printable thresholds"
         return await _check_mcp_response_size(ctx, found_decoded_strings, "find_and_decode_encoded_strings", limit_info_str)
 
-    except Exception as e:
+    except Exception as e: # Catch errors in the main loop of the tool itself
         error_message = f"ToolError: find_and_decode_encoded_strings failed processing. Original error: {type(e).__name__}: {str(e)}"
         await ctx.error(f"Error in find_and_decode_encoded_strings: {str(e)}")
         logger.error(f"MCP: Error in find_and_decode_encoded_strings: {error_message}", exc_info=True)
@@ -3526,21 +4314,51 @@ async def get_current_datetime(ctx: Context) -> Dict[str,str]:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Comprehensive PE File Analyzer.",formatter_class=argparse.RawTextHelpFormatter)
+
     parser.add_argument("--input-file", type=str, required=True, help="REQUIRED: Path to the PE file to be analyzed at server startup (for MCP mode) or for CLI analysis.")
     parser.add_argument("-d", "--db", dest="peid_db", default=None, help=f"Path to PEiD userdb.txt. If not specified, defaults to '{DEFAULT_PEID_DB_PATH}'. Downloads if not found.")
     parser.add_argument("-y", "--yara-rules", dest="yara_rules", default=None, help="Path to YARA rule file or directory.")
     parser.add_argument("--capa-rules-dir", default=None, help=f"Directory containing capa rule files. If not provided or empty/invalid, attempts download to '{SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / CAPA_RULES_SUBDIR_NAME}'.")
-    parser.add_argument("--capa-sigs-dir", default=None, help="Directory containing capa library identification signature files (e.g., sigs/*.sig). Optional. If not provided, attempts to find a script-relative 'capa_sigs' or uses Capa's internal default (which may require `capa download sigs`).")
-    parser.add_argument("--skip-capa", action="store_true", help="Skip capa capability analysis entirely.") # New argument
+    parser.add_argument("--capa-sigs-dir", default=None, help="Directory containing capa library identification signature files (e.g., sigs/*.sig). Optional. If not provided, attempts to find a script-relative 'capa_sigs' or uses Capa's internal default.")
+    
+    parser.add_argument("--skip-capa", action="store_true", help="Skip capa capability analysis entirely.")
+    parser.add_argument("--skip-floss", action="store_true", help="Skip FLOSS advanced string analysis entirely.")
+    parser.add_argument("--skip-peid", action="store_true", help="Skip PEiD signature scanning entirely.")
+    parser.add_argument("--skip-yara", action="store_true", help="Skip YARA scanning entirely.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for CLI mode and more detailed MCP logging.")
-    parser.add_argument("--skip-full-peid-scan",action="store_true",help="Skip full PEiD scan (only scan entry point).")
-    parser.add_argument("--psah","--peid-scan-all-sigs-heuristically",action="store_true",dest="peid_scan_all_sigs_heuristically",help="During full heuristic PEiD scan, use ALL signatures (not just non-EP_only).")
+    
+    peid_group = parser.add_argument_group('PEiD Specific Options (if PEiD scan is not skipped)')
+    peid_group.add_argument("--skip-full-peid-scan",action="store_true",help="Skip full PEiD scan (only scan entry point).")
+    peid_group.add_argument("--psah","--peid-scan-all-sigs-heuristically",action="store_true",dest="peid_scan_all_sigs_heuristically",help="During full heuristic PEiD scan, use ALL signatures (not just non-EP_only).")
+
+    floss_group = parser.add_argument_group('FLOSS Specific Options (if FLOSS scan is not skipped)')
+    floss_group.add_argument("--floss-min-length", "-n", type=int, default=None, 
+                             help=f"Minimum string length for FLOSS (default: {FLOSS_MIN_LENGTH_DEFAULT}).")
+    floss_group.add_argument("--floss-format", "-f", default="auto", choices=["auto", "pe", "sc32", "sc64"],
+                             help="File format hint for FLOSS/Vivisect (auto, pe, sc32, sc64). Default: auto.")
+    floss_group.add_argument("--floss-no-static", action="store_true", help="FLOSS: Do not extract static strings.")
+    floss_group.add_argument("--floss-no-stack", action="store_true", help="FLOSS: Do not extract stack strings.")
+    floss_group.add_argument("--floss-no-tight", action="store_true", help="FLOSS: Do not extract tight strings.")
+    floss_group.add_argument("--floss-no-decoded", action="store_true", help="FLOSS: Do not extract decoded strings.")
+    floss_group.add_argument("--floss-only-static", action="store_true", help="FLOSS: Only extract static strings.")
+    floss_group.add_argument("--floss-only-stack", action="store_true", help="FLOSS: Only extract stack strings.")
+    floss_group.add_argument("--floss-only-tight", action="store_true", help="FLOSS: Only extract tight strings.")
+    floss_group.add_argument("--floss-only-decoded", action="store_true", help="FLOSS: Only extract decoded strings.")
+    floss_group.add_argument("--floss-functions", type=str, nargs="+", default=[], 
+                             help="FLOSS: Hex addresses (e.g., 0x401000) of functions to analyze for stack/decoded strings.")
+    floss_group.add_argument("--floss-verbose-level", "--fv",type=int, default=0, choices=[0,1,2],
+                             help="FLOSS internal verbosity for string output (0=default, 1=verbose, 2=more verbose). Default: 0.")
+    floss_group.add_argument("--floss-quiet", "--fq", action="store_true",
+                             help="FLOSS: Suppress FLOSS's own progress indicators. Overrides script verbosity for FLOSS progress bars.")
+    floss_group.add_argument("--floss-script-debug-level", default="NONE", 
+                             choices=["NONE", "DEFAULT", "DEBUG", "TRACE", "SUPERTRACE"], 
+                             help="Set logging level for FLOSS internal loggers (NONE, DEFAULT, TRACE, SUPERTRACE). Default: NONE.")
 
     cli_group=parser.add_argument_group('CLI Mode Specific Options (ignored if --mcp-server is used)')
-    cli_group.add_argument("--extract-strings",action="store_true",help="Extract and print strings from the PE file.")
-    cli_group.add_argument("--min-str-len",type=int,default=5,help="Minimum length for extracted strings (default: 5).")
-    cli_group.add_argument("--search-string",action="append",help="String to search for within the PE file (multiple allowed).")
-    cli_group.add_argument("--strings-limit",type=int,default=100,help="Limit for string extraction and search results display (default: 100).")
+    cli_group.add_argument("--extract-strings",action="store_true",help="Extract and print strings from the PE file (basic method, use FLOSS for advanced).")
+    cli_group.add_argument("--min-str-len",type=int,default=5,help="Minimum length for basic extracted strings (default: 5).")
+    cli_group.add_argument("--search-string",action="append",help="String to search for within the PE file (multiple allowed, basic method).")
+    cli_group.add_argument("--strings-limit",type=int,default=100,help="Limit for basic string extraction and search results display (default: 100).")
     cli_group.add_argument("--hexdump-offset",type=lambda x:int(x,0),help="Hex dump start offset (e.g., 0x1000 or 4096).")
     cli_group.add_argument("--hexdump-length",type=int,help="Hex dump length in bytes.")
     cli_group.add_argument("--hexdump-lines",type=int,default=16,help="Maximum number of lines to display for hex dump (default: 16).")
@@ -3548,19 +4366,34 @@ if __name__ == '__main__':
     mcp_group=parser.add_argument_group('MCP Server Mode Specific Options')
     mcp_group.add_argument("--mcp-server",action="store_true",help="Run in MCP server mode. The --input-file is pre-analyzed, and tools operate on this file.")
     mcp_group.add_argument("--mcp-host",type=str,default="127.0.0.1",help="MCP server host (default: 127.0.0.1).")
-    mcp_group.add_argument("--mcp-port",type=int,default=8082,help="MCP server port (default: 8082).") # Changed default from 8081 to 8082 as per original script
+    mcp_group.add_argument("--mcp-port",type=int,default=8082,help="MCP server port (default: 8082).") 
     mcp_group.add_argument("--mcp-transport",type=str,default="stdio",choices=["stdio","sse"],help="MCP transport protocol (default: stdio).")
-    args=parser.parse_args()
+    
+    args = None
+    try:
+        args = parser.parse_args()
+    except SystemExit as e:
+        # Argparse calls sys.exit on errors like -h or invalid arguments.
+        # We want to allow this to happen naturally.
+        sys.exit(e.code) 
+    except Exception as e_parse: # Should ideally not be reached if argparse handles its exits.
+        print(f"[!] Exception during argument parsing: {type(e_parse).__name__} - {e_parse}", file=sys.stderr)
+        sys.exit(1) 
 
+    if args is None: # Should also not be reached if argparse exits on error.
+        print("[!] Args is None after parsing attempt, exiting.", file=sys.stderr)
+        sys.exit(1)
+ 
     check_and_install_dependencies(args.mcp_server)
 
-    log_level=logging.DEBUG if args.verbose else logging.INFO;logger.setLevel(log_level)
-    logging.getLogger('mcp').setLevel(log_level) # Ensure MCP's logger also respects verbosity
-    if args.mcp_transport=='sse': # Configure uvicorn logging if SSE is used
+    # Configure logging level based on verbosity AFTER args are parsed
+    log_level = logging.DEBUG if args.verbose else logging.INFO
+    logger.setLevel(log_level)
+    logging.getLogger('mcp').setLevel(log_level) 
+    if args.mcp_transport == 'sse': 
         logging.getLogger('uvicorn').setLevel(log_level)
         logging.getLogger('uvicorn.error').setLevel(log_level)
         logging.getLogger('uvicorn.access').setLevel(logging.WARNING if not args.verbose else logging.DEBUG)
-
 
     abs_input_file = str(Path(args.input_file).resolve())
     abs_peid_db_path = str(Path(args.peid_db).resolve()) if args.peid_db else str(DEFAULT_PEID_DB_PATH)
@@ -3568,11 +4401,47 @@ if __name__ == '__main__':
     abs_capa_rules_dir_arg = str(Path(args.capa_rules_dir).resolve()) if args.capa_rules_dir else None
     abs_capa_sigs_dir_arg = str(Path(args.capa_sigs_dir).resolve()) if args.capa_sigs_dir else None
 
-    # Prepare list of analyses to skip based on args
     analyses_to_skip_arg_list = []
-    if args.skip_capa:
-        analyses_to_skip_arg_list.append("capa")
-        logger.info("User requested to skip Capa analysis via command line.")
+    if args.skip_capa: analyses_to_skip_arg_list.append("capa")
+    if args.skip_floss: analyses_to_skip_arg_list.append("floss")
+    if args.skip_peid: analyses_to_skip_arg_list.append("peid")
+    if args.skip_yara: analyses_to_skip_arg_list.append("yara")
+    if analyses_to_skip_arg_list:
+        logger.info(f"User requested to skip the following analyses via command line: {', '.join(analyses_to_skip_arg_list)}")
+
+    floss_min_len_resolved = args.floss_min_length if args.floss_min_length is not None else FLOSS_MIN_LENGTH_DEFAULT
+    
+    floss_debug_level_map = {
+        "NONE": Actual_DebugLevel_Floss.NONE, "DEFAULT": Actual_DebugLevel_Floss.DEFAULT,
+        "DEBUG": Actual_DebugLevel_Floss.DEFAULT, 
+        "TRACE": Actual_DebugLevel_Floss.TRACE, "SUPERTRACE": Actual_DebugLevel_Floss.SUPERTRACE
+    }
+    floss_script_debug_level_enum_val_resolved = floss_debug_level_map.get(args.floss_script_debug_level.upper(), Actual_DebugLevel_Floss.NONE)
+
+    if args.verbose and floss_script_debug_level_enum_val_resolved == Actual_DebugLevel_Floss.NONE:
+        floss_script_debug_level_enum_val_resolved = Actual_DebugLevel_Floss.TRACE 
+        logger.info(f"Main script verbose (-v) is active, elevating FLOSS script debug level for its loggers to TRACE for detailed FLOSS logs.")
+
+
+    floss_disabled_types_resolved = []
+    if args.floss_no_static: floss_disabled_types_resolved.append(Actual_StringType_Floss.STATIC)
+    if args.floss_no_stack: floss_disabled_types_resolved.append(Actual_StringType_Floss.STACK)
+    if args.floss_no_tight: floss_disabled_types_resolved.append(Actual_StringType_Floss.TIGHT)
+    if args.floss_no_decoded: floss_disabled_types_resolved.append(Actual_StringType_Floss.DECODED)
+
+    floss_only_types_resolved = []
+    if args.floss_only_static: floss_only_types_resolved.append(Actual_StringType_Floss.STATIC)
+    if args.floss_only_stack: floss_only_types_resolved.append(Actual_StringType_Floss.STACK)
+    if args.floss_only_tight: floss_only_types_resolved.append(Actual_StringType_Floss.TIGHT)
+    if args.floss_only_decoded: floss_only_types_resolved.append(Actual_StringType_Floss.DECODED)
+
+    floss_functions_to_analyze_resolved = []
+    if args.floss_functions:
+        for func_str in args.floss_functions:
+            try: floss_functions_to_analyze_resolved.append(int(func_str, 0)) 
+            except ValueError: logger.warning(f"Invalid FLOSS function address '{func_str}' in --floss-functions, skipping.")
+    
+    floss_quiet_resolved = args.floss_quiet or (not args.verbose and args.mcp_server and not (floss_script_debug_level_enum_val_resolved > Actual_DebugLevel_Floss.NONE) )
 
 
     if args.mcp_server:
@@ -3598,25 +4467,33 @@ if __name__ == '__main__':
                 abs_capa_rules_dir_arg,
                 abs_capa_sigs_dir_arg,
                 args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                analyses_to_skip=analyses_to_skip_arg_list # Pass the skip list
+                floss_min_len_arg=floss_min_len_resolved,
+                floss_verbose_level_arg=args.floss_verbose_level,
+                floss_script_debug_level_arg=floss_script_debug_level_enum_val_resolved,
+                floss_format_hint_arg=args.floss_format,
+                floss_disabled_types_arg=floss_disabled_types_resolved,
+                floss_only_types_arg=floss_only_types_resolved,
+                floss_functions_to_analyze_arg=floss_functions_to_analyze_resolved,
+                floss_quiet_mode_arg=floss_quiet_resolved,
+                analyses_to_skip=analyses_to_skip_arg_list 
             )
-            PE_OBJECT_FOR_MCP = temp_pe_obj_for_preload # Store the opened PE object
+            PE_OBJECT_FOR_MCP = temp_pe_obj_for_preload 
             logger.info(f"MCP: Successfully pre-loaded and analyzed: {abs_input_file}. Server is ready.")
 
         except Exception as e:
-            logger.critical(f"MCP: Failed to pre-load/analyze PE file '{abs_input_file}': {str(e)}", exc_info=True) # exc_info for verbose
-            if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload: # Ensure it's defined before trying to close
+            logger.critical(f"MCP: Failed to pre-load/analyze PE file '{abs_input_file}': {str(e)}", exc_info=True) 
+            if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload: 
                 temp_pe_obj_for_preload.close()
-            ANALYZED_PE_FILE_PATH = None # Clear global state on failure
+            ANALYZED_PE_FILE_PATH = None 
             ANALYZED_PE_DATA = None
             PE_OBJECT_FOR_MCP = None
             logger.error("MCP server will not start due to pre-load analysis failure.")
-            sys.exit(1) # Critical failure
+            sys.exit(1) 
 
         if args.mcp_transport=="sse":
             mcp_server.settings.host=args.mcp_host
             mcp_server.settings.port=args.mcp_port
-            mcp_server.settings.log_level=logging.getLevelName(log_level).lower() # Use resolved log level
+            mcp_server.settings.log_level=logging.getLevelName(log_level).lower() 
             logger.info(f"Starting MCP server (SSE) on http://{mcp_server.settings.host}:{mcp_server.settings.port}")
         else:
             logger.info("Starting MCP server (stdio).")
@@ -3630,15 +4507,14 @@ if __name__ == '__main__':
             logger.critical(f"MCP Server encountered an unhandled error: {str(e)}", exc_info=True)
             server_exc=e
         finally:
-            if PE_OBJECT_FOR_MCP: # Ensure it's not None before closing
+            if PE_OBJECT_FOR_MCP: 
                 PE_OBJECT_FOR_MCP.close()
                 logger.info("MCP: Closed pre-loaded PE object upon server exit.")
-            sys.exit(1 if server_exc else 0) # Exit with error code if server crashed
+            sys.exit(1 if server_exc else 0) 
 
     else: # CLI Mode
         cli_capa_rules_to_use = abs_capa_rules_dir_arg
-        # Logic for ensuring capa rules for CLI mode (if capa is available and not skipped)
-        if "capa" not in analyses_to_skip_arg_list and CAPA_AVAILABLE: # Only try to get rules if capa is not skipped and available
+        if "capa" not in analyses_to_skip_arg_list and CAPA_AVAILABLE: 
             if not cli_capa_rules_to_use or not os.path.isdir(cli_capa_rules_to_use) or not os.listdir(cli_capa_rules_to_use):
                 logger.info(f"CLI Mode: Capa rules dir '{cli_capa_rules_to_use if cli_capa_rules_to_use else 'not specified'}' is invalid or empty. Attempting download to script-relative default.")
                 default_capa_base_cli = str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
@@ -3649,29 +4525,42 @@ if __name__ == '__main__':
                     logger.info(f"CLI Mode: Using capa rules from: {cli_capa_rules_to_use}")
         elif "capa" in analyses_to_skip_arg_list:
              logger.info("CLI Mode: Capa analysis is skipped by user, not attempting to load rules.")
-             cli_capa_rules_to_use = None # Ensure it's None if skipped
+             cli_capa_rules_to_use = None 
         elif not CAPA_AVAILABLE:
              logger.warning("CLI Mode: Capa library not available, capa rule download/check skipped.")
              cli_capa_rules_to_use = None
 
-
         try:
             _cli_analyze_and_print_pe(
                 abs_input_file, abs_peid_db_path, abs_yara_rules_path,
-                cli_capa_rules_to_use, # Pass the resolved or None path
+                cli_capa_rules_to_use, 
                 abs_capa_sigs_dir_arg,
                 args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                args.extract_strings, args.min_str_len, args.search_string, args.strings_limit,
-                args.hexdump_offset, args.hexdump_length, args.hexdump_lines,
-                analyses_to_skip_cli_arg=analyses_to_skip_arg_list # Pass the skip list
+                # FLOSS CLI args
+                floss_min_len_cli=floss_min_len_resolved,
+                floss_verbose_level_cli=args.floss_verbose_level,
+                floss_script_debug_level_cli=floss_script_debug_level_enum_val_resolved,
+                floss_format_hint_cli=args.floss_format,
+                floss_disabled_types_cli=floss_disabled_types_resolved,
+                floss_only_types_cli=floss_only_types_resolved,
+                floss_functions_to_analyze_cli=floss_functions_to_analyze_resolved,
+                floss_quiet_mode_cli=floss_quiet_resolved,
+                # General CLI args
+                extract_strings_cli=args.extract_strings, 
+                min_str_len_cli=args.min_str_len, 
+                search_strings_cli=args.search_string, 
+                strings_limit_cli=args.strings_limit,
+                hexdump_offset_cli=args.hexdump_offset, 
+                hexdump_length_cli=args.hexdump_length, 
+                hexdump_lines_cli=args.hexdump_lines,
+                analyses_to_skip_cli_arg=analyses_to_skip_arg_list 
             )
         except KeyboardInterrupt:
             safe_print("\n[*] CLI Analysis interrupted by user. Exiting.")
-            sys.exit(1) # Exit code 1 for interruption
+            sys.exit(1) 
         except Exception as e_cli_main:
-            # Use safe_print for user-facing error, logger for detailed traceback
             safe_print(f"\n[!] An critical unexpected error occurred during CLI analysis: {type(e_cli_main).__name__} - {e_cli_main}")
             logger.critical("Critical unexpected error in CLI main execution", exc_info=True)
-            sys.exit(1) # Exit code 1 for other errors
+            sys.exit(1) 
 
-    sys.exit(0) # Default exit code for successful CLI completion
+    sys.exit(0)
