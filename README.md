@@ -99,37 +99,37 @@ python PeMCP.py --help
 ```
 When run with `--mcp-server`, the script pre-analyzes the specified input file and starts an MCP server, allowing programmatic access to analysis results via a rich set of tools. This mode is ideal for integration with other systems.
 
-* **Single File Focus**: The server pre-analyzes one PE file at startup, and all tool calls operate on this file's data. [cite: 8, 42, 43]
-* **Comprehensive Tools**: A large set of tools is available to retrieve specific parts of the analysis (e.g., `get_sections_info`, `get_imports_info`), re-trigger analysis, search for strings, get hex dumps, and even query VirusTotal for the loaded file's hash. [cite: 19, 53, 55, 56, 57, 64, 65, 67, 75]
+* **Single File Focus**: The server pre-analyzes one PE file at startup, and all tool calls operate on this file's data. 
+* **Comprehensive Tools**: A large set of tools is available to retrieve specific parts of the analysis (e.g., `get_sections_info`, `get_imports_info`), re-trigger analysis, search for strings, get hex dumps, and even query VirusTotal for the loaded file's hash. 
 
 ## **How It Works (General Principles)**
 
-* **PE Analysis**: Primarily uses the `pefile` library for parsing PE structures. [cite: 92] Hashes are calculated using `hashlib` and the integrated `SSDeep` class. [cite: 93]
-* **Signature Scanning**: Employs a custom parser for the `userdb.txt` format and applies regex-compiled signatures for PEiD scanning. [cite: 95]
-* **External Tool Integration**: Leverages `yara-python`, `flare-capa`, and `flare-floss` through their Python APIs. [cite: 96, 113]
-* **MCP Server**: Uses the `modelcontextprotocol` library to expose its analysis tools. [cite: 98]
+* **PE Analysis**: Primarily uses the `pefile` library for parsing PE structures. [cite: 92] Hashes are calculated using `hashlib` and the integrated `SSDeep` class.
+* **Signature Scanning**: Employs a custom parser for the `userdb.txt` format and applies regex-compiled signatures for PEiD scanning.
+* **External Tool Integration**: Leverages `yara-python`, `flare-capa`, and `flare-floss` through their Python APIs.
+* **MCP Server**: Uses the `modelcontextprotocol` library to expose its analysis tools. 
 
 ## **Limitations**
 
-* **Static Analysis Only**: The script performs static analysis and does not execute the PE files. [cite: 99]
-* **Advanced Obfuscation/Packing**: Effectiveness on heavily obfuscated files depends on the capabilities of `pefile` and the other integrated tools. [cite: 100]
-* **Authenticode Full Chain Validation**: Relies on `signify`; comprehensive trust chain validation might depend on system certificate stores. [cite: 101]
+* **Static Analysis Only**: The script performs static analysis and does not execute the PE files. 
+* **Advanced Obfuscation/Packing**: Effectiveness on heavily obfuscated files depends on the capabilities of `pefile` and the other integrated tools. 
+* **Authenticode Full Chain Validation**: Relies on `signify`; comprehensive trust chain validation might depend on system certificate stores. 
 
 ## **Contributing**
 
 Contributions are welcome! Please follow standard GitHub practices:
 
-1.  Fork the repository. [cite: 102]
+1.  Fork the repository. 
 2.  Create a feature branch (`git checkout -b feature/YourAmazingFeature`).
-3.  Commit your changes (`git commit -m 'Add YourAmazingFeature'`). [cite: 103]
+3.  Commit your changes (`git commit -m 'Add YourAmazingFeature'`). 
 4.  Push to the branch (`git push origin feature/YourAmazingFeature`).
-5.  Open a Pull Request. [cite: 104]
+5.  Open a Pull Request. 
 
 ## **License**
 
-Distributed under the MIT License. See `LICENSE.txt` for more information. [cite: 105]
+Distributed under the MIT License. See `LICENSE.txt` for more information. 
 
 ## **Disclaimer**
 
-This toolkit is provided "as-is" for educational and research purposes only. [cite: 106] Users are solely responsible for ensuring they have proper authorization before analyzing any files with this tool. [cite: 107] The author(s) and contributors are not liable for any misuse or damage caused by this software.
+This toolkit is provided "as-is" for educational and research purposes only. Users are solely responsible for ensuring they have proper authorization before analyzing any files with this tool. The author(s) and contributors are not liable for any misuse or damage caused by this software.
 """
