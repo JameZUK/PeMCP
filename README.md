@@ -7,7 +7,7 @@ The PeMCP Toolkit is a Python-based script designed for in-depth analysis of Por
 1.  **Python 3.7+**: Ensure you have a compatible version of Python installed.
 2.  **Clone the Repository**:
     ```bash
-    git clone [https://github.com/JameZUK/PeMCP/](https://github.com/JameZUK/PeMCP/) # Replace with your actual repository URL
+    git clone https://github.com/JameZUK/PeMCP/
     cd PeMCP
     ```
 3.  **Install Dependencies**: This project uses a `requirements.txt` file to manage all necessary libraries. Install them with a single command:
