@@ -1055,6 +1055,42 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
     except Exception as e: logger.error(f"   Unexpected YARA scan error: {e}",exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {str(e)}"})
     return scan_results
 
+def perform_floss_analysis(args):
+    """
+    Controller function to perform FLOSS analysis based on command-line arguments.
+    """
+    logger.info(f"Starting FLOSS analysis for {args.filepath}")
+    
+    disabled_types = [t.strip() for t in args.floss_disable.split(',')] if args.floss_disable else []
+    only_types = [t.strip() for t in args.floss_only.split(',')] if args.floss_only else []
+    
+    # --- MODIFIED: Added regex_search_pattern=args.regex_pattern ---
+    floss_results = _parse_floss_analysis(
+        pe_filepath_str=args.filepath,
+        min_length=args.min_length,
+        floss_verbose_level=args.verbose,
+        floss_script_debug_level=Actual_DebugLevel_Floss.DEFAULT, # Or map from script verbosity
+        floss_format_hint=args.floss_format,
+        floss_disabled_types=disabled_types,
+        floss_only_types=only_types,
+        floss_functions_to_analyze=[], # Placeholder for function analysis
+        quiet_mode_for_floss_progress=args.quiet,
+        regex_search_pattern=args.regex_pattern 
+    )
+
+    output_path = args.output
+    if not output_path:
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = Path(args.filepath).stem
+        output_path = f"{filename}_floss_results_{timestamp}.json"
+
+    try:
+        with open(output_path, 'w') as f:
+            json.dump(floss_results, f, indent=4)
+        logger.info(f"FLOSS analysis results saved to {output_path}")
+    except Exception as e:
+        logger.error(f"Failed to save FLOSS results to {output_path}: {e}")
+
 def _parse_capa_analysis(pe_obj: pefile.PE,
                          pe_filepath_original: str,
                          capa_rules_dir_path: Optional[str],
@@ -1821,10 +1857,12 @@ def _parse_floss_analysis(
     floss_disabled_types: List[str],
     floss_only_types: List[str],
     floss_functions_to_analyze: List[int], # List of function RVAs/VAs
-    quiet_mode_for_floss_progress: bool # For disabling FLOSS's own progress bars
+    quiet_mode_for_floss_progress: bool, # For disabling FLOSS's own progress bars
+    regex_search_pattern: Optional[str] = None
     ) -> Dict[str, Any]:
     """
     Performs string extraction using FLOSS and returns a structured result.
+    Optionally performs a regex search on all found strings if a pattern is provided.
     """
     floss_results_dict: Dict[str, Any] = {
         "status": "Not performed", "error": None,
@@ -1832,7 +1870,8 @@ def _parse_floss_analysis(
         "strings": {
             "static_strings": [], "stack_strings": [],
             "tight_strings": [], "decoded_strings": []
-        }
+        },
+        "regex_matches": []
     }
 
     if not FLOSS_AVAILABLE:
@@ -1947,8 +1986,8 @@ def _parse_floss_analysis(
                 stack_list = []
                 for s_obj in stack_strings_gen: 
                     stack_list.append({
-                        "function_va": hex(s_obj.function_address),
-                        "string_va": hex(s_obj.address), 
+                        "function_va": hex(s_obj.function), 
+                        "string_va": hex(s_obj.offset), # *** FIX APPLIED HERE ***
                         "string": s_obj.string
                     })
                 floss_results_dict["strings"]["stack_strings"] = stack_list
@@ -1964,37 +2003,13 @@ def _parse_floss_analysis(
                     logger.warning("FLOSS: Decoding features map is empty, cannot identify functions with tight loops.")
                     floss_results_dict["strings"]["tight_strings"] = [{"error": "Decoding features map was empty, prerequisite for tight strings."}]
                 else:
-                    if floss_script_debug_level >= Actual_DebugLevel_Floss.TRACE: 
-                        logger.debug(f"FLOSS_DEBUG (Tight Strings): Type of decoding_features_map: {type(decoding_features_map)}")
-                        if isinstance(decoding_features_map, dict):
-                            sample_keys = list(decoding_features_map.keys())[:3]
-                            logger.debug(f"FLOSS_DEBUG (Tight Strings): Sample keys from decoding_features_map: {sample_keys}")
-                            for key_sample in sample_keys:
-                                try:
-                                    value_sample = decoding_features_map[key_sample]
-                                    value_repr = repr(value_sample)
-                                    logger.debug(f"FLOSS_DEBUG (Tight Strings): Sample value for key {hex(key_sample)} (type {type(value_sample)}): {value_repr[:200]}{'...' if len(value_repr) > 200 else ''}")
-                                except Exception as e_debug_log:
-                                    logger.debug(f"FLOSS_DEBUG (Tight Strings): Error logging sample value for key {hex(key_sample)}: {e_debug_log}")
-                        elif decoding_features_map is not None:
-                             logger.debug(f"FLOSS_DEBUG (Tight Strings): decoding_features_map is not a dict, it's a {type(decoding_features_map)}. Value (repr): {repr(decoding_features_map)[:200]}")
-
-                    tightloop_fvas_set = get_functions_with_tightloops(decoding_features_map)
+                    tightloop_fvas_dict = get_functions_with_tightloops(decoding_features_map)
                     
-                    # --- Additional Debugging for tightloop_fvas_set ---
-                    if floss_script_debug_level >= Actual_DebugLevel_Floss.TRACE:
-                        logger.debug(f"FLOSS_DEBUG (Tight Strings): Type of tightloop_fvas_set (returned by get_functions_with_tightloops): {type(tightloop_fvas_set)}")
-                        logger.debug(f"FLOSS_DEBUG (Tight Strings): Content of tightloop_fvas_set (sample of first 10): {list(tightloop_fvas_set)[:10]}")
-                        logger.debug(f"FLOSS_DEBUG (Tight Strings): Length of tightloop_fvas_set: {len(tightloop_fvas_set)}")
-
-
-                    if log_progress: logger.info(f"FLOSS: Identified {len(tightloop_fvas_set)} functions with tight loops for tight string analysis.")
+                    if log_progress: logger.info(f"FLOSS: Identified {len(tightloop_fvas_dict)} functions with tight loops for tight string analysis.")
                     
-                    if tightloop_fvas_set: 
-                        # The error occurs inside extract_tightstrings when it calls .items()
-                        # on the fvas list/set it receives.
+                    if tightloop_fvas_dict: 
                         tight_strings_gen = extract_tightstrings(
-                            vw, list(tightloop_fvas_set), min_length, # Pass as list
+                            vw, tightloop_fvas_dict, min_length, # *** FIX APPLIED HERE ***
                             verbosity=floss_verbose_level,
                             disable_progress=quiet_mode_for_floss_progress
                         )
@@ -2012,8 +2027,6 @@ def _parse_floss_analysis(
                         floss_results_dict["strings"]["tight_strings"] = []
             except Exception as e:
                 logger.error(f"FLOSS: Error extracting tight strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-                if floss_script_debug_level >= Actual_DebugLevel_Floss.TRACE: # Check if TRACE or higher
-                    logger.error(f"FLOSS_DEBUG (Tight Strings): The above error occurred after processing decoding_features_map and tightloop_fvas_set (details logged if TRACE was enabled).")
                 logger.info("FLOSS: This error might be internal to FLOSS's tight loop identification with the current sample/vivisect version.")
                 floss_results_dict["strings"]["tight_strings"] = [{"error": str(e)}]
 
@@ -2063,8 +2076,44 @@ def _parse_floss_analysis(
     else: 
         floss_results_dict["status"] = "FLOSS analysis status unclear."
 
+
+    # --- NEW REGEX SEARCH SECTION ---
+    if regex_search_pattern:
+        if log_progress:
+            logger.info(f"Performing regex search with pattern: '{regex_search_pattern}'")
+        
+        try:
+            # Compile the regex for efficiency, making it case-insensitive
+            pattern = re.compile(regex_search_pattern, re.IGNORECASE)
+        except re.error as e:
+            logger.error(f"Invalid regex pattern provided: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+            floss_results_dict["regex_matches"] = [{"error": f"Invalid regex pattern: {e}"}]
+            return floss_results_dict
+
+        all_found_strings = []
+        # Consolidate all found strings into one list, preserving their context
+        for source_type, string_list in floss_results_dict["strings"].items():
+            for string_item in string_list:
+                # Ensure the item is a dictionary with a 'string' key before processing
+                if isinstance(string_item, dict) and "string" in string_item:
+                    contextual_item = string_item.copy()
+                    contextual_item["source_type"] = source_type.replace("_strings", "")
+                    all_found_strings.append(contextual_item)
+        
+        matched_strings = []
+        for string_item in all_found_strings:
+            string_to_search = string_item["string"]
+            if pattern.search(string_to_search):
+                matched_strings.append(string_item)
+        
+        floss_results_dict["regex_matches"] = matched_strings
+        if log_progress:
+            logger.info(f"Found {len(matched_strings)} strings matching the regex pattern.")
+    # --- END OF REGEX SEARCH SECTION ---
+
     if log_progress or "complete" not in floss_results_dict["status"].lower():
         logger.info(f"--- FLOSS Analysis for: {pe_filepath_str} Finished (Status: {floss_results_dict['status']}) ---")
+        
     return floss_results_dict
 
 # --- Main PE Parsing Logic ---
@@ -2794,6 +2843,94 @@ mcp_server = FastMCP("PEFileAnalyzerMCP", description="MCP Server for PE file an
 tool_decorator = mcp_server.tool()
 
 # --- MCP Tools ---
+
+@tool_decorator
+async def search_floss_strings(
+    ctx: Context,
+    regex_patterns: List[str],
+    min_length: int = 0, # --- NEW ---
+    limit: int = 100,
+    case_sensitive: bool = False
+) -> Dict[str, Any]:
+    """
+    Performs a live regex search against all previously extracted FLOSS strings.
+    This tool supports multiple regex patterns and a minimum length filter.
+    A string is included if it matches ANY of the provided regex patterns AND meets the minimum length.
+
+    Args:
+        ctx: The MCP Context object.
+        regex_patterns: (List[str]) A list of regex patterns to search for.
+        min_length: (int) The minimum length for a matched string to be included. Defaults to 0 (no minimum). --- NEW ---
+        limit: (int) The maximum number of matches to return. Defaults to 100.
+        case_sensitive: (bool) If True, the regex search will be case-sensitive. Defaults to False.
+
+    Returns:
+        A dictionary containing a list of matched strings with their original context
+        (source type, address, etc.) and pagination information.
+
+    Raises:
+        RuntimeError: If no FLOSS analysis data is available.
+        ValueError: For invalid regex patterns or parameters, or if the response size is too large.
+    """
+    # --- MODIFIED --- Updated log message for new parameters
+    await ctx.info(f"Request to search FLOSS strings. Patterns: {len(regex_patterns)}, Min-Length: {min_length}, Limit: {limit}, Case-Sensitive: {case_sensitive}")
+
+    # --- MODIFIED --- Updated validation for a list of patterns
+    if not regex_patterns or not isinstance(regex_patterns, list):
+        raise ValueError("The 'regex_patterns' parameter must be a non-empty list of strings.")
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("The 'limit' parameter must be a positive integer.")
+    # --- NEW --- Validation for min_length
+    if not (isinstance(min_length, int) and min_length >= 0):
+        raise ValueError("The 'min_length' parameter must be a non-negative integer.")
+
+    if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
+        raise RuntimeError("No FLOSS analysis data found. Please run an analysis first.")
+
+    floss_data = ANALYZED_PE_DATA.get('floss_analysis', {})
+    if not floss_data.get("strings"):
+        return {"matches": [], "message": "No FLOSS strings available to search."}
+
+    # --- MODIFIED --- Compile a list of regex patterns
+    compiled_patterns = []
+    try:
+        flags = 0 if case_sensitive else re.IGNORECASE
+        for pattern_str in regex_patterns:
+            compiled_patterns.append(re.compile(pattern_str, flags))
+    except re.error as e:
+        raise ValueError(f"Invalid regex pattern provided in the list: {e}")
+
+    all_strings_with_context = []
+    # Consolidate all found strings into one list
+    for source_type, string_list in floss_data.get("strings", {}).items():
+        for string_item in string_list:
+            if isinstance(string_item, dict) and "string" in string_item:
+                contextual_item = string_item.copy()
+                contextual_item["source_type"] = source_type.replace("_strings", "")
+                all_strings_with_context.append(contextual_item)
+
+    matches = []
+    for item in all_strings_with_context:
+        string_to_search = item["string"]
+        # --- MODIFIED --- Check against multiple patterns and apply the new length filter
+        if any(p.search(string_to_search) for p in compiled_patterns):
+            if len(string_to_search) >= min_length:
+                matches.append(item)
+
+    paginated_matches = matches[:limit]
+
+    response = {
+        "matches": paginated_matches,
+        "pagination_info": {
+            "limit": limit,
+            "returned_matches": len(paginated_matches),
+            "total_matches_found": len(matches)
+        }
+    }
+    
+    limit_info_str = "the 'limit' parameter or by using more specific 'regex_patterns'"
+    return await _check_mcp_response_size(ctx, response, "search_floss_strings", limit_info_str)
+
 @tool_decorator
 async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
     """
@@ -4095,7 +4232,8 @@ async def find_and_decode_encoded_strings(
     min_candidate_len_url: int = 3,  
     min_decoded_printable_length: int = 4,
     printable_threshold: float = 0.8,
-    decoded_regex_patterns: Optional[List[str]] = None
+    decoded_regex_patterns: Optional[List[str]] = None,
+    verbose_mcp_output: bool = False
 ) -> List[Dict[str, Any]]:
     """
     Searches the pre-loaded binary for potential Base64, Base32, Hex, or URL encoded
@@ -4353,6 +4491,13 @@ if __name__ == '__main__':
     floss_group.add_argument("--floss-script-debug-level", default="NONE", 
                              choices=["NONE", "DEFAULT", "DEBUG", "TRACE", "SUPERTRACE"], 
                              help="Set logging level for FLOSS internal loggers (NONE, DEFAULT, TRACE, SUPERTRACE). Default: NONE.")
+    floss_group.add_argument(
+        "-r", "--regex",
+        dest="regex_pattern",
+        type=str,
+        default=None,
+        help="A regex pattern to search for within all extracted FLOSS strings (case-insensitive)."
+    )
 
     cli_group=parser.add_argument_group('CLI Mode Specific Options (ignored if --mcp-server is used)')
     cli_group.add_argument("--extract-strings",action="store_true",help="Extract and print strings from the PE file (basic method, use FLOSS for advanced).")
@@ -4442,7 +4587,6 @@ if __name__ == '__main__':
             except ValueError: logger.warning(f"Invalid FLOSS function address '{func_str}' in --floss-functions, skipping.")
     
     floss_quiet_resolved = args.floss_quiet or (not args.verbose and args.mcp_server and not (floss_script_debug_level_enum_val_resolved > Actual_DebugLevel_Floss.NONE) )
-
 
     if args.mcp_server:
         if not MCP_SDK_AVAILABLE:
