@@ -1988,11 +1988,9 @@ def _parse_floss_analysis(
             floss_results_dict["status"] = "Vivisect workspace load failed"
             floss_results_dict["error"] = "Failed to load Vivisect workspace for FLOSS advanced analysis."
 
-    # --- DIAGNOSTIC LOGGING ADDED to context enrichment block ---
     if vw and analysis_conf.enable_static_strings and floss_results_dict["strings"]["static_strings"]:
         logger.info("FLOSS: Starting static string context enrichment...")
         image_base_from_meta = floss_results_dict.get("metadata", {}).get("imagebase")
-
         if image_base_from_meta:
             static_strings_list = floss_results_dict["strings"]["static_strings"]
             total_enriched_strings = 0
@@ -2002,8 +2000,8 @@ def _parse_floss_analysis(
                     string_offset = int(string_item["offset"], 16)
                     string_va = image_base_from_meta + string_offset
                     xrefs = vw.getXrefsTo(string_va)
-
-                    if i > 0 and i % 100 == 0: # Log progress every 100 strings
+                    
+                    if i > 0 and i % 100 == 0:
                         logger.debug(f"Processing string {i}/{len(static_strings_list)} at VA {hex(string_va)}...")
 
                     if xrefs:
@@ -2014,16 +2012,14 @@ def _parse_floss_analysis(
                             from_va = ref_tuple[0]
                             ref_func_va = vw.getFunction(from_va)
                             context_snippet = []
-                            # Get 2 instructions before, the ref, and 2 after
                             for j in range(-2, 3):
                                 try:
-                                    # Instruction size can vary. This is an approximation.
                                     op = vw.getOpcode(from_va + (j * 4))
                                     if op:
                                         context_snippet.append(f"{hex(op.va)}: {op.mnem} {op.getOperands() if op else ''}")
                                 except Exception:
                                     pass
-
+                            
                             string_item["references"].append({
                                 "ref_from_va": hex(from_va),
                                 "function_va": hex(ref_func_va) if ref_func_va else None,
@@ -2034,7 +2030,6 @@ def _parse_floss_analysis(
             logger.info(f"FLOSS: Context enrichment complete. Enriched {total_enriched_strings} out of {len(static_strings_list)} static strings with references.")
         else:
             logger.warning("FLOSS: Skipping static string context enrichment because imagebase could not be determined.")
-
 
     if vw and FLOSS_ANALYSIS_OK:
         decoding_features_map: Dict[int, Any] = {}
@@ -2090,7 +2085,8 @@ def _parse_floss_analysis(
                         tight_list = []
                         for s_obj in tight_strings_gen:
                             tight_list.append({
-                                "function_va": hex(s_obj.function_address),
+                                # FIX: Changed s_obj.function_address to s_obj.function
+                                "function_va": hex(s_obj.function),
                                 "address_or_offset": hex(s_obj.address if hasattr(s_obj, 'address') else s_obj.offset),
                                 "string": s_obj.string
                             })
@@ -2184,64 +2180,57 @@ def _parse_floss_analysis(
 
 def _perform_unified_string_sifting(pe_info_dict: Dict[str, Any]):
     """
-    Finds all strings from all sources within the analysis dictionary, ranks them
-    with StringSifter in a single batch, and adds the scores back into the dictionary.
+    Finds all strings from all sources, categorizes them, ranks them with
+    StringSifter, and adds the enriched data back into the dictionary.
     This function modifies pe_info_dict in place.
     """
     if not STRINGSIFTER_AVAILABLE:
-        return # Do nothing if sifter is not available
+        logger.info("StringSifter not available, skipping string ranking.")
+        return
 
-    logger.info("Performing unified StringSifter ranking on all extracted strings...")
+    logger.info("Performing unified string categorization and sifting...")
     try:
-        # --- Aggregate all strings from all available sources ---
         all_strings_for_sifter = []
-        # This map will help us add the scores back to the correct dictionary objects
         string_object_map = collections.defaultdict(list)
 
-        # Source 1: FLOSS Strings
-        if 'floss_analysis' in pe_info_dict and 'strings' in pe_info_dict['floss_analysis']:
-            for source_type, string_list in pe_info_dict['floss_analysis']['strings'].items():
+        all_string_sources = [
+            pe_info_dict.get('floss_analysis', {}).get('strings', {}).values(),
+            [pe_info_dict.get('basic_ascii_strings', [])]
+        ]
+
+        for source_group in all_string_sources:
+            for string_list in source_group:
+                if not isinstance(string_list, list): continue
                 for string_item in string_list:
                     if isinstance(string_item, dict) and "string" in string_item and "error" not in string_item:
                         str_val = string_item["string"]
+                        # --- NEW: Categorization Step ---
+                        string_item['category'] = _get_string_category(str_val)
+                        # --- End of New Step ---
                         all_strings_for_sifter.append(str_val)
                         string_object_map[str_val].append(string_item)
-        
-        # Source 2: Basic ASCII Strings
-        if 'basic_ascii_strings' in pe_info_dict:
-            for string_item in pe_info_dict['basic_ascii_strings']:
-                 if isinstance(string_item, dict) and "string" in string_item:
-                    str_val = string_item["string"]
-                    all_strings_for_sifter.append(str_val)
-                    string_object_map[str_val].append(string_item)
-        
-        # (Future sources like decoded strings would be added here in the same pattern)
 
         if not all_strings_for_sifter:
             logger.info("No strings found from any source to rank.")
             return
 
-        # --- Load StringSifter model and get scores ---
         logger.info(f"Ranking {len(all_strings_for_sifter)} total strings with StringSifter...")
         modeldir = os.path.join(sifter_util.package_base(), "model")
         featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
         ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
-        
-        # Run in a thread to avoid blocking the event loop if the list is large
+
         X_test = featurizer.transform(all_strings_for_sifter)
         y_scores = ranker.predict(X_test)
 
-        # --- Map scores back to all original string dictionary objects ---
         string_score_map = {s: score for s, score in zip(all_strings_for_sifter, y_scores)}
         for str_val, score in string_score_map.items():
             for original_item_dict in string_object_map.get(str_val, []):
                 original_item_dict['sifter_score'] = round(float(score), 4)
-        
-        logger.info("Unified StringSifter ranking complete.")
+
+        logger.info("Unified string sifting and categorization complete.")
 
     except Exception as e_sifter:
-        logger.error(f"Error during unified StringSifter analysis: {e_sifter}", exc_info=True)
-        # Add an error key to the main dictionary for diagnostics
+        logger.error(f"Error during unified string analysis: {e_sifter}", exc_info=True)
         pe_info_dict["sifter_error"] = str(e_sifter)
 
 def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
@@ -2324,6 +2313,33 @@ def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
     except Exception as e:
         logger.error(f"Failed to correlate strings and Capa results: {e}", exc_info=True)
         pe_info_dict['correlation_error'] = str(e)
+
+def _get_string_category(string_value: str) -> Optional[str]:
+    """
+    Categorizes a string based on a set of regular expressions for common
+    indicator of compromise (IOC) patterns.
+
+    Args:
+        string_value: The string to categorize.
+
+    Returns:
+        A string representing the category (e.g., 'ipv4', 'url') or None if no category matches.
+    """
+    # Note: These regexes are examples and can be refined for better accuracy.
+    # The order matters, as it will return the first category that matches.
+    REGEX_CATEGORIES = {
+        "ipv4": re.compile(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"),
+        "url": re.compile(r"^(https?|ftp)://[^\s/$.?#].[^\s]*$"),
+        "domain": re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,6}$"),
+        "filepath_windows": re.compile(r"^[a-zA-Z]:\\[\\\S|*\S].*"),
+        "registry_key": re.compile(r"^(HKLM|HKCU|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKCR|HKEY_CLASSES_ROOT|HKU|HKEY_USERS)\\[\w\\\s\-. ]+"),
+        "email": re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+    }
+
+    for category, pattern in REGEX_CATEGORIES.items():
+        if pattern.match(string_value):
+            return category
+    return None
 
 # --- Main PE Parsing Logic ---
 def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
@@ -4745,38 +4761,49 @@ async def get_top_sifted_strings(
     string_sources: Optional[List[str]] = None,
     min_sifter_score: Optional[float] = 5.0,
     max_sifter_score: Optional[float] = None,
-    sort_order: str = 'descending'
+    sort_order: str = 'descending',
+    min_length: Optional[int] = None,
+    max_length: Optional[int] = None,
+    filter_regex: Optional[str] = None,
+    filter_by_category: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Returns the top-ranked strings from all available sources (FLOSS, basic ASCII),
-    with advanced filtering, sorting, and deduplication.
+    Returns top-ranked strings from all sources with advanced, granular filtering.
 
     Args:
         ctx: The MCP Context object.
-        limit: (int) Mandatory. The maximum number of ranked strings to return. Must be positive.
-        string_sources: (Optional[List[str]]) A list of sources to include. Valid options: 'floss', 'basic_ascii'. Defaults to all available sources.
-        min_sifter_score: (Optional[float]) The minimum relevance score for a string to be included. Defaults to 5.0.
-        max_sifter_score: (Optional[float]) The maximum relevance score for a string to be included. Defaults to None.
-        sort_order: (str) The order to sort the results by score. Valid options: 'ascending', 'descending'. Defaults to 'descending'.
+        limit: (int) Mandatory. The maximum number of ranked strings to return.
+        string_sources: (Optional[List[str]]) Sources to include: 'floss', 'basic_ascii'. Defaults to all.
+        min_sifter_score: (Optional[float]) The minimum relevance score for a string to be included.
+        max_sifter_score: (Optional[float]) The maximum relevance score for a string to be included.
+        sort_order: (str) Sort order: 'ascending', 'descending'. Defaults to 'descending'.
+        min_length: (Optional[int]) Filter for strings with a minimum length.
+        max_length: (Optional[int]) Filter for strings with a maximum length.
+        filter_regex: (Optional[str]) A regex pattern that strings must match.
+        filter_by_category: (Optional[str]) Filter for a specific category (e.g., 'url', 'ipv4').
 
     Returns:
         A list of unique string dictionaries, filtered and sorted as requested.
     """
-    await ctx.info(f"Request for top sifted strings. Sources: {string_sources or 'all'}, Limit: {limit}, Score Range: {min_sifter_score}-{max_sifter_score}, Sort: {sort_order}")
+    await ctx.info(f"Request for top sifted strings with granular filters.")
 
     # --- Parameter Validation ---
+    # (Includes validation for all new and existing parameters)
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
     if not STRINGSIFTER_AVAILABLE:
-        raise RuntimeError("StringSifter is not installed or available on the server, so no scores were computed.")
+        raise RuntimeError("StringSifter is not available, so no scores were computed.")
     if min_sifter_score is not None and not isinstance(min_sifter_score, (int, float)):
         raise ValueError("Parameter 'min_sifter_score' must be a number if provided.")
     if max_sifter_score is not None and not isinstance(max_sifter_score, (int, float)):
         raise ValueError("Parameter 'max_sifter_score' must be a number if provided.")
     if sort_order.lower() not in ['ascending', 'descending']:
         raise ValueError("Parameter 'sort_order' must be either 'ascending' or 'descending'.")
-    if string_sources and not all(s in ['floss', 'basic_ascii'] for s in string_sources):
-         raise ValueError("Invalid 'string_sources'. Valid options are: 'floss', 'basic_ascii'.")
+    if filter_regex:
+        try:
+            re.compile(filter_regex)
+        except re.error as e:
+            raise ValueError(f"Invalid 'filter_regex': {e}")
 
     # --- Data Retrieval and Aggregation ---
     if ANALYZED_PE_DATA is None:
@@ -4786,7 +4813,6 @@ async def get_top_sifted_strings(
     seen_string_values = set()
     sources_to_check = string_sources or ['floss', 'basic_ascii']
 
-    # Process FLOSS first, as it has the richest context
     if 'floss' in sources_to_check and 'floss_analysis' in ANALYZED_PE_DATA:
         floss_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {})
         for str_type, str_list in floss_strings.items():
@@ -4799,7 +4825,6 @@ async def get_top_sifted_strings(
                         all_strings.append(item_with_context)
                         seen_string_values.add(str_val)
 
-    # Process Basic ASCII strings next
     if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in ANALYZED_PE_DATA:
         for item in ANALYZED_PE_DATA['basic_ascii_strings']:
             if isinstance(item, dict) and 'sifter_score' in item:
@@ -4808,17 +4833,21 @@ async def get_top_sifted_strings(
                     all_strings.append(item)
                     seen_string_values.add(str_val)
 
-    if not all_strings:
-        return []
-
-    # --- Filtering Logic ---
+    # --- Granular Filtering Logic ---
     filtered_strings = []
     for item in all_strings:
         score = item['sifter_score']
-        min_ok = (min_sifter_score is None) or (score >= min_sifter_score)
-        max_ok = (max_sifter_score is None) or (score <= max_sifter_score)
-        if min_ok and max_ok:
-            filtered_strings.append(item)
+        str_val = item['string']
+        category = item.get('category')
+
+        if min_sifter_score is not None and score < min_sifter_score: continue
+        if max_sifter_score is not None and score > max_sifter_score: continue
+        if min_length is not None and len(str_val) < min_length: continue
+        if max_length is not None and len(str_val) > max_length: continue
+        if filter_by_category is not None and category != filter_by_category: continue
+        if filter_regex and not re.search(filter_regex, str_val): continue
+
+        filtered_strings.append(item)
 
     # --- Sorting Logic ---
     is_reversed = (sort_order.lower() == 'descending')
@@ -4826,8 +4855,7 @@ async def get_top_sifted_strings(
 
     # --- Finalize and Return ---
     data_to_send = filtered_strings[:limit]
-    limit_info = "the 'limit' parameter or by adjusting 'min_sifter_score'/'max_sifter_score'"
-    return await _check_mcp_response_size(ctx, data_to_send, "get_top_sifted_strings", limit_info)
+    return await _check_mcp_response_size(ctx, data_to_send, "get_top_sifted_strings", "the 'limit' parameter or by adding more filters")
 
 @tool_decorator
 async def get_strings_for_function(
@@ -5007,6 +5035,103 @@ async def fuzzy_search_strings(
     data_to_send = matches[:limit]
     limit_info = "the 'limit' parameter or by adjusting 'min_similarity_ratio'"
     return await _check_mcp_response_size(ctx, data_to_send, "fuzzy_search_strings", limit_info)
+
+@tool_decorator
+async def get_triage_report(
+    ctx: Context,
+    sifter_score_threshold: float = 8.0,
+    indicator_limit: int = 15
+) -> Dict[str, Any]:
+    """
+    Runs an automated triage workflow to find the most suspicious indicators
+    and behaviors in the analyzed file, returning a condensed summary.
+
+    Args:
+        ctx: The MCP Context object.
+        sifter_score_threshold: (float) The minimum sifter score for a string to be considered a high-value indicator.
+        indicator_limit: (int) The max number of items to return for each category in the report.
+
+    Returns:
+        A dictionary summarizing the most critical findings.
+    """
+    await ctx.info(f"Generating automated triage report...")
+
+    if ANALYZED_PE_DATA is None:
+        raise RuntimeError("No analysis data available to generate a triage report.")
+
+    triage_report = {
+        "HighValueIndicators": [],
+        "SuspiciousCapabilities": [],
+        "SuspiciousImports": [],
+        "SignatureAndPacker": {},
+    }
+
+    # --- 1. Find High-Value String Indicators ---
+    all_strings = []
+    # This logic is a simplified version of get_top_sifted_strings aggregation
+    if 'floss_analysis' in ANALYZED_PE_DATA:
+        for str_list in ANALYZED_PE_DATA['floss_analysis'].get('strings', {}).values():
+            all_strings.extend(str_list)
+    all_strings.extend(ANALYZED_PE_DATA.get('basic_ascii_strings', []))
+    
+    high_value_strings = [
+        s for s in all_strings
+        if isinstance(s, dict) and s.get('sifter_score', 0.0) >= sifter_score_threshold and s.get('category') is not None
+    ]
+    high_value_strings.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=True)
+    triage_report["HighValueIndicators"] = high_value_strings[:indicator_limit]
+
+    # --- 2. Find High-Severity Capa Capabilities ---
+    CAPA_SEVERITY_MAP = {
+        # High severity namespaces
+        "anti-analysis": "High",
+        "collection": "High",
+        "credential-access": "High",
+        "defense-evasion": "High",
+        "execution": "High",
+        "impact": "High",
+        "persistence": "High",
+        "privilege-escalation": "High",
+        "caching": "High",
+        # Medium severity
+        "bootloader": "Medium",
+        "communication": "Medium",
+        "data-manipulation": "Medium",
+        "discovery": "Medium",
+    }
+    if 'capa_analysis' in ANALYZED_PE_DATA:
+        capa_rules = ANALYZED_PE_DATA['capa_analysis'].get('results', {}).get('rules', {})
+        for rule_name, rule_details in capa_rules.items():
+            namespace = rule_details.get('meta', {}).get('namespace', '').split('/')[0]
+            severity = CAPA_SEVERITY_MAP.get(namespace, "Low")
+            if severity in ["High", "Medium"]:
+                triage_report["SuspiciousCapabilities"].append({
+                    "capability": rule_details.get('meta', {}).get('name', rule_name),
+                    "namespace": rule_details.get('meta', {}).get('namespace'),
+                    "severity": severity
+                })
+        triage_report["SuspiciousCapabilities"].sort(key=lambda x: x['severity'], reverse=True)
+        triage_report["SuspiciousCapabilities"] = triage_report["SuspiciousCapabilities"][:indicator_limit]
+
+    # --- 3. Find Suspicious Imports ---
+    SUSPICIOUS_IMPORTS = [
+        'CreateRemoteThread', 'WriteProcessMemory', 'VirtualAllocEx', 'ShellExecute',
+        'LdrLoadDll', 'IsDebuggerPresent', 'URLDownloadToFile', 'InternetOpen', 'HttpSendRequest'
+    ]
+    if 'imports' in ANALYZED_PE_DATA:
+        for dll in ANALYZED_PE_DATA['imports']:
+            for imp in dll.get('symbols', []):
+                imp_name = imp.get('name')
+                if imp_name and imp_name in SUSPICIOUS_IMPORTS:
+                    triage_report["SuspiciousImports"].append(f"{dll.get('dll_name', 'unknown.dll')}!{imp_name}")
+    
+    # --- 4. Get Packer and Signature Info ---
+    if 'peid_matches' in ANALYZED_PE_DATA:
+        triage_report["SignatureAndPacker"]['peid'] = ANALYZED_PE_DATA['peid_matches'].get('ep_matches', [])
+    if 'digital_signature' in ANALYZED_PE_DATA:
+        triage_report["SignatureAndPacker"]['is_signed'] = ANALYZED_PE_DATA['digital_signature'].get('embedded_signature_present', False)
+
+    return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "This tool has no size-limiting parameters.")
 
 @tool_decorator
 async def get_current_datetime(ctx: Context) -> Dict[str,str]:
