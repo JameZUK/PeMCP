@@ -1,9 +1,11 @@
 pefile
 cryptography
 requests
-signify
+signify-windows
 yara-python
 flare-capa
 flare-floss
 vivisect
-mcp[cli]
+mcp-sdk[cli]
+flare-stringsifter
+thefuzz[speedup]
