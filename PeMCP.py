@@ -368,6 +368,13 @@ except ImportError as e:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+try:
+    from thefuzz import fuzz
+    THEFUZZ_AVAILABLE = True
+except ImportError as e:
+    THEFUZZ_AVAILABLE = False
+    THEFUZZ_IMPORT_ERROR = str(e)
+
 # --- START MODIFIED CAPA IMPORT SECTION ---
 class CapaError(Exception):
     def __init__(self, msg="Generic Capa Error", status_code=None):
@@ -502,6 +509,15 @@ FLOSS_LOGGERS_LIST = [
 ]
 # --- END FLOSS IMPORT SECTION ---
 
+try:
+    # StringSifter imports its own dependencies
+    import stringsifter.lib.util as sifter_util
+    import joblib
+    import numpy
+    STRINGSIFTER_AVAILABLE = True
+except ImportError as e:
+    STRINGSIFTER_AVAILABLE = False
+    STRINGSIFTER_IMPORT_ERROR = str(e)
 
 MCP_SDK_AVAILABLE = False
 try:
@@ -536,15 +552,16 @@ CAPA_RULES_SUBDIR_NAME = "rules"
 
 DEPENDENCIES = [
     ("cryptography", "cryptography", "Cryptography (for digital signatures)", False),
-    ("requests", "requests", "Requests (for PEiD DB download & capa/FLOSS support)", False), # FLOSS might need requests if it downloads things
+    ("requests", "requests", "Requests (for PEiD DB download & capa/FLOSS support)", False),
     ("signify.authenticode", "signify", "Signify (for Authenticode validation)", False),
     ("yara", "yara-python", "Yara (for YARA scanning)", False),
     ("capa.main", "flare-capa", "Capa (for capability detection)", False),
-    ("floss.main", "flare-floss", "FLOSS (for advanced string extraction)", False), # Added FLOSS
-    ("viv_utils", "vivisect", "Vivisect & Viv-Utils (for FLOSS analysis backend)", False), # Added Vivisect as FLOSS dependency
+    ("floss.main", "flare-floss", "FLOSS (for advanced string extraction)", False),
+    ("stringsifter", "flare-stringsifter", "StringSifter (for ranking string relevance)", False),
+    ("thefuzz", "thefuzz[speedup]", "TheFuzz (for fuzzy string matching)", False),
+    ("viv_utils", "vivisect", "Vivisect & Viv-Utils (for FLOSS analysis backend)", False),
     ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True)
 ]
-
 def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
     missing_deps_info = []
     critical_mcp_missing_for_current_mode = False
@@ -561,18 +578,24 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
         elif spec_name == "signify.authenticode":
             if not SIGNIFY_AVAILABLE:
                 is_missing = True
-        elif spec_name == "yara": 
+        elif spec_name == "yara":
             if not YARA_AVAILABLE:
                 is_missing = True
-        elif spec_name == "floss.main": 
-            if not FLOSS_SETUP_OK: 
+        elif spec_name == "stringsifter":
+            if not STRINGSIFTER_AVAILABLE:
                 is_missing = True
-        elif spec_name == "viv_utils": 
+        elif spec_name == "thefuzz":
+            if not THEFUZZ_AVAILABLE:
+                is_missing = True
+        elif spec_name == "floss.main":
+            if not FLOSS_SETUP_OK:
+                is_missing = True
+        elif spec_name == "viv_utils":
             if FLOSS_SETUP_OK and not FLOSS_ANALYSIS_OK:
-                is_missing = True 
+                is_missing = True
             elif not FLOSS_SETUP_OK:
-                pass 
-        else: 
+                pass
+        else:
             spec = importlib.util.find_spec(spec_name)
             if spec is None:
                 is_missing = True
@@ -583,10 +606,10 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
                 missing_reason = f" (FLOSS Setup Error: {FLOSS_IMPORT_ERROR_SETUP})"
             elif spec_name == "viv_utils" and FLOSS_SETUP_OK and not FLOSS_ANALYSIS_OK and FLOSS_IMPORT_ERROR_ANALYSIS:
                  missing_reason = f" (FLOSS Analysis/Vivisect Error: {FLOSS_IMPORT_ERROR_ANALYSIS})"
-            
+
             missing_deps_info.append({
-                "pip": pip_name, 
-                "friendly": f"{friendly_name}{missing_reason}", 
+                "pip": pip_name,
+                "friendly": f"{friendly_name}{missing_reason}",
                 "is_critical_mcp": is_critical_for_mcp_mode
             })
             if is_critical_for_mcp_mode and is_mcp_server_mode_arg:
@@ -634,11 +657,11 @@ def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
                     print(f"[!] Error installing {dep_to_install['friendly']}: {e_pip_install}", file=sys.stderr)
                 except FileNotFoundError:
                     print("[!] Error: 'pip' command not found. Is Python and pip installed correctly and in PATH?", file=sys.stderr)
-                    break 
+                    break
 
             if installed_any:
                 print("\n[*] Optional library installation process finished. Please re-run the script for changes to take full effect.", file=sys.stderr)
-                sys.exit(0) 
+                sys.exit(0)
             else:
                 print("[*] No optional libraries were successfully installed.", file=sys.stderr)
                 if critical_mcp_missing_for_current_mode:
@@ -669,7 +692,10 @@ else: logger.warning(f"Signify library not found. Authenticode validation will b
 if FLOSS_AVAILABLE: logger.info("FLOSS library and analysis components found.")
 elif FLOSS_SETUP_OK: logger.warning(f"FLOSS basic setup OK, but analysis components (or vivisect) failed to import. FLOSS analysis will be limited/skipped. Analysis import error: {FLOSS_IMPORT_ERROR_ANALYSIS}")
 else: logger.warning(f"FLOSS library (flare-floss) not found or basic setup failed. FLOSS analysis will be skipped. Setup import error: {FLOSS_IMPORT_ERROR_SETUP}")
-
+if STRINGSIFTER_AVAILABLE: logger.info("StringSifter library found. String ranking will be available.")
+else: logger.warning(f"StringSifter library not found. String ranking will be skipped. Import error: {STRINGSIFTER_IMPORT_ERROR}")
+if THEFUZZ_AVAILABLE: logger.info("TheFuzz library found. Fuzzy string search will be available.")
+else: logger.warning(f"TheFuzz library not found. Fuzzy search will be skipped. Import error: {THEFUZZ_IMPORT_ERROR}")
 
 def safe_print(text_to_print, verbose_prefix=""):
     try:
@@ -1861,8 +1887,8 @@ def _parse_floss_analysis(
     regex_search_pattern: Optional[str] = None
     ) -> Dict[str, Any]:
     """
-    Performs string extraction using FLOSS and returns a structured result.
-    Optionally performs a regex search on all found strings if a pattern is provided.
+    Performs string extraction using FLOSS, enriches with context, ranks with StringSifter,
+    and returns a structured result.
     """
     floss_results_dict: Dict[str, Any] = {
         "status": "Not performed", "error": None,
@@ -1888,18 +1914,18 @@ def _parse_floss_analysis(
         logger.info(f"--- Starting FLOSS Analysis for: {pe_filepath_str} ---")
     sample_path = Path(pe_filepath_str)
 
-    analysis_conf = FlossAnalysis( 
+    analysis_conf = FlossAnalysis(
         enable_static_strings=Actual_StringType_Floss.STATIC not in floss_disabled_types,
         enable_stack_strings=Actual_StringType_Floss.STACK not in floss_disabled_types,
         enable_tight_strings=Actual_StringType_Floss.TIGHT not in floss_disabled_types,
         enable_decoded_strings=Actual_StringType_Floss.DECODED not in floss_disabled_types,
     )
-    if floss_only_types: 
+    if floss_only_types:
         analysis_conf.enable_static_strings = Actual_StringType_Floss.STATIC in floss_only_types
         analysis_conf.enable_stack_strings = Actual_StringType_Floss.STACK in floss_only_types
         analysis_conf.enable_tight_strings = Actual_StringType_Floss.TIGHT in floss_only_types
         analysis_conf.enable_decoded_strings = Actual_StringType_Floss.DECODED in floss_only_types
-    
+
     floss_results_dict["analysis_config"] = {
         "static_enabled": analysis_conf.enable_static_strings,
         "stack_enabled": analysis_conf.enable_stack_strings,
@@ -1910,16 +1936,16 @@ def _parse_floss_analysis(
         "functions_to_analyze_count": len(floss_functions_to_analyze),
         "floss_internal_verbosity": floss_verbose_level,
     }
-    
+
     if analysis_conf.enable_static_strings:
         if log_progress: logger.info("FLOSS: Extracting static strings...")
         try:
             static_strings_gen = get_static_strings(sample_path, min_length)
             static_list = []
-            for s_obj in static_strings_gen: 
+            for s_obj in static_strings_gen:
                 static_list.append({"offset": hex(s_obj.offset), "string": s_obj.string})
             floss_results_dict["strings"]["static_strings"] = static_list
-            logger.info(f"FLOSS: Found {len(static_list)} static strings.") 
+            logger.info(f"FLOSS: Found {len(static_list)} static strings.")
         except Exception as e:
             logger.error(f"FLOSS: Error extracting static strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
             floss_results_dict["strings"]["static_strings"] = [{"error": str(e)}]
@@ -1928,7 +1954,8 @@ def _parse_floss_analysis(
     selected_functions_fvas_set: Set[int] = set()
     needs_vivisect = (analysis_conf.enable_stack_strings or \
                       analysis_conf.enable_tight_strings or \
-                      analysis_conf.enable_decoded_strings)
+                      analysis_conf.enable_decoded_strings or \
+                      analysis_conf.enable_static_strings)
 
     if needs_vivisect:
         if log_progress: logger.info("FLOSS: Preparing Vivisect workspace for deeper analysis...")
@@ -1936,13 +1963,13 @@ def _parse_floss_analysis(
         if vw:
             try:
                 imagebase = get_imagebase(vw)
-                floss_results_dict["metadata"]["imagebase"] = hex(imagebase) if imagebase is not None else None
-                all_vw_functions_vas = set(vw.getFunctions()) 
-                if floss_functions_to_analyze: 
+                floss_results_dict["metadata"]["imagebase"] = imagebase # Store as int for calculations
+                all_vw_functions_vas = set(vw.getFunctions())
+                if floss_functions_to_analyze:
                     valid_user_functions = set()
                     for fva_or_rva in floss_functions_to_analyze:
                         fva = fva_or_rva
-                        if imagebase is not None and fva < imagebase : 
+                        if imagebase is not None and fva < imagebase :
                             fva = imagebase + fva_or_rva
                         if fva in all_vw_functions_vas:
                             valid_user_functions.add(fva)
@@ -1950,19 +1977,67 @@ def _parse_floss_analysis(
                             logger.warning(f"FLOSS: Requested function 0x{fva_or_rva:x} (resolved to VA 0x{fva:x}) not found in Vivisect workspace.")
                     selected_functions_fvas_set = valid_user_functions
                     if log_progress: logger.info(f"FLOSS: User specified {len(valid_user_functions)} valid functions for analysis.")
-                else: 
+                else:
                     selected_functions_fvas_set = all_vw_functions_vas
                     if log_progress: logger.info(f"FLOSS: Will analyze all {len(all_vw_functions_vas)} functions found in Vivisect workspace.")
             except Exception as e_vw_setup:
                 logger.error(f"FLOSS: Error during Vivisect workspace post-processing: {e_vw_setup}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-                vw = None 
+                vw = None
         else:
-            logger.error("FLOSS: Failed to load Vivisect workspace. Stack, tight, and decoded string analysis will be skipped.")
+            logger.error("FLOSS: Failed to load Vivisect workspace. Deeper analysis will be skipped.")
             floss_results_dict["status"] = "Vivisect workspace load failed"
             floss_results_dict["error"] = "Failed to load Vivisect workspace for FLOSS advanced analysis."
 
-    if vw and FLOSS_ANALYSIS_OK: 
-        decoding_features_map: Dict[int, Any] = {} 
+    # --- DIAGNOSTIC LOGGING ADDED to context enrichment block ---
+    if vw and analysis_conf.enable_static_strings and floss_results_dict["strings"]["static_strings"]:
+        logger.info("FLOSS: Starting static string context enrichment...")
+        image_base_from_meta = floss_results_dict.get("metadata", {}).get("imagebase")
+
+        if image_base_from_meta:
+            static_strings_list = floss_results_dict["strings"]["static_strings"]
+            total_enriched_strings = 0
+            logger.debug(f"Attempting to enrich {len(static_strings_list)} static strings.")
+            for i, string_item in enumerate(static_strings_list):
+                try:
+                    string_offset = int(string_item["offset"], 16)
+                    string_va = image_base_from_meta + string_offset
+                    xrefs = vw.getXrefsTo(string_va)
+
+                    if i > 0 and i % 100 == 0: # Log progress every 100 strings
+                        logger.debug(f"Processing string {i}/{len(static_strings_list)} at VA {hex(string_va)}...")
+
+                    if xrefs:
+                        total_enriched_strings += 1
+                        logger.debug(f"Found {len(xrefs)} cross-references for string at {hex(string_va)}")
+                        string_item["references"] = []
+                        for ref_tuple in xrefs:
+                            from_va = ref_tuple[0]
+                            ref_func_va = vw.getFunction(from_va)
+                            context_snippet = []
+                            # Get 2 instructions before, the ref, and 2 after
+                            for j in range(-2, 3):
+                                try:
+                                    # Instruction size can vary. This is an approximation.
+                                    op = vw.getOpcode(from_va + (j * 4))
+                                    if op:
+                                        context_snippet.append(f"{hex(op.va)}: {op.mnem} {op.getOperands() if op else ''}")
+                                except Exception:
+                                    pass
+
+                            string_item["references"].append({
+                                "ref_from_va": hex(from_va),
+                                "function_va": hex(ref_func_va) if ref_func_va else None,
+                                "disassembly_context": context_snippet
+                            })
+                except Exception as e_xref:
+                    logger.warning(f"Could not get xrefs for string at {string_item['offset']}: {e_xref}")
+            logger.info(f"FLOSS: Context enrichment complete. Enriched {total_enriched_strings} out of {len(static_strings_list)} static strings with references.")
+        else:
+            logger.warning("FLOSS: Skipping static string context enrichment because imagebase could not be determined.")
+
+
+    if vw and FLOSS_ANALYSIS_OK:
+        decoding_features_map: Dict[int, Any] = {}
         if analysis_conf.enable_decoded_strings or analysis_conf.enable_tight_strings:
             if log_progress: logger.info("FLOSS: Identifying decoding function features...")
             try:
@@ -1974,24 +2049,23 @@ def _parse_floss_analysis(
                 if analysis_conf.enable_decoded_strings: floss_results_dict["strings"]["decoded_strings"] = [err_msg_feat]
                 if analysis_conf.enable_tight_strings: floss_results_dict["strings"]["tight_strings"] = [err_msg_feat]
 
-
         if analysis_conf.enable_stack_strings:
             if log_progress: logger.info("FLOSS: Extracting stack strings...")
             try:
                 stack_strings_gen = extract_stackstrings(
                     vw, list(selected_functions_fvas_set), min_length,
-                    verbosity=floss_verbose_level, 
+                    verbosity=floss_verbose_level,
                     disable_progress=quiet_mode_for_floss_progress
                 )
                 stack_list = []
-                for s_obj in stack_strings_gen: 
+                for s_obj in stack_strings_gen:
                     stack_list.append({
-                        "function_va": hex(s_obj.function), 
-                        "string_va": hex(s_obj.offset), # *** FIX APPLIED HERE ***
+                        "function_va": hex(s_obj.function),
+                        "string_va": hex(s_obj.offset),
                         "string": s_obj.string
                     })
                 floss_results_dict["strings"]["stack_strings"] = stack_list
-                logger.info(f"FLOSS: Found {len(stack_list)} stack strings.") 
+                logger.info(f"FLOSS: Found {len(stack_list)} stack strings.")
             except Exception as e:
                 logger.error(f"FLOSS: Error extracting stack strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
                 floss_results_dict["strings"]["stack_strings"] = [{"error": str(e)}]
@@ -2004,30 +2078,29 @@ def _parse_floss_analysis(
                     floss_results_dict["strings"]["tight_strings"] = [{"error": "Decoding features map was empty, prerequisite for tight strings."}]
                 else:
                     tightloop_fvas_dict = get_functions_with_tightloops(decoding_features_map)
-                    
+
                     if log_progress: logger.info(f"FLOSS: Identified {len(tightloop_fvas_dict)} functions with tight loops for tight string analysis.")
-                    
-                    if tightloop_fvas_dict: 
+
+                    if tightloop_fvas_dict:
                         tight_strings_gen = extract_tightstrings(
-                            vw, tightloop_fvas_dict, min_length, # *** FIX APPLIED HERE ***
+                            vw, tightloop_fvas_dict, min_length,
                             verbosity=floss_verbose_level,
                             disable_progress=quiet_mode_for_floss_progress
                         )
                         tight_list = []
-                        for s_obj in tight_strings_gen: 
+                        for s_obj in tight_strings_gen:
                             tight_list.append({
                                 "function_va": hex(s_obj.function_address),
                                 "address_or_offset": hex(s_obj.address if hasattr(s_obj, 'address') else s_obj.offset),
                                 "string": s_obj.string
                             })
                         floss_results_dict["strings"]["tight_strings"] = tight_list
-                        logger.info(f"FLOSS: Found {len(tight_list)} tight strings.") 
+                        logger.info(f"FLOSS: Found {len(tight_list)} tight strings.")
                     else:
                         if log_progress: logger.info("FLOSS: No functions with tight loops identified from features. Skipping tight string extraction.")
                         floss_results_dict["strings"]["tight_strings"] = []
             except Exception as e:
                 logger.error(f"FLOSS: Error extracting tight strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-                logger.info("FLOSS: This error might be internal to FLOSS's tight loop identification with the current sample/vivisect version.")
                 floss_results_dict["strings"]["tight_strings"] = [{"error": str(e)}]
 
         if analysis_conf.enable_decoded_strings:
@@ -2047,43 +2120,39 @@ def _parse_floss_analysis(
                             disable_progress=quiet_mode_for_floss_progress
                         )
                         decoded_list = []
-                        for s_obj in decoded_strings_gen: 
+                        for s_obj in decoded_strings_gen:
                             decoded_list.append({
                                 "string_va": hex(s_obj.address),
                                 "string": s_obj.string,
-                                "decoding_routine_va": hex(s_obj.decoding_routine) 
+                                "decoding_routine_va": hex(s_obj.decoding_routine)
                             })
                         floss_results_dict["strings"]["decoded_strings"] = decoded_list
-                        logger.info(f"FLOSS: Found {len(decoded_list)} decoded strings.") 
+                        logger.info(f"FLOSS: Found {len(decoded_list)} decoded strings.")
                     else:
                         if log_progress: logger.info("FLOSS: No candidate functions found for decoded string emulation from features.")
                         floss_results_dict["strings"]["decoded_strings"] = []
             except Exception as e:
                 logger.error(f"FLOSS: Error extracting decoded strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
                 floss_results_dict["strings"]["decoded_strings"] = [{"error": str(e)}]
-        
-        floss_results_dict["status"] = "FLOSS analysis complete."
 
-    elif needs_vivisect and not vw: 
+        floss_results_dict["status"] = "FLOSS analysis complete."
+    elif needs_vivisect and not vw:
         floss_results_dict["status"] = "FLOSS analysis incomplete due to Vivisect workspace load failure."
         floss_results_dict["error"] = floss_results_dict.get("error", "Vivisect workspace could not be loaded.")
         err_msg_vw = {"error": "Vivisect workspace load failed"}
         if analysis_conf.enable_stack_strings: floss_results_dict["strings"]["stack_strings"] = [err_msg_vw]
         if analysis_conf.enable_tight_strings: floss_results_dict["strings"]["tight_strings"] = [err_msg_vw]
         if analysis_conf.enable_decoded_strings: floss_results_dict["strings"]["decoded_strings"] = [err_msg_vw]
-    elif not needs_vivisect: 
+    elif not needs_vivisect:
          floss_results_dict["status"] = "FLOSS analysis complete (only static strings requested/enabled)."
-    else: 
+    else:
         floss_results_dict["status"] = "FLOSS analysis status unclear."
 
-
-    # --- NEW REGEX SEARCH SECTION ---
     if regex_search_pattern:
         if log_progress:
             logger.info(f"Performing regex search with pattern: '{regex_search_pattern}'")
-        
+
         try:
-            # Compile the regex for efficiency, making it case-insensitive
             pattern = re.compile(regex_search_pattern, re.IGNORECASE)
         except re.error as e:
             logger.error(f"Invalid regex pattern provided: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
@@ -2091,30 +2160,170 @@ def _parse_floss_analysis(
             return floss_results_dict
 
         all_found_strings = []
-        # Consolidate all found strings into one list, preserving their context
         for source_type, string_list in floss_results_dict["strings"].items():
             for string_item in string_list:
-                # Ensure the item is a dictionary with a 'string' key before processing
                 if isinstance(string_item, dict) and "string" in string_item:
                     contextual_item = string_item.copy()
                     contextual_item["source_type"] = source_type.replace("_strings", "")
-                    all_found_strings.append(contextual_item)
-        
+                    all_strings_with_context.append(contextual_item)
+
         matched_strings = []
-        for string_item in all_found_strings:
+        for string_item in all_strings_with_context:
             string_to_search = string_item["string"]
             if pattern.search(string_to_search):
                 matched_strings.append(string_item)
-        
+
         floss_results_dict["regex_matches"] = matched_strings
         if log_progress:
             logger.info(f"Found {len(matched_strings)} strings matching the regex pattern.")
-    # --- END OF REGEX SEARCH SECTION ---
 
     if log_progress or "complete" not in floss_results_dict["status"].lower():
         logger.info(f"--- FLOSS Analysis for: {pe_filepath_str} Finished (Status: {floss_results_dict['status']}) ---")
-        
+
     return floss_results_dict
+
+def _perform_unified_string_sifting(pe_info_dict: Dict[str, Any]):
+    """
+    Finds all strings from all sources within the analysis dictionary, ranks them
+    with StringSifter in a single batch, and adds the scores back into the dictionary.
+    This function modifies pe_info_dict in place.
+    """
+    if not STRINGSIFTER_AVAILABLE:
+        return # Do nothing if sifter is not available
+
+    logger.info("Performing unified StringSifter ranking on all extracted strings...")
+    try:
+        # --- Aggregate all strings from all available sources ---
+        all_strings_for_sifter = []
+        # This map will help us add the scores back to the correct dictionary objects
+        string_object_map = collections.defaultdict(list)
+
+        # Source 1: FLOSS Strings
+        if 'floss_analysis' in pe_info_dict and 'strings' in pe_info_dict['floss_analysis']:
+            for source_type, string_list in pe_info_dict['floss_analysis']['strings'].items():
+                for string_item in string_list:
+                    if isinstance(string_item, dict) and "string" in string_item and "error" not in string_item:
+                        str_val = string_item["string"]
+                        all_strings_for_sifter.append(str_val)
+                        string_object_map[str_val].append(string_item)
+        
+        # Source 2: Basic ASCII Strings
+        if 'basic_ascii_strings' in pe_info_dict:
+            for string_item in pe_info_dict['basic_ascii_strings']:
+                 if isinstance(string_item, dict) and "string" in string_item:
+                    str_val = string_item["string"]
+                    all_strings_for_sifter.append(str_val)
+                    string_object_map[str_val].append(string_item)
+        
+        # (Future sources like decoded strings would be added here in the same pattern)
+
+        if not all_strings_for_sifter:
+            logger.info("No strings found from any source to rank.")
+            return
+
+        # --- Load StringSifter model and get scores ---
+        logger.info(f"Ranking {len(all_strings_for_sifter)} total strings with StringSifter...")
+        modeldir = os.path.join(sifter_util.package_base(), "model")
+        featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
+        ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
+        
+        # Run in a thread to avoid blocking the event loop if the list is large
+        X_test = featurizer.transform(all_strings_for_sifter)
+        y_scores = ranker.predict(X_test)
+
+        # --- Map scores back to all original string dictionary objects ---
+        string_score_map = {s: score for s, score in zip(all_strings_for_sifter, y_scores)}
+        for str_val, score in string_score_map.items():
+            for original_item_dict in string_object_map.get(str_val, []):
+                original_item_dict['sifter_score'] = round(float(score), 4)
+        
+        logger.info("Unified StringSifter ranking complete.")
+
+    except Exception as e_sifter:
+        logger.error(f"Error during unified StringSifter analysis: {e_sifter}", exc_info=True)
+        # Add an error key to the main dictionary for diagnostics
+        pe_info_dict["sifter_error"] = str(e_sifter)
+
+def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
+    """
+    Correlates string usage with Capa's behavioral findings by checking if
+    a string's referencing function is also flagged by a Capa rule.
+    Modifies pe_info_dict in place.
+    """
+    logger.info("Correlating strings with Capa behavioral indicators...")
+    try:
+        capa_analysis = pe_info_dict.get('capa_analysis')
+        floss_analysis = pe_info_dict.get('floss_analysis')
+
+        if not capa_analysis or not floss_analysis or 'results' not in capa_analysis or not capa_analysis.get('results'):
+            logger.info("Skipping correlation: Capa or FLOSS results are missing or incomplete.")
+            return
+
+        capa_rules = capa_analysis.get('results', {}).get('rules', {})
+        if not capa_rules:
+            logger.info("No Capa rules found in results to correlate.")
+            return
+
+        # 1. Build a map of Function VA -> List of Capa Rule Names
+        capa_func_map = collections.defaultdict(list)
+        for rule_name, rule_details in capa_rules.items():
+            rule_meta = rule_details.get('meta', {})
+            capa_id = rule_meta.get('name', rule_name)
+            if rule_meta.get('namespace'):
+                capa_id = f"{rule_meta['namespace']}/{capa_id}"
+
+            matches_data = rule_details.get("matches", {})
+            match_addresses = set()
+            if isinstance(matches_data, dict):
+                match_addresses.update(matches_data.keys())
+            elif isinstance(matches_data, list):
+                for item in matches_data:
+                    if isinstance(item, list) and len(item) > 0 and isinstance(item[0], dict) and 'value' in item[0]:
+                        match_addresses.add(item[0]['value'])
+            
+            for addr in match_addresses:
+                capa_func_map[addr].append(capa_id)
+
+        # 2. Iterate through all FLOSS strings and check for correlation
+        all_strings_with_refs = []
+        floss_string_types = floss_analysis.get('strings', {})
+        for str_type, str_list in floss_string_types.items():
+            if not isinstance(str_list, list): continue
+            for string_item in str_list:
+                if not isinstance(string_item, dict): continue
+                
+                # Handle static strings with their list of references
+                if 'references' in string_item:
+                    for ref in string_item.get('references', []):
+                        if ref.get('function_va'):
+                            try:
+                                all_strings_with_refs.append((string_item, int(ref['function_va'], 16)))
+                            except (ValueError, TypeError): continue
+                # Handle stack, tight, and decoded strings
+                elif 'function_va' in string_item:
+                    try:
+                        all_strings_with_refs.append((string_item, int(string_item['function_va'], 16)))
+                    except (ValueError, TypeError): continue
+                elif 'decoding_routine_va' in string_item:
+                    try:
+                        all_strings_with_refs.append((string_item, int(string_item['decoding_routine_va'], 16)))
+                    except (ValueError, TypeError): continue
+
+        # 3. Add correlation data back to the string items
+        for string_item, func_va in all_strings_with_refs:
+            if func_va in capa_func_map:
+                if 'related_capabilities' not in string_item:
+                    string_item['related_capabilities'] = []
+                
+                for capa_rule in capa_func_map[func_va]:
+                    if capa_rule not in string_item['related_capabilities']:
+                        string_item['related_capabilities'].append(capa_rule)
+        
+        logger.info("String and Capa correlation complete.")
+
+    except Exception as e:
+        logger.error(f"Failed to correlate strings and Capa results: {e}", exc_info=True)
+        pe_info_dict['correlation_error'] = str(e)
 
 # --- Main PE Parsing Logic ---
 def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
@@ -2205,9 +2414,62 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         pe_info_dict['floss_analysis'] = {"status": "Skipped by user request", "strings": {}}
         logger.info("FLOSS analysis skipped by request.")
 
+    pe_info_dict['basic_ascii_strings'] = [
+        {"offset": hex(offset), "string": s, "source_type": "basic_ascii"}
+        for offset, s in _extract_strings_from_data(pe.__data__, 5)
+    ]
+
+    _perform_unified_string_sifting(pe_info_dict)
+    
+    _correlate_strings_and_capa(pe_info_dict)
 
     pe_info_dict['pefile_warnings'] = pe.get_warnings()
     return pe_info_dict
+
+def _decode_single_byte_xor(data: bytes) -> Optional[Tuple[bytes, int]]:
+    """
+    Attempts to decode data by bruteforcing a single-byte XOR key.
+
+    It tries every possible key from 1 to 255. For each result, it checks
+    how much of the output is printable ASCII. It returns the decoded bytes
+    and the key that produced the most printable result, but only if that
+    result meets a minimum printability threshold.
+
+    Args:
+        data: The byte string to decode.
+
+    Returns:
+        A tuple containing the decoded bytes and the key used, or None if no
+        key produces a sufficiently printable result.
+    """
+    best_result = None
+    max_printable_score = 0
+    best_key = 0
+
+    # A successful XOR decode should be mostly ASCII text
+    required_printable_ratio = 0.85
+
+    for key in range(1, 256):
+        decoded_bytes = bytes([b ^ key for b in data])
+        
+        # Score the result based on how many characters are printable
+        printable_chars = sum(1 for b in decoded_bytes if 32 <= b <= 126 or b in [9, 10, 13])
+        
+        try:
+            printable_score = printable_chars / len(decoded_bytes)
+        except ZeroDivisionError:
+            printable_score = 0
+
+        if printable_score > max_printable_score:
+            max_printable_score = printable_score
+            best_result = decoded_bytes
+            best_key = key
+
+    # Only return a result if it's highly likely to be text
+    if max_printable_score > required_printable_ratio:
+        return (best_result, best_key)
+
+    return None
 
 # --- CLI Printing Helper Functions ---
 VERBOSE_CLI_OUTPUT_FLAG = False # Global to control verbosity in print helpers
@@ -2443,9 +2705,9 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
         analysis_meta = meta["analysis"]
         safe_print(f"    Format: {analysis_meta.get('format')}, Arch: {analysis_meta.get('arch')}, OS: {analysis_meta.get('os')}")
         safe_print(f"    Extractor: {analysis_meta.get('extractor')}")
-        if verbose_flag and analysis_meta.get('rules'): # Only show rules paths if verbose
+        if verbose_flag and analysis_meta.get('rules'):
             safe_print(f"    Rules Paths Used: {', '.join(analysis_meta.get('rules', []))}")
-    if verbose_flag and meta.get("version"): # Only show capa version if verbose
+    if verbose_flag and meta.get("version"):
         safe_print(f"    Capa Version: {meta.get('version')}")
 
 
@@ -2467,10 +2729,10 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
         if attck_entries:
             attck_display_list = []
             for entry in attck_entries:
-                if isinstance(entry, dict): # Newer capa might have dicts here
+                if isinstance(entry, dict):
                     display_str = entry.get('id', entry.get('name', str(entry)))
                     attck_display_list.append(str(display_str))
-                else: # Older capa might have simple strings
+                else:
                     attck_display_list.append(str(entry))
             safe_print(f"    ATT&CK: {', '.join(attck_display_list)}")
 
@@ -2486,55 +2748,64 @@ def _print_capa_analysis_cli(capa_analysis_data: Dict[str, Any], verbose_flag: b
             safe_print(f"    MBC: {', '.join(mbc_display_list)}")
 
 
-        if verbose_flag: # Only show these if verbose
+        if verbose_flag:
             if rule_meta.get('description'):
                 safe_print(f"    Description: {rule_meta.get('description')}")
             if rule_meta.get('authors'):
                 safe_print(f"    Authors: {', '.join(rule_meta.get('authors',[]))}")
 
-        matches_data = rule_details.get("matches") # This is a dict: {address_hex: [match_details_list]}
-
+        matches_data = rule_details.get("matches")
+        
+        # This block is updated to handle both dict and list formats
+        match_locations = collections.defaultdict(list)
         if isinstance(matches_data, dict):
-            if matches_data:
-                safe_print(f"    Matches ({len(matches_data)}):")
-                match_count_on_cli = 0
-                for addr_hex, match_list_at_addr in matches_data.items():
-                    if not verbose_flag and match_count_on_cli >=3: # Limit matches shown per rule if not verbose
-                        safe_print(f"      ... (additional matches for this rule omitted, use --verbose)")
-                        break
-                    safe_print(f"      At Address: {addr_hex}")
-                    if verbose_flag and isinstance(match_list_at_addr, list): # Only show feature details if verbose
-                        for match_idx, match_item_detail in enumerate(match_list_at_addr):
-                            feature_desc = "N/A"
-                            if isinstance(match_item_detail, dict):
-                                feature_dict = match_item_detail.get('feature', {})
-                                if isinstance(feature_dict, dict):
-                                    feature_type = feature_dict.get('type', 'N/A')
-                                    feature_value = feature_dict.get('value', '')
-                                    feature_description = feature_dict.get('description', '')
-                                    parts = [f"Type: {feature_type}"]
-                                    if feature_value: parts.append(f"Value: {str(feature_value)[:50]}") # Truncate long values
-                                    if feature_description: parts.append(f"Desc: {str(feature_description)[:50]}") # Truncate
-                                    feature_desc = ", ".join(parts)
-                                else: # feature might not be a dict in some rare cases
-                                    feature_desc = f"Feature: {str(feature_dict)[:100]}"
-                            else: # match_item_detail might not be a dict
-                                feature_desc = f"Match item: {str(match_item_detail)[:100]}"
-                            safe_print(f"        Match Detail #{match_idx+1}: {feature_desc}")
-                    match_count_on_cli +=1
-            else:
-                safe_print("    No specific address match locations found (matches field was an empty dictionary).")
-        elif matches_data is None or (isinstance(matches_data, list) and not matches_data): # Handle if 'matches' is None or empty list
-            safe_print("    No specific address match locations found (matches field was empty or not present).")
-        else: # Unexpected structure for 'matches'
-             safe_print(f"    Matches field has unexpected structure: {type(matches_data)}. Data (first 100 chars): {str(matches_data)[:100]}")
+            for addr, details in matches_data.items():
+                match_locations[addr].extend(details)
+        elif isinstance(matches_data, list) and matches_data:
+            for item in matches_data:
+                if isinstance(item, list) and len(item) == 2:
+                    addr_obj, detail_obj = item[0], item[1]
+                    if isinstance(addr_obj, dict) and "value" in addr_obj:
+                        addr_val = addr_obj["value"]
+                        match_locations[addr_val].append(detail_obj)
+
+        if match_locations:
+            safe_print(f"    Matches ({len(match_locations)}):")
+            match_count_on_cli = 0
+            for addr_val, match_list_at_addr in sorted(match_locations.items()):
+                addr_hex = hex(addr_val) if isinstance(addr_val, int) else str(addr_val)
+                if not verbose_flag and match_count_on_cli >= 3:
+                    safe_print(f"      ... (additional matches for this rule omitted, use --verbose)")
+                    break
+                safe_print(f"      At Address: {addr_hex}")
+                if verbose_flag and isinstance(match_list_at_addr, list):
+                    for match_idx, match_item_detail in enumerate(match_list_at_addr):
+                        feature_desc = "N/A"
+                        if isinstance(match_item_detail, dict):
+                            feature_dict = match_item_detail.get('feature', {})
+                            if isinstance(feature_dict, dict):
+                                feature_type = feature_dict.get('type', 'N/A')
+                                feature_value = feature_dict.get('value', '')
+                                feature_description = feature_dict.get('description', '')
+                                parts = [f"Type: {feature_type}"]
+                                if feature_value: parts.append(f"Value: {str(feature_value)[:50]}")
+                                if feature_description: parts.append(f"Desc: {str(feature_description)[:50]}")
+                                feature_desc = ", ".join(parts)
+                            else:
+                                feature_desc = f"Feature: {str(feature_dict)[:100]}"
+                        else:
+                            feature_desc = f"Match item: {str(match_item_detail)[:100]}"
+                        safe_print(f"        Match Detail #{match_idx+1}: {feature_desc}")
+                match_count_on_cli += 1
+        else:
+            safe_print("    No specific address match locations found.")
 
 
-        if not verbose_flag and capability_count >= 10: # Limit total capabilities shown if not verbose
+        if not verbose_flag and capability_count >= 10:
             safe_print("\n  ... (additional capabilities omitted, use --verbose to see all)")
             break
 
-    if capability_count == 0: # If loop didn't run
+    if capability_count == 0:
         safe_print("\n  No capabilities detected by capa.")
 
 
@@ -2595,8 +2866,8 @@ def _print_floss_analysis_cli(floss_data: Dict[str, Any], verbose_flag: bool):
             safe_print(f"    {k.replace('_', ' ').title()}: {v}")
 
     strings_results = floss_data.get("strings", {})
-    if not strings_results and status == "FLOSS library not available.": # If FLOSS wasn't available, strings will be empty.
-        return # Already printed status.
+    if not strings_results and status == "FLOSS library not available.":
+        return
 
     for str_type, str_list in strings_results.items():
         type_name_pretty = str_type.replace("_", " ").title()
@@ -2606,25 +2877,35 @@ def _print_floss_analysis_cli(floss_data: Dict[str, Any], verbose_flag: bool):
                 safe_print(f"    Error during extraction: {str_list[0]['error']}")
                 continue
 
-            limited_str_list = str_list[:20] if not verbose_flag and len(str_list) > 20 else str_list
+            # If verbose, sort by sifter score to show most relevant first
+            if verbose_flag and 'sifter_score' in str_list[0]:
+                str_list_sorted = sorted(str_list, key=lambda x: x.get('sifter_score', 0.0), reverse=True)
+            else:
+                str_list_sorted = str_list
+
+            limited_str_list = str_list_sorted[:20] if not verbose_flag and len(str_list_sorted) > 20 else str_list_sorted
             for item_idx, item_dict in enumerate(limited_str_list):
+                sifter_score_str = ""
+                if verbose_flag and 'sifter_score' in item_dict:
+                    sifter_score_str = f" (Sifter Score: {item_dict['sifter_score']:.2f})"
+
                 if str_type == "static_strings":
-                    safe_print(f"    Offset: {item_dict.get('offset', 'N/A')}, String: \"{item_dict.get('string', '')}\"")
+                    safe_print(f"    Offset: {item_dict.get('offset', 'N/A')}, String: \"{item_dict.get('string', '')}\"{sifter_score_str}")
                 elif str_type == "stack_strings":
-                    safe_print(f"    Function VA: {item_dict.get('function_va', 'N/A')}, String VA: {item_dict.get('string_va', 'N/A')}, String: \"{item_dict.get('string', '')}\"")
+                    safe_print(f"    Function VA: {item_dict.get('function_va', 'N/A')}, String VA: {item_dict.get('string_va', 'N/A')}, String: \"{item_dict.get('string', '')}\"{sifter_score_str}")
                 elif str_type == "tight_strings":
-                    safe_print(f"    Function VA: {item_dict.get('function_va', 'N/A')}, Addr/Offset: {item_dict.get('address_or_offset', 'N/A')}, String: \"{item_dict.get('string', '')}\"")
+                    safe_print(f"    Function VA: {item_dict.get('function_va', 'N/A')}, Addr/Offset: {item_dict.get('address_or_offset', 'N/A')}, String: \"{item_dict.get('string', '')}\"{sifter_score_str}")
                 elif str_type == "decoded_strings":
                     char_str = f" (Characteristics: {', '.join(item_dict.get('characteristics',[]))})" if item_dict.get('characteristics') else ""
-                    safe_print(f"    String VA: {item_dict.get('string_va', 'N/A')}, Routine VA: {item_dict.get('decoding_routine_va', 'N/A')}, String: \"{item_dict.get('string', '')}\"{char_str}")
-                else: # Should not happen
+                    safe_print(f"    String VA: {item_dict.get('string_va', 'N/A')}, Routine VA: {item_dict.get('decoding_routine_va', 'N/A')}, String: \"{item_dict.get('string', '')}\"{sifter_score_str}{char_str}")
+                else:
                     safe_print(f"    {item_dict}")
             
-            if not verbose_flag and len(str_list) > 20:
-                safe_print(f"    ... ({len(str_list) - 20} more strings omitted, use --verbose for all {type_name_pretty})")
-        elif not str_list: # Empty list
+            if not verbose_flag and len(str_list_sorted) > 20:
+                safe_print(f"    ... ({len(str_list_sorted) - 20} more strings omitted, use --verbose for all {type_name_pretty})")
+        elif not str_list:
              safe_print(f"    No {type_name_pretty.lower()} found.")
-        else: # Should be a list
+        else:
             safe_print(f"    Unexpected data format for {type_name_pretty}: {type(str_list)}")
 
 
@@ -2848,50 +3129,57 @@ tool_decorator = mcp_server.tool()
 async def search_floss_strings(
     ctx: Context,
     regex_patterns: List[str],
-    min_length: int = 0, # --- NEW ---
+    min_sifter_score: Optional[float] = None,
+    max_sifter_score: Optional[float] = None,
+    sort_order: Optional[str] = None,
+    min_length: int = 0,
     limit: int = 100,
     case_sensitive: bool = False
 ) -> Dict[str, Any]:
     """
-    Performs a live regex search against all previously extracted FLOSS strings.
-    This tool supports multiple regex patterns and a minimum length filter.
-    A string is included if it matches ANY of the provided regex patterns AND meets the minimum length.
+    Performs a regex search against FLOSS strings, with advanced score filtering and sorting.
 
     Args:
         ctx: The MCP Context object.
         regex_patterns: (List[str]) A list of regex patterns to search for.
-        min_length: (int) The minimum length for a matched string to be included. Defaults to 0 (no minimum). --- NEW ---
+        min_sifter_score: (Optional[float]) If provided, only include strings with a sifter_score >= this value.
+        max_sifter_score: (Optional[float]) If provided, only include strings with a sifter_score <= this value.
+        sort_order: (Optional[str]) If provided, sorts results by score. Valid: 'ascending', 'descending'. Defaults to None (no sorting).
+        min_length: (int) The minimum length for a matched string to be included. Defaults to 0.
         limit: (int) The maximum number of matches to return. Defaults to 100.
         case_sensitive: (bool) If True, the regex search will be case-sensitive. Defaults to False.
 
     Returns:
-        A dictionary containing a list of matched strings with their original context
-        (source type, address, etc.) and pagination information.
+        A dictionary containing a list of matched strings and pagination information.
 
     Raises:
-        RuntimeError: If no FLOSS analysis data is available.
-        ValueError: For invalid regex patterns or parameters, or if the response size is too large.
+        RuntimeError: If no FLOSS analysis data is available or sifter is required but unavailable.
+        ValueError: For invalid parameters or if the response size is too large.
     """
-    # --- MODIFIED --- Updated log message for new parameters
-    await ctx.info(f"Request to search FLOSS strings. Patterns: {len(regex_patterns)}, Min-Length: {min_length}, Limit: {limit}, Case-Sensitive: {case_sensitive}")
-
-    # --- MODIFIED --- Updated validation for a list of patterns
+    await ctx.info(f"Request to search FLOSS strings. Patterns: {len(regex_patterns)}, Score Range: {min_sifter_score}-{max_sifter_score}, Sort: {sort_order}, Limit: {limit}")
+    
+    # --- Parameter Validation ---
+    if (min_sifter_score is not None or max_sifter_score is not None or sort_order is not None) and not STRINGSIFTER_AVAILABLE:
+        raise RuntimeError("Score filtering/sorting is requested, but StringSifter is not available on the server.")
+    if min_sifter_score is not None and not isinstance(min_sifter_score, (int, float)):
+        raise ValueError("Parameter 'min_sifter_score' must be a number if provided.")
+    if max_sifter_score is not None and not isinstance(max_sifter_score, (int, float)):
+        raise ValueError("Parameter 'max_sifter_score' must be a number if provided.")
+    if sort_order is not None and sort_order.lower() not in ['ascending', 'descending']:
+        raise ValueError("Parameter 'sort_order' must be either 'ascending', 'descending', or None.")
     if not regex_patterns or not isinstance(regex_patterns, list):
         raise ValueError("The 'regex_patterns' parameter must be a non-empty list of strings.")
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("The 'limit' parameter must be a positive integer.")
-    # --- NEW --- Validation for min_length
-    if not (isinstance(min_length, int) and min_length >= 0):
-        raise ValueError("The 'min_length' parameter must be a non-negative integer.")
 
+    # --- Data Retrieval ---
     if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
         raise RuntimeError("No FLOSS analysis data found. Please run an analysis first.")
-
     floss_data = ANALYZED_PE_DATA.get('floss_analysis', {})
     if not floss_data.get("strings"):
         return {"matches": [], "message": "No FLOSS strings available to search."}
 
-    # --- MODIFIED --- Compile a list of regex patterns
+    # --- Filtering Logic ---
     compiled_patterns = []
     try:
         flags = 0 if case_sensitive else re.IGNORECASE
@@ -2901,7 +3189,6 @@ async def search_floss_strings(
         raise ValueError(f"Invalid regex pattern provided in the list: {e}")
 
     all_strings_with_context = []
-    # Consolidate all found strings into one list
     for source_type, string_list in floss_data.get("strings", {}).items():
         for string_item in string_list:
             if isinstance(string_item, dict) and "string" in string_item:
@@ -2911,14 +3198,25 @@ async def search_floss_strings(
 
     matches = []
     for item in all_strings_with_context:
-        string_to_search = item["string"]
-        # --- MODIFIED --- Check against multiple patterns and apply the new length filter
-        if any(p.search(string_to_search) for p in compiled_patterns):
-            if len(string_to_search) >= min_length:
-                matches.append(item)
+        # Score filtering
+        score = item.get('sifter_score', -999.0)
+        min_ok = (min_sifter_score is None) or (score >= min_sifter_score)
+        max_ok = (max_sifter_score is None) or (score <= max_sifter_score)
+        
+        if min_ok and max_ok:
+            # Length and Regex filtering
+            string_to_search = item["string"]
+            if any(p.search(string_to_search) for p in compiled_patterns):
+                if len(string_to_search) >= min_length:
+                    matches.append(item)
 
+    # --- Sorting Logic ---
+    if sort_order:
+        is_reversed = (sort_order.lower() == 'descending')
+        matches.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=is_reversed)
+
+    # --- Finalize and Return ---
     paginated_matches = matches[:limit]
-
     response = {
         "matches": paginated_matches,
         "pagination_info": {
@@ -2928,7 +3226,7 @@ async def search_floss_strings(
         }
     }
     
-    limit_info_str = "the 'limit' parameter or by using more specific 'regex_patterns'"
+    limit_info_str = "the 'limit' parameter or by using more specific filters ('regex_patterns', 'min_sifter_score', etc.)"
     return await _check_mcp_response_size(ctx, response, "search_floss_strings", limit_info_str)
 
 @tool_decorator
@@ -3509,33 +3807,24 @@ for key, desc in TOOL_DEFINITIONS.items(): globals()[f"get_{key}_info"] = _creat
 @tool_decorator
 async def get_floss_analysis_info(ctx: Context,
                                   string_type: Optional[str] = None,
+                                  only_with_references: bool = False,
                                   limit: int = 100,
                                   offset: Optional[int] = 0
                                  ) -> Dict[str, Any]:
     """
-    Retrieves FLOSS (FireEye Labs Obfuscated String Solver) analysis results for the pre-loaded file.
-    Allows filtering by string type (static_strings, stack_strings, tight_strings, decoded_strings)
-    and pagination for the selected string type. If no string_type is specified, returns metadata
-    and analysis configuration from FLOSS.
+    Retrieves FLOSS analysis results, with new option to filter for strings with code context.
 
     Args:
         ctx: The MCP Context object.
-        string_type: (Optional[str]) The type of FLOSS strings to retrieve.
-                     Valid values: "static_strings", "stack_strings", "tight_strings", "decoded_strings".
-                     If None, returns FLOSS metadata and config.
-        limit: (int) Max number of strings to return if string_type is specified. Defaults to 100. Must be positive.
+        string_type: (Optional[str]) The type of FLOSS strings to retrieve. Valid values: "static_strings", "stack_strings", "tight_strings", "decoded_strings". If None, returns metadata.
+        only_with_references: (bool) If True and string_type is 'static_strings', only return strings that have code cross-references. Defaults to False.
+        limit: (int) Max number of strings to return if string_type is specified. Defaults to 100.
         offset: (Optional[int]) Starting index for string pagination if string_type is specified. Defaults to 0.
 
     Returns:
-        A dictionary containing the requested FLOSS information or an error status.
-        If string_type is specified, includes "strings" (list) and "pagination_info".
-        Otherwise, includes "metadata" and "analysis_config".
-
-    Raises:
-        RuntimeError: If no PE file is loaded or FLOSS analysis data is unavailable.
-        ValueError: If parameters are invalid, or if the response size exceeds the server limit.
+        A dictionary containing the requested FLOSS information.
     """
-    await ctx.info(f"Request for FLOSS analysis info. String Type: {string_type}, Limit: {limit}, Offset: {offset}")
+    await ctx.info(f"Request for FLOSS info. Type: {string_type}, Refs Only: {only_with_references}, Limit: {limit}")
 
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
@@ -3552,12 +3841,9 @@ async def get_floss_analysis_info(ctx: Context,
     floss_data_block = ANALYZED_PE_DATA.get('floss_analysis', {})
     status = floss_data_block.get("status", "Unknown")
 
-    if status == "Skipped by user request":
-        data_to_send = {"status": status, "message": "FLOSS analysis was skipped by user request.", "data": {}}
-        return await _check_mcp_response_size(ctx, data_to_send, "get_floss_analysis_info")
-    if status != "FLOSS analysis complete." and status != "FLOSS analysis complete (only static strings requested/enabled)." and status != "FLOSS analysis incomplete due to Vivisect workspace load failure.": # Allow incomplete if some static strings were found
-        data_to_send = {"status": status, "error": floss_data_block.get("error", "FLOSS analysis did not complete successfully."), "data": {}}
-        return await _check_mcp_response_size(ctx, data_to_send, "get_floss_analysis_info")
+    if status != "FLOSS analysis complete." and "incomplete" not in status:
+         data_to_send = {"status": status, "error": floss_data_block.get("error", "FLOSS analysis did not complete successfully."), "data": {}}
+         return await _check_mcp_response_size(ctx, data_to_send, "get_floss_analysis_info")
 
     response_data: Dict[str, Any] = {"status": status}
     if floss_data_block.get("error"): response_data["error_details"] = floss_data_block.get("error")
@@ -3570,11 +3856,12 @@ async def get_floss_analysis_info(ctx: Context,
     else: # Return specific string type with pagination
         all_strings_of_type = floss_data_block.get("strings", {}).get(string_type, [])
         
-        if isinstance(all_strings_of_type, list) and all_strings_of_type and isinstance(all_strings_of_type[0], dict) and "error" in all_strings_of_type[0]:
-            response_data["strings"] = []
-            response_data["error_in_type"] = f"Error during {string_type} extraction: {all_strings_of_type[0]['error']}"
-            response_data["pagination_info"] = {'offset': 0, 'limit': limit, 'current_items_count': 0, 'total_items_for_type': 0}
-        elif isinstance(all_strings_of_type, list):
+        # --- NEW FILTERING LOGIC ---
+        if string_type == 'static_strings' and only_with_references:
+            await ctx.info("Filtering static strings for only those with code references.")
+            all_strings_of_type = [item for item in all_strings_of_type if item.get('references')]
+
+        if isinstance(all_strings_of_type, list):
             current_offset_val = offset if offset is not None else 0
             paginated_strings = all_strings_of_type[current_offset_val : current_offset_val + limit]
             response_data["strings"] = paginated_strings
@@ -3584,15 +3871,14 @@ async def get_floss_analysis_info(ctx: Context,
                 'current_items_count': len(paginated_strings),
                 'total_items_for_type': len(all_strings_of_type)
             }
-            await ctx.info(f"Returning {len(paginated_strings)} {string_type} (total: {len(all_strings_of_type)}).")
-        else: # Should not happen if _parse_floss_analysis is correct
+            await ctx.info(f"Returning {len(paginated_strings)} {string_type} (total available after filter: {len(all_strings_of_type)}).")
+        else:
             response_data["strings"] = []
             response_data["error_in_type"] = f"Data for {string_type} is not in the expected list format."
             response_data["pagination_info"] = {'offset': 0, 'limit': limit, 'current_items_count': 0, 'total_items_for_type': 0}
             
     limit_info_str = f"parameters like 'limit' or 'offset' for string_type '{string_type}'" if string_type else "parameters (none for metadata)"
     return await _check_mcp_response_size(ctx, response_data, "get_floss_analysis_info", limit_info_str)
-
 
 @tool_decorator 
 async def get_capa_analysis_info(ctx: Context,
@@ -3932,9 +4218,16 @@ async def get_capa_rule_match_details(ctx: Context,
     return await _check_mcp_response_size(ctx, data_to_send, "get_capa_rule_match_details", limit_info_str)
 
 @tool_decorator
-async def extract_strings_from_binary(ctx: Context, limit: int, min_length: int = 5) -> List[Dict[str, Any]]:
+async def extract_strings_from_binary(
+    ctx: Context,
+    limit: int,
+    min_length: int = 5,
+    rank_with_sifter: bool = False,
+    min_sifter_score: Optional[float] = None,
+    sort_by_score: bool = False
+) -> List[Dict[str, Any]]:
     """
-    Extracts printable ASCII strings from the pre-loaded PE file's binary data.
+    Extracts printable ASCII strings and can optionally rank them with StringSifter.
 
     Prerequisites:
     - A PE file must have been successfully pre-loaded at server startup.
@@ -3943,32 +4236,72 @@ async def extract_strings_from_binary(ctx: Context, limit: int, min_length: int 
         ctx: The MCP Context object.
         limit: (int) Mandatory. The maximum number of strings to return. Must be positive.
         min_length: (int) The minimum length for a sequence of characters to be considered a string. Defaults to 5.
+        rank_with_sifter: (bool) If True, rank extracted strings using StringSifter. Defaults to False.
+        min_sifter_score: (Optional[float]) If ranking, only include strings with a score >= this value.
+        sort_by_score: (bool) If ranking, sort the results by relevance score (descending).
 
     Returns:
-        A list of dictionaries, where each dictionary contains:
-        - "offset": (str) The hexadecimal offset of the string within the file.
-        - "string": (str) The extracted string.
+        A list of dictionaries, where each dictionary contains "offset", "string", and optionally "sifter_score".
         Returns an empty list if no PE file is loaded or no strings are found.
 
     Raises:
-        RuntimeError: If no PE file is currently loaded or an extraction error occurs.
-        ValueError: If limit is not a positive integer, or if the response size exceeds the server limit.
+        RuntimeError: If no PE file is currently loaded, a ranking error occurs, or if StringSifter is required but unavailable.
+        ValueError: If parameters are invalid, or if the response size exceeds the server limit.
     """
-    await ctx.info(f"Request to extract strings. Min_len: {min_length}, Limit: {limit}")
+    await ctx.info(f"Request to extract strings. MinLen: {min_length}, Limit: {limit}, Sifter: {rank_with_sifter}")
+
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
+    if rank_with_sifter and not STRINGSIFTER_AVAILABLE:
+        raise RuntimeError("Ranking is requested, but StringSifter is not available on the server.")
+    if min_sifter_score is not None and not rank_with_sifter:
+        await ctx.warning("'min_sifter_score' is set, but 'rank_with_sifter' is False. The score filter will be ignored.")
+    if min_sifter_score is not None and not (0.0 <= min_sifter_score <= 1.0):
+        raise ValueError("Parameter 'min_sifter_score' must be between 0.0 and 1.0.")
 
     if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
         raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
+
     try:
-        file_data=PE_OBJECT_FOR_MCP.__data__; found=_extract_strings_from_data(file_data,min_length)
-        results=[{"offset":hex(offset),"string":s}for offset,s in found]
-        
+        file_data = PE_OBJECT_FOR_MCP.__data__
+        found = _extract_strings_from_data(file_data, min_length)
+        results = [{"offset": hex(offset), "string": s} for offset, s in found]
+
+        # --- StringSifter Integration Logic ---
+        if rank_with_sifter:
+            await ctx.info("Ranking extracted strings with StringSifter...")
+            
+            # Get just the string values for ranking
+            string_values = [res["string"] for res in results]
+            if not string_values:
+                return [] # No strings to rank
+
+            # Load model and rank
+            modeldir = os.path.join(sifter_util.package_base(), "model")
+            featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
+            ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
+            X_test = await asyncio.to_thread(featurizer.transform, string_values)
+            y_scores = await asyncio.to_thread(ranker.predict, X_test)
+
+            # Add scores back to the results
+            for i, res_dict in enumerate(results):
+                res_dict['sifter_score'] = round(float(y_scores[i]), 4)
+
+            # Filter by score if requested
+            if min_sifter_score is not None:
+                results = [res for res in results if res.get('sifter_score', -1.0) >= min_sifter_score]
+
+            # Sort by score if requested
+            if sort_by_score:
+                results.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=True)
+
         data_to_send = results[:limit]
-        limit_info_str = "the 'limit' parameter or a larger 'min_length'"
+        limit_info_str = "the 'limit' parameter or by adjusting 'min_sifter_score'"
         return await _check_mcp_response_size(ctx, data_to_send, "extract_strings_from_binary", limit_info_str)
 
-    except Exception as e: await ctx.error(f"String extraction error: {e}"); raise RuntimeError(f"Failed during string extraction: {e}")from e
+    except Exception as e:
+        await ctx.error(f"String extraction/ranking error: {e}")
+        raise RuntimeError(f"Failed during string extraction: {e}") from e
 
 @tool_decorator
 async def search_for_specific_strings(ctx: Context, search_terms: List[str], limit_per_term: Optional[int] = 100) -> Dict[str, List[str]]:
@@ -4226,211 +4559,455 @@ def _is_mostly_printable_ascii_sync(text_input: str, threshold: float = 0.8) -> 
 async def find_and_decode_encoded_strings(
     ctx: Context,
     limit: int,
+    rank_with_sifter: bool = False,
+    min_sifter_score: Optional[float] = None,
+    min_confidence: float = 0.6,
     min_candidate_len_b64: int = 20,
-    min_candidate_len_b32: int = 24, 
-    min_candidate_len_hex: int = 8,  
-    min_candidate_len_url: int = 3,  
+    min_candidate_len_b32: int = 24,
+    min_candidate_len_hex: int = 8,
+    min_candidate_len_url: int = 3,
     min_decoded_printable_length: int = 4,
     printable_threshold: float = 0.8,
+    max_decode_layers: int = 3,
     decoded_regex_patterns: Optional[List[str]] = None,
     verbose_mcp_output: bool = False
 ) -> List[Dict[str, Any]]:
     """
-    Searches the pre-loaded binary for potential Base64, Base32, Hex, or URL encoded
-    substrings, attempts to decode them, filters by printability and length, 
-    and optionally filters by custom regex patterns applied to the decoded strings.
+    Finds, decodes (recursively), and optionally ranks encoded strings with heuristics.
+
+    This enhanced tool implements multi-layer decoding, adds a confidence score based
+    on the location of the string, and includes a single-byte XOR bruteforce decoder.
 
     Args:
         ctx: The MCP Context object.
-        limit: (int) Mandatory. Maximum number of decoded results to return. Must be positive.
-        min_candidate_len_b64: (int) Minimum length of a potential Base64 sequence. Default 20.
-        min_candidate_len_b32: (int) Minimum length of a potential Base32 sequence. Default 24.
-        min_candidate_len_hex: (int) Minimum length of a potential Hex sequence. Default 8.
-        min_candidate_len_url: (int) Minimum length of a potential URL-encoded sequence. Default 3.
-        min_decoded_printable_length: (int) Minimum length of a successfully decoded string. Default 4.
-        printable_threshold: (float) Ratio (0.0-1.0) of printable chars for decoded data. Default 0.8.
-        decoded_regex_patterns: (Optional[List[str]]) A list of regex patterns to search for
-                                 within the successfully decoded strings. If provided, a decoded string
-                                 must match at least one of these patterns to be included. Default None.
+        limit: (int) Mandatory. Maximum number of decoded results to return.
+        rank_with_sifter: (bool) If True, rank the successfully decoded strings.
+        min_sifter_score: (Optional[float]) If ranking, only include strings with a score >= this value.
+        min_confidence: (float) Minimum confidence score (0.0-1.0) for a result to be included. Based on heuristics like PE section. Defaults to 0.6.
+        min_candidate_len_b64: (int) Minimum length of a potential Base64 sequence.
+        min_candidate_len_b32: (int) Minimum length of a potential Base32 sequence.
+        min_candidate_len_hex: (int) Minimum length of a potential Hex sequence.
+        min_candidate_len_url: (int) Minimum length of a potential URL-encoded sequence.
+        min_decoded_printable_length: (int) Minimum length of a successfully decoded string.
+        printable_threshold: (float) Ratio (0.0-1.0) of printable chars for decoded data.
+        max_decode_layers: (int) The maximum number of encoding layers to decode. Defaults to 3.
+        decoded_regex_patterns: (Optional[List[str]]) Regex patterns to search within decoded strings.
+        verbose_mcp_output: (bool) Enables more detailed server-side logging.
 
     Returns:
         A list of dictionaries, each representing a successfully decoded and filtered string.
-    Raises:
-        RuntimeError: If no PE file is loaded or an unexpected error occurs.
-        ValueError: For invalid parameter values (including invalid regex patterns), or if the response size exceeds the server limit.
     """
-    await ctx.info(f"Request to find and decode encoded strings. Limit: {limit}, "
-                   f"MinLens(B64/B32/Hex/URL): {min_candidate_len_b64}/{min_candidate_len_b32}/{min_candidate_len_hex}/{min_candidate_len_url}, "
-                   f"MinDecodedLen: {min_decoded_printable_length}, PrintableThreshold: {printable_threshold}, "
-                   f"DecodedRegexPatterns: {decoded_regex_patterns}")
-
+    await ctx.info(f"Request to find/decode strings. Limit: {limit}, Max Layers: {max_decode_layers}, Min Confidence: {min_confidence}")
+    
+    # --- Parameter Validation ---
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
-    for name, val, min_val in [
-        ("min_candidate_len_b64", min_candidate_len_b64, 4),
-        ("min_candidate_len_b32", min_candidate_len_b32, 8),
-        ("min_candidate_len_hex", min_candidate_len_hex, 2), 
-        ("min_candidate_len_url", min_candidate_len_url, 3), 
-        ("min_decoded_printable_length", min_decoded_printable_length, 1)
-    ]:
-        if not (isinstance(val, int) and val >= min_val):
-            raise ValueError(f"Parameter '{name}' must be an integer >= {min_val}.")
-    if not (0.0 <= printable_threshold <= 1.0):
-        raise ValueError("Parameter 'printable_threshold' must be between 0.0 and 1.0.")
+    if rank_with_sifter and not STRINGSIFTER_AVAILABLE:
+        raise RuntimeError("Ranking is requested, but StringSifter is not available on the server.")
+    if not (0.0 <= min_confidence <= 1.0):
+        raise ValueError("Parameter 'min_confidence' must be between 0.0 and 1.0.")
+    if not (isinstance(max_decode_layers, int) and 1 <= max_decode_layers <= 10):
+        raise ValueError("Parameter 'max_decode_layers' must be an integer between 1 and 10.")
 
-    compiled_decoded_regexes = []
-    if decoded_regex_patterns:
-        if not isinstance(decoded_regex_patterns, list) or \
-           not all(isinstance(p, str) for p in decoded_regex_patterns):
-            raise ValueError("Parameter 'decoded_regex_patterns' must be a list of strings.")
-        try:
-            for pattern_str in decoded_regex_patterns:
-                compiled_decoded_regexes.append(re.compile(pattern_str))
-            await ctx.info(f"Successfully compiled {len(compiled_decoded_regexes)} regex patterns for decoded strings.")
-        except re.error as e_re:
-            err_msg = f"Invalid regex pattern in 'decoded_regex_patterns': {e_re}"
-            await ctx.error(err_msg)
-            raise ValueError(err_msg) from e_re
-
+    # --- Setup ---
     if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
         raise RuntimeError("No PE file loaded or PE data unavailable.")
 
-    file_data = PE_OBJECT_FOR_MCP.__data__
+    pe = PE_OBJECT_FOR_MCP
+    file_data = pe.__data__
     found_decoded_strings = []
 
-    # Regex for Base64: allows for padding, requires min length.
-    # This regex is a common one, but might need refinement for edge cases or specific Base64 variants.
-    base64_char_set = rb"[A-Za-z0-9+/]"
-    base64_pattern_core = rb"(?:%s{4})*(?:%s{4}|%s{2}==|%s{3}=)" % (
-        base64_char_set, base64_char_set, base64_char_set, base64_char_set
-    )
-    base64_pattern = re.compile(base64_pattern_core)
+    base64_pattern = re.compile(rb"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)")
+    hex_pattern = re.compile(rb"(?:[0-9a-fA-F]{2}){4,}") # Require at least 4 hex pairs
+
+    initial_candidates = []
+    for pat, min_len in [(base64_pattern, min_candidate_len_b64), (hex_pattern, min_candidate_len_hex)]:
+        for match in pat.finditer(file_data):
+            if len(match.group(0)) >= min_len:
+                initial_candidates.append(match)
     
-    # Regex for Base32 (RFC 4648): A-Z, 2-7 characters, padding with '='
-    base32_char_set = rb"[A-Z2-7]"
-    base32_pattern_core = rb"(?:%s{8})*(?:%s{8}|%s{2}={6}|%s{4}={4}|%s{5}={3}|%s{7}=)" % (
-        base32_char_set, base32_char_set, base32_char_set, 
-        base32_char_set, base32_char_set, base32_char_set
-    )
-    base32_pattern = re.compile(base32_pattern_core)
-
-    # Regex for Hex: sequence of hex characters (pairs)
-    hex_pattern = re.compile(rb"(?:[0-9a-fA-F]{2})+") # Must be even length for bytes.fromhex
-
-    # Regex for URL encoding: %xx sequences, possibly mixed with other URL-safe chars
-    # This is a simplified regex; full URL validation is complex.
-    # It looks for at least one %xx sequence.
-    url_char_set_no_percent = rb"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=]" # Common URL characters NOT percent encoded
-    percent_encoded_group = rb"(?:%[0-9a-fA-F]{2})+" # One or more %xx
-    # A sequence that must contain at least one percent-encoded part, possibly surrounded by other URL chars.
-    url_pattern_core = rb"(?:%s*%s%s*)+" % (
-        url_char_set_no_percent, percent_encoded_group, url_char_set_no_percent
-    )
-    url_pattern = re.compile(url_pattern_core)
-
     decoding_attempts = [
-        ("base64", base64_pattern, min_candidate_len_b64, lambda b: codecs.decode(b, 'base64')),
-        ("base32", base32_pattern, min_candidate_len_b32, lambda b: codecs.decode(b, 'base32')),
-        ("hex", hex_pattern, min_candidate_len_hex, lambda b: bytes.fromhex(b.decode('ascii'))), # Hex needs to be decoded from ascii first
-        ("url", url_pattern, min_candidate_len_url, lambda b: urllib.parse.unquote_to_bytes(b)) # Handles bytes directly
+        ("base64", lambda b: codecs.decode(b, 'base64')),
+        ("hex", lambda b: bytes.fromhex(b.decode('ascii'))),
     ]
 
-    processed_offsets = set() # To avoid processing overlapping matches from different regexes if they yield same core data
+    for match in initial_candidates:
+        if len(found_decoded_strings) >= limit: break
 
-    # Ensure the helper is available (it should be, defined in this script)
-    if '_is_mostly_printable_ascii_sync' not in globals():
-        error_msg = "Critical: Helper function '_is_mostly_printable_ascii_sync' is not defined in the global scope."
-        await ctx.error(error_msg)
-        logger.critical(f"MCP: {error_msg} This function is essential for find_and_decode_encoded_strings.")
-        raise NameError(error_msg)
-
-    try:
-        for encoding_name, pattern, min_len, decode_func in decoding_attempts:
-            if len(found_decoded_strings) >= limit: break
-            
-            await ctx.info(f"Scanning for {encoding_name} patterns...")
-            for match in pattern.finditer(file_data):
-                if len(found_decoded_strings) >= limit: break
-                
-                start_offset, end_offset = match.start(), match.end()
-                # Check if this exact span has been processed (e.g. if a hex string was also a valid b64 string part)
-                if (start_offset, end_offset) in processed_offsets:
-                    continue
-
-                encoded_bytes = match.group(0)
-
-                if len(encoded_bytes) < min_len:
-                    continue
-                
-                # For hex, ensure it's an even number of characters before trying bytes.fromhex
-                if encoding_name == "hex" and len(encoded_bytes) % 2 != 0:
-                    continue
-                
-                try:
-                    # Perform the actual decoding in a thread to avoid blocking asyncio event loop
-                    # if a decode_func is unexpectedly slow (though these are usually fast)
-                    decoded_bytes = await asyncio.to_thread(decode_func, encoded_bytes)
-                    
-                    if not decoded_bytes: # Some decode functions might return None or empty on failure
-                        continue
-
-                    # Attempt to decode the bytes into a string (UTF-8, then fallback)
-                    decoded_text = decoded_bytes.decode('utf-8', errors='replace')
-                    
-                    passes_len_check = len(decoded_text) >= min_decoded_printable_length
-                    passes_printable_check = _is_mostly_printable_ascii_sync(decoded_text, printable_threshold)
-
-                    if passes_len_check and passes_printable_check:
-                        # Apply custom regex patterns if provided
-                        matches_custom_regex = False
-                        if not compiled_decoded_regexes: # If no patterns, it's a match by default
-                            matches_custom_regex = True
-                        else:
-                            for compiled_regex in compiled_decoded_regexes:
-                                if compiled_regex.search(decoded_text):
-                                    matches_custom_regex = True
-                                    break # Found a match with one of the patterns
-
-                        if matches_custom_regex: # Only add if it passes all filters
-                            # Get a snippet of the original data around the match for context
-                            snippet_start = max(0, start_offset - 16)
-                            snippet_end = min(len(file_data), end_offset + 16)
-                            
-                            found_decoded_strings.append({
-                                "original_match_offset": hex(start_offset),
-                                "original_match_snippet_hex": file_data[snippet_start:snippet_end].hex(), # Context snippet
-                                "encoded_substring_repr": encoded_bytes.decode('ascii', 'replace')[:200], # Truncate long raw strings
-                                "detected_encoding": encoding_name,
-                                "decoded_string": decoded_text,
-                                "decoded_length": len(decoded_text)
-                            })
-                            processed_offsets.add((start_offset, end_offset)) # Mark this span as processed
-
-                            if len(found_decoded_strings) >= limit: break
-                
-                except (binascii.Error, ValueError, TypeError) as e_decode: # Common errors from decode funcs
-                    # These are expected for non-matching byte sequences, so just pass
-                    pass 
-                except NameError as e_name: # Should not happen if _is_mostly_printable_ascii_sync is defined
-                    await ctx.error(f"Internal error: NameError encountered: {e_name}.")
-                    logger.error(f"MCP: NameError in find_and_decode_encoded_strings: {e_name}", exc_info=True)
-                    raise RuntimeError(f"Internal tool error: A required helper function was not found ({e_name}).") from e_name
-                except Exception as e_generic_decode: # Catch any other unexpected error during decoding a specific match
-                    # Log this as it might indicate an issue with a decode_func or pattern
-                    logger.warning(f"MCP: Unexpected error decoding candidate for {encoding_name} at offset {start_offset}: {e_generic_decode}", exc_info=verbose_mcp_output)
-                    pass
-
-
-        await ctx.info(f"Found {len(found_decoded_strings)} decoded and printable strings matching all criteria.")
-        limit_info_str = "the 'limit' parameter, or by adjusting minimum candidate lengths or decoded length/printable thresholds"
-        return await _check_mcp_response_size(ctx, found_decoded_strings, "find_and_decode_encoded_strings", limit_info_str)
-
-    except Exception as e: # Catch errors in the main loop of the tool itself
-        error_message = f"ToolError: find_and_decode_encoded_strings failed processing. Original error: {type(e).__name__}: {str(e)}"
-        await ctx.error(f"Error in find_and_decode_encoded_strings: {str(e)}")
-        logger.error(f"MCP: Error in find_and_decode_encoded_strings: {error_message}", exc_info=True)
-        raise RuntimeError(error_message) from e
+        original_encoded_bytes = match.group(0)
+        start_offset = match.start()
         
+        # --- HEURISTIC: Calculate confidence based on section ---
+        confidence = 0.5 # Default low confidence
+        try:
+            section = pe.get_section_by_offset(start_offset)
+            if section:
+                sec_name = section.Name.decode('utf-8', 'ignore').strip('\x00')
+                if '.data' in sec_name or '.rdata' in sec_name:
+                    confidence = 1.0 # High confidence for data sections
+                elif '.text' not in sec_name:
+                    confidence = 0.8 # Medium confidence for other non-code sections
+        except Exception:
+            pass # Keep default confidence if section lookup fails
+
+        if confidence < min_confidence:
+            continue
+
+        # --- MULTI-LAYER DECODING ---
+        current_bytes = original_encoded_bytes
+        encoding_layers = []
+        final_decoded_text = None
+
+        for _ in range(max_decode_layers):
+            decoded_this_layer = False
+            # Try standard decoders first
+            for enc_name, dec_func in decoding_attempts:
+                try:
+                    decoded_bytes = await asyncio.to_thread(dec_func, current_bytes)
+                    if decoded_bytes and decoded_bytes != current_bytes:
+                        encoding_layers.append(enc_name)
+                        current_bytes = decoded_bytes
+                        decoded_this_layer = True
+                        break 
+                except Exception:
+                    continue
+            
+            # If standard decoders found something, check if the result is printable
+            if decoded_this_layer:
+                try:
+                    text_candidate = current_bytes.decode('utf-8', 'ignore')
+                    if _is_mostly_printable_ascii_sync(text_candidate, printable_threshold):
+                        final_decoded_text = text_candidate
+                        break # Found final printable payload
+                except Exception:
+                    pass # Not printable, continue to next layer or XOR
+            
+            # If standard decoders failed OR result wasn't printable, try XOR
+            if not final_decoded_text:
+                xor_result = await asyncio.to_thread(_decode_single_byte_xor, current_bytes)
+                if xor_result:
+                    decoded_bytes, key = xor_result
+                    encoding_layers.append(f"xor(0x{key:02x})")
+                    current_bytes = decoded_bytes
+                    final_decoded_text = current_bytes.decode('utf-8', 'ignore')
+                    break # Assume XOR result is final payload
+
+            if not decoded_this_layer:
+                break # No decoders worked on this layer, stop
+
+        # --- Final filtering and result creation ---
+        if final_decoded_text and len(final_decoded_text) >= min_decoded_printable_length:
+            if decoded_regex_patterns:
+                try:
+                    if not any(re.search(p, final_decoded_text) for p in decoded_regex_patterns):
+                        continue
+                except re.error:
+                    await ctx.warning("An invalid regex was skipped during search.")
+                    continue
+            
+            snippet_start = max(0, start_offset - 16)
+            snippet_end = min(len(file_data), match.end() + 16)
+
+            found_decoded_strings.append({
+                "original_match_offset": hex(start_offset),
+                "encoded_substring_repr": original_encoded_bytes.decode('ascii', 'replace')[:200],
+                "encoding_layers": encoding_layers,
+                "decoded_string": final_decoded_text,
+                "confidence": round(confidence, 2),
+                "context_snippet_hex": file_data[snippet_start:snippet_end].hex()
+            })
+
+    # --- Final Ranking, Filtering and Return ---
+    final_results = found_decoded_strings
+    if rank_with_sifter and final_results:
+        string_values = [res["decoded_string"] for res in final_results]
+        if string_values:
+            modeldir = os.path.join(sifter_util.package_base(), "model")
+            featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
+            ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
+            X_test = await asyncio.to_thread(featurizer.transform, string_values)
+            y_scores = await asyncio.to_thread(ranker.predict, X_test)
+            
+            for i, res_dict in enumerate(final_results):
+                res_dict['sifter_score'] = round(float(y_scores[i]), 4)
+        
+        if min_sifter_score is not None:
+            final_results = [res for res in final_results if res.get('sifter_score', -999.0) >= min_sifter_score]
+        
+        final_results.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=True)
+
+    return await _check_mcp_response_size(ctx, final_results[:limit], "find_and_decode_encoded_strings", "the 'limit' parameter or by adjusting filters")
+
+@tool_decorator
+async def get_top_sifted_strings(
+    ctx: Context,
+    limit: int,
+    string_sources: Optional[List[str]] = None,
+    min_sifter_score: Optional[float] = 5.0,
+    max_sifter_score: Optional[float] = None,
+    sort_order: str = 'descending'
+) -> List[Dict[str, Any]]:
+    """
+    Returns the top-ranked strings from all available sources (FLOSS, basic ASCII),
+    with advanced filtering, sorting, and deduplication.
+
+    Args:
+        ctx: The MCP Context object.
+        limit: (int) Mandatory. The maximum number of ranked strings to return. Must be positive.
+        string_sources: (Optional[List[str]]) A list of sources to include. Valid options: 'floss', 'basic_ascii'. Defaults to all available sources.
+        min_sifter_score: (Optional[float]) The minimum relevance score for a string to be included. Defaults to 5.0.
+        max_sifter_score: (Optional[float]) The maximum relevance score for a string to be included. Defaults to None.
+        sort_order: (str) The order to sort the results by score. Valid options: 'ascending', 'descending'. Defaults to 'descending'.
+
+    Returns:
+        A list of unique string dictionaries, filtered and sorted as requested.
+    """
+    await ctx.info(f"Request for top sifted strings. Sources: {string_sources or 'all'}, Limit: {limit}, Score Range: {min_sifter_score}-{max_sifter_score}, Sort: {sort_order}")
+
+    # --- Parameter Validation ---
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("Parameter 'limit' must be a positive integer.")
+    if not STRINGSIFTER_AVAILABLE:
+        raise RuntimeError("StringSifter is not installed or available on the server, so no scores were computed.")
+    if min_sifter_score is not None and not isinstance(min_sifter_score, (int, float)):
+        raise ValueError("Parameter 'min_sifter_score' must be a number if provided.")
+    if max_sifter_score is not None and not isinstance(max_sifter_score, (int, float)):
+        raise ValueError("Parameter 'max_sifter_score' must be a number if provided.")
+    if sort_order.lower() not in ['ascending', 'descending']:
+        raise ValueError("Parameter 'sort_order' must be either 'ascending' or 'descending'.")
+    if string_sources and not all(s in ['floss', 'basic_ascii'] for s in string_sources):
+         raise ValueError("Invalid 'string_sources'. Valid options are: 'floss', 'basic_ascii'.")
+
+    # --- Data Retrieval and Aggregation ---
+    if ANALYZED_PE_DATA is None:
+        raise RuntimeError("No analysis data found.")
+
+    all_strings = []
+    seen_string_values = set()
+    sources_to_check = string_sources or ['floss', 'basic_ascii']
+
+    # Process FLOSS first, as it has the richest context
+    if 'floss' in sources_to_check and 'floss_analysis' in ANALYZED_PE_DATA:
+        floss_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {})
+        for str_type, str_list in floss_strings.items():
+            for item in str_list:
+                if isinstance(item, dict) and 'sifter_score' in item:
+                    str_val = item.get("string")
+                    if str_val and str_val not in seen_string_values:
+                        item_with_context = item.copy()
+                        item_with_context['source_type'] = f"floss_{str_type.replace('_strings', '')}"
+                        all_strings.append(item_with_context)
+                        seen_string_values.add(str_val)
+
+    # Process Basic ASCII strings next
+    if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in ANALYZED_PE_DATA:
+        for item in ANALYZED_PE_DATA['basic_ascii_strings']:
+            if isinstance(item, dict) and 'sifter_score' in item:
+                str_val = item.get("string")
+                if str_val and str_val not in seen_string_values:
+                    all_strings.append(item)
+                    seen_string_values.add(str_val)
+
+    if not all_strings:
+        return []
+
+    # --- Filtering Logic ---
+    filtered_strings = []
+    for item in all_strings:
+        score = item['sifter_score']
+        min_ok = (min_sifter_score is None) or (score >= min_sifter_score)
+        max_ok = (max_sifter_score is None) or (score <= max_sifter_score)
+        if min_ok and max_ok:
+            filtered_strings.append(item)
+
+    # --- Sorting Logic ---
+    is_reversed = (sort_order.lower() == 'descending')
+    filtered_strings.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=is_reversed)
+
+    # --- Finalize and Return ---
+    data_to_send = filtered_strings[:limit]
+    limit_info = "the 'limit' parameter or by adjusting 'min_sifter_score'/'max_sifter_score'"
+    return await _check_mcp_response_size(ctx, data_to_send, "get_top_sifted_strings", limit_info)
+
+@tool_decorator
+async def get_strings_for_function(
+    ctx: Context,
+    function_va: int,
+    limit: int = 100
+) -> List[Dict[str, Any]]:
+    """
+    Finds and returns all strings that are referenced by a specific function.
+
+    Args:
+        ctx: The MCP Context object.
+        function_va: (int) The virtual address of the function to query.
+        limit: (int) The maximum number of strings to return. Defaults to 100.
+
+    Returns:
+        A list of string dictionaries that are associated with the given function.
+    """
+    await ctx.info(f"Request for strings referenced by function: {hex(function_va)}")
+    if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
+        raise RuntimeError("FLOSS analysis data with function context is not available.")
+
+    found_strings = []
+    all_floss_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {})
+    for str_type, str_list in all_floss_strings.items():
+        if not isinstance(str_list, list): continue
+        for item in str_list:
+            if not isinstance(item, dict): continue
+            is_match = False
+            if 'references' in item:
+                for ref in item.get('references', []):
+                    if ref.get('function_va') and int(ref.get('function_va', '0x0'), 16) == function_va:
+                        is_match = True; break
+            elif 'function_va' in item and int(item.get('function_va', '0x0'), 16) == function_va:
+                is_match = True
+            elif 'decoding_routine_va' in item and int(item.get('decoding_routine_va', '0x0'), 16) == function_va:
+                is_match = True
+            
+            if is_match:
+                item_with_context = item.copy()
+                item_with_context['source_type'] = f"floss_{str_type.replace('_strings', '')}"
+                found_strings.append(item_with_context)
+    
+    if found_strings and 'sifter_score' in found_strings[0]:
+        found_strings.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=True)
+
+    return await _check_mcp_response_size(ctx, found_strings[:limit], "get_strings_for_function", "the 'limit' parameter")
+
+@tool_decorator
+async def get_string_usage_context(
+    ctx: Context,
+    string_offset: int,
+    limit: int = 20
+) -> List[Dict[str, Any]]:
+    """
+    Finds a static string by its file offset and returns the disassembly
+    context for each location where it is referenced in code.
+
+    **IMPORTANT PREREQUISITES FOR THIS FUNCTION TO RETURN RESULTS:**
+    1.  The `string_offset` MUST correspond to a **static string**. This tool does not work for stack, tight, or decoded strings.
+    2.  The static string must have code cross-references (xrefs). An unused string will have no references.
+    3.  FLOSS analysis, including the vivisect workspace analysis, must have run successfully during the initial PE file loading, as this is what generates the context.
+
+    Args:
+        ctx: The MCP Context object.
+        string_offset: (int) The file offset (e.g., 12345) of the static string to look up.
+        limit: (int) Max number of reference contexts to return. Defaults to 20.
+
+    Returns:
+        A list of reference objects, where each object contains the function VA and
+        a snippet of disassembly code showing how the string is used. Returns an
+        empty list if the offset is not found or has no references.
+    """
+    await ctx.info(f"Request for usage context for string at offset: {hex(string_offset)}")
+    if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
+        raise RuntimeError("FLOSS analysis data with context is not available.")
+
+    static_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {}).get('static_strings', [])
+    for item in static_strings:
+        # Ensure we handle both '0x...' hex strings and integer offsets
+        try:
+            item_offset = int(item.get('offset', '-1'), 16)
+        except (ValueError, TypeError):
+            continue
+
+        if item_offset == string_offset:
+            references = item.get('references', [])
+            return await _check_mcp_response_size(ctx, references[:limit], "get_string_usage_context", "the 'limit' parameter")
+
+    return []
+
+@tool_decorator
+async def fuzzy_search_strings(
+    ctx: Context,
+    query_string: str,
+    limit: int,
+    string_sources: Optional[List[str]] = None,
+    min_similarity_ratio: int = 85
+) -> List[Dict[str, Any]]:
+    """
+    Performs a fuzzy search to find strings similar to the query string across
+    all specified sources. Results are sorted by similarity.
+
+    Args:
+        ctx: The MCP Context object.
+        query_string: (str) The string to search for.
+        limit: (int) The maximum number of similar strings to return.
+        string_sources: (Optional[List[str]]) A list of sources to search. Valid: 'floss', 'basic_ascii'. Defaults to all.
+        min_similarity_ratio: (int) The minimum similarity score (0-100) required for a string to be considered a match. Defaults to 85.
+
+    Returns:
+        A list of string dictionaries that meet the similarity threshold, sorted by similarity score.
+    """
+    await ctx.info(f"Fuzzy search request for '{query_string}'. Min Ratio: {min_similarity_ratio}, Limit: {limit}")
+
+    # --- Parameter Validation ---
+    if not THEFUZZ_AVAILABLE:
+        raise RuntimeError("Fuzzy search is not available because the 'thefuzz' library is not installed.")
+    if not query_string:
+        raise ValueError("Parameter 'query_string' cannot be empty.")
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("Parameter 'limit' must be a positive integer.")
+    if not (isinstance(min_similarity_ratio, int) and 0 <= min_similarity_ratio <= 100):
+        raise ValueError("Parameter 'min_similarity_ratio' must be an integer between 0 and 100.")
+
+    # --- Data Retrieval and Aggregation (with deduplication) ---
+    if ANALYZED_PE_DATA is None:
+        raise RuntimeError("No analysis data found.")
+
+    all_strings = []
+    seen_string_values = set()
+    sources_to_check = string_sources or ['floss', 'basic_ascii']
+
+    # Process FLOSS first to prioritize its richer context
+    if 'floss' in sources_to_check and 'floss_analysis' in ANALYZED_PE_DATA:
+        floss_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {})
+        for str_type, str_list in floss_strings.items():
+            for item in str_list:
+                if isinstance(item, dict):
+                    str_val = item.get("string")
+                    if str_val and str_val not in seen_string_values:
+                        item_with_context = item.copy()
+                        item_with_context['source_type'] = f"floss_{str_type.replace('_strings', '')}"
+                        all_strings.append(item_with_context)
+                        seen_string_values.add(str_val)
+
+    # Process Basic ASCII strings
+    if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in ANALYZED_PE_DATA:
+        for item in ANALYZED_PE_DATA['basic_ascii_strings']:
+            if isinstance(item, dict):
+                str_val = item.get("string")
+                if str_val and str_val not in seen_string_values:
+                    all_strings.append(item)
+                    seen_string_values.add(str_val)
+
+    if not all_strings:
+        return []
+
+    # --- Fuzzy Matching Logic ---
+    matches = []
+    for item in all_strings:
+        target_string = item.get("string")
+        if not target_string:
+            continue
+        
+        # Calculate the similarity ratio
+        ratio = await asyncio.to_thread(fuzz.ratio, query_string, target_string)
+        
+        if ratio >= min_similarity_ratio:
+            match_item = item.copy()
+            match_item['similarity_ratio'] = ratio
+            matches.append(match_item)
+
+    # --- Sorting and Finalizing ---
+    matches.sort(key=lambda x: x.get('similarity_ratio', 0), reverse=True)
+
+    data_to_send = matches[:limit]
+    limit_info = "the 'limit' parameter or by adjusting 'min_similarity_ratio'"
+    return await _check_mcp_response_size(ctx, data_to_send, "fuzzy_search_strings", limit_info)
+
 @tool_decorator
 async def get_current_datetime(ctx: Context) -> Dict[str,str]:
     """
