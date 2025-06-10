@@ -542,7 +542,7 @@ PEFILE_VERSION_USED: Optional[str] = None
 PE_OBJECT_FOR_MCP: Optional[pefile.PE] = None # This will hold the single pre-loaded PE object
 
 # --- Constants ---
-PEID_USERDB_URL = "https://raw.githubusercontent.com/GerkNL/PEid/master/userdb.txt"
+PEID_USERDB_URL = "https://raw.githubusercontent.com/JameZUK/PeMCP/refs/heads/main/userdb.txt"
 DEFAULT_PEID_DB_PATH = SCRIPT_DIR / "userdb.txt"
 
 CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.1.0.zip" # Example, use a recent stable tag
