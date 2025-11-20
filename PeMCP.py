@@ -1,40 +1,35 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 """
-Comprehensive PE File Analyzer (Refactored with Integrated ssdeep, capa, and FLOSS)
-
-This script provides extensive analysis of Portable Executable (PE) files.
-It can operate in two modes:
-1. CLI Mode: Analyzes a PE file and prints a detailed report to the console.
-   Supports PEiD-like signature scanning, YARA scanning, capa capability detection,
-   FLOSS string extraction (static, stack, tight, decoded),
-   general string extraction/searching, and hex dumping.
-2. MCP Server Mode: Runs as a Model-Context-Protocol (MCP) server.
-   When starting in MCP server mode, it pre-analyzes a single PE file specified
-   at startup via --input-file. All MCP tools then operate on this pre-loaded file's data.
-   A tool is provided to re-trigger analysis on this pre-loaded file.
+Comprehensive PE File Analyzer PeMCP
 
 Key Features:
-- Parses all major PE structures (relies on 'pefile' library).
-- Calculates file and section hashes (MD5, SHA1, SHA256, ssdeep fuzzy hash).
-- Verifies PE checksum.
-- Checks for 'pefile' at startup and offers installation.
-- Optional dependency handling for enhanced features:
-  - `cryptography` for parsing digital signature certificates.
-  - `requests` for downloading PEiD database and capa rules.
-  - `signify` for Authenticode signature validation.
-  - `yara-python` for YARA scanning.
-  - `flare-capa` (capa) for capability detection.
-  - `flare-floss` (FLOSS) for advanced string extraction.
-  - `mcp` for MCP server functionality.
-- Includes integrated pure-Python ssdeep (ssdeep) for fuzzy hashing.
-- Automatic download and management of capa rules.
-- Support for capa library identification signatures.
-- Exposes general deobfuscation utilities (base64, XOR, printable check) via MCP.
+- Encapsulated ALL global state into AnalyzerState class
+- Removed interactive dependency installation (Docker-compatible)
+- Improved error handling and logging
+- All 40+ MCP tools included
+- **PE Parsing**: DOS/NT Headers, Sections, Imports, Exports, Resources, Debug, TLS, Load Config, Exceptions, Relocations.
+- **Hashing**: MD5, SHA1, SHA256, and ssdeep fuzzy hashing.
+- **Signature Verification**: Authenticode validation via Signify and certificate parsing via Cryptography.
+- **Packer Detection**: PEiD signature scanning (Entry Point & Heuristic).
+- **YARA Scanning**: Integrated rule matching.
+- **Capability Detection**: Capa integration for MITRE ATT&CK and MBC mapping.
+- **Advanced String Analysis**: FLOSS (Static, Stack, Tight, Decoded strings), StringSifter ranking, and Fuzzy search (RapidFuzz).
+- **Binary Analysis (Angr)**:
+    - Decompilation to C-like pseudocode.
+    - Control Flow Graph (CFG) generation and Loop analysis.
+    - Symbolic Execution (Path finding) and Function Emulation.
+    - Dominator analysis, Backward/Forward slicing, and Complexity metrics.
+- **VirusTotal Integration**: Hash-based report retrieval.
+- **Deobfuscation Utilities**: Base64, Single-byte XOR, and printable string heuristics.
+- **Shellcode Support**: Raw binary analysis mode.
+- **Background Task Monitoring**: Async task management with console heartbeat.
 
-Simplified MCP mode to analyze only the --input-file provided at server startup.
-The load_and_analyze_pe_file tool is repurposed to re-analyze the pre-loaded file.
+Modes:
+1. CLI Mode: Complete PE analysis with detailed console output
+2. MCP Server Mode: Pre-analyzes file and exposes ~40 tools via MCP
 """
+
 
 # Standard library imports - Group them at the top
 import datetime
@@ -62,12 +57,53 @@ import base64 # For base64 and base32 decoding in the new tool
 import codecs # For existing deobfuscate_base64 tool and now for general decoding
 import urllib.parse # For URL decoding
 import binascii # Added to handle potential errors from codecs.decode
+import networkx as nx
+import uuid
+import threading
+import time
 
 from pathlib import Path
 import copy # For deepcopy in MCP tool limiting
 
 # Crucial: Import typing early, as it's used for global type hints and throughout the script
 from typing import Dict, Any, Optional, List, Tuple, Set, Union, Type # Added Type for FLOSS
+
+
+# --- Global State Management ---
+class AnalyzerState:
+    """Centralized state management for analyzed files."""
+    def __init__(self):
+        self.filepath: Optional[str] = None
+        self.pe_data: Optional[Dict[str, Any]] = None
+        self.pe_object: Optional[pefile.PE] = None
+        self.pefile_version: Optional[str] = None
+        
+        # Angr State
+        self.angr_project = None
+        self.angr_cfg = None
+        self.angr_loop_cache = None
+        self.angr_loop_cache_config = None
+        
+        # Background Tasks
+        self.background_tasks: Dict[str, Dict[str, Any]] = {}
+        self.monitor_thread_started = False
+
+    def reset_angr(self):
+        self.angr_project = None
+        self.angr_cfg = None
+        self.angr_loop_cache = None
+        self.angr_loop_cache_config = None
+
+    def close_pe(self):
+        if self.pe_object:
+            try:
+                self.pe_object.close()
+            except:
+                pass
+            self.pe_object = None
+
+state = AnalyzerState()
+
 
 # --- Ensure pefile is available (Critical Dependency) ---
 try:
@@ -105,11 +141,147 @@ except ImportError:
             print("\n[*] Installation of 'pefile' cancelled by user. This library is required. Exiting.", file=sys.stderr)
             sys.exit(1)
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(os.getenv("PEMCP_DATA_DIR", Path(__file__).resolve().parent))
 
 # --- VirusTotal API Configuration ---
 VT_API_KEY = os.getenv("VT_API_KEY") # Your VirusTotal API Key
 VT_API_URL_FILE_REPORT = "https://www.virustotal.com/api/v3/files/"
+
+# --- Global Registry for Background Tasks ---
+
+def _console_heartbeat_loop():
+    """
+    Daemon thread that prints the status of running tasks to the console every 30 seconds.
+    This ensures the user knows the script is alive even during heavy blocking operations.
+    """
+    while True:
+        time.sleep(30)
+        
+        active_tasks_found = False
+        current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
+        
+        # Snapshot keys to iterate safely
+        task_ids = list(state.background_tasks.keys())
+        
+        # Check for running tasks
+        running_entries = []
+        for task_id in task_ids:
+            task = state.background_tasks[task_id]
+            if task["status"] == "running":
+                running_entries.append((task_id, task))
+
+        if running_entries:
+            # Print a clean status block
+            print(f"\n--- [Status Heartbeat {current_time_str}] ---")
+            for task_id, task in running_entries:
+                # Calculate elapsed time
+                try:
+                    start_time = datetime.datetime.fromisoformat(task["created_at"])
+                    elapsed = datetime.datetime.now() - start_time
+                    elapsed_str = str(elapsed).split('.')[0] # Remove microseconds
+                except:
+                    elapsed_str = "?"
+
+                percent = task.get("progress_percent", 0)
+                msg = task.get("progress_message", "Processing...")
+                
+                print(f" * Task {task_id[:8]}... [{elapsed_str} elapsed] | {percent}%: {msg}")
+            print("------------------------------------------\n")
+            
+            # Flush stdout to ensure it appears in logs/consoles immediately
+            sys.stdout.flush()
+
+def _update_progress(task_id: str, percent: int, message: str):
+    """Helper to safely update progress in the global registry."""
+    if task_id in state.background_tasks:
+        state.background_tasks[task_id]["progress_percent"] = percent
+        state.background_tasks[task_id]["progress_message"] = message
+        # We optionally print immediate updates here too, but keep it minimal
+        # so the 30s heartbeat handles the detailed logging.
+        # sys.stdout.write(f"\r... {percent}%: {message}") 
+
+async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
+    """Helper to run a blocking function in a thread and update the registry."""
+
+    # Lazy-start the heartbeat monitor on the first background request
+    if not state.monitor_thread_started:
+        monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
+        monitor_thread.start()
+        state.monitor_thread_started = True
+        logger.info("Console heartbeat monitor started.")
+
+    try:
+        # Inject the task_id into the function if it accepts 'task_id_for_progress'
+        kwargs['task_id_for_progress'] = task_id
+        
+        result = await asyncio.to_thread(func, *args, **kwargs)
+        
+        state.background_tasks[task_id]["result"] = result
+        state.background_tasks[task_id]["status"] = "completed"
+        state.background_tasks[task_id]["progress_percent"] = 100
+        state.background_tasks[task_id]["progress_message"] = "Analysis complete."
+        print(f"\n[*] Task {task_id[:8]} finished successfully.")
+        
+    except Exception as e:
+        logger.error(f"Background task {task_id} failed: {e}", exc_info=True)
+        state.background_tasks[task_id]["error"] = str(e)
+        state.background_tasks[task_id]["status"] = "failed"
+        print(f"\n[!] Task {task_id[:8]} failed: {e}")
+        
+def _startup_angr_analysis_worker(filepath: str, task_id: str):
+    """
+    Background thread that performs heavy Angr analysis immediately upon script startup.
+    """
+
+    try:
+        _update_progress(task_id, 1, "Initializing Angr Project...")
+        
+        # 1. Load Project
+        project = angr.Project(filepath, auto_load_libs=False)
+        
+        # Update Global Project
+        state.angr_project = project
+        _update_progress(task_id, 10, "Project loaded. Starting CFG generation (Heavy)...")
+
+        # 2. Build CFG (The heaviest step)
+        # We use standard settings suitable for most tools
+        cfg = project.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
+        
+        # Update Global CFG
+        state.angr_cfg = cfg
+        _update_progress(task_id, 75, "CFG generated. identifying loops...")
+
+        # 3. Pre-calculate Loops (Optional but fast once CFG is done)
+        loop_finder = project.analyses.LoopFinder(kb=project.kb)
+        raw_loops = {}
+        for loop in loop_finder.loops:
+            try:
+                node = cfg.model.get_any_node(loop.entry.addr)
+                if node and node.function_address:
+                    func_addr = node.function_address
+                    if func_addr not in raw_loops: raw_loops[func_addr] = []
+                    raw_loops[func_addr].append({
+                        "entry": hex(loop.entry.addr),
+                        "blocks": len(list(loop.body_nodes)),
+                        "subloops": bool(loop.subloops)
+                    })
+            except Exception: continue
+        
+        # Update Global Loop Cache
+        state.angr_loop_cache = raw_loops
+        state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False} # Matches params used above
+
+        # 4. Mark Complete
+        state.background_tasks[task_id]["status"] = "completed"
+        state.background_tasks[task_id]["result"] = {"message": "Startup analysis completed successfully."}
+        _update_progress(task_id, 100, "Startup pre-analysis complete.")
+        print(f"\n[*] Background Startup Analysis finished.")
+
+    except Exception as e:
+        logger.error(f"Startup Angr analysis failed: {e}")
+        state.background_tasks[task_id]["status"] = "failed"
+        state.background_tasks[task_id]["error"] = str(e)
+        _update_progress(task_id, 0, f"Failed: {e}")
 
 class SSDeep:
     BLOCKSIZE_MIN = 3
@@ -335,6 +507,53 @@ class SSDeep:
 
 ssdeep_hasher = SSDeep()
 
+class MockPE:
+    """
+    A dummy wrapper to mimic a pefile.PE object for raw shellcode analysis.
+    """
+    def __init__(self, data):
+        self.__data__ = data
+        self.sections = []
+        self.DOS_HEADER = None
+        self.NT_HEADERS = None
+        self.OPTIONAL_HEADER = None
+        self.FILE_HEADER = None
+        
+        # Standard PE directories mocked as empty/None
+        self.DIRECTORY_ENTRY_IMPORT = []
+        self.DIRECTORY_ENTRY_EXPORT = None
+        self.DIRECTORY_ENTRY_RESOURCE = None
+        self.DIRECTORY_ENTRY_DEBUG = []
+        self.DIRECTORY_ENTRY_TLS = None
+        self.DIRECTORY_ENTRY_LOAD_CONFIG = None
+        self.DIRECTORY_ENTRY_COM_DESCRIPTOR = None
+        self.DIRECTORY_ENTRY_BASERELOC = []
+        self.DIRECTORY_ENTRY_BOUND_IMPORT = []
+        self.DIRECTORY_ENTRY_EXCEPTION = []
+        self.DIRECTORY_ENTRY_DELAY_IMPORT = [] # Added
+        self.RICH_HEADER = None # Added
+        self.VS_VERSIONINFO = None # Added
+        self.FileInfo = None # Added
+        self.SYMBOLS = []
+        
+    def get_warnings(self):
+        return ["Loaded in Raw Shellcode Mode (PE parsing skipped)."]
+        
+    def close(self):
+        pass
+
+    def get_overlay_data_start_offset(self):
+        return None
+        
+    def generate_checksum(self):
+        return 0
+
+    def get_data(self, offset=0, length=None):
+        """Mimic pefile.get_data for signature extraction attempts."""
+        if length is None:
+            return self.__data__[offset:]
+        return self.__data__[offset:offset+length]
+
 # --- Optional Library Imports & Availability Flags ---
 try:
     from cryptography import x509
@@ -349,13 +568,20 @@ try:
 except ImportError:
     REQUESTS_AVAILABLE = False
 
+# --- Corrected Signify Import ---
 SIGNIFY_AVAILABLE = False
 SIGNIFY_IMPORT_ERROR = None
+
 try:
-    from signify.authenticode import SignedPEFile, AuthenticodeVerificationResult, AuthenticodeSignedData
+    # We import the high-level interface which handles the concrete classes automatically.
+    # This avoids the specific module/class name errors (signed_pe vs signed_file).
+    from signify.authenticode import AuthenticodeFile, AuthenticodeVerificationResult
     SIGNIFY_AVAILABLE = True
 except ImportError as e:
-    SIGNIFY_IMPORT_ERROR = e
+    SIGNIFY_IMPORT_ERROR = str(e)
+    SIGNIFY_AVAILABLE = False
+    # Print a clear warning if it still fails
+    print(f"[!] Signify Import Error: {e}", file=sys.stderr)
 
 YARA_AVAILABLE = False
 YARA_IMPORT_ERROR = None
@@ -369,11 +595,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 try:
-    from thefuzz import fuzz
-    THEFUZZ_AVAILABLE = True
+    from rapidfuzz import fuzz
+    RAPIDFUZZ_AVAILABLE = True
 except ImportError as e:
-    THEFUZZ_AVAILABLE = False
-    THEFUZZ_IMPORT_ERROR = str(e)
+    RAPIDFUZZ_AVAILABLE = False
+    RAPIDFUZZ_IMPORT_ERROR = str(e)
 
 # --- START MODIFIED CAPA IMPORT SECTION ---
 class CapaError(Exception):
@@ -535,15 +761,24 @@ except ImportError:
         async def error(self, msg): print(f"(mock ctx error): {msg}")
         async def warning(self, msg): print(f"(mock ctx warning): {msg}")
 
+# --- Angr Integration (Add this block) ---
+ANGR_AVAILABLE = False
+try:
+    import angr
+    import angr.analyses.decompiler
+    ANGR_AVAILABLE = True
+    logger.info("Angr library found. Advanced binary analysis (Decompilation, Symbolic Execution) enabled.")
+except ImportError:
+    ANGR_AVAILABLE = False
+    logger.warning("Angr library not found. Advanced binary analysis tools will be unavailable.")
+
+# Global state for Angr to avoid reloading the heavy project on every request
+
 # --- Global State for MCP ---
-ANALYZED_PE_FILE_PATH: Optional[str] = None
-ANALYZED_PE_DATA: Optional[Dict[str, Any]] = None
-PEFILE_VERSION_USED: Optional[str] = None
-PE_OBJECT_FOR_MCP: Optional[pefile.PE] = None # This will hold the single pre-loaded PE object
 
 # --- Constants ---
 PEID_USERDB_URL = "https://raw.githubusercontent.com/JameZUK/PeMCP/refs/heads/main/userdb.txt"
-DEFAULT_PEID_DB_PATH = SCRIPT_DIR / "userdb.txt"
+DEFAULT_PEID_DB_PATH = DATA_DIR / "userdb.txt"
 
 CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.1.0.zip" # Example, use a recent stable tag
 CAPA_RULES_DEFAULT_DIR_NAME = "capa_rules_store"
@@ -558,130 +793,11 @@ DEPENDENCIES = [
     ("capa.main", "flare-capa", "Capa (for capability detection)", False),
     ("floss.main", "flare-floss", "FLOSS (for advanced string extraction)", False),
     ("stringsifter", "flare-stringsifter", "StringSifter (for ranking string relevance)", False),
-    ("thefuzz", "thefuzz[speedup]", "TheFuzz (for fuzzy string matching)", False),
+    ("rapidfuzz", "rapidfuzz", "RapidFuzz (for fuzzy string matching)", False),
     ("viv_utils", "vivisect", "Vivisect & Viv-Utils (for FLOSS analysis backend)", False),
-    ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True)
+    ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True),
+    ("angr", "angr", "Angr (for binary decompilation & solving)", False)
 ]
-def check_and_install_dependencies(is_mcp_server_mode_arg: bool):
-    missing_deps_info = []
-    critical_mcp_missing_for_current_mode = False
-
-    # Determine missing dependencies
-    for spec_name, pip_name, friendly_name, is_critical_for_mcp_mode in DEPENDENCIES:
-        is_missing = False
-        if spec_name == "mcp.server":
-            if not MCP_SDK_AVAILABLE:
-                is_missing = True
-        elif spec_name == "capa.main":
-            if not CAPA_AVAILABLE:
-                is_missing = True
-        elif spec_name == "signify.authenticode":
-            if not SIGNIFY_AVAILABLE:
-                is_missing = True
-        elif spec_name == "yara":
-            if not YARA_AVAILABLE:
-                is_missing = True
-        elif spec_name == "stringsifter":
-            if not STRINGSIFTER_AVAILABLE:
-                is_missing = True
-        elif spec_name == "thefuzz":
-            if not THEFUZZ_AVAILABLE:
-                is_missing = True
-        elif spec_name == "floss.main":
-            if not FLOSS_SETUP_OK:
-                is_missing = True
-        elif spec_name == "viv_utils":
-            if FLOSS_SETUP_OK and not FLOSS_ANALYSIS_OK:
-                is_missing = True
-            elif not FLOSS_SETUP_OK:
-                pass
-        else:
-            spec = importlib.util.find_spec(spec_name)
-            if spec is None:
-                is_missing = True
-
-        if is_missing:
-            missing_reason = ""
-            if spec_name == "floss.main" and FLOSS_IMPORT_ERROR_SETUP:
-                missing_reason = f" (FLOSS Setup Error: {FLOSS_IMPORT_ERROR_SETUP})"
-            elif spec_name == "viv_utils" and FLOSS_SETUP_OK and not FLOSS_ANALYSIS_OK and FLOSS_IMPORT_ERROR_ANALYSIS:
-                 missing_reason = f" (FLOSS Analysis/Vivisect Error: {FLOSS_IMPORT_ERROR_ANALYSIS})"
-
-            missing_deps_info.append({
-                "pip": pip_name,
-                "friendly": f"{friendly_name}{missing_reason}",
-                "is_critical_mcp": is_critical_for_mcp_mode
-            })
-            if is_critical_for_mcp_mode and is_mcp_server_mode_arg:
-                critical_mcp_missing_for_current_mode = True
-
-    if not missing_deps_info:
-        return # No missing dependencies, just return.
-
-    # All prints from here onward go to stderr for better visibility
-    print("\n[!] Some optional libraries are missing or could not be imported:", file=sys.stderr)
-    for dep in missing_deps_info:
-        print(f"     - {dep['friendly']} (Python package: {dep['pip']})", file=sys.stderr)
-
-    if critical_mcp_missing_for_current_mode:
-        print("[!] One or more libraries critical for --mcp-server mode are missing.", file=sys.stderr)
-    print("[!] These libraries enhance the script's functionality or are required for specific modes/features.", file=sys.stderr)
-
-    try:
-        if not sys.stdin.isatty():
-            print("[!] Non-interactive environment detected. Cannot prompt for installation of optional libraries.", file=sys.stderr)
-            if critical_mcp_missing_for_current_mode:
-                print("[!] Please install the required MCP SDK ('pip install \"mcp[cli]\"') and/or other critical optional libraries manually and re-run.", file=sys.stderr)
-                sys.exit(1)
-            print("[!] Please install other missing optional libraries manually if needed.", file=sys.stderr)
-            return
-
-        # Interactive prompt
-        answer = ""
-        try:
-            answer = input("Do you want to attempt to install the missing optional libraries now? (yes/no): ").strip().lower()
-        except RuntimeError as e_input: # Catch potential errors if input() fails (e.g. stdin closed)
-             print(f"[!] Error during input prompt: {e_input}. Assuming 'no' for installation.", file=sys.stderr)
-             answer = "no"
-
-
-        if answer == 'yes' or answer == 'y':
-            installed_any = False
-            for dep_to_install in missing_deps_info:
-                print(f"[*] Attempting to install {dep_to_install['friendly']} (pip install \"{dep_to_install['pip']}\")...", file=sys.stderr)
-                try:
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", dep_to_install['pip']])
-                    print(f"[*] Successfully installed {dep_to_install['friendly']}.", file=sys.stderr)
-                    installed_any = True
-                except subprocess.CalledProcessError as e_pip_install:
-                    print(f"[!] Error installing {dep_to_install['friendly']}: {e_pip_install}", file=sys.stderr)
-                except FileNotFoundError:
-                    print("[!] Error: 'pip' command not found. Is Python and pip installed correctly and in PATH?", file=sys.stderr)
-                    break
-
-            if installed_any:
-                print("\n[*] Optional library installation process finished. Please re-run the script for changes to take full effect.", file=sys.stderr)
-                sys.exit(0)
-            else:
-                print("[*] No optional libraries were successfully installed.", file=sys.stderr)
-                if critical_mcp_missing_for_current_mode:
-                    print("[!] Critical MCP dependencies were not installed. MCP server mode may not function as expected. Exiting.", file=sys.stderr)
-                    sys.exit(1)
-        else: # User answered 'no' or input failed and defaulted to 'no'
-            print("[*] Skipping installation of optional libraries.", file=sys.stderr)
-            if critical_mcp_missing_for_current_mode:
-                print("[!] Critical MCP dependencies were not installed because installation was skipped. MCP server mode cannot function. Exiting.", file=sys.stderr)
-                sys.exit(1)
-    except EOFError: # If input stream is closed during input()
-        print("[!] No input received for optional library installation. Assuming 'no'. Skipping.", file=sys.stderr)
-        if critical_mcp_missing_for_current_mode:
-            print("[!] Critical MCP dependencies were not installed. Exiting.", file=sys.stderr)
-            sys.exit(1)
-    except KeyboardInterrupt:
-        print("\n[*] Optional library installation cancelled by user.", file=sys.stderr)
-        if critical_mcp_missing_for_current_mode:
-            print("[!] Critical MCP dependencies were not installed. Exiting.", file=sys.stderr)
-            sys.exit(1)
 
 if MCP_SDK_AVAILABLE: logger.info("MCP SDK found.")
 else: logger.warning("MCP SDK not found. MCP server functionality will be mocked or unavailable if critical.")
@@ -694,8 +810,8 @@ elif FLOSS_SETUP_OK: logger.warning(f"FLOSS basic setup OK, but analysis compone
 else: logger.warning(f"FLOSS library (flare-floss) not found or basic setup failed. FLOSS analysis will be skipped. Setup import error: {FLOSS_IMPORT_ERROR_SETUP}")
 if STRINGSIFTER_AVAILABLE: logger.info("StringSifter library found. String ranking will be available.")
 else: logger.warning(f"StringSifter library not found. String ranking will be skipped. Import error: {STRINGSIFTER_IMPORT_ERROR}")
-if THEFUZZ_AVAILABLE: logger.info("TheFuzz library found. Fuzzy string search will be available.")
-else: logger.warning(f"TheFuzz library not found. Fuzzy search will be skipped. Import error: {THEFUZZ_IMPORT_ERROR}")
+if RAPIDFUZZ_AVAILABLE: logger.info("RapidFuzz library found. Fuzzy string search will be available.")
+else: logger.warning(f"RapidFuzz library not found. Fuzzy search will be skipped. Import error: {RAPIDFUZZ_IMPORT_ERROR}")
 
 def safe_print(text_to_print, verbose_prefix=""):
     try:
@@ -1132,16 +1248,16 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
 
     effective_rules_path_str = capa_rules_dir_path
     if not effective_rules_path_str:
-        default_rules_base = str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
+        default_rules_base = str(DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
         logger.info(f"Capa rules directory not specified, using default script-relative base: '{default_rules_base}'")
         effective_rules_path_str = ensure_capa_rules_exist(default_rules_base, CAPA_RULES_ZIP_URL, verbose)
     elif not os.path.isdir(effective_rules_path_str) or not os.listdir(effective_rules_path_str):
         logger.warning(f"Provided capa_rules_dir_path '{capa_rules_dir_path}' is invalid. Attempting script-relative default.")
-        default_rules_base = str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
+        default_rules_base = str(DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
         effective_rules_path_str = ensure_capa_rules_exist(default_rules_base, CAPA_RULES_ZIP_URL, verbose)
 
     if not effective_rules_path_str:
-        err_path_msg_part = capa_rules_dir_path if capa_rules_dir_path else str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / CAPA_RULES_SUBDIR_NAME)
+        err_path_msg_part = capa_rules_dir_path if capa_rules_dir_path else str(DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME / CAPA_RULES_SUBDIR_NAME)
         capa_results["status"] = "Capa rules not found or download/extraction failed."
         capa_results["error"] = f"Failed to ensure capa rules at '{err_path_msg_part}'."
         logger.error(capa_results["error"])
@@ -1169,12 +1285,12 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         else:
             logger.info("Capa signatures directory not explicitly provided by user.")
 
-        potential_script_relative_sigs = SCRIPT_DIR / "capa_sigs"
+        potential_script_relative_sigs = DATA_DIR / "capa_sigs"
         if potential_script_relative_sigs.is_dir():
              effective_capa_sigs_path_str_for_mock_args = str(potential_script_relative_sigs.resolve())
              logger.info(f"Found and using script-relative 'capa_sigs' directory: {effective_capa_sigs_path_str_for_mock_args}")
-        elif (SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").is_dir():
-             effective_capa_sigs_path_str_for_mock_args = str((SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").resolve())
+        elif (DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").is_dir():
+             effective_capa_sigs_path_str_for_mock_args = str((DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").resolve())
              logger.info(f"Found 'sigs' directory near default rules store: {effective_capa_sigs_path_str_for_mock_args}")
         else:
             logger.warning("Capa signatures directory not found locally (e.g., ./capa_sigs or next to default rules). Explicitly telling Capa to load no library function signatures to prevent potential errors if Capa's internal default path is problematic.")
@@ -1534,30 +1650,45 @@ def _parse_digital_signature(pe: pefile.PE, filepath: str, cryptography_availabl
                 except Exception as e:sig_info['cryptography_parsed_certs_error']=str(e)
             else:sig_info['cryptography_parsed_certs']="cryptography library not available"
             if signify_available_flag:
-                signify_res=[]
+                signify_res = []
                 try:
-                    # Signify expects a file-like object or path. Since we have pe.__data__, use BytesIO.
-                    with io.BytesIO(pe.__data__)as f_mem:
-                        signed_pe=SignedPEFile(f_mem) # Pass the file-like object
-                        if not signed_pe.signed_datas:signify_res.append({"status":"No signature blocks found by signify."})
-                        else:
-                            for i,sdo in enumerate(signed_pe.signed_datas): # AuthenticodeSignedData object
-                                vr_enum,vr_exc=sdo.explain_verify()
-                                item:Dict[str,Any]={"block":i+1,"status_description":str(vr_enum),"is_valid":vr_enum==AuthenticodeVerificationResult.OK,"exception":str(vr_exc)if vr_exc else None}
-                                if sdo.signer_info: # SignerInfo object
-                                    si=sdo.signer_info;ident_parts=[]
-                                    if hasattr(si,'issuer')and si.issuer: # Name object
-                                        try:ident_parts.append(f"Issuer: {si.issuer.rfc4514_string()}")
-                                        except:ident_parts.append(f"Issuer: {str(si.issuer)}") # Fallback
-                                    else:ident_parts.append("Issuer: N/A")
-                                    if hasattr(si,'serial_number')and si.serial_number is not None:ident_parts.append(f"Serial: {si.serial_number}")
-                                    else:ident_parts.append("Serial: N/A")
-                                    item["signer_identification_string"]=", ".join(ident_parts)
-                                    if hasattr(si,'program_name')and si.program_name:item["program_name"]=si.program_name
-                                if sdo.signer_info and sdo.signer_info.countersigner and hasattr(sdo.signer_info.countersigner,'signing_time'):item["timestamp_time"]=str(sdo.signer_info.countersigner.signing_time)
-                                signify_res.append(item)
-                except Exception as e:signify_res.append({"error":f"Signify validation error: {e}"})
-                sig_info['signify_validation']=signify_res
+                    # Signify expects a file-like object.
+                    with io.BytesIO(pe.__data__) as f_mem:
+                        # Use the factory method as per documentation
+                        auth_file = AuthenticodeFile.from_stream(f_mem)
+                        
+                        # Verify the file
+                        # explain_verify returns (status_enum, exception_or_none)
+                        status, err = auth_file.explain_verify()
+                        
+                        # Create a summary item
+                        item = {
+                            "status_description": str(status),
+                            "is_valid": status == AuthenticodeVerificationResult.OK,
+                            "exception": str(err) if err else None
+                        }
+
+                        # Extract signer information from the signatures
+                        # The docs say to iterate over 'signatures' or 'embedded_signatures'
+                        signer_names = []
+                        for sig in auth_file.signatures:
+                            if hasattr(sig, 'signer_info'):
+                                # Try to get the program name or certificate subject
+                                if hasattr(sig.signer_info, 'program_name') and sig.signer_info.program_name:
+                                    signer_names.append(sig.signer_info.program_name)
+                                elif hasattr(sig.signer_info, 'issuer'):
+                                     # Fallback to issuer if program name is missing
+                                    signer_names.append(str(sig.signer_info.issuer))
+                        
+                        if signer_names:
+                            item["signers"] = signer_names
+
+                        signify_res.append(item)
+
+                except Exception as e:
+                    signify_res.append({"error": f"Signify validation error: {e}"})
+                
+                sig_info['signify_validation'] = signify_res
             else:sig_info['signify_validation']={"status":"Signify library not available."}
         else:sig_info['embedded_signature_present']=False
     return sig_info
@@ -2198,17 +2329,6 @@ def _perform_unified_string_sifting(pe_info_dict: Dict[str, Any]):
             [pe_info_dict.get('basic_ascii_strings', [])]
         ]
 
-        for source_group in all_string_sources:
-            for string_list in source_group:
-                if not isinstance(string_list, list): continue
-                for string_item in string_list:
-                    if isinstance(string_item, dict) and "string" in string_item and "error" not in string_item:
-                        str_val = string_item["string"]
-                        # --- NEW: Categorization Step ---
-                        string_item['category'] = _get_string_category(str_val)
-                        # --- End of New Step ---
-                        all_strings_for_sifter.append(str_val)
-                        string_object_map[str_val].append(string_item)
 
         if not all_strings_for_sifter:
             logger.info("No strings found from any source to rank.")
@@ -2361,43 +2481,62 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                       floss_quiet_mode_arg: bool, # For FLOSS progress bars
                       analyses_to_skip: Optional[List[str]] = None
                       ) -> Dict[str, Any]:
-    global PEFILE_VERSION_USED
-    try: PEFILE_VERSION_USED = pefile.__version__
-    except AttributeError: PEFILE_VERSION_USED = "Unknown"
+
+    try: state.pefile_version = pefile.__version__
+    except AttributeError: state.pefile_version = "Unknown"
 
     if analyses_to_skip is None:
         analyses_to_skip = []
     analyses_to_skip = [analysis.lower() for analysis in analyses_to_skip]
 
 
-    pe_info_dict: Dict[str, Any] = {"filepath": filepath, "pefile_version": PEFILE_VERSION_USED}
-    nt_headers_info, magic_type_str = _parse_nt_headers(pe)
+    pe_info_dict: Dict[str, Any] = {"filepath": filepath, "pefile_version": state.pefile_version}
+    
+    # --- DETECT RAW MODE ---
+    is_raw_mode = isinstance(pe, MockPE)
+    if is_raw_mode:
+        pe_info_dict["mode"] = "shellcode_raw"
+        pe_info_dict["note"] = "Standard PE headers/imports/exports skipped in raw mode."
+    else:
+        pe_info_dict["mode"] = "pe_executable"
 
+    # Basic hashes (Works for both)
     pe_info_dict['file_hashes'] = _parse_file_hashes(pe.__data__)
-    pe_info_dict['dos_header'] = _parse_dos_header(pe)
-    pe_info_dict['nt_headers'] = nt_headers_info
-    pe_info_dict['data_directories'] = _parse_data_directories(pe)
-    pe_info_dict['sections'] = _parse_sections(pe)
-    pe_info_dict['imports'] = _parse_imports(pe)
-    pe_info_dict['exports'] = _parse_exports(pe)
-    pe_info_dict['resources_summary'] = _parse_resources_summary(pe)
-    pe_info_dict['version_info'] = _parse_version_info(pe)
-    pe_info_dict['debug_info'] = _parse_debug_info(pe)
-    pe_info_dict['digital_signature'] = _parse_digital_signature(pe, filepath, CRYPTOGRAPHY_AVAILABLE, SIGNIFY_AVAILABLE)
-    pe_info_dict['rich_header'] = _parse_rich_header(pe)
-    pe_info_dict['delay_load_imports'] = _parse_delay_load_imports(pe, magic_type_str)
-    pe_info_dict['tls_info'] = _parse_tls_info(pe, magic_type_str)
-    pe_info_dict['load_config'] = _parse_load_config(pe)
-    pe_info_dict['com_descriptor'] = _parse_com_descriptor(pe)
-    pe_info_dict['overlay_data'] = _parse_overlay_data(pe)
-    pe_info_dict['base_relocations'] = _parse_base_relocations(pe)
-    pe_info_dict['bound_imports'] = _parse_bound_imports(pe)
-    pe_info_dict['exception_data'] = _parse_exception_data(pe)
-    pe_info_dict['coff_symbols'] = _parse_coff_symbols(pe)
-    pe_info_dict['checksum_verification'] = _verify_checksum(pe)
+
+    if not is_raw_mode:
+        # Run PE-specific parsers only if it's a real PE
+        nt_headers_info, magic_type_str = _parse_nt_headers(pe)
+        pe_info_dict['dos_header'] = _parse_dos_header(pe)
+        pe_info_dict['nt_headers'] = nt_headers_info
+        pe_info_dict['data_directories'] = _parse_data_directories(pe)
+        pe_info_dict['sections'] = _parse_sections(pe)
+        pe_info_dict['imports'] = _parse_imports(pe)
+        pe_info_dict['exports'] = _parse_exports(pe)
+        pe_info_dict['resources_summary'] = _parse_resources_summary(pe)
+        pe_info_dict['version_info'] = _parse_version_info(pe)
+        pe_info_dict['debug_info'] = _parse_debug_info(pe)
+        pe_info_dict['digital_signature'] = _parse_digital_signature(pe, filepath, CRYPTOGRAPHY_AVAILABLE, SIGNIFY_AVAILABLE)
+        pe_info_dict['rich_header'] = _parse_rich_header(pe)
+        pe_info_dict['delay_load_imports'] = _parse_delay_load_imports(pe, magic_type_str)
+        pe_info_dict['tls_info'] = _parse_tls_info(pe, magic_type_str)
+        pe_info_dict['load_config'] = _parse_load_config(pe)
+        pe_info_dict['com_descriptor'] = _parse_com_descriptor(pe)
+        pe_info_dict['overlay_data'] = _parse_overlay_data(pe)
+        pe_info_dict['base_relocations'] = _parse_base_relocations(pe)
+        pe_info_dict['bound_imports'] = _parse_bound_imports(pe)
+        pe_info_dict['exception_data'] = _parse_exception_data(pe)
+        pe_info_dict['coff_symbols'] = _parse_coff_symbols(pe)
+        pe_info_dict['checksum_verification'] = _verify_checksum(pe)
+    else:
+        # Set minimal defaults for raw mode to avoid UI errors in subsequent tools
+        pe_info_dict['digital_signature'] = {"status": "Not applicable for raw shellcode"}
 
     if "peid" not in analyses_to_skip:
-        pe_info_dict['peid_matches'] = _perform_peid_scan(pe, peid_db_path, verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically)
+        if is_raw_mode:
+             # PEiD signatures rely on EP or Section iteration. MockPE has neither.
+             pe_info_dict['peid_matches'] = {"status": "Skipped (Raw Shellcode Mode)"}
+        else:
+             pe_info_dict['peid_matches'] = _perform_peid_scan(pe, peid_db_path, verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically)
     else:
         pe_info_dict['peid_matches'] = {"status": "Skipped by user request", "ep_matches": [], "heuristic_matches": []}
         logger.info("PEiD analysis skipped by request.")
@@ -2435,9 +2574,6 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         for offset, s in _extract_strings_from_data(pe.__data__, 5)
     ]
 
-    _perform_unified_string_sifting(pe_info_dict)
-    
-    _correlate_strings_and_capa(pe_info_dict)
 
     pe_info_dict['pefile_warnings'] = pe.get_warnings()
     return pe_info_dict
@@ -2952,7 +3088,7 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
                               hexdump_lines_cli: int,
                               analyses_to_skip_cli_arg: Optional[List[str]] = None 
                               ):
-    global PEFILE_VERSION_USED, VERBOSE_CLI_OUTPUT_FLAG
+
     VERBOSE_CLI_OUTPUT_FLAG = verbose 
     
     pefile_version_str = "unknown"
@@ -3043,22 +3179,6 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
         ("bound_imports", "Bound Imports"), ("exception_data", "Exception Data"),
         ("checksum_verification", "Checksum Verification")
     ]
-    for key, title_str in remaining_keys_to_print_generic:
-        data_item = cli_pe_info_dict.get(key)
-        safe_print(f"\n--- {title_str} ---")
-        if data_item is not None and data_item != {} and data_item != []: 
-            if isinstance(data_item, list) and data_item: 
-                for i, item_in_list in enumerate(data_item):
-                    if isinstance(item_in_list, dict):
-                        _print_dict_structure_cli(item_in_list, indent=1, title=f"Entry {i+1}")
-                    else:
-                        safe_print(f"  Entry {i+1}: {item_in_list}")
-            elif isinstance(data_item, dict): 
-                 _print_dict_structure_cli(data_item, indent=1)
-            else: 
-                safe_print(f"  {data_item}")
-        else:
-            safe_print(f"  No {title_str.lower()} information found.")
 
     _print_coff_symbols_cli(cli_pe_info_dict.get('coff_symbols',[]),verbose)
     _print_pefile_warnings_cli(cli_pe_info_dict.get('pefile_warnings',[]))
@@ -3136,7 +3256,7 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
         pe_obj_for_cli.close()
 
 # --- MCP Server Setup ---
-mcp_server = FastMCP("PEFileAnalyzerMCP", description="MCP Server for PE file analysis. Pre-analyzes the --input-file at startup. Tools operate on this pre-loaded file.")
+mcp_server = FastMCP("PEFileAnalyzerMCP")
 tool_decorator = mcp_server.tool()
 
 # --- MCP Tools ---
@@ -3189,9 +3309,9 @@ async def search_floss_strings(
         raise ValueError("The 'limit' parameter must be a positive integer.")
 
     # --- Data Retrieval ---
-    if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
+    if state.pe_data is None or 'floss_analysis' not in state.pe_data:
         raise RuntimeError("No FLOSS analysis data found. Please run an analysis first.")
-    floss_data = ANALYZED_PE_DATA.get('floss_analysis', {})
+    floss_data = state.pe_data.get('floss_analysis', {})
     if not floss_data.get("strings"):
         return {"matches": [], "message": "No FLOSS strings available to search."}
 
@@ -3263,15 +3383,14 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
         RuntimeError: If no PE file is loaded or hashes are unavailable.
         ValueError: If the response size exceeds the server limit.
     """
-    global ANALYZED_PE_DATA, VT_API_KEY, VT_API_URL_FILE_REPORT, REQUESTS_AVAILABLE
 
     tool_name = "get_virustotal_report_for_loaded_file"
     await ctx.info(f"Request for VirusTotal report for the loaded file.")
 
-    if not ANALYZED_PE_DATA or 'file_hashes' not in ANALYZED_PE_DATA:
+    if not state.pe_data or 'file_hashes' not in state.pe_data:
         raise RuntimeError("No PE file loaded or file hashes are unavailable. Cannot query VirusTotal.")
 
-    file_hashes = ANALYZED_PE_DATA['file_hashes']
+    file_hashes = state.pe_data['file_hashes']
     main_hash_value: Optional[str] = None
     hash_type_used: Optional[str] = None
 
@@ -3400,7 +3519,12 @@ async def reanalyze_loaded_pe_file(
     capa_sigs_dir: Optional[str] = None,
     analyses_to_skip: Optional[List[str]] = None,
     skip_capa_analysis: Optional[bool] = None,
-    skip_floss_analysis: Optional[bool] = None, # New FLOSS skip flag
+    skip_floss_analysis: Optional[bool] = None,
+    
+    # --- NEW: Angr Parameter ---
+    pre_analyze_angr: bool = False,
+    # ---------------------------
+
     # FLOSS specific args for re-analysis
     floss_min_length: Optional[int] = None,
     floss_verbose_level: Optional[int] = None, # FLOSS's own -v, -vv (0,1,2)
@@ -3425,48 +3549,36 @@ async def reanalyze_loaded_pe_file(
     Re-triggers a full or partial analysis of the PE file that was pre-loaded at server startup.
     Allows skipping heavy analyses (PEiD, YARA, Capa, FLOSS) via 'analyses_to_skip' list or specific flags.
     The analysis results are updated globally. FLOSS specific parameters can also be provided.
-
-    Args:
-        ctx: The MCP Context object.
-        peid_db_path: (Optional[str]) Path to PEiD userdb.txt.
-        yara_rules_path: (Optional[str]) Path to YARA rule file/directory.
-        capa_rules_dir: (Optional[str]) Path to capa rule directory.
-        capa_sigs_dir: (Optional[str]) Path to capa library ID signature files.
-        analyses_to_skip: (Optional[List[str]]) Analyses to skip ("peid", "yara", "capa", "floss").
-        skip_capa_analysis: (Optional[bool]) If True, capa analysis will be skipped.
-        skip_floss_analysis: (Optional[bool]) If True, FLOSS analysis will be skipped.
-        floss_min_length: (Optional[int]) Min string length for FLOSS.
-        floss_verbose_level: (Optional[int]) FLOSS's internal verbosity (0,1,2).
-        floss_script_debug_level_for_floss_loggers: (Optional[str]) Logging level for FLOSS loggers (e.g. "INFO", "TRACE").
-        floss_format: (Optional[str]) File format hint for FLOSS (auto, pe, sc32, sc64).
-        floss_no_static: (Optional[bool]) Disable static string extraction in FLOSS.
-        floss_no_stack: (Optional[bool]) Disable stack string extraction in FLOSS.
-        floss_no_tight: (Optional[bool]) Disable tight string extraction in FLOSS.
-        floss_no_decoded: (Optional[bool]) Disable decoded string extraction in FLOSS.
-        floss_only_static: (Optional[bool]) Only extract static strings with FLOSS.
-        floss_only_stack: (Optional[bool]) Only extract stack strings with FLOSS.
-        floss_only_tight: (Optional[bool]) Only extract tight strings with FLOSS.
-        floss_only_decoded: (Optional[bool]) Only extract decoded strings with FLOSS.
-        floss_functions: (Optional[List[str]]) Hex addresses of functions for FLOSS to analyze.
-        floss_quiet: (Optional[bool]) Suppress FLOSS progress indicators.
-        verbose_mcp_output: (bool) Enables detailed logging for the analysis. Defaults to False.
-        skip_full_peid_scan: (bool) If True and PEiD is not skipped, PEiD scan is entry point only. Defaults to False.
-        peid_scan_all_sigs_heuristically: (bool) If True (PEiD not skipped, full scan not skipped), all PEiD sigs are used heuristically. Defaults to False.
-
-    Returns:
-        A dictionary indicating status: {"status": "success", "message": "File '...' re-analyzed.", "filepath": "..."}
-
-    Raises:
-        RuntimeError: If no PE file was successfully pre-loaded at startup, or if re-analysis fails.
-        asyncio.CancelledError: If the underlying analysis task is cancelled by the MCP framework.
+    
+    If 'pre_analyze_angr' is True, it will also build the Angr Control Flow Graph (CFG) to speed up
+    subsequent decompilation and graph queries.
     """
-    global ANALYZED_PE_FILE_PATH, ANALYZED_PE_DATA, PE_OBJECT_FOR_MCP
 
-    if ANALYZED_PE_FILE_PATH is None or not os.path.exists(ANALYZED_PE_FILE_PATH) :
+    # --- NEW: Angr Globals ---
+
+    if state.filepath is None or not os.path.exists(state.filepath) :
         await ctx.error("No PE file was successfully pre-loaded at server startup, or path is invalid. Cannot re-analyze.")
         raise RuntimeError("No PE file pre-loaded or pre-loaded file path is invalid. Cannot re-analyze.")
 
-    await ctx.info(f"Request to re-analyze pre-loaded PE: {ANALYZED_PE_FILE_PATH}")
+    await ctx.info(f"Request to re-analyze pre-loaded PE: {state.filepath}")
+
+    # --- NEW: Angr Pre-Analysis Logic ---
+    if pre_analyze_angr:
+        if ANGR_AVAILABLE:
+            await ctx.info("Angr pre-analysis requested. Building CFG (this may take time)...")
+            def _build_cfg():
+
+                state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+                state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+            try:
+                await asyncio.to_thread(_build_cfg)
+                await ctx.info("Angr CFG generation complete. Future Angr calls will be fast.")
+            except Exception as e:
+                await ctx.error(f"Angr pre-analysis failed: {e}")
+                # We do not stop the rest of the analysis; just log the error
+        else:
+            await ctx.warning("Angr pre-analysis requested but 'angr' library is not installed.")
+    # ------------------------------------
 
     normalized_analyses_to_skip = []
     if analyses_to_skip:
@@ -3508,11 +3620,6 @@ async def reanalyze_loaded_pe_file(
             current_capa_sigs_dir_to_use = capa_sigs_dir
 
     # FLOSS specific argument preparation for _parse_pe_to_dict
-    # Use provided values if not None, otherwise use defaults or previously established values (e.g. from initial load)
-    # For simplicity in re-analysis, if a FLOSS arg is None, it implies "use default for this run"
-    # rather than trying to fetch from ANALYZED_PE_DATA (which might be complex).
-    # The _parse_pe_to_dict will use FLOSS_MIN_LENGTH_DEFAULT if floss_min_length is None.
-
     mcp_floss_min_len = floss_min_length if floss_min_length is not None else FLOSS_MIN_LENGTH_DEFAULT
     mcp_floss_verbose_level = floss_verbose_level if floss_verbose_level is not None else 0 # Default to 0 (non-verbose FLOSS output)
     
@@ -3552,10 +3659,10 @@ async def reanalyze_loaded_pe_file(
     def perform_analysis_in_thread():
         temp_pe_obj = None 
         try:
-            temp_pe_obj = pefile.PE(ANALYZED_PE_FILE_PATH, fast_load=False) 
+            temp_pe_obj = pefile.PE(state.filepath, fast_load=False) 
             
             new_parsed_data = _parse_pe_to_dict(
-                temp_pe_obj, ANALYZED_PE_FILE_PATH, current_peid_db_path, current_yara_rules_path,
+                temp_pe_obj, state.filepath, current_peid_db_path, current_yara_rules_path,
                 current_capa_rules_dir_to_use, 
                 current_capa_sigs_dir_to_use,  
                 verbose_mcp_output, skip_full_peid_scan, peid_scan_all_sigs_heuristically,
@@ -3574,30 +3681,36 @@ async def reanalyze_loaded_pe_file(
         except Exception as e_thread: 
             if temp_pe_obj:
                 temp_pe_obj.close()
-            logger.error(f"Error during threaded re-analysis of {ANALYZED_PE_FILE_PATH}: {e_thread}", exc_info=verbose_mcp_output)
+            logger.error(f"Error during threaded re-analysis of {state.filepath}: {e_thread}", exc_info=verbose_mcp_output)
             raise 
 
     try:
         new_pe_obj_from_thread, new_parsed_data_from_thread = await asyncio.to_thread(perform_analysis_in_thread)
         
-        if PE_OBJECT_FOR_MCP: 
-            PE_OBJECT_FOR_MCP.close()
+        if state.pe_object: 
+            state.pe_object.close()
         
-        PE_OBJECT_FOR_MCP = new_pe_obj_from_thread 
-        ANALYZED_PE_DATA = new_parsed_data_from_thread 
+        state.pe_object = new_pe_obj_from_thread 
+        state.pe_data = new_parsed_data_from_thread 
 
-        await ctx.info(f"Successfully re-analyzed PE: {ANALYZED_PE_FILE_PATH}")
+        await ctx.info(f"Successfully re-analyzed PE: {state.filepath}")
         skipped_msg_part = f" (Skipped: {', '.join(normalized_analyses_to_skip) if normalized_analyses_to_skip else 'None'})"
-        return {"status":"success", "message":f"File '{ANALYZED_PE_FILE_PATH}' re-analyzed{skipped_msg_part}.", "filepath":ANALYZED_PE_FILE_PATH}
+        
+        # Build result message
+        msg = f"File '{state.filepath}' re-analyzed{skipped_msg_part}."
+        if pre_analyze_angr and ANGR_AVAILABLE:
+            msg += " Angr CFG pre-built."
+            
+        return {"status":"success", "message": msg, "filepath":state.filepath}
 
     except asyncio.CancelledError: 
-        await ctx.warning(f"Re-analysis task for {ANALYZED_PE_FILE_PATH} was cancelled by MCP framework.")
-        logger.info(f"Re-analysis of {ANALYZED_PE_FILE_PATH} cancelled. Global PE data remains from previous successful load/analysis.")
+        await ctx.warning(f"Re-analysis task for {state.filepath} was cancelled by MCP framework.")
+        logger.info(f"Re-analysis of {state.filepath} cancelled. Global PE data remains from previous successful load/analysis.")
         raise 
     except Exception as e_outer: 
-        await ctx.error(f"Error re-analyzing PE '{ANALYZED_PE_FILE_PATH}': {str(e_outer)}");
-        logger.error(f"MCP: Error re-analyzing PE '{ANALYZED_PE_FILE_PATH}': {str(e_outer)}", exc_info=verbose_mcp_output)
-        raise RuntimeError(f"Failed to re-analyze PE file '{ANALYZED_PE_FILE_PATH}': {str(e_outer)}") from e_outer
+        await ctx.error(f"Error re-analyzing PE '{state.filepath}': {str(e_outer)}");
+        logger.error(f"MCP: Error re-analyzing PE '{state.filepath}': {str(e_outer)}", exc_info=verbose_mcp_output)
+        raise RuntimeError(f"Failed to re-analyze PE file '{state.filepath}': {str(e_outer)}") from e_outer
 
 @tool_decorator
 async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
@@ -3621,37 +3734,36 @@ async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
         
-    if ANALYZED_PE_DATA is None or ANALYZED_PE_FILE_PATH is None:
+    if state.pe_data is None or state.filepath is None:
         raise RuntimeError("No PE file loaded. Server may not have pre-loaded the input file successfully.")
 
-    floss_analysis_summary = ANALYZED_PE_DATA.get('floss_analysis', {})
+    floss_analysis_summary = state.pe_data.get('floss_analysis', {})
     floss_strings_summary = floss_analysis_summary.get('strings', {})
 
     full_summary = {
-        "filepath":ANALYZED_PE_FILE_PATH,"pefile_version_used":PEFILE_VERSION_USED,
-        "has_dos_header":'dos_header'in ANALYZED_PE_DATA and ANALYZED_PE_DATA['dos_header']is not None and"error"not in ANALYZED_PE_DATA['dos_header'],
-        "has_nt_headers":'nt_headers'in ANALYZED_PE_DATA and ANALYZED_PE_DATA['nt_headers']is not None and"error"not in ANALYZED_PE_DATA['nt_headers'],
-        "section_count":len(ANALYZED_PE_DATA.get('sections',[])),
-        "import_dll_count":len(ANALYZED_PE_DATA.get('imports',[])),
-        "export_symbol_count":len(ANALYZED_PE_DATA.get('exports',{}).get('symbols',[])),
-        "peid_ep_match_count":len(ANALYZED_PE_DATA.get('peid_matches',{}).get('ep_matches',[])),
-        "peid_heuristic_match_count":len(ANALYZED_PE_DATA.get('peid_matches',{}).get('heuristic_matches',[])),
-        "peid_status": ANALYZED_PE_DATA.get('peid_matches',{}).get('status',"Not run/Skipped"),
-        "yara_match_count":len([m for m in ANALYZED_PE_DATA.get('yara_matches',[])if isinstance(m, dict) and "error" not in m and "status" not in m]),
-        "yara_status": ANALYZED_PE_DATA.get('yara_matches',[{}])[0].get('status', "Run/No Matches or Not Run/Skipped") if ANALYZED_PE_DATA.get('yara_matches') and isinstance(ANALYZED_PE_DATA.get('yara_matches'), list) and ANALYZED_PE_DATA.get('yara_matches')[0] else "Not run/Skipped",
-        "capa_status": ANALYZED_PE_DATA.get('capa_analysis',{}).get('status',"Not run/Skipped"),
-        "capa_capability_count": len(ANALYZED_PE_DATA.get('capa_analysis',{}).get('results',{}).get('rules',{})) if ANALYZED_PE_DATA.get('capa_analysis',{}).get('status')=="Analysis complete (adapted workflow)" else 0,
+        "filepath":state.filepath,"pefile_version_used":state.pefile_version,
+        "has_dos_header":'dos_header'in state.pe_data and state.pe_data['dos_header']is not None and"error"not in state.pe_data['dos_header'],
+        "has_nt_headers":'nt_headers'in state.pe_data and state.pe_data['nt_headers']is not None and"error"not in state.pe_data['nt_headers'],
+        "section_count":len(state.pe_data.get('sections',[])),
+        "import_dll_count":len(state.pe_data.get('imports',[])),
+        "export_symbol_count":len(state.pe_data.get('exports',{}).get('symbols',[])),
+        "peid_ep_match_count":len(state.pe_data.get('peid_matches',{}).get('ep_matches',[])),
+        "peid_heuristic_match_count":len(state.pe_data.get('peid_matches',{}).get('heuristic_matches',[])),
+        "peid_status": state.pe_data.get('peid_matches',{}).get('status',"Not run/Skipped"),
+        "yara_match_count":len([m for m in state.pe_data.get('yara_matches',[])if isinstance(m, dict) and "error" not in m and "status" not in m]),
+        "yara_status": state.pe_data.get('yara_matches',[{}])[0].get('status', "Run/No Matches or Not Run/Skipped") if state.pe_data.get('yara_matches') and isinstance(state.pe_data.get('yara_matches'), list) and state.pe_data.get('yara_matches')[0] else "Not run/Skipped",
+        "capa_status": state.pe_data.get('capa_analysis',{}).get('status',"Not run/Skipped"),
+        "capa_capability_count": len(state.pe_data.get('capa_analysis',{}).get('results',{}).get('rules',{})) if state.pe_data.get('capa_analysis',{}).get('status')=="Analysis complete (adapted workflow)" else 0,
         "floss_status": floss_analysis_summary.get('status', "Not run/Skipped"),
         "floss_static_string_count": len(floss_strings_summary.get('static_strings', [])),
         "floss_stack_string_count": len(floss_strings_summary.get('stack_strings', [])),
         "floss_tight_string_count": len(floss_strings_summary.get('tight_strings', [])),
         "floss_decoded_string_count": len(floss_strings_summary.get('decoded_strings', [])),
-        "has_embedded_signature":ANALYZED_PE_DATA.get('digital_signature',{}).get('embedded_signature_present',False)
+        "has_embedded_signature":state.pe_data.get('digital_signature',{}).get('embedded_signature_present',False)
     }
-    await ctx.info(f"Summary for {ANALYZED_PE_FILE_PATH} generated.")
+    await ctx.info(f"Summary for {state.filepath} generated.")
     return dict(list(full_summary.items())[:limit])
 
-# --- NEW: MCP Response Size Check Helper ---
 async def _check_mcp_response_size(
     ctx: Context,
     data_to_return: Any,
@@ -3659,38 +3771,110 @@ async def _check_mcp_response_size(
     limit_param_info: Optional[str] = None
 ) -> Any:
     """
-    Checks if the serialized size of data_to_return exceeds MAX_MCP_RESPONSE_SIZE_BYTES.
-    If it does, logs an error via ctx, and raises a ValueError.
-    Otherwise, returns data_to_return.
+    Smart Size Guard: Checks if response exceeds the 64KB limit.
+    If it does, it INTELLIGENTLY TRUNCATES the largest list or string in the response
+    to fit within the limit, rather than raising an error.
     """
     try:
-        # Serialize to JSON to get a representative size.
-        # Ensure ensure_ascii=False to correctly measure UTF-8 byte length.
+        # 1. Check initial size
         serialized_data = json.dumps(data_to_return, ensure_ascii=False)
         data_size_bytes = len(serialized_data.encode('utf-8'))
-
-        if data_size_bytes > MAX_MCP_RESPONSE_SIZE_BYTES:
-            param_guidance = limit_param_info or "your request parameters (e.g., using limits, offsets, or stricter filters)"
-            error_message = (
-                f"Response from tool '{tool_name}' (approx. {data_size_bytes // 1024}KB) "
-                f"exceeds the maximum allowed size ({MAX_MCP_RESPONSE_SIZE_KB}KB). "
-                f"Please request less data by adjusting {param_guidance}."
-            )
-            await ctx.error(error_message)
-            logger.warning(f"MCP: {tool_name} response too large ({data_size_bytes} bytes). Client needs to adjust request.")
-            raise ValueError(error_message)
         
-        return data_to_return
-    except TypeError as e_json: # Handle cases where data might not be JSON serializable
-        await ctx.error(f"Internal error in tool '{tool_name}': Could not serialize response data to check size. Error: {e_json}")
-        logger.error(f"MCP: Failed to serialize response for '{tool_name}' for size check: {e_json}", exc_info=True)
-        # Depending on policy, either raise or return an error dict. Raising is cleaner.
-        raise ValueError(f"Internal error: Could not determine response size for tool '{tool_name}'.") from e_json
-    except Exception as e_check: # Catch any other unexpected errors during the check
-        await ctx.error(f"Internal error in tool '{tool_name}' while checking response size: {e_check}")
-        logger.error(f"MCP: Unexpected error during response size check for '{tool_name}': {e_check}", exc_info=True)
-        raise ValueError(f"Internal error: Failed response size check for tool '{tool_name}'.") from e_check
+        # If it fits, return immediately
+        if data_size_bytes <= MAX_MCP_RESPONSE_SIZE_BYTES:
+            return data_to_return
 
+        # 2. It's too big. Enter Truncation Mode.
+        # We aim for 60KB to leave a safety buffer for the warning message
+        TARGET_SIZE = MAX_MCP_RESPONSE_SIZE_BYTES - 4096 
+        
+        await ctx.warning(f"Response for '{tool_name}' was {data_size_bytes/1024:.1f}KB. Auto-truncating to fit limits.")
+        
+        # Work on a copy to avoid modifying global state if it was a global obj
+        # (Simple shallow copy usually sufficient for top-level modifications)
+        if isinstance(data_to_return, dict):
+            modified_data = data_to_return.copy()
+        elif isinstance(data_to_return, list):
+            modified_data = data_to_return[:]
+        else:
+            # Primitives (str, etc) are immutable, so we just reassign
+            modified_data = data_to_return
+
+        # 3. Heuristic: Find the largest element and chop it
+        # We iterate up to 5 times to try and make it fit.
+        for attempt in range(5):
+            current_json = json.dumps(modified_data, ensure_ascii=False)
+            current_size = len(current_json.encode('utf-8'))
+            
+            if current_size <= TARGET_SIZE:
+                break # It fits now!
+
+            reduction_ratio = TARGET_SIZE / current_size
+            # Be aggressive: cut slightly more than the ratio suggests
+            reduction_ratio *= 0.9 
+
+            if isinstance(modified_data, dict):
+                # Find the key holding the largest amount of data
+                largest_key = None
+                largest_len = 0
+                
+                for k, v in modified_data.items():
+                    try:
+                        v_len = len(json.dumps(v, ensure_ascii=False))
+                        if v_len > largest_len:
+                            largest_len = v_len
+                            largest_key = k
+                    except: continue
+                
+                if largest_key:
+                    val = modified_data[largest_key]
+                    if isinstance(val, list):
+                        new_len = int(len(val) * reduction_ratio)
+                        new_len = max(1, new_len) # Keep at least 1
+                        modified_data[largest_key] = val[:new_len]
+                        modified_data["_truncation_warning"] = f"Data in '{largest_key}' truncated from {len(val)} to {new_len} items to fit 64KB limit."
+                    elif isinstance(val, str):
+                        new_len = int(len(val) * reduction_ratio)
+                        modified_data[largest_key] = val[:new_len] + "...[TRUNCATED]"
+                        modified_data["_truncation_warning"] = f"String in '{largest_key}' truncated to fit limit."
+                    elif isinstance(val, dict):
+                        # If a dictionary is the biggest thing, simply removing items is risky structure-wise,
+                        # but we can try to remove half the keys.
+                        keys = list(val.keys())
+                        cut_point = int(len(keys) * reduction_ratio)
+                        new_dict = {k: val[k] for k in keys[:cut_point]}
+                        modified_data[largest_key] = new_dict
+                        modified_data["_truncation_warning"] = f"Dictionary '{largest_key}' truncated keys to fit limit."
+                    else:
+                        # Fallback: if we can't shrink the biggest value, we fail gracefully to avoid infinite loop
+                         break
+
+            elif isinstance(modified_data, list):
+                # If the root object is a list, slice the list itself
+                old_len = len(modified_data)
+                new_len = int(old_len * reduction_ratio)
+                modified_data = modified_data[:new_len]
+                # We can't add a key to a list, so we append a warning item if possible, or rely on ctx.warning
+                if len(modified_data) > 0 and isinstance(modified_data[0], dict):
+                     modified_data.append({"_warning": f"List truncated from {old_len} to {new_len} items."})
+            
+            elif isinstance(modified_data, str):
+                 new_len = int(len(modified_data) * reduction_ratio)
+                 modified_data = modified_data[:new_len] + "...[TRUNCATED]"
+
+        return modified_data
+
+    except Exception as e:
+        # If auto-truncation fails, fallback to the hard error so we don't crash the server
+        await ctx.error(f"Auto-truncation failed: {e}")
+        logger.error(f"MCP: Truncation logic failed: {e}", exc_info=True)
+        # Fallback to a safe, tiny error message
+        return {
+            "error": "Response too large", 
+            "message": f"The data generated was {data_size_bytes} bytes (Limit: {MAX_MCP_RESPONSE_SIZE_BYTES}). Auto-truncation failed.",
+            "suggestion": limit_param_info or "Reduce limit parameter significantly."
+        }
+        
 @tool_decorator
 async def get_full_analysis_results(ctx: Context, limit: int) -> Dict[str, Any]:
     """
@@ -3713,10 +3897,10 @@ async def get_full_analysis_results(ctx: Context, limit: int) -> Dict[str, Any]:
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
 
-    if ANALYZED_PE_DATA is None: raise RuntimeError("No PE file loaded. Server may not have pre-loaded the input file successfully.")
+    if state.pe_data is None: raise RuntimeError("No PE file loaded. Server may not have pre-loaded the input file successfully.")
     
     # Prepare the data according to the client's limit on top-level keys
-    data_to_send = dict(list(ANALYZED_PE_DATA.items())[:limit])
+    data_to_send = dict(list(state.pe_data.items())[:limit])
     
     # Now check the size of this potentially limited data
     limit_info = "the 'limit' parameter (to request fewer top-level keys) or use more specific data retrieval tools"
@@ -3728,10 +3912,10 @@ def _create_mcp_tool_for_key(key_name: str, tool_description: str):
         if not (isinstance(limit, int) and limit > 0):
             raise ValueError(f"Parameter 'limit' for '{key_name}' must be a positive integer.")
 
-        if ANALYZED_PE_DATA is None:
+        if state.pe_data is None:
             raise RuntimeError(f"No PE file loaded. Server may not have pre-loaded the input file successfully. Cannot get '{key_name}'.")
 
-        original_data = ANALYZED_PE_DATA.get(key_name)
+        original_data = state.pe_data.get(key_name)
         if original_data is None:
             await ctx.warning(f"Data for '{key_name}' not found in analyzed results. Returning empty structure.")
             # For empty structure, size check is trivial but let's be consistent
@@ -3851,10 +4035,10 @@ async def get_floss_analysis_info(ctx: Context,
     if string_type is not None and string_type not in valid_string_types:
         raise ValueError(f"Invalid 'string_type'. Must be one of: {', '.join(valid_string_types)} or None.")
 
-    if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
+    if state.pe_data is None or 'floss_analysis' not in state.pe_data:
         raise RuntimeError("No PE file loaded or FLOSS analysis data unavailable.")
 
-    floss_data_block = ANALYZED_PE_DATA.get('floss_analysis', {})
+    floss_data_block = state.pe_data.get('floss_analysis', {})
     status = floss_data_block.get("status", "Unknown")
 
     if status != "FLOSS analysis complete." and "incomplete" not in status:
@@ -3942,10 +4126,10 @@ async def get_capa_analysis_info(ctx: Context,
     if source_string_limit is not None and not (isinstance(source_string_limit, int) and source_string_limit >= 0):
         raise ValueError("Parameter 'source_string_limit' must be a non-negative integer if provided.")
 
-    if ANALYZED_PE_DATA is None or 'capa_analysis' not in ANALYZED_PE_DATA:
+    if state.pe_data is None or 'capa_analysis' not in state.pe_data:
         raise RuntimeError("No Capa analysis data found. Ensure Capa analysis ran at startup or via re-analyze.")
 
-    capa_data_block = ANALYZED_PE_DATA.get('capa_analysis', {})
+    capa_data_block = state.pe_data.get('capa_analysis', {})
     capa_full_results = capa_data_block.get('results') 
     capa_status = capa_data_block.get("status", "Unknown")
     
@@ -4112,10 +4296,10 @@ async def get_capa_rule_match_details(ctx: Context,
     if selected_feature_fields is not None and not isinstance(selected_feature_fields, list):
         raise ValueError("'selected_feature_fields' must be a list of strings if provided.")
 
-    if ANALYZED_PE_DATA is None or 'capa_analysis' not in ANALYZED_PE_DATA:
+    if state.pe_data is None or 'capa_analysis' not in state.pe_data:
         raise RuntimeError("No Capa analysis data found.")
 
-    capa_data_block = ANALYZED_PE_DATA.get('capa_analysis', {})
+    capa_data_block = state.pe_data.get('capa_analysis', {})
     capa_full_results = capa_data_block.get('results')
     capa_status = capa_data_block.get("status", "Unknown")
 
@@ -4275,11 +4459,11 @@ async def extract_strings_from_binary(
     if min_sifter_score is not None and not (0.0 <= min_sifter_score <= 1.0):
         raise ValueError("Parameter 'min_sifter_score' must be between 0.0 and 1.0.")
 
-    if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
+    if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
         raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
 
     try:
-        file_data = PE_OBJECT_FOR_MCP.__data__
+        file_data = state.pe_object.__data__
         found = _extract_strings_from_data(file_data, min_length)
         results = [{"offset": hex(offset), "string": s} for offset, s in found]
 
@@ -4341,7 +4525,7 @@ async def search_for_specific_strings(ctx: Context, search_terms: List[str], lim
         ValueError: If `search_terms` is empty or not a list, or if the response size exceeds the server limit.
     """
     await ctx.info(f"Request to search strings: {search_terms}. Limit per term: {limit_per_term}")
-    if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
+    if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
         raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
     if not search_terms or not isinstance(search_terms,list): raise ValueError("search_terms must be a non-empty list of strings.")
 
@@ -4352,7 +4536,7 @@ async def search_for_specific_strings(ctx: Context, search_terms: List[str], lim
         await ctx.warning(f"Invalid limit_per_term value '{limit_per_term}'. Using default of {effective_limit_pt}.")
 
     try:
-        file_data=PE_OBJECT_FOR_MCP.__data__; found_offsets_dict=_search_specific_strings_in_data(file_data,search_terms)
+        file_data=state.pe_object.__data__; found_offsets_dict=_search_specific_strings_in_data(file_data,search_terms)
 
         limited_results:Dict[str,List[str]]={}
         for term, offsets_list_int in found_offsets_dict.items():
@@ -4385,7 +4569,7 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
         ValueError: If inputs are invalid, or if the response size exceeds the server limit.
     """
     await ctx.info(f"Hex dump requested: Offset {hex(start_offset)}, Length {length}, Bytes/Line {bytes_per_line}, Limit Lines {limit_lines}")
-    if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
+    if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
         raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
     if not isinstance(start_offset,int)or start_offset<0:raise ValueError("start_offset must be a non-negative integer.")
     if not isinstance(length,int)or length<=0:raise ValueError("length must be a positive integer.")
@@ -4401,7 +4585,7 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
         else: raise ValueError("limit_lines must be a positive integer.")
 
     try:
-        file_data=PE_OBJECT_FOR_MCP.__data__
+        file_data=state.pe_object.__data__
         if start_offset>=len(file_data):
             # This case results in an empty list or error message, which is small.
             return ["Error: Start offset is beyond the file size."]
@@ -4626,10 +4810,10 @@ async def find_and_decode_encoded_strings(
         raise ValueError("Parameter 'max_decode_layers' must be an integer between 1 and 10.")
 
     # --- Setup ---
-    if PE_OBJECT_FOR_MCP is None or not hasattr(PE_OBJECT_FOR_MCP, '__data__'):
+    if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
         raise RuntimeError("No PE file loaded or PE data unavailable.")
 
-    pe = PE_OBJECT_FOR_MCP
+    pe = state.pe_object
     file_data = pe.__data__
     found_decoded_strings = []
 
@@ -4646,7 +4830,6 @@ async def find_and_decode_encoded_strings(
         ("base64", lambda b: codecs.decode(b, 'base64')),
         ("hex", lambda b: bytes.fromhex(b.decode('ascii'))),
     ]
-
     for match in initial_candidates:
         if len(found_decoded_strings) >= limit: break
 
@@ -4806,15 +4989,15 @@ async def get_top_sifted_strings(
             raise ValueError(f"Invalid 'filter_regex': {e}")
 
     # --- Data Retrieval and Aggregation ---
-    if ANALYZED_PE_DATA is None:
+    if state.pe_data is None:
         raise RuntimeError("No analysis data found.")
 
     all_strings = []
     seen_string_values = set()
     sources_to_check = string_sources or ['floss', 'basic_ascii']
 
-    if 'floss' in sources_to_check and 'floss_analysis' in ANALYZED_PE_DATA:
-        floss_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {})
+    if 'floss' in sources_to_check and 'floss_analysis' in state.pe_data:
+        floss_strings = state.pe_data['floss_analysis'].get('strings', {})
         for str_type, str_list in floss_strings.items():
             for item in str_list:
                 if isinstance(item, dict) and 'sifter_score' in item:
@@ -4825,8 +5008,8 @@ async def get_top_sifted_strings(
                         all_strings.append(item_with_context)
                         seen_string_values.add(str_val)
 
-    if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in ANALYZED_PE_DATA:
-        for item in ANALYZED_PE_DATA['basic_ascii_strings']:
+    if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in state.pe_data:
+        for item in state.pe_data['basic_ascii_strings']:
             if isinstance(item, dict) and 'sifter_score' in item:
                 str_val = item.get("string")
                 if str_val and str_val not in seen_string_values:
@@ -4875,11 +5058,11 @@ async def get_strings_for_function(
         A list of string dictionaries that are associated with the given function.
     """
     await ctx.info(f"Request for strings referenced by function: {hex(function_va)}")
-    if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
+    if state.pe_data is None or 'floss_analysis' not in state.pe_data:
         raise RuntimeError("FLOSS analysis data with function context is not available.")
 
     found_strings = []
-    all_floss_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {})
+    all_floss_strings = state.pe_data['floss_analysis'].get('strings', {})
     for str_type, str_list in all_floss_strings.items():
         if not isinstance(str_list, list): continue
         for item in str_list:
@@ -4930,10 +5113,10 @@ async def get_string_usage_context(
         empty list if the offset is not found or has no references.
     """
     await ctx.info(f"Request for usage context for string at offset: {hex(string_offset)}")
-    if ANALYZED_PE_DATA is None or 'floss_analysis' not in ANALYZED_PE_DATA:
+    if state.pe_data is None or 'floss_analysis' not in state.pe_data:
         raise RuntimeError("FLOSS analysis data with context is not available.")
 
-    static_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {}).get('static_strings', [])
+    static_strings = state.pe_data['floss_analysis'].get('strings', {}).get('static_strings', [])
     for item in static_strings:
         # Ensure we handle both '0x...' hex strings and integer offsets
         try:
@@ -4958,22 +5141,15 @@ async def fuzzy_search_strings(
     """
     Performs a fuzzy search to find strings similar to the query string across
     all specified sources. Results are sorted by similarity.
-
-    Args:
-        ctx: The MCP Context object.
-        query_string: (str) The string to search for.
-        limit: (int) The maximum number of similar strings to return.
-        string_sources: (Optional[List[str]]) A list of sources to search. Valid: 'floss', 'basic_ascii'. Defaults to all.
-        min_similarity_ratio: (int) The minimum similarity score (0-100) required for a string to be considered a match. Defaults to 85.
-
-    Returns:
-        A list of string dictionaries that meet the similarity threshold, sorted by similarity score.
+    ... (rest of docstring is fine) ...
     """
     await ctx.info(f"Fuzzy search request for '{query_string}'. Min Ratio: {min_similarity_ratio}, Limit: {limit}")
 
     # --- Parameter Validation ---
-    if not THEFUZZ_AVAILABLE:
-        raise RuntimeError("Fuzzy search is not available because the 'thefuzz' library is not installed.")
+    # CHANGED: Check RAPIDFUZZ_AVAILABLE instead of THEFUZZ_AVAILABLE
+    if not RAPIDFUZZ_AVAILABLE:
+        raise RuntimeError("Fuzzy search is not available because the 'rapidfuzz' library is not installed.")
+    
     if not query_string:
         raise ValueError("Parameter 'query_string' cannot be empty.")
     if not (isinstance(limit, int) and limit > 0):
@@ -4982,7 +5158,7 @@ async def fuzzy_search_strings(
         raise ValueError("Parameter 'min_similarity_ratio' must be an integer between 0 and 100.")
 
     # --- Data Retrieval and Aggregation (with deduplication) ---
-    if ANALYZED_PE_DATA is None:
+    if state.pe_data is None:
         raise RuntimeError("No analysis data found.")
 
     all_strings = []
@@ -4990,8 +5166,8 @@ async def fuzzy_search_strings(
     sources_to_check = string_sources or ['floss', 'basic_ascii']
 
     # Process FLOSS first to prioritize its richer context
-    if 'floss' in sources_to_check and 'floss_analysis' in ANALYZED_PE_DATA:
-        floss_strings = ANALYZED_PE_DATA['floss_analysis'].get('strings', {})
+    if 'floss' in sources_to_check and 'floss_analysis' in state.pe_data:
+        floss_strings = state.pe_data['floss_analysis'].get('strings', {})
         for str_type, str_list in floss_strings.items():
             for item in str_list:
                 if isinstance(item, dict):
@@ -5003,8 +5179,8 @@ async def fuzzy_search_strings(
                         seen_string_values.add(str_val)
 
     # Process Basic ASCII strings
-    if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in ANALYZED_PE_DATA:
-        for item in ANALYZED_PE_DATA['basic_ascii_strings']:
+    if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in state.pe_data:
+        for item in state.pe_data['basic_ascii_strings']:
             if isinstance(item, dict):
                 str_val = item.get("string")
                 if str_val and str_val not in seen_string_values:
@@ -5056,30 +5232,44 @@ async def get_triage_report(
     """
     await ctx.info(f"Generating automated triage report...")
 
-    if ANALYZED_PE_DATA is None:
+    if state.pe_data is None:
         raise RuntimeError("No analysis data available to generate a triage report.")
 
     triage_report = {
         "HighValueIndicators": [],
         "SuspiciousCapabilities": [],
         "SuspiciousImports": [],
-        "SignatureAndPacker": {},
+        # "SignatureAndPacker": state.pe_data.get('peid_matches', {}), # Optional inclusion
     }
 
     # --- 1. Find High-Value String Indicators ---
     all_strings = []
-    # This logic is a simplified version of get_top_sifted_strings aggregation
-    if 'floss_analysis' in ANALYZED_PE_DATA:
-        for str_list in ANALYZED_PE_DATA['floss_analysis'].get('strings', {}).values():
-            all_strings.extend(str_list)
-    all_strings.extend(ANALYZED_PE_DATA.get('basic_ascii_strings', []))
+    # Collect strings from FLOSS results safely
+    if 'floss_analysis' in state.pe_data and isinstance(state.pe_data['floss_analysis'], dict):
+        floss_strings = state.pe_data['floss_analysis'].get('strings')
+        if isinstance(floss_strings, dict):
+            for str_list in floss_strings.values():
+                if isinstance(str_list, list):
+                    all_strings.extend(str_list)
     
-    high_value_strings = [
-        s for s in all_strings
-        if isinstance(s, dict) and s.get('sifter_score', 0.0) >= sifter_score_threshold and s.get('category') is not None
-    ]
-    high_value_strings.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=True)
-    triage_report["HighValueIndicators"] = high_value_strings[:indicator_limit]
+    # Collect strings from Basic ASCII
+    basic_strings = state.pe_data.get('basic_ascii_strings')
+    if isinstance(basic_strings, list):
+        all_strings.extend(basic_strings)
+    
+    # Filter high-value strings
+    high_value_strings = []
+    for s in all_strings:
+        if isinstance(s, dict) and s.get('sifter_score', 0.0) >= sifter_score_threshold:
+            # Only include if it has a category (e.g. IP, URL) or is very highly ranked
+            if s.get('category') or s.get('sifter_score', 0.0) >= 9.0:
+                high_value_strings.append(s)
+    
+    # Deduplicate and sort
+    # Use string value as unique key
+    unique_indicators = {s['string']: s for s in high_value_strings}
+    sorted_indicators = sorted(unique_indicators.values(), key=lambda x: x.get('sifter_score', 0.0), reverse=True)
+    triage_report["HighValueIndicators"] = sorted_indicators[:indicator_limit]
 
     # --- 2. Find High-Severity Capa Capabilities ---
     CAPA_SEVERITY_MAP = {
@@ -5099,37 +5289,49 @@ async def get_triage_report(
         "data-manipulation": "Medium",
         "discovery": "Medium",
     }
-    if 'capa_analysis' in ANALYZED_PE_DATA:
-        capa_rules = ANALYZED_PE_DATA['capa_analysis'].get('results', {}).get('rules', {})
-        for rule_name, rule_details in capa_rules.items():
-            namespace = rule_details.get('meta', {}).get('namespace', '').split('/')[0]
-            severity = CAPA_SEVERITY_MAP.get(namespace, "Low")
-            if severity in ["High", "Medium"]:
-                triage_report["SuspiciousCapabilities"].append({
-                    "capability": rule_details.get('meta', {}).get('name', rule_name),
-                    "namespace": rule_details.get('meta', {}).get('namespace'),
-                    "severity": severity
-                })
-        triage_report["SuspiciousCapabilities"].sort(key=lambda x: x['severity'], reverse=True)
-        triage_report["SuspiciousCapabilities"] = triage_report["SuspiciousCapabilities"][:indicator_limit]
+    
+    # BUG FIX: Added safe checks for 'results' being None
+    if 'capa_analysis' in state.pe_data:
+        capa_analysis = state.pe_data['capa_analysis']
+        # Ensure results exist and are a dictionary
+        if isinstance(capa_analysis.get('results'), dict):
+            capa_rules = capa_analysis['results'].get('rules', {})
+            
+            for rule_name, rule_details in capa_rules.items():
+                meta = rule_details.get('meta', {})
+                namespace = meta.get('namespace', '').split('/')[0]
+                severity = CAPA_SEVERITY_MAP.get(namespace, "Low")
+                
+                if severity in ["High", "Medium"]:
+                    triage_report["SuspiciousCapabilities"].append({
+                        "capability": meta.get('name', rule_name),
+                        "namespace": meta.get('namespace'),
+                        "severity": severity
+                    })
+            
+            triage_report["SuspiciousCapabilities"].sort(key=lambda x: x['severity'], reverse=True)
+            triage_report["SuspiciousCapabilities"] = triage_report["SuspiciousCapabilities"][:indicator_limit]
 
     # --- 3. Find Suspicious Imports ---
-    SUSPICIOUS_IMPORTS = [
+    SUSPICIOUS_IMPORTS = {
         'CreateRemoteThread', 'WriteProcessMemory', 'VirtualAllocEx', 'ShellExecute',
-        'LdrLoadDll', 'IsDebuggerPresent', 'URLDownloadToFile', 'InternetOpen', 'HttpSendRequest'
-    ]
-    if 'imports' in ANALYZED_PE_DATA:
-        for dll in ANALYZED_PE_DATA['imports']:
-            for imp in dll.get('symbols', []):
-                imp_name = imp.get('name')
-                if imp_name and imp_name in SUSPICIOUS_IMPORTS:
-                    triage_report["SuspiciousImports"].append(f"{dll.get('dll_name', 'unknown.dll')}!{imp_name}")
+        'LdrLoadDll', 'IsDebuggerPresent', 'URLDownloadToFile', 'InternetOpen', 
+        'HttpSendRequest', 'RegSetValueEx', 'AdjustTokenPrivileges'
+    }
     
-    # --- 4. Get Packer and Signature Info ---
-    if 'peid_matches' in ANALYZED_PE_DATA:
-        triage_report["SignatureAndPacker"]['peid'] = ANALYZED_PE_DATA['peid_matches'].get('ep_matches', [])
-    if 'digital_signature' in ANALYZED_PE_DATA:
-        triage_report["SignatureAndPacker"]['is_signed'] = ANALYZED_PE_DATA['digital_signature'].get('embedded_signature_present', False)
+    if 'imports' in state.pe_data and isinstance(state.pe_data['imports'], list):
+        for dll_entry in state.pe_data['imports']:
+            dll_name = dll_entry.get('dll_name', 'Unknown')
+            for sym in dll_entry.get('symbols', []):
+                func_name = sym.get('name')
+                if func_name and any(susp in func_name for susp in SUSPICIOUS_IMPORTS):
+                    triage_report["SuspiciousImports"].append({
+                        "function": func_name,
+                        "dll": dll_name,
+                        "address": sym.get('address')
+                    })
+    
+    triage_report["SuspiciousImports"] = triage_report["SuspiciousImports"][:indicator_limit]
 
     return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "This tool has no size-limiting parameters.")
 
@@ -5152,30 +5354,1007 @@ async def get_current_datetime(ctx: Context) -> Dict[str,str]:
     now_utc=datetime.datetime.now(datetime.timezone.utc);now_local=datetime.datetime.now().astimezone()
     return{"utc_datetime":now_utc.isoformat(),"local_datetime":now_local.isoformat(),"local_timezone_name":str(now_local.tzinfo)}
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Comprehensive PE File Analyzer.",formatter_class=argparse.RawTextHelpFormatter)
+# --- Angr Analysis Tools ---
 
-    parser.add_argument("--input-file", type=str, required=True, help="REQUIRED: Path to the PE file to be analyzed at server startup (for MCP mode) or for CLI analysis.")
+@tool_decorator
+async def decompile_function_with_angr(ctx: Context, function_address: str) -> Dict[str, Any]:
+    """
+    Decompiles a function into C-like pseudocode using Angr.
+    Automatically attempts to handle RVA (offsets) if the exact VA is not found.
+    """
+
+    await ctx.info(f"Requesting Angr decompilation for: {function_address}")
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    try: target_addr = int(function_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _decompile():
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        
+        addr_to_use = target_addr
+        
+        # Check if address exists; if not, try correcting RVA -> VA
+        if addr_to_use not in state.angr_cfg.functions:
+            # Try adding ImageBase if available
+            if state.pe_object and hasattr(state.pe_object, 'OPTIONAL_HEADER') and state.pe_object.OPTIONAL_HEADER:
+                image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
+                potential_va = target_addr + image_base
+                if potential_va in state.angr_cfg.functions:
+                    addr_to_use = potential_va
+        
+        try:
+            func = state.angr_cfg.functions[addr_to_use]
+        except KeyError: 
+            return {
+                "error": f"No function found at {hex(target_addr)} (or adjusted VA {hex(addr_to_use)}).",
+                "hint": "Verify the address. If using an offset, ensure it matches the ImageBase."
+            }
+            
+        try:
+            dec = state.angr_project.analyses.Decompiler(func, cfg=state.angr_cfg.model)
+            if not dec.codegen: return {"error": "Decompilation produced no code."}
+            return {"function_name": func.name, "address": hex(addr_to_use), "c_pseudocode": dec.codegen.text}
+        except Exception as e: return {"error": f"Decompilation failed: {e}"}
+
+    result = await asyncio.to_thread(_decompile)
+    return await _check_mcp_response_size(ctx, result, "decompile_function_with_angr")
+
+@tool_decorator
+async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any]:
+    """
+    Retrieves the Control Flow Graph (CFG) for a function (Nodes/Blocks and Edges/Jumps).
+    Automatically attempts to handle RVA (offsets) if the exact VA is not found.
+    """
+
+    await ctx.info(f"Requesting CFG for: {function_address}")
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    try: target_addr = int(function_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _extract_graph():
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        
+        addr_to_use = target_addr
+        
+        # Smart RVA check
+        if addr_to_use not in state.angr_cfg.functions:
+            if state.pe_object and hasattr(state.pe_object, 'OPTIONAL_HEADER') and state.pe_object.OPTIONAL_HEADER:
+                image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
+                potential_va = target_addr + image_base
+                if potential_va in state.angr_cfg.functions:
+                    addr_to_use = potential_va
+
+        try:
+            func = state.angr_cfg.functions[addr_to_use]
+        except KeyError: 
+            return {"error": f"No function found at {hex(target_addr)}."}
+            
+        nodes_data = [{"addr": hex(b.addr), "size": b.size} for b in func.blocks]
+        edges_data = [{"src": hex(s.addr), "dst": hex(d.addr)} for s, d in func.graph.edges]
+        return {"function_name": func.name, "address": hex(addr_to_use), "nodes": nodes_data, "edges": edges_data}
+
+    result = await asyncio.to_thread(_extract_graph)
+    return await _check_mcp_response_size(ctx, result, "get_function_cfg")
+
+@tool_decorator
+async def find_path_to_address(
+    ctx: Context, 
+    target_address: str, 
+    avoid_address: Optional[str] = None,
+    enable_veritesting: bool = True,
+    use_dfs: bool = True,
+    run_in_background: bool = True
+) -> Dict[str, Any]:
+    """
+    Uses Symbolic Execution to find an input (stdin) that causes execution to reach 'target_address'.
+    """
+
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    try:
+        target = int(target_address, 16)
+        avoid = int(avoid_address, 16) if avoid_address else None
+    except ValueError: raise ValueError("Invalid address format.")
+
+    # --- IMPROVEMENT: Fail Fast Validation ---
+    # Check if the address is actually mapped in the binary
+    if state.angr_project is not None:
+        try:
+            # Attempt to check if address is mapped
+            obj = state.angr_project.loader.find_object_containing(target)
+            if not obj:
+                # Also check if it's in dynamically mapped memory (less likely for static start)
+                # But primarily, if it's not in the loader, it's usually a bad request.
+                valid_min = state.angr_project.loader.min_addr
+                valid_max = state.angr_project.loader.max_addr
+                return {
+                    "error": f"Target address {hex(target)} is unmapped.",
+                    "message": f"The address {hex(target)} does not exist in the loaded binary memory.",
+                    "valid_memory_range": f"{hex(valid_min)} - {hex(valid_max)}",
+                    "tip": "Check 'sections' or 'function_complexity' to find valid addresses."
+                }
+        except Exception:
+            pass # If validation fails, let the solver try anyway just in case
+    # -----------------------------------------
+
+    # --- Internal Logic ---
+    def _solve_path(task_id_for_progress=None):
+
+        if state.angr_project is None: 
+            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        
+        stability_options = {
+            angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY, 
+            angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS
+        }
+        state = state.angr_project.factory.entry_state(add_options=stability_options)
+        simgr = state.angr_project.factory.simulation_manager(state)
+        
+        techniques_applied = []
+        if enable_veritesting:
+            try:
+                simgr.use_technique(angr.exploration_techniques.Veritesting())
+                techniques_applied.append("Veritesting")
+            except Exception: pass
+
+        if use_dfs:
+            simgr.use_technique(angr.exploration_techniques.DFS())
+            techniques_applied.append("DFS")
+            
+        simgr.use_technique(angr.exploration_techniques.LengthLimiter(max_length=5000))
+        simgr.use_technique(angr.exploration_techniques.Explorer(find=target, avoid=avoid))
+        
+        try:
+            max_steps = 2000 
+            steps = 0
+            
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 0, f"Starting Solver... Techniques: {', '.join(techniques_applied)}")
+
+            while len(simgr.active) > 0 and len(simgr.found) == 0 and steps < max_steps:
+                # Pruning logic to keep memory low
+                if len(simgr.active) > 30:
+                    simgr.split(from_stash='active', to_stash='deferred', limit=30)
+
+                simgr.step()
+                steps += 1
+                
+                if task_id_for_progress and steps % 10 == 0:
+                    active = len(simgr.active)
+                    deferred = len(simgr.stashed) + len(getattr(simgr, 'deferred', []))
+                    percent = min(95, int((steps / max_steps) * 100))
+                    msg = f"Solving... Active: {active}, Deferred: {deferred} (Step {steps})"
+                    _update_progress(task_id_for_progress, percent, msg)
+
+            if len(simgr.found) > 0:
+                solution = simgr.found[0].posix.dumps(0)
+                return {
+                    "status": "success", 
+                    "input_hex": solution.hex(), 
+                    "input_ascii": solution.decode('utf-8', 'ignore'),
+                    "steps_taken": steps
+                }
+            
+            return {
+                "status": "failure", 
+                "message": f"No path found after {steps} steps.",
+                "hint": "Try increasing max_steps, checking if the address is actually reachable, or disable 'use_dfs'."
+            }
+
+        except Exception as e:
+            return {"status": "error", "error_message": str(e)}
+
+    # --- Background Handling ---
+    if run_in_background:
+        task_id = str(uuid.uuid4())
+        state.background_tasks[task_id] = {
+            "status": "running",
+            "progress_percent": 0,
+            "progress_message": "Initializing solver...",
+            "created_at": datetime.datetime.now().isoformat(),
+            "tool": "find_path_to_address"
+        }
+        asyncio.create_task(_run_background_task_wrapper(task_id, _solve_path))
+        return {
+            "status": "queued", 
+            "task_id": task_id, 
+            "message": f"Solver queued (Veritesting={enable_veritesting}, DFS={use_dfs})."
+        }
+
+    await ctx.info(f"Solving path to {target_address}")
+    result = await asyncio.to_thread(_solve_path)
+    return await _check_mcp_response_size(ctx, result, "find_path_to_address")
+
+@tool_decorator
+async def emulate_function_execution(
+    ctx: Context, 
+    function_address: str, 
+    args_hex: List[str] = [],
+    max_steps: int = 1000,
+    high_precision_mode: bool = False,
+    run_in_background: bool = True
+) -> Dict[str, Any]:
+    """
+    Emulates a function with specific concrete arguments.
+    """
+
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    try:
+        target = int(function_address, 16)
+        args = [int(a, 16) for a in args_hex]
+    except ValueError: raise ValueError("Invalid format for address or arguments.")
+
+    def _core_emulation(task_id_for_progress=None):
+
+        if state.angr_project is None: 
+            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        
+        try:
+            add_options = {angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY, angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS}
+            if 'unicorn' in sys.modules: add_options.add(angr.options.UNICORN)
+            remove_options = set()
+            if not high_precision_mode:
+                add_options.update({angr.options.FAST_MEMORY, angr.options.FAST_REGISTERS})
+                remove_options.update({angr.options.UNICORN_TRACK_BBL_ADDRS, angr.options.UNICORN_TRACK_STACK_POINTERS})
+
+            state = state.angr_project.factory.call_state(target, *args, add_options=add_options, remove_options=remove_options)
+            simgr = state.angr_project.factory.simulation_manager(state)
+            
+            chunk_size = 50
+            steps_taken = 0
+            
+            while steps_taken < max_steps:
+                if not simgr.active: break
+                simgr.run(n=chunk_size)
+                steps_taken += chunk_size
+                
+                if task_id_for_progress:
+                    percent = min(99, int((steps_taken / max_steps) * 100))
+                    msg = f"Emulating... Step {steps_taken}/{max_steps}"
+                    _update_progress(task_id_for_progress, percent, msg)
+
+            if len(simgr.deadended) > 0:
+                final = simgr.deadended[0]
+                try: ret_val = hex(final.solver.eval(final.regs.eax))
+                except: ret_val = "unknown"
+                return {
+                    "status": "success", 
+                    "return_value": ret_val, 
+                    "stdout": final.posix.dumps(1).decode('utf-8', 'ignore'),
+                    "steps_taken_count": len(final.history.bbl_addrs)
+                }
+            elif len(simgr.active) > 0:
+                # --- IMPROVEMENT: Explicit Hinting ---
+                current_state = simgr.active[0]
+                partial_stdout = current_state.posix.dumps(1).decode('utf-8', 'ignore')
+                return {
+                    "status": "incomplete", 
+                    "message": f"Execution exceeded {max_steps} steps. Function did not return yet.",
+                    "hint": f"The function is complex. Rerun with 'max_steps' set to {max_steps * 2} or higher.",
+                    "partial_stdout": partial_stdout,
+                    "current_instruction": hex(current_state.addr)
+                }
+            elif len(simgr.errored) > 0:
+                return {"status": "error", "message": str(simgr.errored[0].error)}
+            else:
+                return {"status": "uncertain", "message": "Simulation finished but no active or deadended states."}
+
+        except Exception as e:
+            return {"status": "crash", "error": str(e)}
+
+    if run_in_background:
+        task_id = str(uuid.uuid4())
+        state.background_tasks[task_id] = {
+            "status": "running",
+            "progress_percent": 0,
+            "progress_message": "Initializing emulation...",
+            "created_at": datetime.datetime.now().isoformat(),
+            "tool": "emulate_function_execution"
+        }
+        asyncio.create_task(_run_background_task_wrapper(task_id, _core_emulation))
+        return {"status": "queued", "task_id": task_id, "message": "Emulation queued."}
+
+    await ctx.info(f"Emulating {function_address} (Limit: {max_steps})")
+    result = await asyncio.to_thread(_core_emulation)
+    return await _check_mcp_response_size(ctx, result, "emulate_function_execution")
+
+@tool_decorator
+async def analyze_binary_loops(
+    ctx: Context, 
+    min_loop_size: int = 0, 
+    limit: int = 50,
+    resolve_indirect_jumps: bool = False,
+    scan_data_refs: bool = False,
+    run_in_background: bool = True
+) -> Dict[str, Any]:
+    """
+    Scans the binary for loops. Uses existing analysis if available to save time.
+    """
+
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+
+    def _core_logic(task_id_for_progress=None):
+        # Configuration requested by the user
+        req_config = {"resolve_jumps": resolve_indirect_jumps, "data_refs": scan_data_refs}
+        
+        # Determine if we need to rebuild the CFG
+        need_rebuild = False
+        
+        if state.angr_project is None: 
+            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+            need_rebuild = True
+        elif state.angr_cfg is None:
+            need_rebuild = True
+        else:
+            # If we have a CFG, check if it satisfies the request.
+            # If user wants data_refs but current CFG doesn't have them, we must rebuild.
+            current_has_data = getattr(state, 'angr_loop_cache_config', {}).get('data_refs', False)
+            if scan_data_refs and not current_has_data:
+                need_rebuild = True
+            
+            # If user wants indirect jumps but current CFG was built without them (unlikely in this script's flow, but possible)
+            # We assume startup analysis enables jump resolution, so we usually don't need to rebuild.
+
+        if need_rebuild:
+            if task_id_for_progress: _update_progress(task_id_for_progress, 10, "Building/Upgrading Control Flow Graph...")
+            
+            # CFG Generation (Blocking)
+            new_cfg = state.angr_project.analyses.CFGFast(
+                normalize=True,
+                resolve_indirect_jumps=resolve_indirect_jumps,
+                data_references=scan_data_refs, 
+                force_complete_scan=scan_data_refs 
+            )
+            state.angr_cfg = new_cfg 
+            
+            # Invalidate loop cache if we rebuilt CFG
+            state.angr_loop_cache = None 
+
+        # Ensure loop cache exists
+        if state.angr_loop_cache is None:
+            if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...")
+            
+            loop_finder = state.angr_project.analyses.LoopFinder(kb=state.angr_project.kb)
+            raw_loops = {}
+            
+            for loop in loop_finder.loops:
+                try:
+                    node = state.angr_cfg.model.get_any_node(loop.entry.addr)
+                    if node and node.function_address:
+                        func_addr = node.function_address
+                        if func_addr not in raw_loops: raw_loops[func_addr] = []
+                        
+                        block_count = len(list(loop.body_nodes))
+                        raw_loops[func_addr].append({
+                            "entry": hex(loop.entry.addr),
+                            "blocks": block_count,
+                            "subloops": bool(loop.subloops)
+                        })
+                except Exception: continue
+            
+            state.angr_loop_cache = raw_loops
+            state.angr_loop_cache_config = req_config
+        else:
+            if task_id_for_progress: _update_progress(task_id_for_progress, 90, "Using cached analysis data...")
+
+        # Filtering Results
+        if task_id_for_progress: _update_progress(task_id_for_progress, 95, "Formatting results...")
+        results = []
+        current_cfg_ref = state.angr_cfg
+        
+        for func_addr, loops in state.angr_loop_cache.items():
+            valid_loops = [l for l in loops if l['blocks'] >= min_loop_size]
+            if valid_loops:
+                func_name = "Unknown"
+                if current_cfg_ref and func_addr in current_cfg_ref.functions:
+                     func_name = current_cfg_ref.functions[func_addr].name
+                results.append({
+                    "function_name": func_name, 
+                    "address": hex(func_addr), 
+                    "loop_count": len(valid_loops), 
+                    "loops": valid_loops
+                })
+        
+        results.sort(key=lambda x: x['loop_count'], reverse=True)
+        limited_results = results[:limit]
+        
+        return {
+            "config_used": state.angr_loop_cache_config,
+            "rebuild_triggered": need_rebuild,
+            "total_functions_with_loops": len(results),
+            "returned_count": len(limited_results),
+            "functions_with_loops": limited_results
+        }
+
+    if run_in_background:
+        task_id = str(uuid.uuid4())
+        state.background_tasks[task_id] = {
+            "status": "running",
+            "progress_percent": 0,
+            "progress_message": "Starting loop analysis...",
+            "created_at": datetime.datetime.now().isoformat(),
+            "tool": "analyze_binary_loops"
+        }
+        asyncio.create_task(_run_background_task_wrapper(task_id, _core_logic))
+        return {"status": "queued", "task_id": task_id, "message": "Loop analysis queued."}
+
+    try:
+        result = await asyncio.to_thread(_core_logic)
+        limit_info = "the 'limit' parameter or increasing 'min_loop_size'"
+        return await _check_mcp_response_size(ctx, result, "analyze_binary_loops", limit_info)
+    except Exception as e:
+        return {"error": f"Analysis failed: {str(e)}"}
+
+@tool_decorator
+async def get_function_xrefs(
+    ctx: Context, 
+    function_address: str, 
+    limit: int = 100
+) -> Dict[str, Any]:
+    """
+    Retrieves Cross-References (Callers/Callees) for a function.
+    """
+
+    await ctx.info(f"Requesting X-Refs for: {function_address} (Limit: {limit})")
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    try: target_addr = int(function_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _get_xrefs():
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        try: 
+            func = state.angr_cfg.functions[target_addr]
+        except KeyError: 
+            return {"error": f"No function found at {hex(target_addr)}."}
+        
+        callers = []
+        if target_addr in state.angr_cfg.functions.callgraph:
+             for pred in state.angr_cfg.functions.callgraph.predecessors(target_addr):
+                 try: callers.append({"name": state.angr_cfg.functions[pred].name, "address": hex(pred)})
+                 except: callers.append({"name": "Unknown", "address": hex(pred)})
+        
+        callees = []
+        if target_addr in state.angr_cfg.functions.callgraph:
+            for succ in state.angr_cfg.functions.callgraph.successors(target_addr):
+                try: callees.append({"name": state.angr_cfg.functions[succ].name, "address": hex(succ)})
+                except: callees.append({"name": "External", "address": hex(succ)})
+        
+        return {
+            "function_name": func.name, 
+            "address": hex(target_addr), 
+            "total_callers": len(callers),
+            "callers": callers[:limit],
+            "total_callees": len(callees),
+            "callees": callees[:limit]
+        }
+
+    result = await asyncio.to_thread(_get_xrefs)
+    return await _check_mcp_response_size(ctx, result, "get_function_xrefs", "the 'limit' parameter")
+
+@tool_decorator
+async def get_backward_slice(
+    ctx: Context, 
+    target_address: str, 
+    limit: int = 200
+) -> Dict[str, Any]:
+    """
+    Finds all code (Basic Blocks) that can reach the target address (Control Flow Ancestors).
+    """
+
+    await ctx.info(f"Calculating backward reachability for: {target_address} (Limit: {limit})")
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    try: target_addr = int(target_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _slice():
+        import networkx as nx
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        
+        try:
+            # Get the node. If exact match fails, try to find the block containing this addr
+            target_node = state.angr_cfg.model.get_any_node(target_addr)
+            if not target_node:
+                block = state.angr_project.factory.block(target_addr)
+                target_node = state.angr_cfg.model.get_any_node(block.addr)
+            
+            if not target_node: return {"error": f"Address {hex(target_addr)} not found in CFG."}
+
+            # Use NetworkX to find ancestors
+            ancestors = nx.ancestors(state.angr_cfg.graph, target_node)
+            
+            slice_nodes = []
+            for n in ancestors:
+                func_name = "Unknown"
+                if n.function_address and n.function_address in state.angr_cfg.functions:
+                    func_name = state.angr_cfg.functions[n.function_address].name
+                slice_nodes.append({"address": hex(n.addr), "function": func_name})
+
+            # Sort by address for readability
+            sorted_nodes = sorted(slice_nodes, key=lambda x: int(x['address'], 16))
+            
+            return {
+                "target": hex(target_addr), 
+                "total_nodes_found": len(sorted_nodes),
+                "returned_count": min(len(sorted_nodes), limit),
+                "slice_nodes": sorted_nodes[:limit]
+            }
+        except Exception as e: return {"error": f"Backward reachability failed: {e}"}
+
+    result = await asyncio.to_thread(_slice)
+    return await _check_mcp_response_size(ctx, result, "get_backward_slice", "the 'limit' parameter")
+
+@tool_decorator
+async def get_forward_slice(
+    ctx: Context, 
+    source_address: str, 
+    limit: int = 200
+) -> Dict[str, Any]:
+    """
+    Finds all code (Basic Blocks) reachable FROM the source address (Control Flow Descendants).
+    """
+
+    await ctx.info(f"Calculating forward reachability from: {source_address} (Limit: {limit})")
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    try: source_addr = int(source_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _slice():
+        import networkx as nx
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        
+        try:
+            source_node = state.angr_cfg.model.get_any_node(source_addr)
+            if not source_node:
+                block = state.angr_project.factory.block(source_addr)
+                source_node = state.angr_cfg.model.get_any_node(block.addr)
+                
+            if not source_node: return {"error": f"Address {hex(source_addr)} not found in CFG."}
+
+            # Use NetworkX to find descendants
+            descendants = nx.descendants(state.angr_cfg.graph, source_node)
+            
+            slice_nodes = []
+            for n in descendants:
+                func_name = "Unknown"
+                if n.function_address and n.function_address in state.angr_cfg.functions:
+                    func_name = state.angr_cfg.functions[n.function_address].name
+                slice_nodes.append({"address": hex(n.addr), "function": func_name})
+
+            sorted_nodes = sorted(slice_nodes, key=lambda x: int(x['address'], 16))
+            
+            return {
+                "source": hex(source_addr), 
+                "total_nodes_found": len(sorted_nodes),
+                "returned_count": min(len(sorted_nodes), limit),
+                "impacted_nodes": sorted_nodes[:limit]
+            }
+        except Exception as e: return {"error": f"Forward reachability failed: {e}"}
+
+    result = await asyncio.to_thread(_slice)
+    return await _check_mcp_response_size(ctx, result, "get_forward_slice", "the 'limit' parameter")
+
+@tool_decorator
+async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
+    """
+    Finds 'Dominator' blocks for a specific target (blocks that MUST execute to reach the target).
+    """
+
+    await ctx.info(f"Calculating dominators for: {target_address}")
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    try: target_addr = int(target_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _find_dominators():
+        import networkx as nx
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        
+        try:
+            target_node = state.angr_cfg.model.get_any_node(target_addr)
+            if not target_node: 
+                # Fallback to block start
+                block = state.angr_project.factory.block(target_addr)
+                target_node = state.angr_cfg.model.get_any_node(block.addr)
+
+            if not target_node: return {"error": "Node not found in CFG."}
+
+            # Dominators are calculated PER FUNCTION in Angr's CFG
+            if not target_node.function_address:
+                return {"error": "Target node does not belong to a known function, cannot calculate dominators."}
+
+            func = state.angr_cfg.functions.get(target_node.function_address)
+            if not func: return {"error": "Function object not found."}
+
+            # Identify the entry node of the function graph
+            # func.graph is a NetworkX DiGraph
+            entry_node = None
+            for node in func.graph.nodes():
+                if node.addr == func.addr:
+                    entry_node = node
+                    break
+            
+            if not entry_node: return {"error": "Could not identify function entry node."}
+
+            # Calculate immediate dominators using NetworkX directly
+            # This returns a dict: {node: immediate_dominator}
+            dom_dict = nx.immediate_dominators(func.graph, entry_node)
+
+            # Trace back the dominator chain for our target
+            dominators_list = []
+            curr = target_node
+            
+            # Safety break to prevent infinite loops in malformed graphs
+            iterations = 0
+            while curr in dom_dict and iterations < 1000:
+                dom = dom_dict[curr]
+                # If a node dominates itself (start node), stop
+                if dom == curr: 
+                    dominators_list.append({"address": hex(dom.addr), "size": dom.size, "type": "Function Entry"})
+                    break
+                
+                dominators_list.append({"address": hex(dom.addr), "size": dom.size})
+                curr = dom
+                iterations += 1
+
+            return {"target": hex(target_addr), "function": func.name, "dominators": dominators_list}
+            
+        except Exception as e: return {"error": f"Dominator analysis failed: {e}"}
+
+    result = await asyncio.to_thread(_find_dominators)
+    return await _check_mcp_response_size(ctx, result, "get_dominators")
+    
+@tool_decorator
+async def get_function_complexity_list(
+    ctx: Context, 
+    limit: int = 20,
+    sort_by: str = "blocks"  # "blocks" or "edges"
+) -> Dict[str, Any]:
+    """
+    Lists functions ranked by complexity (block count or edge count). 
+    Useful for identifying main logic or obfuscated routines.
+    
+    Args:
+        limit: Max number of functions to return.
+        sort_by: Criterion to sort by: 'blocks' (default) or 'edges'.
+    """
+
+    await ctx.info(f"Requesting function complexity list. Limit: {limit}, Sort: {sort_by}")
+    
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+
+    def _analyze():
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        
+        funcs_data = []
+        for addr, func in state.angr_cfg.functions.items():
+            # Filter out library/simprocedures or empty placeholders
+            if func.is_simprocedure or func.is_syscall: continue
+            
+            # --- FIX: Convert generator to list before len() ---
+            try:
+                # func.blocks is often a generator in newer angr versions
+                block_count = len(list(func.blocks))
+            except Exception:
+                # Fallback if access fails
+                block_count = 0
+            
+            # func.graph.edges usually returns a View, list() ensures it's countable
+            edge_count = len(list(func.graph.edges))
+            
+            funcs_data.append({
+                "name": func.name,
+                "address": hex(func.addr),
+                "blocks": block_count,
+                "edges": edge_count,
+                "is_entry_point": (func.addr == state.angr_project.entry)
+            })
+
+        # Sort
+        key = "edges" if sort_by == "edges" else "blocks"
+        funcs_data.sort(key=lambda x: x[key], reverse=True)
+        
+        return {
+            "total_functions_scanned": len(funcs_data),
+            "sort_metric": key,
+            "top_functions": funcs_data[:limit]
+        }
+
+    result = await asyncio.to_thread(_analyze)
+    return await _check_mcp_response_size(ctx, result, "get_function_complexity_list", "the 'limit' parameter")
+    
+@tool_decorator
+async def extract_function_constants(
+    ctx: Context, 
+    function_address: str, 
+    limit: int = 50
+) -> Dict[str, Any]:
+    """
+    Scans a specific function for hardcoded constants (integers) and string references.
+    Useful for extracting potential IOCs, keys, or config data from a target function.
+    """
+
+    await ctx.info(f"Extracting constants from: {function_address} (Limit: {limit})")
+    
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    try: target_addr = int(function_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _extract():
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        
+        try:
+            func = state.angr_cfg.functions[target_addr]
+        except KeyError: return {"error": f"No function found at {hex(target_addr)}."}
+
+        integers = set()
+        strings = set()
+        
+        # Iterate over all blocks in the function
+        for block in func.blocks:
+            # Use Capstone (disassembly) to find immediate operands
+            for insn in block.capstone.insns:
+                # Iterate operands
+                for op in insn.operands:
+                    # 2 corresponds to X86_OP_IMM (Immediate value)
+                    if op.type == 2: 
+                        val = op.value.imm
+                        # Filter out likely noise (small loop counters, etc)
+                        if val > 0x1000: 
+                            integers.add(hex(val))
+                            
+                            # Heuristic: Check if this immediate points to a string in memory
+                            try:
+                                # Read up to 64 bytes from this address
+                                mem_data = state.angr_project.loader.memory.load(val, 64)
+                                # Simple check for ASCII printable
+                                str_candidate = ""
+                                for b in mem_data:
+                                    if b == 0: break
+                                    if 32 <= b <= 126: str_candidate += chr(b)
+                                    else: 
+                                        str_candidate = "" # Invalid char, discard
+                                        break
+                                
+                                if len(str_candidate) > 3:
+                                    strings.add(f"{str_candidate} (@ {hex(val)})")
+                            except:
+                                pass
+
+        # Format for output
+        sorted_ints = sorted(list(integers))
+        sorted_strs = sorted(list(strings))
+        
+        return {
+            "function": func.name,
+            "integer_constants_count": len(sorted_ints),
+            "string_references_count": len(sorted_strs),
+            "integers": sorted_ints[:limit],
+            "strings": sorted_strs[:limit]
+        }
+
+    result = await asyncio.to_thread(_extract)
+    return await _check_mcp_response_size(ctx, result, "extract_function_constants", "the 'limit' parameter")
+    
+@tool_decorator
+async def get_global_data_refs(
+    ctx: Context, 
+    function_address: str, 
+    limit: int = 50
+) -> Dict[str, Any]:
+    """
+    Identifies global memory addresses read from or written to by the target function.
+    Useful for understanding what global state (flags, config, strings) a function interacts with.
+    """
+
+    await ctx.info(f"Scanning global refs in: {function_address} (Limit: {limit})")
+    
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    try: target_addr = int(function_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _scan_refs():
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        # We need a CFG that tracks data references for this to work best
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True, collect_data_references=True)
+        
+        try:
+            func = state.angr_cfg.functions[target_addr]
+        except KeyError: return {"error": f"No function found at {hex(target_addr)}."}
+
+        refs_found = []
+        
+        # Iterate blocks and check for MemoryData references associated with instruction addresses
+        for block in func.blocks:
+            for insn_addr in block.instruction_addrs:
+                # --- FIX: Access XRefs using the dictionary index ---
+                # .xrefs_by_ins_addr returns a set of XRef objects originating from this address
+                xrefs = state.angr_project.kb.xrefs.xrefs_by_ins_addr.get(insn_addr, [])
+                
+                for xref in xrefs:
+                    # We care about memory data (not code jumps)
+                    if xref.memory_data:
+                        refs_found.append({
+                            "instruction": hex(insn_addr),
+                            "target_address": hex(xref.memory_data.addr),
+                            "sort": xref.memory_data.sort, # e.g., 'string', 'unknown'
+                            "content_preview": str(xref.memory_data.content)[:30] if xref.memory_data.content else "N/A"
+                        })
+
+        return {
+            "function": func.name,
+            "total_refs_found": len(refs_found),
+            "references": refs_found[:limit]
+        }
+
+    result = await asyncio.to_thread(_scan_refs)
+    return await _check_mcp_response_size(ctx, result, "get_global_data_refs", "the 'limit' parameter")
+    
+@tool_decorator
+async def scan_for_indirect_jumps(
+    ctx: Context, 
+    function_address: str, 
+    limit: int = 50
+) -> Dict[str, Any]:
+    """
+    Scans a function for indirect jumps or calls (dynamic control flow).
+    This helps detect switch tables, virtual function calls, or obfuscated control flow.
+    """
+
+    await ctx.info(f"Scanning for indirect jumps in: {function_address} (Limit: {limit})")
+    
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    try: target_addr = int(function_address, 16)
+    except ValueError: raise ValueError("Invalid address format.")
+
+    def _scan_jumps():
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        
+        try:
+            func = state.angr_cfg.functions[target_addr]
+        except KeyError: return {"error": f"No function found at {hex(target_addr)}."}
+
+        indirect_flow = []
+        
+        for block in func.blocks:
+            # VEX Jumpkind 'Ijk_Boring' is standard, 'Ijk_Call' is call.
+            # We look for cases where the target is NOT a constant value.
+            
+            # Note: 'block.vex' lifts the block. This can be slow for huge functions.
+            try:
+                vex_block = block.vex
+                # If the exit target is not a constant (e.g. it is a temporary variable or register)
+                # and it's not a strict fallthrough
+                if not isinstance(vex_block.next, int) and not hasattr(vex_block.next, 'value'):
+                     # It is symbolic/dynamic
+                     indirect_flow.append({
+                         "block_addr": hex(block.addr),
+                         "jump_kind": vex_block.jumpkind,
+                         "instruction_count": len(vex_block.statements)
+                     })
+            except Exception:
+                # Lifting failed or other error
+                continue
+
+        return {
+            "function": func.name,
+            "total_indirect_blocks": len(indirect_flow),
+            "indirect_blocks": indirect_flow[:limit]
+        }
+
+    result = await asyncio.to_thread(_scan_jumps)
+    return await _check_mcp_response_size(ctx, result, "scan_for_indirect_jumps", "the 'limit' parameter")
+
+@tool_decorator
+async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) -> Dict[str, Any]:
+    """
+    Patches the loaded binary IN MEMORY with new bytes (affects future analysis).
+    """
+
+    await ctx.info(f"Patching memory at {address}")
+    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    try:
+        addr = int(address, 16)
+        patch_data = bytes.fromhex(patch_bytes_hex)
+    except ValueError: raise ValueError("Invalid address or hex data.")
+
+    def _patch():
+
+        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        try:
+            state.angr_project.loader.memory.store(addr, patch_data)
+            state.angr_cfg = None # Invalidate CFG
+            return {"status": "success", "message": f"Patched {len(patch_data)} bytes. CFG cache cleared."}
+        except Exception as e: return {"error": f"Patching failed: {e}"}
+
+    result = await asyncio.to_thread(_patch)
+    return await _check_mcp_response_size(ctx, result, "patch_binary_memory")
+
+@tool_decorator
+async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
+    """
+    Checks the status and progress of a background analysis task.
+    
+    Args:
+        task_id: The ID returned by a tool running in background mode.
+    """
+    # await ctx.info(f"Checking status for task: {task_id}") # Optional: Comment out to reduce noise
+    
+    task = state.background_tasks.get(task_id)
+    if not task:
+        return {"error": f"Task ID {task_id} not found."}
+    
+    response = {
+        "task_id": task_id,
+        "status": task["status"],
+        "progress_percent": task.get("progress_percent", 0),
+        "progress_message": task.get("progress_message", "Initializing..."),
+        "created_at": task.get("created_at", "unknown"),
+        "tool": task.get("tool", "unknown")
+    }
+    
+    if task["status"] == "completed":
+        result_data = task["result"]
+        full_response = {**response, "result": result_data}
+        return await _check_mcp_response_size(ctx, full_response, f"check_task_status_{task_id}")
+        
+    elif task["status"] == "failed":
+        response["error"] = task.get("error", "Unknown error")
+        
+    return response
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Comprehensive PE File Analyzer.", formatter_class=argparse.RawTextHelpFormatter)
+
+    # --- Input & Mode ---
+    parser.add_argument("--input-file", type=str, required=True, help="REQUIRED: Path to the file to be analyzed.")
+    parser.add_argument("--mode", choices=["pe", "shellcode"], default="pe", help="Analysis mode. Use 'shellcode' for raw binaries (default: pe).")
+    
+    # --- External Resources ---
     parser.add_argument("-d", "--db", dest="peid_db", default=None, help=f"Path to PEiD userdb.txt. If not specified, defaults to '{DEFAULT_PEID_DB_PATH}'. Downloads if not found.")
     parser.add_argument("-y", "--yara-rules", dest="yara_rules", default=None, help="Path to YARA rule file or directory.")
-    parser.add_argument("--capa-rules-dir", default=None, help=f"Directory containing capa rule files. If not provided or empty/invalid, attempts download to '{SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME / CAPA_RULES_SUBDIR_NAME}'.")
+    parser.add_argument("--capa-rules-dir", default=None, help=f"Directory containing capa rule files. If not provided or empty/invalid, attempts download to '{DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME / CAPA_RULES_SUBDIR_NAME}'.")
     parser.add_argument("--capa-sigs-dir", default=None, help="Directory containing capa library identification signature files (e.g., sigs/*.sig). Optional. If not provided, attempts to find a script-relative 'capa_sigs' or uses Capa's internal default.")
     
+    # --- Skips ---
     parser.add_argument("--skip-capa", action="store_true", help="Skip capa capability analysis entirely.")
     parser.add_argument("--skip-floss", action="store_true", help="Skip FLOSS advanced string analysis entirely.")
     parser.add_argument("--skip-peid", action="store_true", help="Skip PEiD signature scanning entirely.")
     parser.add_argument("--skip-yara", action="store_true", help="Skip YARA scanning entirely.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for CLI mode and more detailed MCP logging.")
     
+    # --- PEiD Options ---
     peid_group = parser.add_argument_group('PEiD Specific Options (if PEiD scan is not skipped)')
-    peid_group.add_argument("--skip-full-peid-scan",action="store_true",help="Skip full PEiD scan (only scan entry point).")
-    peid_group.add_argument("--psah","--peid-scan-all-sigs-heuristically",action="store_true",dest="peid_scan_all_sigs_heuristically",help="During full heuristic PEiD scan, use ALL signatures (not just non-EP_only).")
+    peid_group.add_argument("--skip-full-peid-scan", action="store_true", help="Skip full PEiD scan (only scan entry point).")
+    peid_group.add_argument("--psah", "--peid-scan-all-sigs-heuristically", action="store_true", dest="peid_scan_all_sigs_heuristically", help="During full heuristic PEiD scan, use ALL signatures (not just non-EP_only).")
 
+    # --- FLOSS Options ---
     floss_group = parser.add_argument_group('FLOSS Specific Options (if FLOSS scan is not skipped)')
-    floss_group.add_argument("--floss-min-length", "-n", type=int, default=None, 
-                             help=f"Minimum string length for FLOSS (default: {FLOSS_MIN_LENGTH_DEFAULT}).")
-    floss_group.add_argument("--floss-format", "-f", default="auto", choices=["auto", "pe", "sc32", "sc64"],
-                             help="File format hint for FLOSS/Vivisect (auto, pe, sc32, sc64). Default: auto.")
+    floss_group.add_argument("--floss-min-length", "-n", type=int, default=None, help=f"Minimum string length for FLOSS (default: {FLOSS_MIN_LENGTH_DEFAULT}).")
+    floss_group.add_argument("--floss-format", "-f", default="auto", choices=["auto", "pe", "sc32", "sc64"], help="File format hint for FLOSS/Vivisect (auto, pe, sc32, sc64). Important for shellcode mode.")
     floss_group.add_argument("--floss-no-static", action="store_true", help="FLOSS: Do not extract static strings.")
     floss_group.add_argument("--floss-no-stack", action="store_true", help="FLOSS: Do not extract stack strings.")
     floss_group.add_argument("--floss-no-tight", action="store_true", help="FLOSS: Do not extract tight strings.")
@@ -5184,55 +6363,41 @@ if __name__ == '__main__':
     floss_group.add_argument("--floss-only-stack", action="store_true", help="FLOSS: Only extract stack strings.")
     floss_group.add_argument("--floss-only-tight", action="store_true", help="FLOSS: Only extract tight strings.")
     floss_group.add_argument("--floss-only-decoded", action="store_true", help="FLOSS: Only extract decoded strings.")
-    floss_group.add_argument("--floss-functions", type=str, nargs="+", default=[], 
-                             help="FLOSS: Hex addresses (e.g., 0x401000) of functions to analyze for stack/decoded strings.")
-    floss_group.add_argument("--floss-verbose-level", "--fv",type=int, default=0, choices=[0,1,2],
-                             help="FLOSS internal verbosity for string output (0=default, 1=verbose, 2=more verbose). Default: 0.")
-    floss_group.add_argument("--floss-quiet", "--fq", action="store_true",
-                             help="FLOSS: Suppress FLOSS's own progress indicators. Overrides script verbosity for FLOSS progress bars.")
-    floss_group.add_argument("--floss-script-debug-level", default="NONE", 
-                             choices=["NONE", "DEFAULT", "DEBUG", "TRACE", "SUPERTRACE"], 
-                             help="Set logging level for FLOSS internal loggers (NONE, DEFAULT, TRACE, SUPERTRACE). Default: NONE.")
-    floss_group.add_argument(
-        "-r", "--regex",
-        dest="regex_pattern",
-        type=str,
-        default=None,
-        help="A regex pattern to search for within all extracted FLOSS strings (case-insensitive)."
-    )
+    floss_group.add_argument("--floss-functions", type=str, nargs="+", default=[], help="FLOSS: Hex addresses (e.g., 0x401000) of functions to analyze for stack/decoded strings.")
+    floss_group.add_argument("--floss-verbose-level", "--fv", type=int, default=0, choices=[0,1,2], help="FLOSS internal verbosity for string output (0=default, 1=verbose, 2=more verbose). Default: 0.")
+    floss_group.add_argument("--floss-quiet", "--fq", action="store_true", help="FLOSS: Suppress FLOSS's own progress indicators. Overrides script verbosity for FLOSS progress bars.")
+    floss_group.add_argument("--floss-script-debug-level", default="NONE", choices=["NONE", "DEFAULT", "DEBUG", "TRACE", "SUPERTRACE"], help="Set logging level for FLOSS internal loggers (NONE, DEFAULT, TRACE, SUPERTRACE). Default: NONE.")
+    floss_group.add_argument("-r", "--regex", dest="regex_pattern", type=str, default=None, help="A regex pattern to search for within all extracted FLOSS strings (case-insensitive).")
 
-    cli_group=parser.add_argument_group('CLI Mode Specific Options (ignored if --mcp-server is used)')
-    cli_group.add_argument("--extract-strings",action="store_true",help="Extract and print strings from the PE file (basic method, use FLOSS for advanced).")
-    cli_group.add_argument("--min-str-len",type=int,default=5,help="Minimum length for basic extracted strings (default: 5).")
-    cli_group.add_argument("--search-string",action="append",help="String to search for within the PE file (multiple allowed, basic method).")
-    cli_group.add_argument("--strings-limit",type=int,default=100,help="Limit for basic string extraction and search results display (default: 100).")
-    cli_group.add_argument("--hexdump-offset",type=lambda x:int(x,0),help="Hex dump start offset (e.g., 0x1000 or 4096).")
-    cli_group.add_argument("--hexdump-length",type=int,help="Hex dump length in bytes.")
-    cli_group.add_argument("--hexdump-lines",type=int,default=16,help="Maximum number of lines to display for hex dump (default: 16).")
+    # --- CLI Options ---
+    cli_group = parser.add_argument_group('CLI Mode Specific Options (ignored if --mcp-server is used)')
+    cli_group.add_argument("--extract-strings", action="store_true", help="Extract and print strings from the PE file (basic method, use FLOSS for advanced).")
+    cli_group.add_argument("--min-str-len", type=int, default=5, help="Minimum length for basic extracted strings (default: 5).")
+    cli_group.add_argument("--search-string", action="append", help="String to search for within the PE file (multiple allowed, basic method).")
+    cli_group.add_argument("--strings-limit", type=int, default=100, help="Limit for basic string extraction and search results display (default: 100).")
+    cli_group.add_argument("--hexdump-offset", type=lambda x:int(x,0), help="Hex dump start offset (e.g., 0x1000 or 4096).")
+    cli_group.add_argument("--hexdump-length", type=int, help="Hex dump length in bytes.")
+    cli_group.add_argument("--hexdump-lines", type=int, default=16, help="Maximum number of lines to display for hex dump (default: 16).")
 
-    mcp_group=parser.add_argument_group('MCP Server Mode Specific Options')
-    mcp_group.add_argument("--mcp-server",action="store_true",help="Run in MCP server mode. The --input-file is pre-analyzed, and tools operate on this file.")
-    mcp_group.add_argument("--mcp-host",type=str,default="127.0.0.1",help="MCP server host (default: 127.0.0.1).")
-    mcp_group.add_argument("--mcp-port",type=int,default=8082,help="MCP server port (default: 8082).") 
-    mcp_group.add_argument("--mcp-transport",type=str,default="stdio",choices=["stdio","sse"],help="MCP transport protocol (default: stdio).")
+    # --- MCP Options ---
+    mcp_group = parser.add_argument_group('MCP Server Mode Specific Options')
+    mcp_group.add_argument("--mcp-server", action="store_true", help="Run in MCP server mode. The --input-file is pre-analyzed, and tools operate on this file.")
+    mcp_group.add_argument("--mcp-host", type=str, default="127.0.0.1", help="MCP server host (default: 127.0.0.1).")
+    mcp_group.add_argument("--mcp-port", type=int, default=8082, help="MCP server port (default: 8082).") 
+    mcp_group.add_argument("--mcp-transport", type=str, default="stdio", choices=["stdio","sse"], help="MCP transport protocol (default: stdio).")
     
     args = None
     try:
         args = parser.parse_args()
     except SystemExit as e:
-        # Argparse calls sys.exit on errors like -h or invalid arguments.
-        # We want to allow this to happen naturally.
         sys.exit(e.code) 
-    except Exception as e_parse: # Should ideally not be reached if argparse handles its exits.
+    except Exception as e_parse:
         print(f"[!] Exception during argument parsing: {type(e_parse).__name__} - {e_parse}", file=sys.stderr)
         sys.exit(1) 
 
-    if args is None: # Should also not be reached if argparse exits on error.
+    if args is None:
         print("[!] Args is None after parsing attempt, exiting.", file=sys.stderr)
         sys.exit(1)
- 
-    check_and_install_dependencies(args.mcp_server)
-
     # Configure logging level based on verbosity AFTER args are parsed
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logger.setLevel(log_level)
@@ -5243,6 +6408,11 @@ if __name__ == '__main__':
         logging.getLogger('uvicorn.access').setLevel(logging.WARNING if not args.verbose else logging.DEBUG)
 
     abs_input_file = str(Path(args.input_file).resolve())
+    if not os.path.exists(abs_input_file):
+        logger.critical(f"Input file not found: {abs_input_file}")
+        print(f"[!] Error: Input file not found: {abs_input_file}", file=sys.stderr)
+        sys.exit(1)
+
     abs_peid_db_path = str(Path(args.peid_db).resolve()) if args.peid_db else str(DEFAULT_PEID_DB_PATH)
     abs_yara_rules_path = str(Path(args.yara_rules).resolve()) if args.yara_rules else None
     abs_capa_rules_dir_arg = str(Path(args.capa_rules_dir).resolve()) if args.capa_rules_dir else None
@@ -5254,10 +6424,17 @@ if __name__ == '__main__':
     if args.skip_peid: analyses_to_skip_arg_list.append("peid")
     if args.skip_yara: analyses_to_skip_arg_list.append("yara")
     if analyses_to_skip_arg_list:
-        logger.info(f"User requested to skip the following analyses via command line: {', '.join(analyses_to_skip_arg_list)}")
+        logger.info(f"Skipping analyses: {', '.join(analyses_to_skip_arg_list)}")
 
+    # FLOSS Config
     floss_min_len_resolved = args.floss_min_length if args.floss_min_length is not None else FLOSS_MIN_LENGTH_DEFAULT
-    
+    floss_fmt = args.floss_format
+
+    # Auto-detect architecture hint for shellcode mode if user left it as 'auto'
+    if args.mode == 'shellcode' and floss_fmt == 'auto':
+        floss_fmt = 'sc64' # Default to 64-bit if unspecified
+        logger.info("Shellcode mode detected with 'auto' format. Defaulting to 'sc64' (64-bit). Use --floss-format sc32 for 32-bit.")
+
     floss_debug_level_map = {
         "NONE": Actual_DebugLevel_Floss.NONE, "DEFAULT": Actual_DebugLevel_Floss.DEFAULT,
         "DEBUG": Actual_DebugLevel_Floss.DEFAULT, 
@@ -5267,9 +6444,9 @@ if __name__ == '__main__':
 
     if args.verbose and floss_script_debug_level_enum_val_resolved == Actual_DebugLevel_Floss.NONE:
         floss_script_debug_level_enum_val_resolved = Actual_DebugLevel_Floss.TRACE 
-        logger.info(f"Main script verbose (-v) is active, elevating FLOSS script debug level for its loggers to TRACE for detailed FLOSS logs.")
+        logger.info(f"Verbose mode active, elevating FLOSS debug level to TRACE.")
 
-
+    # Resolve FLOSS lists
     floss_disabled_types_resolved = []
     if args.floss_no_static: floss_disabled_types_resolved.append(Actual_StringType_Floss.STATIC)
     if args.floss_no_stack: floss_disabled_types_resolved.append(Actual_StringType_Floss.STACK)
@@ -5286,54 +6463,165 @@ if __name__ == '__main__':
     if args.floss_functions:
         for func_str in args.floss_functions:
             try: floss_functions_to_analyze_resolved.append(int(func_str, 0)) 
-            except ValueError: logger.warning(f"Invalid FLOSS function address '{func_str}' in --floss-functions, skipping.")
+            except ValueError: logger.warning(f"Invalid FLOSS function address '{func_str}', skipping.")
     
-    floss_quiet_resolved = args.floss_quiet or (not args.verbose and args.mcp_server and not (floss_script_debug_level_enum_val_resolved > Actual_DebugLevel_Floss.NONE) )
+    floss_quiet_resolved = args.floss_quiet or (not args.verbose and args.mcp_server and not (floss_script_debug_level_enum_val_resolved > Actual_DebugLevel_Floss.NONE))
 
+    # --- MCP Server Mode ---
     if args.mcp_server:
         if not MCP_SDK_AVAILABLE:
             logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.");
             sys.exit(1)
 
-        logger.info(f"MCP Server: Pre-loading and analyzing PE file: {abs_input_file}")
-        logger.info("The MCP server will become available once this initial analysis is complete.")
+        logger.info(f"MCP Server: Loading input file: {abs_input_file} (Mode: {args.mode})")
         try:
-            if not os.path.exists(abs_input_file):
-                logger.critical(f"Input PE file for MCP server not found: {abs_input_file}")
-                sys.exit(1)
             if not os.path.isfile(abs_input_file):
                 logger.critical(f"Input path for MCP server is not a file: {abs_input_file}")
                 sys.exit(1)
 
-            temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
-            ANALYZED_PE_FILE_PATH = abs_input_file
+            # --- Loading Logic with Mode Support ---
+            if args.mode == 'shellcode':
+                with open(abs_input_file, 'rb') as f:
+                    raw_data = f.read()
+                state.pe_object = MockPE(raw_data)
+                state.filepath = abs_input_file
+                
+                # Manually build the analysis dict for shellcode
+                state.pe_data = {
+                    "filepath": abs_input_file,
+                    "mode": "shellcode",
+                    "file_hashes": _parse_file_hashes(raw_data),
+                    "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
+                    "floss_analysis": {"status": "Pending..."} 
+                }
+                
+                # Trigger FLOSS if not skipped
+                if "floss" not in analyses_to_skip_arg_list:
+                    state.pe_data['floss_analysis'] = _parse_floss_analysis(
+                        abs_input_file, floss_min_len_resolved, args.floss_verbose_level,
+                        floss_script_debug_level_enum_val_resolved, floss_fmt,
+                        floss_disabled_types_resolved, floss_only_types_resolved,
+                        floss_functions_to_analyze_resolved, floss_quiet_resolved,
+                        args.regex_pattern
+                    )
+                    # Sift strings after FLOSS
+                    _perform_unified_string_sifting(state.pe_data)
 
-            ANALYZED_PE_DATA = _parse_pe_to_dict(
-                temp_pe_obj_for_preload, abs_input_file, abs_peid_db_path, abs_yara_rules_path,
-                abs_capa_rules_dir_arg,
-                abs_capa_sigs_dir_arg,
-                args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                floss_min_len_arg=floss_min_len_resolved,
-                floss_verbose_level_arg=args.floss_verbose_level,
-                floss_script_debug_level_arg=floss_script_debug_level_enum_val_resolved,
-                floss_format_hint_arg=args.floss_format,
-                floss_disabled_types_arg=floss_disabled_types_resolved,
-                floss_only_types_arg=floss_only_types_resolved,
-                floss_functions_to_analyze_arg=floss_functions_to_analyze_resolved,
-                floss_quiet_mode_arg=floss_quiet_resolved,
-                analyses_to_skip=analyses_to_skip_arg_list 
-            )
-            PE_OBJECT_FOR_MCP = temp_pe_obj_for_preload 
-            logger.info(f"MCP: Successfully pre-loaded and analyzed: {abs_input_file}. Server is ready.")
+            else:
+                # PE Mode
+                temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
+                state.filepath = abs_input_file
+                state.pe_object = temp_pe_obj_for_preload 
+
+                state.pe_data = _parse_pe_to_dict(
+                    temp_pe_obj_for_preload, abs_input_file, abs_peid_db_path, abs_yara_rules_path,
+                    abs_capa_rules_dir_arg, abs_capa_sigs_dir_arg,
+                    args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
+                    floss_min_len_arg=floss_min_len_resolved,
+                    floss_verbose_level_arg=args.floss_verbose_level,
+                    floss_script_debug_level_arg=floss_script_debug_level_enum_val_resolved,
+                    floss_format_hint_arg=floss_fmt,
+                    floss_disabled_types_arg=floss_disabled_types_resolved,
+                    floss_only_types_arg=floss_only_types_resolved,
+                    floss_functions_to_analyze_arg=floss_functions_to_analyze_resolved,
+                    floss_quiet_mode_arg=floss_quiet_resolved,
+                    analyses_to_skip=analyses_to_skip_arg_list 
+                )
+            
+            logger.info(f"MCP: Successfully loaded analysis for: {abs_input_file}.")
+
+            # --- Background Angr Analysis (Mode Aware) ---
+            if ANGR_AVAILABLE:
+                task_id = "startup-angr"
+                
+                # Register task
+                state.background_tasks[task_id] = {
+                    "status": "running",
+                    "progress_percent": 0,
+                    "progress_message": "Starting background pre-analysis...",
+                    "created_at": datetime.datetime.now().isoformat(),
+                    "tool": "startup_auto_analysis"
+                }
+                
+                # Start Monitor
+                if not state.monitor_thread_started:
+                    monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
+                    monitor_thread.start()
+                    state.monitor_thread_started = True
+
+                # Define Inline Worker to capture args variables correctly
+                def _shellcode_aware_angr_worker(fpath, tid):
+
+                    try:
+                        _update_progress(tid, 1, "Loading Angr Project...")
+                        
+                        if args.mode == 'shellcode':
+                            # Derive arch from floss_format or default to x86
+                            arch = "amd64" if "64" in floss_fmt else "x86"
+                            _update_progress(tid, 5, f"Loading raw shellcode as {arch}...")
+                            proj = angr.Project(fpath, main_opts={'backend': 'blob', 'arch': arch}, auto_load_libs=False)
+                        else:
+                            proj = angr.Project(fpath, auto_load_libs=False)
+                            
+                        state.angr_project = proj
+                        _update_progress(tid, 20, "Building Control Flow Graph (Heavy)...")
+                        
+                        # Build CFG
+                        cfg = proj.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
+                        state.angr_cfg = cfg
+                        _update_progress(tid, 80, "CFG generated. Identifying loops...")
+                        
+                        # Pre-calc Loops
+                        loop_finder = proj.analyses.LoopFinder(kb=proj.kb)
+                        raw_loops = {}
+                        for loop in loop_finder.loops:
+                            try:
+                                node = cfg.model.get_any_node(loop.entry.addr)
+                                if node and node.function_address:
+                                    func_addr = node.function_address
+                                    if func_addr not in raw_loops: raw_loops[func_addr] = []
+                                    block_count = len(list(loop.body_nodes))
+                                    raw_loops[func_addr].append({
+                                        "entry": hex(loop.entry.addr),
+                                        "blocks": block_count,
+                                        "subloops": bool(loop.subloops)
+                                    })
+                            except Exception: continue
+                        
+                        state.angr_loop_cache = raw_loops
+                        state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
+
+                        # Finish
+                        state.background_tasks[tid]["status"] = "completed"
+                        state.background_tasks[tid]["result"] = {"message": "Analysis ready."}
+                        state.background_tasks[tid]["progress_percent"] = 100
+                        state.background_tasks[tid]["progress_message"] = "Startup analysis complete."
+                        print(f"\n[*] Background Angr Analysis finished.")
+                        
+                    except Exception as ex:
+                        state.background_tasks[tid]["status"] = "failed"
+                        state.background_tasks[tid]["error"] = str(ex)
+                        _update_progress(tid, 0, f"Failed: {ex}")
+                
+                # Start the thread
+                angr_thread = threading.Thread(
+                    target=_shellcode_aware_angr_worker, 
+                    args=(abs_input_file, task_id),
+                    daemon=True
+                )
+                angr_thread.start()
+                logger.info("MCP: Background Angr analysis thread started.")
+
+            logger.info("The MCP server is ready.")
 
         except Exception as e:
-            logger.critical(f"MCP: Failed to pre-load/analyze PE file '{abs_input_file}': {str(e)}", exc_info=True) 
+            logger.critical(f"MCP: Failed to start server environment: {str(e)}", exc_info=True) 
             if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload: 
                 temp_pe_obj_for_preload.close()
-            ANALYZED_PE_FILE_PATH = None 
-            ANALYZED_PE_DATA = None
-            PE_OBJECT_FOR_MCP = None
-            logger.error("MCP server will not start due to pre-load analysis failure.")
+            state.filepath = None 
+            state.pe_data = None
+            state.pe_object = None
+            logger.error("MCP server startup aborted.")
             sys.exit(1) 
 
         if args.mcp_transport=="sse":
@@ -5353,60 +6641,57 @@ if __name__ == '__main__':
             logger.critical(f"MCP Server encountered an unhandled error: {str(e)}", exc_info=True)
             server_exc=e
         finally:
-            if PE_OBJECT_FOR_MCP: 
-                PE_OBJECT_FOR_MCP.close()
-                logger.info("MCP: Closed pre-loaded PE object upon server exit.")
+            if state.pe_object: 
+                state.pe_object.close()
+                logger.info("MCP: Closed pre-loaded object upon server exit.")
             sys.exit(1 if server_exc else 0) 
 
-    else: # CLI Mode
-        cli_capa_rules_to_use = abs_capa_rules_dir_arg
-        if "capa" not in analyses_to_skip_arg_list and CAPA_AVAILABLE: 
-            if not cli_capa_rules_to_use or not os.path.isdir(cli_capa_rules_to_use) or not os.listdir(cli_capa_rules_to_use):
-                logger.info(f"CLI Mode: Capa rules dir '{cli_capa_rules_to_use if cli_capa_rules_to_use else 'not specified'}' is invalid or empty. Attempting download to script-relative default.")
-                default_capa_base_cli = str(SCRIPT_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
-                cli_capa_rules_to_use = ensure_capa_rules_exist(default_capa_base_cli, CAPA_RULES_ZIP_URL, args.verbose)
-                if not cli_capa_rules_to_use:
-                    logger.error("CLI Mode: Failed to ensure capa rules. Capa analysis will be skipped or may fail if attempted.")
-                else:
-                    logger.info(f"CLI Mode: Using capa rules from: {cli_capa_rules_to_use}")
-        elif "capa" in analyses_to_skip_arg_list:
-             logger.info("CLI Mode: Capa analysis is skipped by user, not attempting to load rules.")
-             cli_capa_rules_to_use = None 
-        elif not CAPA_AVAILABLE:
-             logger.warning("CLI Mode: Capa library not available, capa rule download/check skipped.")
-             cli_capa_rules_to_use = None
-
+    # --- CLI Mode ---
+    else:
         try:
-            _cli_analyze_and_print_pe(
-                abs_input_file, abs_peid_db_path, abs_yara_rules_path,
-                cli_capa_rules_to_use, 
-                abs_capa_sigs_dir_arg,
-                args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                # FLOSS CLI args
-                floss_min_len_cli=floss_min_len_resolved,
-                floss_verbose_level_cli=args.floss_verbose_level,
-                floss_script_debug_level_cli=floss_script_debug_level_enum_val_resolved,
-                floss_format_hint_cli=args.floss_format,
-                floss_disabled_types_cli=floss_disabled_types_resolved,
-                floss_only_types_cli=floss_only_types_resolved,
-                floss_functions_to_analyze_cli=floss_functions_to_analyze_resolved,
-                floss_quiet_mode_cli=floss_quiet_resolved,
-                # General CLI args
-                extract_strings_cli=args.extract_strings, 
-                min_str_len_cli=args.min_str_len, 
-                search_strings_cli=args.search_string, 
-                strings_limit_cli=args.strings_limit,
-                hexdump_offset_cli=args.hexdump_offset, 
-                hexdump_length_cli=args.hexdump_length, 
-                hexdump_lines_cli=args.hexdump_lines,
-                analyses_to_skip_cli_arg=analyses_to_skip_arg_list 
-            )
+            if args.mode == 'shellcode':
+                print(f"[*] CLI Mode: Shellcode Analysis ({abs_input_file})")
+                with open(abs_input_file, 'rb') as f:
+                    data = f.read()
+                
+                print(f"\n--- File Hashes ---")
+                hashes = _parse_file_hashes(data)
+                for k, v in hashes.items(): print(f"  {k.upper()}: {v}")
+                
+                if args.extract_strings:
+                    print(f"\n--- Strings (Min Len: {args.min_str_len}) ---")
+                    for off, s in _extract_strings_from_data(data, args.min_str_len):
+                        print(f"  {hex(off)}: {s}")
+                
+                if args.hexdump_offset is not None and args.hexdump_length is not None:
+                     print(f"\n--- Hex Dump ---")
+                     start = args.hexdump_offset
+                     end = start + args.hexdump_length
+                     lines = _format_hex_dump_lines(data[start:end], start, 16)
+                     for l in lines[:args.hexdump_lines]: print(l)
+
+                print("\n[!] Note: For deep shellcode analysis (Angr/FLOSS), please use MCP Server mode or FLOSS directly.")
+                
+            else:
+                # PE CLI Mode
+                pe_obj = pefile.PE(abs_input_file, fast_load=False)
+                _cli_analyze_and_print_pe(
+                    abs_input_file, abs_peid_db_path, abs_yara_rules_path,
+                    abs_capa_rules_dir_arg, abs_capa_sigs_dir_arg,
+                    args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
+                    floss_min_len_resolved, args.floss_verbose_level,
+                    floss_script_debug_level_enum_val_resolved, floss_fmt,
+                    floss_disabled_types_resolved, floss_only_types_resolved,
+                    floss_functions_to_analyze_resolved, floss_quiet_resolved,
+                    args.extract_strings, args.min_str_len, args.search_string,
+                    args.strings_limit, args.hexdump_offset, args.hexdump_length,
+                    args.hexdump_lines, analyses_to_skip_arg_list 
+                )
         except KeyboardInterrupt:
-            safe_print("\n[*] CLI Analysis interrupted by user. Exiting.")
+            print("\n[*] CLI Analysis interrupted by user. Exiting.")
             sys.exit(1) 
         except Exception as e_cli_main:
-            safe_print(f"\n[!] An critical unexpected error occurred during CLI analysis: {type(e_cli_main).__name__} - {e_cli_main}")
-            logger.critical("Critical unexpected error in CLI main execution", exc_info=True)
+            print(f"\n[!] A critical unexpected error occurred during CLI analysis: {type(e_cli_main).__name__} - {e_cli_main}", file=sys.stderr)
             sys.exit(1) 
 
     sys.exit(0)
