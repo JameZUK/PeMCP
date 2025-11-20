@@ -1,223 +1,152 @@
-# **PeMCP Toolkit \- Comprehensive Portable Executable Analysis Suite**
+# **PeMCP Toolkit \- Advanced PE Analysis & Decompilation Suite**
 
-The PeMCP Toolkit is a Python-based script designed for in-depth analysis of Portable Executable (PE) files. It provides functionalities for parsing PE structures, enriching data with valuable context, extracting and decoding embedded information, and performing advanced heuristic analysis. The script can be run directly from the command-line for a summary report or as a Model-Context-Protocol (MCP) server for powerful, programmatic integration.  
-This toolkit moves beyond simple parsing by automating common reverse engineering tasks, such as linking strings to the functions that use them, correlating malware behaviors with suspicious indicators, and ranking strings by their relevance. It is an invaluable tool for malware analysis, reverse engineering, digital forensics, and software auditing.
+The **PeMCP Toolkit** is a professional-grade Python suite designed for the in-depth static and dynamic analysis of Portable Executable (PE) files and raw shellcode. While it serves as a powerful CLI tool for generating comprehensive reports, its primary strength lies in its **Model-Context-Protocol (MCP) Server** mode.  
+In MCP mode, PeMCP acts as an intelligent backend for LLMs (like Claude or other AI agents), providing them with a suite of **40+ specialized tools** to interactively explore, decompile, and analyze binaries. It bridges the gap between high-level AI reasoning and low-level binary instrumentation.
+
+# **Key Features**
+
+### **1\. Advanced Binary Analysis (Powered by Angr)**
+
+Beyond standard static analysis, PeMCP now integrates the **Angr** binary analysis framework to provide capabilities typically reserved for dedicated reverse engineering platforms:
+
+* **Decompilation**: Convert assembly into human-readable C-like pseudocode on the fly.  
+* **Control Flow Graph (CFG)**: Generate and traverse function blocks and edges.  
+* **Symbolic Execution**: Automatically find inputs to reach specific code paths (e.g., "Find an input that reaches the 'Access Granted' block").  
+* **Emulation**: Execute functions with concrete arguments using the Unicorn engine to observe behavior safely.  
+* **Slicing & Dominators**: Perform forward/backward slicing to track data flow and identify critical code dependencies.
+
+### **2\. Comprehensive Static Analysis**
+
+* **PE Structure**: Full parsing of DOS/NT Headers, Imports/Exports, Resources, TLS, Debug, and Load Config.  
+* **Signatures**: Authenticode validation (Signify), certificate parsing (Cryptography), and Packer detection (PEiD).  
+* **Capabilities**: Integrated **Capa** analysis to map binary behaviors to the MITRE ATT\&CK framework.  
+* **Strings**: **FLOSS** integration for extracting static, stack, tight, and decoded strings, ranked by relevance using **StringSifter**.
+
+### **3\. Robust Architecture**
+
+* **Docker-First Design**: No interactive prompts. Dependencies are managed via environment or Docker, making it CI/CD and container-ready.  
+* **State Encapsulation**: Uses a centralized AnalyzerState class to manage analysis context, ensuring thread safety and stability.  
+* **Background** Task **Management**: Long-running operations (like symbolic execution) run asynchronously with a heartbeat monitor, preventing timeouts.
 
 ## **Prerequisites and Installation**
 
-1. **Python 3.7+**: Ensure you have a compatible version of Python installed.  
-2. **Clone the Repository**:  
-   Bash  
-   git clone https://github.com/JameZUK/PeMCP/  
-   cd PeMCP
+### **Option A: Docker (Recommended)**
 
-3. **Install Dependencies**: The script will automatically prompt you to install missing core or optional dependencies on the first run. Alternatively, you can install them manually. The core dependency is pefile. All other libraries are optional but highly recommended for full functionality.  
-   Bash  
-   pip install pefile "flare-capa" "flare-floss" "flare-stringsifter" "thefuzz\[speedup\]" "yara-python" cryptography requests signify "mcp-sdk\[cli\]"
+The easiest way to run PeMCP is via Docker. This handles all complex dependencies (Angr, Unicorn, Vivisect) automatically.
 
-   * **Core Libraries**:  
-     * pefile: The essential library for parsing the PE file structure.  
-   * **Highly Recommended Analysis Libraries**:  
-     * flare-floss: Required for advanced string extraction (static, stack, tight, decoded).  
-     * vivisect: A critical dependency for flare-floss and all context-aware analysis (e.g., string-to-function linking).  
-     * flare-capa: Required for identifying program capabilities.  
-     * flare-stringsifter: Required for ranking strings by relevance, a core feature of the toolkit.  
-     * thefuzz\[speedup\]: Enables powerful fuzzy string searching capabilities.  
-     * yara-python: Required for all YARA scanning functionality.  
-   * **Utility and Integration Libraries**:  
-     * cryptography: For advanced parsing of digital signature certificate details.  
-     * signify: For validation of Authenticode digital signatures.  
-     * requests: For automatically downloading the PEiD database, Capa rules, and for VirusTotal queries.  
-     * mcp\[cli\]: **Required only** for running in \--mcp-server mode.  
-4. **Data Files**:  
-   * **PEiD Database (userdb.txt)**: Handled automatically by the script.  
-   * **Capa Rules**: Handled automatically by the script.
+1. **Build the Image**:  
+   docker build \-t pemcp-toolkit .
 
-## **Docker Usage**
+2. **Run** as MCP **Server**:  
+   \# Create a directory for your malware samples  
+   mkdir \-p ./samples
 
-For a consistent and isolated environment, you can run the PeMCP toolkit inside a Docker container. This manages all Python dependencies for you. The Dockerfile is included in this repository.
+   \# Run the container  
+   docker run \--rm \-it \\  
+     \-p 8082:8082 \\  
+     \-v "$(pwd)/samples:/app/samples" \\  
+     \-e VT\_API\_KEY="your\_virustotal\_key" \\  
+     pemcp-toolkit \\  
+     \--mcp-server \\  
+     \--input-file /app/samples/suspicious.exe \\  
+     \--mcp-host 0.0.0.0
 
-### **1\. Build the Docker Image**
+### **Option B: Local Installation**
 
-From your terminal, in the root directory of this repository (where the Dockerfile is located), run the build command:
+If you prefer running locally, you must have Python 3.10+ and cmake installed (for building Unicorn/Angr bindings).
 
-Bash
+1. **Install System Dependencies (Ubuntu/Debian)**:  
+   sudo apt-get install build-essential libssl-dev cmake
 
-docker build \-t pemcp-toolkit .
+2. **Install Python Packages**:  
+   pip install \-r requirements.txt
 
-### **2\. Prepare Local Directories and Run**
+   *Note: Ensure pefile, angr\[unicorn\], flare-floss, flare-capa, rapidfuzz, and mcp\[cli\] are installed.*
 
-To analyze files, you need to mount them into the container. It's best practice to create local directories for your samples and rules.
+## **Modes of Operation**
 
-Bash
+### **1\. CLI Mode (One-Shot Report)**
 
-\# Create directories to hold your samples and rules  
-mkdir \-p local\_data/malware  
-mkdir \-p local\_data/rules/yara
+Best for generating a massive, human-readable dump of all static data found in a file.  
+python PeMCP.py \--input-file malware.exe \--verbose \> analysis\_report.txt
 
-\# Place your PE file (e.g., sample.exe) into local\_data/malware/  
-\# Place your YARA rules into local\_data/rules/yara/
+**Capabilities in CLI Mode:**
 
-#### **Option A: Run a One-Shot CLI Analysis**
+* Full PE header dump.  
+* Hashes (MD5, SHA256, SSDeep).  
+* YARA & PEiD scans.  
+* Capa capability report.  
+* FLOSS string extraction.
 
-This command runs the analysis, prints the report to your console, and then the container is removed.
+### **2\. MCP Server Mode (Interactive Agent)**
 
-Bash
+Best for use with AI coding assistants or MCP clients. The server pre-loads the binary and exposes tools to query it dynamically.  
+python PeMCP.py \--mcp-server \--input-file malware.exe
 
-docker run \--rm \\  
-  \-v "$(pwd)/local\_data/malware:/app/malware" \\  
-  pemcp-toolkit \\  
-  \--input-file /app/malware/sample.exe \--verbose
+#### **Available Tools (Highlights)**
 
-#### **Option B: Run as an Interactive MCP Server**
+**🔍 Deep Binary Analysis (Angr)**
 
-This is the recommended way to use the full power of the toolkit. It starts the server, maps the port to your local machine, and mounts your data directories.
+* decompile\_function\_with\_angr: Returns C-like pseudocode for a specific address.  
+* find\_path\_to\_address: Uses symbolic execution to solve for inputs that reach a target instruction.  
+* emulate\_function\_execution: Runs a function with specific arguments in a sandboxed emulator.  
+* get\_function\_cfg: Returns the nodes and edges of a function's control flow graph.  
+* get\_backward\_slice / get\_forward\_slice: Traces code reachability.  
+* analyze\_binary\_loops: Detects and characterizes loops in the binary.
 
-Bash
+**🧪 Triage & Forensics**
 
-docker run \--rm \-it \\  
-  \-p 127.0.0.1:8082:8082 \\  
-  \-v "$(pwd)/local\_data/malware:/app/malware" \\  
-  \-v "$(pwd)/local\_data/rules:/app/rules" \\  
-  pemcp-toolkit \\  
-  \--mcp-server \\  
-  \--input-file /app/malware/sample.exe \\  
-  \--mcp-host 0.0.0.0 \\  
-  \--yara-rules /app/rules/yara
+* get\_triage\_report: Auto-generates a summary of high-value indicators (suspicious imports, high-score strings, severe capabilities).  
+* get\_virustotal\_report\_for\_loaded\_file: Queries VirusTotal for the file hash (requires VT\_API\_KEY).  
+* reanalyze\_loaded\_pe\_file: Triggers a re-scan (e.g., to enable Angr features if skipped initially).
 
-**Explanation of the docker run command:**
+**📝 String & Data Analysis**
 
-* \--rm: Automatically removes the container when it exits.  
-* \-it: Runs in interactive mode, showing you the server logs. You can stop it with Ctrl+C. Use \-d to run it in the background (detached).  
-* \-p 127.0.0.1:8082:8082: Maps port 8082 from the container to port 8082 on your local machine (localhost).  
-* \-v "$(pwd)/local\_data/malware:/app/malware": Mounts your local malware directory to the /app/malware directory inside the container.  
-* \-v "$(pwd)/local\_data/rules:/app/rules": Mounts your local rules directory, allowing you to use custom YARA or Capa rules from within the container.  
-* \--mcp-server: The flag to start the server.  
-* \--input-file /app/malware/sample.exe: **Crucially**, the path to the file is the path *inside the container*.  
-* \--mcp-host 0.0.0.0: **Required** for the server inside the container to be accessible from your host machine via the mapped port.  
-* \--yara-rules /app/rules/yara: An example of using the mounted volume to provide custom rules to the script.
+* get\_top\_sifted\_strings: Returns strings ranked by "interestingness" (using Machine Learning).  
+* fuzzy\_search\_strings: Finds strings similar to a query (great for finding obfuscated keys).  
+* find\_and\_decode\_encoded\_strings: Detects Base64/Hex/XOR patterns and attempts heuristic decoding.  
+* search\_floss\_strings: Regex search over FLOSS-extracted strings (stack, tight, decoded).
 
-## **Overview of PeMCP Functionality**
+**🧬 Context & Linking**
 
-The PeMCP Toolkit (PeMCP.py) offers two primary modes of operation:
+* get\_string\_usage\_context: Shows the assembly instructions around where a string is used.  
+* get\_strings\_for\_function: Lists all strings referenced by a specific function.
 
-1. **Command-Line Interface (CLI) Mode**:  
-   * **Description**: Performs a comprehensive static analysis of a specified PE file and prints a detailed report to the console. This mode is best for getting a quick, high-level overview of a file.  
-   * **Invocation**:  
-     Bash  
-     python PeMCP.py \--input-file \<file\_path\> \[options\]
+## **Configuration**
 
-2. **Model-Context-Protocol (MCP) Server Mode**:  
-   * **Description**: The most powerful mode. It runs as an MCP server, pre-analyzing a single PE file at startup and enriching the data with advanced context. All MCP tools then operate on this pre-loaded file's data, allowing for deep, interactive, and programmatic analysis. The server will only become fully available after the initial analysis completes successfully.  
-   * **Invocation**:  
-     Bash  
-     python PeMCP.py \--mcp-server \--input-file \<file\_path\> \[server\_options\]
+### **Environment Variables**
 
-### **Core Analysis Capabilities:**
+* VT\_API\_KEY: (Optional) Your VirusTotal API key. Required for the get\_virustotal\_report\_for\_loaded\_file tool.
 
-* **Detailed PE Structure Parsing**: DOS Header, NT Headers, Data Directories, Section Table, etc.  
-* **Hashing**: MD5, SHA1, SHA256 for the full file and individual sections. Includes an integrated pure-Python **SSDeep** for fuzzy hashing.  
-* **Import/Export Analysis**: Detailed listing of imported DLLs and functions (including delay-loaded imports) and exported functions.  
-* **Advanced String Analysis**:  
-  * **FLOSS Extraction**: Uses flare-floss for advanced extraction of static, stack, tight, and decoded strings.  
-  * **StringSifter Ranking**: Automatically ranks all extracted strings by their likely relevance for malware analysis using flare-stringsifter.  
-  * **Indicator Categorization**: Automatically categorizes strings by type (e.g., url, ipv4, filepath, registry\_key).  
-  * **Fuzzy Search**: Provides a tool to find strings that are similar, but not identical, to a search query using thefuzz.  
-* **Enriched Analysis Context**:  
-  * **String-to-Function Linking**: Automatically finds which functions reference specific static strings.  
-  * **Disassembly Snippets**: Provides the disassembly context around each string reference, showing how the string is used in code.  
-  * **Behavior Correlation**: Automatically correlates strings with program capabilities identified by Capa (e.g., links a URL string to the function that Capa flags for network communication).  
-* **Advanced Obfuscation Detection**:  
-  * **Multi-Layer Decoding**: The encoded string finder can now recursively decode multiple layers of encoding (e.g., a Base64 string that decodes to a Hex string).  
-  * **Heuristic-Based Confidence**: Assigns a confidence score to decoded strings based on their location (e.g., higher confidence for strings in data sections).  
-  * **XOR Bruteforcing**: Includes a decoder to automatically find the key for and decode single-byte XORed strings.  
-* **Signature & Capability Detection**:  
-  * **Capa**: Identifies program capabilities based on the MITRE ATT\&CK framework.  
-  * **YARA**: Scans the file with user-provided YARA rules.  
-  * **PEiD**: Matches packer and compiler signatures.  
-* **Other PE Features**: Rich Header decoding, Version Information, Digital Signatures, Debug Information (PDB paths), TLS Callbacks, Load Configuration, and more.
+### **Shellcode Analysis**
 
-## **CLI Mode Command-Line Usage**
+PeMCP supports raw shellcode analysis. When using raw binaries:
 
-This mode is best for a quick, static report. For deep, interactive analysis and to access the most advanced features, use the **MCP Server Mode**.  
-**Full Usage:**
+1. Use \--mode shellcode.  
+2. Ideally provide an architecture hint to FLOSS/Angr using \--floss-format sc64 (or sc32).
 
-Bash
+python PeMCP.py \--mcp-server \--input-file shellcode.bin \--mode shellcode \--floss-format sc64
 
-python PeMCP.py \--input-file \<file\_path\> \[options\]
+## **Architecture & Design**
 
-* \--input-file \<file\_path\>: **(Required)** Path to the PE file to analyze.  
-* \-v, \--verbose: Enable more detailed output.  
-* \-d, \--db \<PATH\_TO\_USERDB\>: Custom path to PEiD userdb.txt.  
-* \-y, \--yara-rules \<RULES\_PATH\>: Path to a YARA rule file or directory.  
-* \--capa-rules-dir \<PATH\>: Directory containing Capa rule files.  
-* \--skip-capa, \--skip-floss, etc.: Options to skip specific, time-consuming analyses.
-
-*For a complete and current list of all command-line options, run:*
-
-Bash
-
-python PeMCP.py \--help
-
-## **MCP Server Mode Operation**
-
-When run with \--mcp-server, the script becomes a powerful backend for programmatic analysis. The server pre-analyzes the specified input file and exposes a rich API for querying the results.
-
-### **Available MCP Tools (Highlights)**
-
-The server provides a comprehensive set of tools. Below are some of the most powerful and recently added ones.
-
-#### **Core Analysis & Triage**
-
-* get\_triage\_report: **(New)** Runs an automated workflow to find the most suspicious indicators (high-score strings, suspicious imports, high-severity capabilities) and returns a condensed summary report. Ideal for initial triage.  
-* reanalyze\_loaded\_pe\_file: Re-triggers the full analysis pipeline on the loaded file, with options to skip certain modules.  
-* get\_analyzed\_file\_summary: Provides a high-level overview of the PE file's characteristics.
-
-#### **Advanced String Analysis & Searching**
-
-* get\_top\_sifted\_strings: Returns a list of the most relevant strings, sorted by their sifter\_score. Now includes powerful granular filters for score, length, category, and regex.  
-* fuzzy\_search\_strings: **(New)** Performs a fuzzy search to find strings that are similar to a given query. Excellent for finding obfuscated or slightly misspelled strings.  
-* find\_and\_decode\_encoded\_strings: Finds and decodes potentially encoded substrings. Now features multi-layer decoding and a confidence score based on heuristics.  
-* search\_floss\_strings: Performs a regex search across all strings extracted by FLOSS.
-
-#### **Context & Correlation Tools**
-
-* get\_string\_usage\_context: **(New)** For a given static string's file offset, this tool returns the disassembly snippets for every location in the code where the string is used.  
-* get\_strings\_for\_function: **(New)** For a given function's address, this tool returns all strings that are referenced by that function.
-
-#### **PE Structure & Utilities**
-
-* **Detailed Information Tools**: A full suite of tools like get\_imports\_info, get\_sections\_info, get\_capa\_analysis\_info, etc., provide complete access to every part of the parsed PE file.  
-* **Deobfuscation & Dumping**: Tools like deobfuscate\_base64, deobfuscate\_xor\_single\_byte, and get\_hex\_dump provide low-level data manipulation capabilities.  
-* **External Integration**: The get\_virustotal\_report\_for\_loaded\_file tool can query the VirusTotal API for reputation information on the loaded file.
-
-## **How It Works (General Principles)**
-
-* **PE Analysis**: Primarily uses the pefile library for parsing PE structures. Hashes are calculated using hashlib and the integrated SSDeep class.  
-* **External Tool Integration**: Leverages yara-python, flare-capa, flare-floss, flare-stringsifter, and thefuzz through their Python APIs.  
-* **Contextual Analysis**: Uses the vivisect workspace (provided by flare-floss) to perform advanced code analysis, such as finding cross-references between code and data.  
-* **MCP Server**: Uses the modelcontextprotocol library to expose its analysis tools.
-
-## **Limitations**
-
-* **Static Analysis Only**: The script performs static analysis and does not execute the PE files. Dynamic behavior is not observed.  
-* **Advanced Obfuscation**: While the toolkit has features to combat common encoding and obfuscation, its effectiveness against sophisticated, custom packers or runtime-only string construction is limited by the underlying static analysis engines.  
-* **Authenticode Full Chain Validation**: Relies on signify; comprehensive trust chain validation might depend on system certificate stores.
+* **Single-File Analysis Context**: The server holds one file in memory (AnalyzerState). All tools operate on this shared context, ensuring consistency.  
+* **Lazy Loading**: Heavy analysis (like Angr CFG generation) can be triggered in the background or on-demand to allow for instant server startup.  
+* **Smart Truncation**: MCP responses are automatically protected against token-limit overflows. If a tool returns 1MB of JSON, the server intelligently truncates lists or strings to fit within 64KB limits while preserving structural integrity.
 
 ## **Contributing**
 
-Contributions are welcome\! Please follow standard GitHub practices:
+Contributions are welcome\!
 
 1. Fork the repository.  
-2. Create a feature branch (git checkout \-b feature/YourAmazingFeature).  
-3. Commit your changes (git commit \-m 'Add YourAmazingFeature').  
-4. Push to the branch (git push origin feature/YourAmazingFeature).  
+2. Create a feature branch (git checkout \-b feature/AngrEnhancement).  
+3. Commit your changes.  
+4. Push to the branch.  
 5. Open a Pull Request.
 
-## **License1**
+## **License**
 
-Distributed under the MIT License. See LICENSE.txt for more information.
+Distributed under the MIT License. See LICENSE for more information.
 
 ## **Disclaimer**
 
-This toolkit is provided "as-is" for educational and research purposes only. Users are solely responsible for ensuring they have proper authorization before analyzing any files with this tool. The author(s) and contributors are not liable for any misuse or damage caused by this software.  
+This toolkit is provided "as-is" for educational and research purposes only. It is capable of executing parts
