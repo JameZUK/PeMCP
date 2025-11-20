@@ -1,11 +1,27 @@
+# --- Core PE Parsing ---
 pefile
-cryptography
-requests
-signify-windows
-yara-python
-flare-capa
-flare-floss
+
+# --- Advanced Binary Analysis & Emulation ---
+# Includes unicorn engine support for fast emulation
+angr[unicorn]
 vivisect
-mcp-sdk[cli]
-flare-stringsifter
-thefuzz[speedup]
+
+# --- FLARE Tools (Capabilities & Advanced Strings) ---
+flare-floss
+flare-capa
+
+# --- String Analysis & Ranking ---
+stringsifter
+rapidfuzz
+
+# --- Signatures, Cryptography & Scanning ---
+yara-python
+signify
+cryptography
+
+# --- Network & API (VirusTotal/Updates) ---
+requests
+
+# --- Server Infrastructure ---
+# Model Context Protocol SDK
+mcp[cli]
