@@ -31,7 +31,7 @@ Modes:
 """
 
 
-# Standard library imports - Group them at the top
+# Standard library imports
 import datetime
 import os
 import sys
@@ -43,27 +43,27 @@ import hashlib
 import warnings
 import json
 import logging
-import io # For BytesIO
-import asyncio # For asyncio.to_thread
-import importlib.util # For checking module availability
-import subprocess # For calling pip
-import mmap # Added for handling mmap objects in ssdeep
-import zipfile # For extracting capa rules
-import shutil # For removing directories
+import io
+import asyncio
+import importlib.util
+import subprocess
+import mmap
+import zipfile
+import shutil
 import collections
 import copy
-import re # For regex in the new tool
-import base64 # For base64 and base32 decoding in the new tool
-import codecs # For existing deobfuscate_base64 tool and now for general decoding
-import urllib.parse # For URL decoding
-import binascii # Added to handle potential errors from codecs.decode
-import networkx as nx
+import base64
+import codecs
+import urllib.parse
+import binascii
 import uuid
 import threading
 import time
 
 from pathlib import Path
-import copy # For deepcopy in MCP tool limiting
+
+# Third-party (always available)
+import networkx as nx
 
 # Crucial: Import typing early, as it's used for global type hints and throughout the script
 from typing import Dict, Any, Optional, List, Tuple, Set, Union, Type # Added Type for FLOSS
@@ -77,16 +77,39 @@ class AnalyzerState:
         self.pe_data: Optional[Dict[str, Any]] = None
         self.pe_object: Optional[pefile.PE] = None
         self.pefile_version: Optional[str] = None
-        
+
         # Angr State
         self.angr_project = None
         self.angr_cfg = None
         self.angr_loop_cache = None
         self.angr_loop_cache_config = None
-        
+
         # Background Tasks
+        self._task_lock = threading.Lock()
         self.background_tasks: Dict[str, Dict[str, Any]] = {}
         self.monitor_thread_started = False
+
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Thread-safe read of a background task."""
+        with self._task_lock:
+            task = self.background_tasks.get(task_id)
+            return dict(task) if task else None
+
+    def set_task(self, task_id: str, task_data: Dict[str, Any]):
+        """Thread-safe creation/replacement of a background task."""
+        with self._task_lock:
+            self.background_tasks[task_id] = task_data
+
+    def update_task(self, task_id: str, **kwargs):
+        """Thread-safe partial update of a background task's fields."""
+        with self._task_lock:
+            if task_id in self.background_tasks:
+                self.background_tasks[task_id].update(kwargs)
+
+    def get_all_task_ids(self) -> List[str]:
+        """Thread-safe snapshot of current task IDs."""
+        with self._task_lock:
+            return list(self.background_tasks.keys())
 
     def reset_angr(self):
         self.angr_project = None
@@ -98,7 +121,7 @@ class AnalyzerState:
         if self.pe_object:
             try:
                 self.pe_object.close()
-            except:
+            except Exception:
                 pass
             self.pe_object = None
 
@@ -111,35 +134,8 @@ try:
 except ImportError:
     print("[!] CRITICAL ERROR: The 'pefile' library is not found.", file=sys.stderr)
     print("[!] This library is essential for the script to function.", file=sys.stderr)
-    if not sys.stdin.isatty():
-        print("[!] Non-interactive environment. Please install 'pefile' manually (e.g., 'pip install pefile') and re-run the script.", file=sys.stderr)
-        sys.exit(1)
-    else:
-        try:
-            answer = input("Do you want to attempt to install 'pefile' now? (yes/no): ").strip().lower()
-            if answer == 'yes' or answer == 'y':
-                print("[*] Attempting to install 'pefile' (pip install pefile)...")
-                try:
-                    subprocess.check_call([sys.executable, "-m", "pip", "install", "pefile"])
-                    print("[*] 'pefile' installed successfully. Please re-run the script for the changes to take effect.")
-                    sys.exit(0)
-                except subprocess.CalledProcessError as e_pip:
-                    print(f"[!] Error installing 'pefile' via pip: {e_pip}", file=sys.stderr)
-                    print("[!] Please install 'pefile' manually (e.g., 'pip install pefile') and re-run.", file=sys.stderr)
-                    sys.exit(1)
-                except FileNotFoundError:
-                    print("[!] Error: 'pip' command or Python executable not found. Is Python and pip installed correctly and in PATH?", file=sys.stderr)
-                    print("[!] Please install 'pefile' manually (e.g., 'pip install pefile') and re-run.", file=sys.stderr)
-                    sys.exit(1)
-            else:
-                print("[!] 'pefile' was not installed. The script cannot continue. Exiting.")
-                sys.exit(1)
-        except EOFError:
-            print("[!] No input received for the installation prompt. Please install 'pefile' manually and re-run.", file=sys.stderr)
-            sys.exit(1)
-        except KeyboardInterrupt:
-            print("\n[*] Installation of 'pefile' cancelled by user. This library is required. Exiting.", file=sys.stderr)
-            sys.exit(1)
+    print("[!] Install it with: pip install pefile", file=sys.stderr)
+    sys.exit(1)
 
 DATA_DIR = Path(os.getenv("PEMCP_DATA_DIR", Path(__file__).resolve().parent))
 
@@ -156,18 +152,17 @@ def _console_heartbeat_loop():
     """
     while True:
         time.sleep(30)
-        
-        active_tasks_found = False
+
         current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
-        
-        # Snapshot keys to iterate safely
-        task_ids = list(state.background_tasks.keys())
-        
+
+        # Thread-safe snapshot of task IDs and their data
+        task_ids = state.get_all_task_ids()
+
         # Check for running tasks
         running_entries = []
         for task_id in task_ids:
-            task = state.background_tasks[task_id]
-            if task["status"] == "running":
+            task = state.get_task(task_id)
+            if task and task["status"] == "running":
                 running_entries.append((task_id, task))
 
         if running_entries:
@@ -179,7 +174,7 @@ def _console_heartbeat_loop():
                     start_time = datetime.datetime.fromisoformat(task["created_at"])
                     elapsed = datetime.datetime.now() - start_time
                     elapsed_str = str(elapsed).split('.')[0] # Remove microseconds
-                except:
+                except Exception:
                     elapsed_str = "?"
 
                 percent = task.get("progress_percent", 0)
@@ -193,9 +188,7 @@ def _console_heartbeat_loop():
 
 def _update_progress(task_id: str, percent: int, message: str):
     """Helper to safely update progress in the global registry."""
-    if task_id in state.background_tasks:
-        state.background_tasks[task_id]["progress_percent"] = percent
-        state.background_tasks[task_id]["progress_message"] = message
+    state.update_task(task_id, progress_percent=percent, progress_message=message)
         # We optionally print immediate updates here too, but keep it minimal
         # so the 30s heartbeat handles the detailed logging.
         # sys.stdout.write(f"\r... {percent}%: {message}") 
@@ -215,17 +208,14 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
         kwargs['task_id_for_progress'] = task_id
         
         result = await asyncio.to_thread(func, *args, **kwargs)
-        
-        state.background_tasks[task_id]["result"] = result
-        state.background_tasks[task_id]["status"] = "completed"
-        state.background_tasks[task_id]["progress_percent"] = 100
-        state.background_tasks[task_id]["progress_message"] = "Analysis complete."
+
+        state.update_task(task_id, result=result, status="completed",
+                          progress_percent=100, progress_message="Analysis complete.")
         print(f"\n[*] Task {task_id[:8]} finished successfully.")
-        
+
     except Exception as e:
         logger.error(f"Background task {task_id} failed: {e}", exc_info=True)
-        state.background_tasks[task_id]["error"] = str(e)
-        state.background_tasks[task_id]["status"] = "failed"
+        state.update_task(task_id, error=str(e), status="failed")
         print(f"\n[!] Task {task_id[:8]} failed: {e}")
         
 def _startup_angr_analysis_worker(filepath: str, task_id: str):
@@ -272,15 +262,14 @@ def _startup_angr_analysis_worker(filepath: str, task_id: str):
         state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False} # Matches params used above
 
         # 4. Mark Complete
-        state.background_tasks[task_id]["status"] = "completed"
-        state.background_tasks[task_id]["result"] = {"message": "Startup analysis completed successfully."}
+        state.update_task(task_id, status="completed",
+                          result={"message": "Startup analysis completed successfully."})
         _update_progress(task_id, 100, "Startup pre-analysis complete.")
         print(f"\n[*] Background Startup Analysis finished.")
 
     except Exception as e:
         logger.error(f"Startup Angr analysis failed: {e}")
-        state.background_tasks[task_id]["status"] = "failed"
-        state.background_tasks[task_id]["error"] = str(e)
+        state.update_task(task_id, status="failed", error=str(e))
         _update_progress(task_id, 0, f"Failed: {e}")
 
 class SSDeep:
@@ -887,7 +876,7 @@ def _dump_aux_symbol_to_dict(parent_symbol_struct, aux_symbol_struct, aux_idx: i
         name_str="N/A"
         if isinstance(name_bytes,bytes):
             try:name_str=name_bytes.decode('utf-8','ignore').rstrip('\x00')
-            except:name_str=name_bytes.hex()
+            except Exception:name_str=name_bytes.hex()
         elif isinstance(name_bytes,str):name_str=name_bytes.rstrip('\x00')
         aux_dict["filename"]=name_str;return aux_dict
     if parent_storage_class==sym_class_section or (parent_storage_class==sym_class_static and parent_symbol_struct.SectionNumber>0):
@@ -917,7 +906,7 @@ def _dump_aux_symbol_to_dict(parent_symbol_struct, aux_symbol_struct, aux_idx: i
     if isinstance(aux_symbol_struct,bytes):raw_bytes=aux_symbol_struct
     elif hasattr(aux_symbol_struct,'__pack__'):
         try:raw_bytes=aux_symbol_struct.__pack__()
-        except:pass
+        except Exception:pass
     if raw_bytes:aux_dict["hex_data"]=raw_bytes[:18].hex()+("..."if len(raw_bytes)>18 else"")
     else:
         raw_attrs={}
@@ -984,6 +973,12 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
 
         logger.info(f"Extracting capa rules from {zip_path} into {rules_base_dir}...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # Validate member paths to prevent zip-slip attacks
+            target_dir = os.path.realpath(rules_base_dir)
+            for member in zip_ref.namelist():
+                member_path = os.path.realpath(os.path.join(rules_base_dir, member))
+                if not member_path.startswith(target_dir + os.sep) and member_path != target_dir:
+                    raise zipfile.BadZipFile(f"Zip member '{member}' would extract outside target directory (path traversal).")
             zip_ref.extractall(rules_base_dir)
         logger.info("Capa rules extracted successfully from zip.")
 
@@ -1533,7 +1528,7 @@ def _parse_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
         for entry in pe.DIRECTORY_ENTRY_IMPORT:
             dll_info:Dict[str,Any]={'dll_name':"Unknown"};
             try:dll_info['dll_name']=entry.dll.decode('utf-8','ignore')if entry.dll else"N/A"
-            except:pass # Keep 'Unknown' or 'N/A' if decoding fails
+            except Exception:pass # Keep 'Unknown' or 'N/A' if decoding fails
             dll_info['struct']=entry.struct.dump_dict();dll_info['symbols']=[]
             if hasattr(entry,'imports'):
                 for imp in entry.imports:
@@ -1561,13 +1556,13 @@ def _parse_resources_summary(pe: pefile.PE) -> List[Dict[str, Any]]:
             type_name_val=getattr(res_type_entry,'id',None);type_name_str=pefile.RESOURCE_TYPE.get(type_name_val,str(type_name_val))
             if hasattr(res_type_entry,'name')and res_type_entry.name is not None:
                 try:type_name_str=f"{res_type_entry.name.decode('utf-16le','ignore')} ({type_name_str})"
-                except:type_name_str=f"{res_type_entry.name.decode('latin-1','ignore')} ({type_name_str})" # Fallback
+                except Exception:type_name_str=f"{res_type_entry.name.decode('latin-1','ignore')} ({type_name_str})" # Fallback
             if hasattr(res_type_entry,'directory'):
                 for res_id_entry in res_type_entry.directory.entries:
                     id_val=getattr(res_id_entry,'id',None);id_name_str=str(id_val)
                     if hasattr(res_id_entry,'name')and res_id_entry.name is not None:
                         try:id_name_str=f"{res_id_entry.name.decode('utf-16le','ignore')} (ID: {id_val if id_val is not None else 'N/A'})"
-                        except:id_name_str=f"{res_id_entry.name.decode('latin-1','ignore')} (ID: {id_val if id_val is not None else 'N/A'})" # Fallback
+                        except Exception:id_name_str=f"{res_id_entry.name.decode('latin-1','ignore')} (ID: {id_val if id_val is not None else 'N/A'})" # Fallback
                     elif id_val is not None:id_name_str=f"ID: {id_val}"
                     else:id_name_str="Unnamed/ID-less"
                     if hasattr(res_id_entry,'directory'):
@@ -1618,7 +1613,7 @@ def _parse_debug_info(pe: pefile.PE) -> List[Dict[str, Any]]:
                 dbg_item['entry_details']=entry.entry.dump_dict()
                 if entry.struct.Type==pefile.DEBUG_TYPE['IMAGE_DEBUG_TYPE_CODEVIEW']and hasattr(entry.entry,'PdbFileName'):
                     try:dbg_item['pdb_filename']=entry.entry.PdbFileName.decode('utf-8','ignore').rstrip('\x00')
-                    except:dbg_item['pdb_filename']=entry.entry.PdbFileName.hex()if isinstance(entry.entry.PdbFileName,bytes)else str(entry.entry.PdbFileName)
+                    except Exception:dbg_item['pdb_filename']=entry.entry.PdbFileName.hex()if isinstance(entry.entry.PdbFileName,bytes)else str(entry.entry.PdbFileName)
             debug_list.append(dbg_item)
     return debug_list
 
@@ -1742,7 +1737,7 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
                 section_name_cleaned_for_log = "UnknownSection"
                 try:
                     section_name_cleaned_for_log = sec.Name.decode('utf-8','ignore').rstrip('\x00')
-                except: pass
+                except Exception: pass
                 logger.warning(f"PEiD section data error {section_name_cleaned_for_log}: {e}")
 
         if scan_tasks_args:
@@ -1774,7 +1769,7 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
             dll_name="N/A"
             if entry.struct.szName: # RVA to DLL name string
                 try:dll_name=pe.get_string_at_rva(entry.struct.szName).decode('utf-8','ignore')
-                except:pass # Keep N/A if error
+                except Exception:pass # Keep N/A if error
             delay_syms=[]
             # pINT (PointerToINT) points to the Import Name Table for this DLL
             if entry.struct.pINT and hasattr(pe,'OPTIONAL_HEADER'):
@@ -1879,12 +1874,12 @@ def _parse_bound_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
         for desc in pe.DIRECTORY_ENTRY_BOUND_IMPORT: # IMAGE_BOUND_IMPORT_DESCRIPTOR
             d_dict:Dict[str,Any]={'struct':desc.struct.dump_dict(),'name':None,'forwarder_refs':[]}
             try:d_dict['name']=desc.name.decode('utf-8','ignore')if desc.name else"N/A"
-            except:pass # Keep N/A if error
+            except Exception:pass # Keep N/A if error
             if hasattr(desc,'entries'): # IMAGE_BOUND_FORWARDER_REF entries
                 for ref in desc.entries:
                     r_dict:Dict[str,Any]={'struct':ref.struct.dump_dict(),'name':None}
                     try:r_dict['name']=ref.name.decode('utf-8','ignore')if ref.name else"N/A"
-                    except:pass # Keep N/A
+                    except Exception:pass # Keep N/A
                     d_dict['forwarder_refs'].append(r_dict)
             bound_list.append(d_dict)
     return bound_list
@@ -3259,6 +3254,64 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
 mcp_server = FastMCP("PEFileAnalyzerMCP")
 tool_decorator = mcp_server.tool()
 
+# --- MCP Feedback Helpers ---
+
+def _check_pe_loaded(tool_name: str) -> None:
+    """Raise a descriptive RuntimeError if no PE file has been loaded."""
+    if state.pe_data is None or state.filepath is None:
+        raise RuntimeError(
+            f"[{tool_name}] No PE file is currently loaded. "
+            "The server must be started with --input-file to pre-load a file for analysis. "
+            "If a file was provided, startup may have failed — check the server logs."
+        )
+
+def _check_angr_ready(tool_name: str) -> None:
+    """
+    Raise a descriptive RuntimeError if angr is unavailable or still initializing.
+    Provides actionable guidance to the MCP client.
+    """
+    if not ANGR_AVAILABLE:
+        raise RuntimeError(
+            f"[{tool_name}] The angr library is not installed on this server. "
+            "Binary analysis tools (decompilation, CFG, symbolic execution, emulation) "
+            "require angr. Install it with: pip install 'angr[unicorn]'"
+        )
+    if state.filepath is None:
+        raise RuntimeError(
+            f"[{tool_name}] No PE file is loaded. Cannot perform binary analysis."
+        )
+    # Check if background angr startup is still running
+    startup_task = state.get_task("startup-angr")
+    if startup_task and startup_task["status"] == "running":
+        progress = startup_task.get("progress_percent", 0)
+        msg = startup_task.get("progress_message", "Initializing...")
+        raise RuntimeError(
+            f"[{tool_name}] Angr background analysis is still in progress ({progress}%: {msg}). "
+            "Please wait and retry shortly. Use check_task_status('startup-angr') to monitor progress."
+        )
+
+def _check_data_key_available(key_name: str, tool_name: str) -> None:
+    """
+    Check that a specific analysis data key is available in pe_data.
+    Provides context-aware feedback about why data might be missing.
+    """
+    _check_pe_loaded(tool_name)
+    if key_name not in state.pe_data:
+        # Check if this was a skipped analysis
+        skipped_hint = ""
+        skip_map = {
+            "floss_analysis": "floss", "capa_analysis": "capa",
+            "yara_matches": "yara", "peid_matches": "peid"
+        }
+        if key_name in skip_map:
+            skipped_hint = (
+                f" This analysis may have been skipped via --skip-{skip_map[key_name]} at startup. "
+                "Use reanalyze_loaded_pe_file to re-run the analysis."
+            )
+        raise RuntimeError(
+            f"[{tool_name}] Analysis data for '{key_name}' is not available.{skipped_hint}"
+        )
+
 # --- MCP Tools ---
 
 @tool_decorator
@@ -3309,8 +3362,7 @@ async def search_floss_strings(
         raise ValueError("The 'limit' parameter must be a positive integer.")
 
     # --- Data Retrieval ---
-    if state.pe_data is None or 'floss_analysis' not in state.pe_data:
-        raise RuntimeError("No FLOSS analysis data found. Please run an analysis first.")
+    _check_data_key_available("floss_analysis", "search_floss_strings")
     floss_data = state.pe_data.get('floss_analysis', {})
     if not floss_data.get("strings"):
         return {"matches": [], "message": "No FLOSS strings available to search."}
@@ -3556,9 +3608,11 @@ async def reanalyze_loaded_pe_file(
 
     # --- NEW: Angr Globals ---
 
-    if state.filepath is None or not os.path.exists(state.filepath) :
-        await ctx.error("No PE file was successfully pre-loaded at server startup, or path is invalid. Cannot re-analyze.")
-        raise RuntimeError("No PE file pre-loaded or pre-loaded file path is invalid. Cannot re-analyze.")
+    if state.filepath is None or not os.path.exists(state.filepath):
+        raise RuntimeError(
+            "[reanalyze_loaded_pe_file] No PE file was pre-loaded at server startup, "
+            "or the file path is no longer valid. Cannot re-analyze."
+        )
 
     await ctx.info(f"Request to re-analyze pre-loaded PE: {state.filepath}")
 
@@ -3733,9 +3787,8 @@ async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
     await ctx.info(f"Request for analyzed file summary. Limit: {limit}")
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
-        
-    if state.pe_data is None or state.filepath is None:
-        raise RuntimeError("No PE file loaded. Server may not have pre-loaded the input file successfully.")
+
+    _check_pe_loaded("get_analyzed_file_summary")
 
     floss_analysis_summary = state.pe_data.get('floss_analysis', {})
     floss_strings_summary = floss_analysis_summary.get('strings', {})
@@ -3824,7 +3877,7 @@ async def _check_mcp_response_size(
                         if v_len > largest_len:
                             largest_len = v_len
                             largest_key = k
-                    except: continue
+                    except Exception: continue
                 
                 if largest_key:
                     val = modified_data[largest_key]
@@ -3897,8 +3950,8 @@ async def get_full_analysis_results(ctx: Context, limit: int) -> Dict[str, Any]:
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
 
-    if state.pe_data is None: raise RuntimeError("No PE file loaded. Server may not have pre-loaded the input file successfully.")
-    
+    _check_pe_loaded("get_full_analysis_results")
+
     # Prepare the data according to the client's limit on top-level keys
     data_to_send = dict(list(state.pe_data.items())[:limit])
     
@@ -3912,8 +3965,7 @@ def _create_mcp_tool_for_key(key_name: str, tool_description: str):
         if not (isinstance(limit, int) and limit > 0):
             raise ValueError(f"Parameter 'limit' for '{key_name}' must be a positive integer.")
 
-        if state.pe_data is None:
-            raise RuntimeError(f"No PE file loaded. Server may not have pre-loaded the input file successfully. Cannot get '{key_name}'.")
+        _check_pe_loaded(f"get_{key_name}_info")
 
         original_data = state.pe_data.get(key_name)
         if original_data is None:
@@ -4035,8 +4087,7 @@ async def get_floss_analysis_info(ctx: Context,
     if string_type is not None and string_type not in valid_string_types:
         raise ValueError(f"Invalid 'string_type'. Must be one of: {', '.join(valid_string_types)} or None.")
 
-    if state.pe_data is None or 'floss_analysis' not in state.pe_data:
-        raise RuntimeError("No PE file loaded or FLOSS analysis data unavailable.")
+    _check_data_key_available("floss_analysis", "get_floss_analysis_info")
 
     floss_data_block = state.pe_data.get('floss_analysis', {})
     status = floss_data_block.get("status", "Unknown")
@@ -4126,8 +4177,7 @@ async def get_capa_analysis_info(ctx: Context,
     if source_string_limit is not None and not (isinstance(source_string_limit, int) and source_string_limit >= 0):
         raise ValueError("Parameter 'source_string_limit' must be a non-negative integer if provided.")
 
-    if state.pe_data is None or 'capa_analysis' not in state.pe_data:
-        raise RuntimeError("No Capa analysis data found. Ensure Capa analysis ran at startup or via re-analyze.")
+    _check_data_key_available("capa_analysis", "get_capa_analysis_info")
 
     capa_data_block = state.pe_data.get('capa_analysis', {})
     capa_full_results = capa_data_block.get('results') 
@@ -4296,8 +4346,7 @@ async def get_capa_rule_match_details(ctx: Context,
     if selected_feature_fields is not None and not isinstance(selected_feature_fields, list):
         raise ValueError("'selected_feature_fields' must be a list of strings if provided.")
 
-    if state.pe_data is None or 'capa_analysis' not in state.pe_data:
-        raise RuntimeError("No Capa analysis data found.")
+    _check_data_key_available("capa_analysis", "get_capa_rule_match_details")
 
     capa_data_block = state.pe_data.get('capa_analysis', {})
     capa_full_results = capa_data_block.get('results')
@@ -4460,7 +4509,11 @@ async def extract_strings_from_binary(
         raise ValueError("Parameter 'min_sifter_score' must be between 0.0 and 1.0.")
 
     if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
-        raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
+        raise RuntimeError(
+            "No PE file loaded or PE data unavailable. "
+            "The server must be started with --input-file to pre-load a file. "
+            "If a file was provided, check the server logs for load errors."
+        )
 
     try:
         file_data = state.pe_object.__data__
@@ -4526,7 +4579,11 @@ async def search_for_specific_strings(ctx: Context, search_terms: List[str], lim
     """
     await ctx.info(f"Request to search strings: {search_terms}. Limit per term: {limit_per_term}")
     if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
-        raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
+        raise RuntimeError(
+            "No PE file loaded or PE data unavailable. "
+            "The server must be started with --input-file to pre-load a file. "
+            "If a file was provided, check the server logs for load errors."
+        )
     if not search_terms or not isinstance(search_terms,list): raise ValueError("search_terms must be a non-empty list of strings.")
 
     effective_limit_pt = 100
@@ -4570,7 +4627,11 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
     """
     await ctx.info(f"Hex dump requested: Offset {hex(start_offset)}, Length {length}, Bytes/Line {bytes_per_line}, Limit Lines {limit_lines}")
     if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
-        raise RuntimeError("No PE file loaded or PE data unavailable. Server may not have pre-loaded the input file successfully.")
+        raise RuntimeError(
+            "No PE file loaded or PE data unavailable. "
+            "The server must be started with --input-file to pre-load a file. "
+            "If a file was provided, check the server logs for load errors."
+        )
     if not isinstance(start_offset,int)or start_offset<0:raise ValueError("start_offset must be a non-negative integer.")
     if not isinstance(length,int)or length<=0:raise ValueError("length must be a positive integer.")
 
@@ -4989,8 +5050,7 @@ async def get_top_sifted_strings(
             raise ValueError(f"Invalid 'filter_regex': {e}")
 
     # --- Data Retrieval and Aggregation ---
-    if state.pe_data is None:
-        raise RuntimeError("No analysis data found.")
+    _check_pe_loaded("get_top_sifted_strings")
 
     all_strings = []
     seen_string_values = set()
@@ -5058,8 +5118,7 @@ async def get_strings_for_function(
         A list of string dictionaries that are associated with the given function.
     """
     await ctx.info(f"Request for strings referenced by function: {hex(function_va)}")
-    if state.pe_data is None or 'floss_analysis' not in state.pe_data:
-        raise RuntimeError("FLOSS analysis data with function context is not available.")
+    _check_data_key_available("floss_analysis", "get_strings_for_function")
 
     found_strings = []
     all_floss_strings = state.pe_data['floss_analysis'].get('strings', {})
@@ -5113,8 +5172,7 @@ async def get_string_usage_context(
         empty list if the offset is not found or has no references.
     """
     await ctx.info(f"Request for usage context for string at offset: {hex(string_offset)}")
-    if state.pe_data is None or 'floss_analysis' not in state.pe_data:
-        raise RuntimeError("FLOSS analysis data with context is not available.")
+    _check_data_key_available("floss_analysis", "get_string_usage_context")
 
     static_strings = state.pe_data['floss_analysis'].get('strings', {}).get('static_strings', [])
     for item in static_strings:
@@ -5158,8 +5216,7 @@ async def fuzzy_search_strings(
         raise ValueError("Parameter 'min_similarity_ratio' must be an integer between 0 and 100.")
 
     # --- Data Retrieval and Aggregation (with deduplication) ---
-    if state.pe_data is None:
-        raise RuntimeError("No analysis data found.")
+    _check_pe_loaded("fuzzy_search_strings")
 
     all_strings = []
     seen_string_values = set()
@@ -5232,8 +5289,7 @@ async def get_triage_report(
     """
     await ctx.info(f"Generating automated triage report...")
 
-    if state.pe_data is None:
-        raise RuntimeError("No analysis data available to generate a triage report.")
+    _check_pe_loaded("get_triage_report")
 
     triage_report = {
         "HighValueIndicators": [],
@@ -5364,8 +5420,7 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
     """
 
     await ctx.info(f"Requesting Angr decompilation for: {function_address}")
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
-    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    _check_angr_ready("decompile_function_with_angr")
     try: target_addr = int(function_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -5410,8 +5465,7 @@ async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any
     """
 
     await ctx.info(f"Requesting CFG for: {function_address}")
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
-    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    _check_angr_ready("get_function_cfg")
     try: target_addr = int(function_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -5455,12 +5509,11 @@ async def find_path_to_address(
     Uses Symbolic Execution to find an input (stdin) that causes execution to reach 'target_address'.
     """
 
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
-    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    _check_angr_ready("find_path_to_address")
     try:
         target = int(target_address, 16)
         avoid = int(avoid_address, 16) if avoid_address else None
-    except ValueError: raise ValueError("Invalid address format.")
+    except ValueError: raise ValueError("Invalid address format. Provide hex addresses (e.g. '0x401000').")
 
     # --- IMPROVEMENT: Fail Fast Validation ---
     # Check if the address is actually mapped in the binary
@@ -5490,11 +5543,11 @@ async def find_path_to_address(
             state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
         
         stability_options = {
-            angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY, 
+            angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
             angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS
         }
-        state = state.angr_project.factory.entry_state(add_options=stability_options)
-        simgr = state.angr_project.factory.simulation_manager(state)
+        entry_st = state.angr_project.factory.entry_state(add_options=stability_options)
+        simgr = state.angr_project.factory.simulation_manager(entry_st)
         
         techniques_applied = []
         if enable_veritesting:
@@ -5553,13 +5606,13 @@ async def find_path_to_address(
     # --- Background Handling ---
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.background_tasks[task_id] = {
+        state.set_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing solver...",
             "created_at": datetime.datetime.now().isoformat(),
             "tool": "find_path_to_address"
-        }
+        })
         asyncio.create_task(_run_background_task_wrapper(task_id, _solve_path))
         return {
             "status": "queued", 
@@ -5573,9 +5626,9 @@ async def find_path_to_address(
 
 @tool_decorator
 async def emulate_function_execution(
-    ctx: Context, 
-    function_address: str, 
-    args_hex: List[str] = [],
+    ctx: Context,
+    function_address: str,
+    args_hex: Optional[List[str]] = None,
     max_steps: int = 1000,
     high_precision_mode: bool = False,
     run_in_background: bool = True
@@ -5584,7 +5637,9 @@ async def emulate_function_execution(
     Emulates a function with specific concrete arguments.
     """
 
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    if args_hex is None:
+        args_hex = []
+    _check_angr_ready("emulate_function_execution")
     try:
         target = int(function_address, 16)
         args = [int(a, 16) for a in args_hex]
@@ -5603,8 +5658,8 @@ async def emulate_function_execution(
                 add_options.update({angr.options.FAST_MEMORY, angr.options.FAST_REGISTERS})
                 remove_options.update({angr.options.UNICORN_TRACK_BBL_ADDRS, angr.options.UNICORN_TRACK_STACK_POINTERS})
 
-            state = state.angr_project.factory.call_state(target, *args, add_options=add_options, remove_options=remove_options)
-            simgr = state.angr_project.factory.simulation_manager(state)
+            call_st = state.angr_project.factory.call_state(target, *args, add_options=add_options, remove_options=remove_options)
+            simgr = state.angr_project.factory.simulation_manager(call_st)
             
             chunk_size = 50
             steps_taken = 0
@@ -5622,7 +5677,7 @@ async def emulate_function_execution(
             if len(simgr.deadended) > 0:
                 final = simgr.deadended[0]
                 try: ret_val = hex(final.solver.eval(final.regs.eax))
-                except: ret_val = "unknown"
+                except Exception: ret_val = "unknown"
                 return {
                     "status": "success", 
                     "return_value": ret_val, 
@@ -5650,13 +5705,13 @@ async def emulate_function_execution(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.background_tasks[task_id] = {
+        state.set_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing emulation...",
             "created_at": datetime.datetime.now().isoformat(),
             "tool": "emulate_function_execution"
-        }
+        })
         asyncio.create_task(_run_background_task_wrapper(task_id, _core_emulation))
         return {"status": "queued", "task_id": task_id, "message": "Emulation queued."}
 
@@ -5677,8 +5732,7 @@ async def analyze_binary_loops(
     Scans the binary for loops. Uses existing analysis if available to save time.
     """
 
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
-    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    _check_angr_ready("angr_tool")
 
     def _core_logic(task_id_for_progress=None):
         # Configuration requested by the user
@@ -5775,13 +5829,13 @@ async def analyze_binary_loops(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.background_tasks[task_id] = {
+        state.set_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Starting loop analysis...",
             "created_at": datetime.datetime.now().isoformat(),
             "tool": "analyze_binary_loops"
-        }
+        })
         asyncio.create_task(_run_background_task_wrapper(task_id, _core_logic))
         return {"status": "queued", "task_id": task_id, "message": "Loop analysis queued."}
 
@@ -5803,8 +5857,7 @@ async def get_function_xrefs(
     """
 
     await ctx.info(f"Requesting X-Refs for: {function_address} (Limit: {limit})")
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
-    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    _check_angr_ready("angr_tool")
     try: target_addr = int(function_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -5821,13 +5874,13 @@ async def get_function_xrefs(
         if target_addr in state.angr_cfg.functions.callgraph:
              for pred in state.angr_cfg.functions.callgraph.predecessors(target_addr):
                  try: callers.append({"name": state.angr_cfg.functions[pred].name, "address": hex(pred)})
-                 except: callers.append({"name": "Unknown", "address": hex(pred)})
+                 except Exception: callers.append({"name": "Unknown", "address": hex(pred)})
         
         callees = []
         if target_addr in state.angr_cfg.functions.callgraph:
             for succ in state.angr_cfg.functions.callgraph.successors(target_addr):
                 try: callees.append({"name": state.angr_cfg.functions[succ].name, "address": hex(succ)})
-                except: callees.append({"name": "External", "address": hex(succ)})
+                except Exception: callees.append({"name": "External", "address": hex(succ)})
         
         return {
             "function_name": func.name, 
@@ -5852,7 +5905,7 @@ async def get_backward_slice(
     """
 
     await ctx.info(f"Calculating backward reachability for: {target_address} (Limit: {limit})")
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    _check_angr_ready("angr_tool")
     try: target_addr = int(target_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -5906,7 +5959,7 @@ async def get_forward_slice(
     """
 
     await ctx.info(f"Calculating forward reachability from: {source_address} (Limit: {limit})")
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    _check_angr_ready("angr_tool")
     try: source_addr = int(source_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -5954,7 +6007,7 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
     """
 
     await ctx.info(f"Calculating dominators for: {target_address}")
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    _check_angr_ready("angr_tool")
     try: target_addr = int(target_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -6035,8 +6088,7 @@ async def get_function_complexity_list(
 
     await ctx.info(f"Requesting function complexity list. Limit: {limit}, Sort: {sort_by}")
     
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
-    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    _check_angr_ready("angr_tool")
 
     def _analyze():
 
@@ -6093,8 +6145,7 @@ async def extract_function_constants(
 
     await ctx.info(f"Extracting constants from: {function_address} (Limit: {limit})")
     
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
-    if state.filepath is None: raise RuntimeError("No PE file loaded.")
+    _check_angr_ready("angr_tool")
     try: target_addr = int(function_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -6138,7 +6189,7 @@ async def extract_function_constants(
                                 
                                 if len(str_candidate) > 3:
                                     strings.add(f"{str_candidate} (@ {hex(val)})")
-                            except:
+                            except Exception:
                                 pass
 
         # Format for output
@@ -6169,7 +6220,7 @@ async def get_global_data_refs(
 
     await ctx.info(f"Scanning global refs in: {function_address} (Limit: {limit})")
     
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    _check_angr_ready("angr_tool")
     try: target_addr = int(function_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -6224,7 +6275,7 @@ async def scan_for_indirect_jumps(
 
     await ctx.info(f"Scanning for indirect jumps in: {function_address} (Limit: {limit})")
     
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    _check_angr_ready("angr_tool")
     try: target_addr = int(function_address, 16)
     except ValueError: raise ValueError("Invalid address format.")
 
@@ -6275,7 +6326,7 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
     """
 
     await ctx.info(f"Patching memory at {address}")
-    if not ANGR_AVAILABLE: raise RuntimeError("Angr library not found.")
+    _check_angr_ready("angr_tool")
     try:
         addr = int(address, 16)
         patch_data = bytes.fromhex(patch_bytes_hex)
@@ -6303,10 +6354,10 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
     """
     # await ctx.info(f"Checking status for task: {task_id}") # Optional: Comment out to reduce noise
     
-    task = state.background_tasks.get(task_id)
+    task = state.get_task(task_id)
     if not task:
-        return {"error": f"Task ID {task_id} not found."}
-    
+        return {"error": f"Task ID '{task_id}' not found.", "available_task_ids": state.get_all_task_ids()}
+
     response = {
         "task_id": task_id,
         "status": task["status"],
@@ -6315,15 +6366,18 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
         "created_at": task.get("created_at", "unknown"),
         "tool": task.get("tool", "unknown")
     }
-    
+
     if task["status"] == "completed":
-        result_data = task["result"]
+        result_data = task.get("result")
         full_response = {**response, "result": result_data}
         return await _check_mcp_response_size(ctx, full_response, f"check_task_status_{task_id}")
-        
+
     elif task["status"] == "failed":
         response["error"] = task.get("error", "Unknown error")
-        
+
+    elif task["status"] == "running":
+        response["hint"] = "Task is still processing. Poll again shortly with check_task_status."
+
     return response
 
 if __name__ == '__main__':
@@ -6535,13 +6589,13 @@ if __name__ == '__main__':
                 task_id = "startup-angr"
                 
                 # Register task
-                state.background_tasks[task_id] = {
+                state.set_task(task_id, {
                     "status": "running",
                     "progress_percent": 0,
                     "progress_message": "Starting background pre-analysis...",
                     "created_at": datetime.datetime.now().isoformat(),
                     "tool": "startup_auto_analysis"
-                }
+                })
                 
                 # Start Monitor
                 if not state.monitor_thread_started:
@@ -6592,15 +6646,14 @@ if __name__ == '__main__':
                         state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
 
                         # Finish
-                        state.background_tasks[tid]["status"] = "completed"
-                        state.background_tasks[tid]["result"] = {"message": "Analysis ready."}
-                        state.background_tasks[tid]["progress_percent"] = 100
-                        state.background_tasks[tid]["progress_message"] = "Startup analysis complete."
+                        state.update_task(tid, status="completed",
+                                          result={"message": "Analysis ready."},
+                                          progress_percent=100,
+                                          progress_message="Startup analysis complete.")
                         print(f"\n[*] Background Angr Analysis finished.")
-                        
+
                     except Exception as ex:
-                        state.background_tasks[tid]["status"] = "failed"
-                        state.background_tasks[tid]["error"] = str(ex)
+                        state.update_task(tid, status="failed", error=str(ex))
                         _update_progress(tid, 0, f"Failed: {ex}")
                 
                 # Start the thread
