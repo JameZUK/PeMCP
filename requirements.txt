@@ -25,3 +25,11 @@ requests
 # --- Server Infrastructure ---
 # Model Context Protocol SDK
 mcp[cli]
+
+# --- Graph Analysis (used directly for angr CFG processing) ---
+networkx
+
+# --- Test Dependencies ---
+# Install with: pip install -r requirements.txt -r requirements-test.txt
+# pytest
+# httpx
