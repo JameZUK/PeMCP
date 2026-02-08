@@ -11,6 +11,7 @@ tools, fuzzy search, and triage workflows.
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Dict, List, Optional, Union, AsyncGenerator, Tuple
 import sys
 from urllib.parse import urljoin
@@ -36,7 +37,7 @@ except ImportError as e:
     sys.exit(1)
 
 # --- Configuration ---
-SERVER_BASE_URL = "http://127.0.0.1:8082"
+SERVER_BASE_URL = os.environ.get("PEMCP_TEST_SERVER_URL", "http://127.0.0.1:8082")
 SSE_PATH = "/sse"
 
 # --- MCP Client Session Context Manager ---
@@ -368,15 +369,6 @@ class TestEncodingAndFileOps:
                 test_logger.info("PASSED: get_hex_dump")
         asyncio.run(_run())
 
-
-#class TestReanalyzeTool:
-#    def test_reanalyze_loaded_pe_file(self):
-#        async def _run():
-#            async with managed_mcp_session() as session:
-#                result = await call_tool_and_assert_success(session, "reanalyze_loaded_pe_file", {"analyses_to_skip": ["yara"]}, dict)
-#                assert result.get("status") == "success"
-#                test_logger.info("PASSED: reanalyze_loaded_pe_file")
-#        asyncio.run(_run())
 
 # --- UPDATED: Test class for CAPA tools ---
 class TestCapaTools:
