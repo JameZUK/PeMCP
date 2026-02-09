@@ -29,6 +29,8 @@ import pemcp.mcp.tools_pe
 import pemcp.mcp.tools_strings
 import pemcp.mcp.tools_angr
 import pemcp.mcp.tools_angr_extended
+import pemcp.mcp.tools_pe_extended
+import pemcp.mcp.tools_new_libs
 import pemcp.mcp.tools_misc
 
 
