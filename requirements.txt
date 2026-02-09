@@ -29,6 +29,26 @@ mcp[cli]
 # --- Graph Analysis (used directly for angr CFG processing) ---
 networkx
 
+# --- Extended Binary Analysis (Optional - graceful degradation) ---
+# Multi-format binary parsing and modification (PE/ELF/Mach-O)
+lief
+# Multi-architecture disassembler (standalone shellcode analysis)
+capstone
+# Multi-architecture assembler (patch generation from mnemonics)
+keystone-engine
+# Windows API emulation for malware analysis
+speakeasy-emulator
+# Automatic PE unpacking (UPX, ASPack, FSG, etc.)
+unipacker
+# .NET PE metadata extraction
+dotnetfile
+# Fuzzy hashing for sample similarity
+ppdeep
+# Locality-sensitive hashing
+py-tlsh
+# Embedded file/firmware detection
+binwalk
+
 # --- Test Dependencies ---
 # Install with: pip install -r requirements.txt -r requirements-test.txt
 # pytest
