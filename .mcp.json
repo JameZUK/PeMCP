@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "pemcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["PeMCP.py", "--mcp-server"],
+      "env": {
+        "VT_API_KEY": ""
+      }
+    }
+  }
+}
