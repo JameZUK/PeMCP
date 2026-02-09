@@ -10,6 +10,8 @@ PeMCP bridges the gap between high-level AI reasoning and low-level binary instr
 
 - [Key Features](#key-features)
 - [Quick Start with Claude Code](#quick-start-with-claude-code)
+  - [Adding PeMCP via the CLI](#adding-pemcp-via-the-cli)
+  - [Adding PeMCP via JSON Configuration](#adding-pemcp-via-json-configuration)
 - [Installation](#installation)
 - [Modes of Operation](#modes-of-operation)
 - [Configuration](#configuration)
@@ -59,9 +61,63 @@ Beyond standard static analysis, PeMCP integrates the **Angr** binary analysis f
 
 ## Quick Start with Claude Code
 
-PeMCP integrates seamlessly with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via stdio transport.
+PeMCP integrates seamlessly with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via stdio transport. You can configure PeMCP using the `claude mcp add` CLI command or by editing JSON configuration files directly.
 
-### 1. Project-Level Configuration (Recommended)
+### Adding PeMCP via the CLI
+
+The fastest way to add PeMCP to Claude Code is with the `claude mcp add` command.
+
+**Add to the current project (recommended):**
+
+```bash
+claude mcp add --scope project pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
+```
+
+**Add with a VirusTotal API key:**
+
+```bash
+claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
+```
+
+**Add globally for all projects (user scope):**
+
+```bash
+claude mcp add --scope user pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
+```
+
+**Add using Docker:**
+
+```bash
+claude mcp add --scope project pemcp -- docker run --rm -i \
+  -v /path/to/samples:/app/samples \
+  -e VT_API_KEY \
+  pemcp-toolkit \
+  --mcp-server
+```
+
+**Add a remote HTTP server:**
+
+```bash
+claude mcp add --transport http --scope project pemcp http://127.0.0.1:8082/mcp
+```
+
+**Verify the server was added:**
+
+```bash
+claude mcp list
+```
+
+**Remove the server:**
+
+```bash
+claude mcp remove pemcp
+```
+
+### Adding PeMCP via JSON Configuration
+
+Alternatively, you can configure PeMCP by editing JSON files directly.
+
+#### 1. Project-Level Configuration (Recommended)
 
 Add a `.mcp.json` file to your project root (an example is included in this repository):
 
@@ -97,7 +153,7 @@ Adjust the `command` path if PeMCP is installed elsewhere:
 }
 ```
 
-### 2. User-Level Configuration
+#### 2. User-Level Configuration
 
 For system-wide availability across all projects, add PeMCP to `~/.claude.json`:
 
@@ -113,7 +169,7 @@ For system-wide availability across all projects, add PeMCP to `~/.claude.json`:
 }
 ```
 
-### 3. Docker Configuration
+#### 3. Docker Configuration
 
 To use the Docker image with Claude Code:
 
