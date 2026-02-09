@@ -9,7 +9,7 @@ import concurrent.futures
 import logging
 
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Tuple, Callable
 
 from pemcp.config import (
     logger, pefile, state,
@@ -521,8 +521,16 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                       floss_only_types_arg: List[str],
                       floss_functions_to_analyze_arg: List[int],
                       floss_quiet_mode_arg: bool, # For FLOSS progress bars
-                      analyses_to_skip: Optional[List[str]] = None
+                      analyses_to_skip: Optional[List[str]] = None,
+                      progress_callback: Optional[Callable[[int, int, str], None]] = None
                       ) -> Dict[str, Any]:
+
+    def _report(step: int, total: int, message: str) -> None:
+        if progress_callback:
+            try:
+                progress_callback(step, total, message)
+            except Exception:
+                pass  # Never let progress reporting break the analysis
 
     try: state.pefile_version = pefile.__version__
     except AttributeError: state.pefile_version = "Unknown"
@@ -531,6 +539,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         analyses_to_skip = []
     analyses_to_skip = [analysis.lower() for analysis in analyses_to_skip]
 
+    _report(0, 100, "Starting PE analysis...")
 
     pe_info_dict: Dict[str, Any] = {"filepath": filepath, "pefile_version": state.pefile_version}
 
@@ -543,10 +552,12 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         pe_info_dict["mode"] = "pe_executable"
 
     # Basic hashes (Works for both)
+    _report(5, 100, "Computing file hashes...")
     pe_info_dict['file_hashes'] = _parse_file_hashes(pe.__data__)
 
     if not is_raw_mode:
         # Run PE-specific parsers only if it's a real PE
+        _report(10, 100, "Parsing PE headers and structures...")
         nt_headers_info, magic_type_str = _parse_nt_headers(pe)
         pe_info_dict['dos_header'] = _parse_dos_header(pe)
         pe_info_dict['nt_headers'] = nt_headers_info
@@ -573,6 +584,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         # Set minimal defaults for raw mode to avoid UI errors in subsequent tools
         pe_info_dict['digital_signature'] = {"status": "Not applicable for raw shellcode"}
 
+    _report(40, 100, "Running signature scans...")
     if "peid" not in analyses_to_skip:
         if is_raw_mode:
              # PEiD signatures rely on EP or Section iteration. MockPE has neither.
@@ -583,18 +595,21 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         pe_info_dict['peid_matches'] = {"status": "Skipped by user request", "ep_matches": [], "heuristic_matches": []}
         logger.info("PEiD analysis skipped by request.")
 
+    _report(50, 100, "Running YARA scan...")
     if "yara" not in analyses_to_skip:
         pe_info_dict['yara_matches'] = perform_yara_scan(filepath, pe.__data__, yara_rules_path, YARA_AVAILABLE, verbose)
     else:
         pe_info_dict['yara_matches'] = [{"status": "Skipped by user request"}]
         logger.info("YARA analysis skipped by request.")
 
+    _report(60, 100, "Running capa analysis...")
     if "capa" not in analyses_to_skip:
         pe_info_dict['capa_analysis'] = _parse_capa_analysis(pe, filepath, capa_rules_path, capa_sigs_path, verbose)
     else:
         pe_info_dict['capa_analysis'] = {"status": "Skipped by user request", "results": None, "error": None}
         logger.info("Capa analysis skipped by request.")
 
+    _report(75, 100, "Running FLOSS string analysis...")
     if "floss" not in analyses_to_skip:
         pe_info_dict['floss_analysis'] = _parse_floss_analysis(
             filepath,
@@ -611,6 +626,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         pe_info_dict['floss_analysis'] = {"status": "Skipped by user request", "strings": {}}
         logger.info("FLOSS analysis skipped by request.")
 
+    _report(90, 100, "Extracting basic strings...")
     pe_info_dict['basic_ascii_strings'] = [
         {"offset": hex(offset), "string": s, "source_type": "basic_ascii"}
         for offset, s in _extract_strings_from_data(pe.__data__, 5)
@@ -618,4 +634,5 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
 
 
     pe_info_dict['pefile_warnings'] = pe.get_warnings()
+    _report(100, 100, "Analysis complete.")
     return pe_info_dict
