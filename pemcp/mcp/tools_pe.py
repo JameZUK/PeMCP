@@ -1,7 +1,9 @@
-"""MCP tools for PE data retrieval - summary, full results, dynamic per-key tools, and reanalysis."""
+"""MCP tools for PE data retrieval - summary, full results, dynamic per-key tools, open/close, and reanalysis."""
 import os
 import json
 import asyncio
+import datetime
+import threading
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
@@ -13,10 +15,257 @@ from pemcp.config import (
     DEFAULT_PEID_DB_PATH,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
-from pemcp.parsers.pe import _parse_pe_to_dict
+from pemcp.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
+from pemcp.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
+from pemcp.parsers.floss import _parse_floss_analysis
+from pemcp.background import _console_heartbeat_loop, _update_progress
+from pemcp.mock import MockPE
 
 if ANGR_AVAILABLE:
     import angr
+
+
+@tool_decorator
+async def open_file(
+    ctx: Context,
+    file_path: str,
+    mode: str = "pe",
+    analyses_to_skip: Optional[List[str]] = None,
+    start_angr_background: bool = True,
+) -> Dict[str, Any]:
+    """
+    Opens and analyses a PE file or raw shellcode, making it available for all other tools.
+    This replaces any previously loaded file. Progress is reported during analysis.
+
+    Args:
+        ctx: The MCP Context object.
+        file_path: (str) Absolute or relative path to the file to analyse.
+        mode: (str) Analysis mode — 'pe' (default) or 'shellcode' for raw binaries.
+        analyses_to_skip: (Optional[List[str]]) List of analyses to skip: 'peid', 'yara', 'capa', 'floss'.
+        start_angr_background: (bool) If True (default) and angr is available, start background CFG analysis.
+
+    Returns:
+        A dictionary with status, filepath, and summary of what was loaded.
+    """
+    abs_path = str(Path(file_path).resolve())
+
+    if not os.path.isfile(abs_path):
+        raise RuntimeError(f"[open_file] File not found: {abs_path}")
+
+    await ctx.info(f"Opening file: {abs_path} (mode: {mode})")
+
+    skip_list = [s.lower() for s in (analyses_to_skip or [])]
+
+    # Close any previously loaded file
+    if state.pe_object:
+        try:
+            state.pe_object.close()
+        except Exception:
+            pass
+        state.pe_object = None
+        state.pe_data = None
+        state.filepath = None
+        state.angr_project = None
+        state.angr_cfg = None
+
+    try:
+        if mode == "shellcode":
+            await ctx.report_progress(5, 100)
+            await ctx.info("Loading raw shellcode...")
+
+            def _load_shellcode():
+                with open(abs_path, 'rb') as f:
+                    raw_data = f.read()
+                state.pe_object = MockPE(raw_data)
+                state.filepath = abs_path
+                state.pe_data = {
+                    "filepath": abs_path,
+                    "mode": "shellcode",
+                    "file_hashes": _parse_file_hashes(raw_data),
+                    "basic_ascii_strings": [
+                        {"offset": hex(o), "string": s}
+                        for o, s in _extract_strings_from_data(raw_data, 5)
+                    ],
+                    "floss_analysis": {"status": "Pending..."},
+                }
+
+            await asyncio.to_thread(_load_shellcode)
+            await ctx.report_progress(30, 100)
+
+            if "floss" not in skip_list and FLOSS_AVAILABLE:
+                await ctx.info("Running FLOSS analysis on shellcode...")
+
+                def _run_floss():
+                    state.pe_data['floss_analysis'] = _parse_floss_analysis(
+                        abs_path, FLOSS_MIN_LENGTH_DEFAULT, 0,
+                        Actual_DebugLevel_Floss.NONE, "auto",
+                        [], [], [], True,
+                    )
+                    _perform_unified_string_sifting(state.pe_data)
+
+                await asyncio.to_thread(_run_floss)
+
+            await ctx.report_progress(100, 100)
+
+        else:
+            # PE mode
+            await ctx.report_progress(5, 100)
+            await ctx.info("Loading PE file...")
+
+            def _load_pe():
+                return pefile.PE(abs_path, fast_load=False)
+
+            pe_obj = await asyncio.to_thread(_load_pe)
+            state.filepath = abs_path
+            state.pe_object = pe_obj
+
+            await ctx.report_progress(15, 100)
+            await ctx.info("Analysing PE structures, signatures, and strings...")
+
+            # Use a shared progress state for the callback
+            _progress_state = {"last": 15}
+
+            def _progress_cb(step: int, total: int, message: str) -> None:
+                # Map 0-100 analysis progress to 15-95 of overall progress
+                mapped = 15 + int(step * 0.8)
+                _progress_state["last"] = mapped
+
+            def _run_analysis():
+                return _parse_pe_to_dict(
+                    pe_obj, abs_path,
+                    str(DEFAULT_PEID_DB_PATH), None, None, None,
+                    False, False, False,
+                    floss_min_len_arg=FLOSS_MIN_LENGTH_DEFAULT,
+                    floss_verbose_level_arg=0,
+                    floss_script_debug_level_arg=Actual_DebugLevel_Floss.NONE,
+                    floss_format_hint_arg="auto",
+                    floss_disabled_types_arg=[],
+                    floss_only_types_arg=[],
+                    floss_functions_to_analyze_arg=[],
+                    floss_quiet_mode_arg=True,
+                    analyses_to_skip=skip_list,
+                    progress_callback=_progress_cb,
+                )
+
+            state.pe_data = await asyncio.to_thread(_run_analysis)
+            await ctx.report_progress(95, 100)
+
+        # Start background angr analysis if requested
+        if start_angr_background and ANGR_AVAILABLE and state.filepath:
+            task_id = "startup-angr"
+
+            state.set_task(task_id, {
+                "status": "running",
+                "progress_percent": 0,
+                "progress_message": "Starting background pre-analysis...",
+                "created_at": datetime.datetime.now().isoformat(),
+                "tool": "open_file_angr_auto",
+            })
+
+            if not state.monitor_thread_started:
+                monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
+                monitor_thread.start()
+                state.monitor_thread_started = True
+
+            def _angr_worker(fpath, tid):
+                try:
+                    _update_progress(tid, 1, "Loading Angr Project...")
+                    if mode == "shellcode":
+                        proj = angr.Project(fpath, main_opts={'backend': 'blob', 'arch': 'amd64'}, auto_load_libs=False)
+                    else:
+                        proj = angr.Project(fpath, auto_load_libs=False)
+                    state.angr_project = proj
+                    _update_progress(tid, 20, "Building Control Flow Graph...")
+                    cfg = proj.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
+                    state.angr_cfg = cfg
+                    _update_progress(tid, 80, "Identifying loops...")
+                    loop_finder = proj.analyses.LoopFinder(kb=proj.kb)
+                    raw_loops = {}
+                    for loop in loop_finder.loops:
+                        try:
+                            node = cfg.model.get_any_node(loop.entry.addr)
+                            if node and node.function_address:
+                                func_addr = node.function_address
+                                if func_addr not in raw_loops:
+                                    raw_loops[func_addr] = []
+                                raw_loops[func_addr].append({
+                                    "entry": hex(loop.entry.addr),
+                                    "blocks": len(list(loop.body_nodes)),
+                                    "subloops": bool(loop.subloops),
+                                })
+                        except Exception:
+                            continue
+                    state.angr_loop_cache = raw_loops
+                    state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
+                    state.update_task(tid, status="completed",
+                                      result={"message": "Analysis ready."},
+                                      progress_percent=100,
+                                      progress_message="Background analysis complete.")
+                except Exception as ex:
+                    state.update_task(tid, status="failed", error=str(ex))
+                    _update_progress(tid, 0, f"Failed: {ex}")
+
+            angr_thread = threading.Thread(
+                target=_angr_worker,
+                args=(abs_path, task_id),
+                daemon=True,
+            )
+            angr_thread.start()
+            await ctx.info("Background Angr analysis started. Use check_task_status('startup-angr') to monitor.")
+
+        await ctx.report_progress(100, 100)
+        await ctx.info(f"File loaded successfully: {abs_path}")
+
+        return {
+            "status": "success",
+            "filepath": abs_path,
+            "mode": mode,
+            "analyses_skipped": skip_list if skip_list else "none",
+            "angr_background": "started" if (start_angr_background and ANGR_AVAILABLE) else "not started",
+        }
+
+    except Exception as e:
+        # Clean up on failure
+        state.filepath = None
+        state.pe_data = None
+        state.pe_object = None
+        logger.error(f"open_file failed for '{abs_path}': {e}", exc_info=True)
+        raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e
+
+
+@tool_decorator
+async def close_file(ctx: Context) -> Dict[str, str]:
+    """
+    Closes the currently loaded file and clears all analysis data from memory.
+    After calling this, a new file must be opened with open_file before using analysis tools.
+
+    Args:
+        ctx: The MCP Context object.
+
+    Returns:
+        A dictionary confirming the file was closed.
+    """
+    if state.filepath is None:
+        return {"status": "no_file", "message": "No file was loaded."}
+
+    closed_path = state.filepath
+
+    if state.pe_object:
+        try:
+            state.pe_object.close()
+        except Exception:
+            pass
+
+    state.pe_object = None
+    state.pe_data = None
+    state.filepath = None
+    state.angr_project = None
+    state.angr_cfg = None
+    state.angr_loop_cache = None
+    state.angr_loop_cache_config = None
+
+    await ctx.info(f"Closed file: {closed_path}")
+    return {"status": "success", "message": f"File '{closed_path}' closed and analysis data cleared."}
 
 
 @tool_decorator

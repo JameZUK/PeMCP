@@ -35,7 +35,7 @@ def main():
     parser = argparse.ArgumentParser(description="Comprehensive PE File Analyzer.", formatter_class=argparse.RawTextHelpFormatter)
 
     # --- Input & Mode ---
-    parser.add_argument("--input-file", type=str, required=True, help="REQUIRED: Path to the file to be analyzed.")
+    parser.add_argument("--input-file", type=str, default=None, help="Path to the file to be analyzed. Required for CLI mode. Optional for MCP server mode (use open_file tool instead).")
     parser.add_argument("--mode", choices=["pe", "shellcode"], default="pe", help="Analysis mode. Use 'shellcode' for raw binaries (default: pe).")
 
     # --- External Resources ---
@@ -89,7 +89,7 @@ def main():
     mcp_group.add_argument("--mcp-server", action="store_true", help="Run in MCP server mode. The --input-file is pre-analyzed, and tools operate on this file.")
     mcp_group.add_argument("--mcp-host", type=str, default="127.0.0.1", help="MCP server host (default: 127.0.0.1).")
     mcp_group.add_argument("--mcp-port", type=int, default=8082, help="MCP server port (default: 8082).")
-    mcp_group.add_argument("--mcp-transport", type=str, default="stdio", choices=["stdio","sse"], help="MCP transport protocol (default: stdio).")
+    mcp_group.add_argument("--mcp-transport", type=str, default="stdio", choices=["stdio", "sse", "streamable-http"], help="MCP transport protocol: 'stdio' (default), 'streamable-http' (recommended for network), or 'sse' (deprecated).")
 
     args = None
     try:
@@ -107,16 +107,26 @@ def main():
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logger.setLevel(log_level)
     logging.getLogger('mcp').setLevel(log_level)
-    if args.mcp_transport == 'sse':
+    if args.mcp_transport in ('sse', 'streamable-http'):
         logging.getLogger('uvicorn').setLevel(log_level)
         logging.getLogger('uvicorn.error').setLevel(log_level)
         logging.getLogger('uvicorn.access').setLevel(logging.WARNING if not args.verbose else logging.DEBUG)
 
-    abs_input_file = str(Path(args.input_file).resolve())
-    if not os.path.exists(abs_input_file):
-        logger.critical(f"Input file not found: {abs_input_file}")
-        print(f"[!] Error: Input file not found: {abs_input_file}", file=sys.stderr)
+    if args.mcp_transport == 'sse':
+        logger.warning("SSE transport is deprecated. Please use 'streamable-http' or 'stdio' instead.")
+
+    # CLI mode requires --input-file
+    if not args.mcp_server and not args.input_file:
+        print("[!] Error: --input-file is required for CLI mode.", file=sys.stderr)
         sys.exit(1)
+
+    abs_input_file = None
+    if args.input_file:
+        abs_input_file = str(Path(args.input_file).resolve())
+        if not os.path.exists(abs_input_file):
+            logger.critical(f"Input file not found: {abs_input_file}")
+            print(f"[!] Error: Input file not found: {abs_input_file}", file=sys.stderr)
+            sys.exit(1)
 
     abs_peid_db_path = str(Path(args.peid_db).resolve()) if args.peid_db else str(DEFAULT_PEID_DB_PATH)
     abs_yara_rules_path = str(Path(args.yara_rules).resolve()) if args.yara_rules else None
@@ -178,162 +188,156 @@ def main():
             logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.");
             sys.exit(1)
 
-        logger.info(f"MCP Server: Loading input file: {abs_input_file} (Mode: {args.mode})")
-        try:
-            if not os.path.isfile(abs_input_file):
-                logger.critical(f"Input path for MCP server is not a file: {abs_input_file}")
-                sys.exit(1)
+        # --- Optional Pre-loading (only when --input-file is provided) ---
+        if abs_input_file:
+            logger.info(f"MCP Server: Loading input file: {abs_input_file} (Mode: {args.mode})")
+            try:
+                if not os.path.isfile(abs_input_file):
+                    logger.critical(f"Input path for MCP server is not a file: {abs_input_file}")
+                    sys.exit(1)
 
-            # --- Loading Logic with Mode Support ---
-            if args.mode == 'shellcode':
-                with open(abs_input_file, 'rb') as f:
-                    raw_data = f.read()
-                state.pe_object = MockPE(raw_data)
-                state.filepath = abs_input_file
+                # --- Loading Logic with Mode Support ---
+                if args.mode == 'shellcode':
+                    with open(abs_input_file, 'rb') as f:
+                        raw_data = f.read()
+                    state.pe_object = MockPE(raw_data)
+                    state.filepath = abs_input_file
 
-                # Manually build the analysis dict for shellcode
-                state.pe_data = {
-                    "filepath": abs_input_file,
-                    "mode": "shellcode",
-                    "file_hashes": _parse_file_hashes(raw_data),
-                    "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
-                    "floss_analysis": {"status": "Pending..."}
-                }
+                    state.pe_data = {
+                        "filepath": abs_input_file,
+                        "mode": "shellcode",
+                        "file_hashes": _parse_file_hashes(raw_data),
+                        "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
+                        "floss_analysis": {"status": "Pending..."}
+                    }
 
-                # Trigger FLOSS if not skipped
-                if "floss" not in analyses_to_skip_arg_list:
-                    state.pe_data['floss_analysis'] = _parse_floss_analysis(
-                        abs_input_file, floss_min_len_resolved, args.floss_verbose_level,
-                        floss_script_debug_level_enum_val_resolved, floss_fmt,
-                        floss_disabled_types_resolved, floss_only_types_resolved,
-                        floss_functions_to_analyze_resolved, floss_quiet_resolved,
-                        args.regex_pattern
+                    if "floss" not in analyses_to_skip_arg_list:
+                        state.pe_data['floss_analysis'] = _parse_floss_analysis(
+                            abs_input_file, floss_min_len_resolved, args.floss_verbose_level,
+                            floss_script_debug_level_enum_val_resolved, floss_fmt,
+                            floss_disabled_types_resolved, floss_only_types_resolved,
+                            floss_functions_to_analyze_resolved, floss_quiet_resolved,
+                            args.regex_pattern
+                        )
+                        _perform_unified_string_sifting(state.pe_data)
+
+                else:
+                    temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
+                    state.filepath = abs_input_file
+                    state.pe_object = temp_pe_obj_for_preload
+
+                    state.pe_data = _parse_pe_to_dict(
+                        temp_pe_obj_for_preload, abs_input_file, abs_peid_db_path, abs_yara_rules_path,
+                        abs_capa_rules_dir_arg, abs_capa_sigs_dir_arg,
+                        args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
+                        floss_min_len_arg=floss_min_len_resolved,
+                        floss_verbose_level_arg=args.floss_verbose_level,
+                        floss_script_debug_level_arg=floss_script_debug_level_enum_val_resolved,
+                        floss_format_hint_arg=floss_fmt,
+                        floss_disabled_types_arg=floss_disabled_types_resolved,
+                        floss_only_types_arg=floss_only_types_resolved,
+                        floss_functions_to_analyze_arg=floss_functions_to_analyze_resolved,
+                        floss_quiet_mode_arg=floss_quiet_resolved,
+                        analyses_to_skip=analyses_to_skip_arg_list
                     )
-                    # Sift strings after FLOSS
-                    _perform_unified_string_sifting(state.pe_data)
 
-            else:
-                # PE Mode
-                temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
-                state.filepath = abs_input_file
-                state.pe_object = temp_pe_obj_for_preload
+                logger.info(f"MCP: Successfully loaded analysis for: {abs_input_file}.")
 
-                state.pe_data = _parse_pe_to_dict(
-                    temp_pe_obj_for_preload, abs_input_file, abs_peid_db_path, abs_yara_rules_path,
-                    abs_capa_rules_dir_arg, abs_capa_sigs_dir_arg,
-                    args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                    floss_min_len_arg=floss_min_len_resolved,
-                    floss_verbose_level_arg=args.floss_verbose_level,
-                    floss_script_debug_level_arg=floss_script_debug_level_enum_val_resolved,
-                    floss_format_hint_arg=floss_fmt,
-                    floss_disabled_types_arg=floss_disabled_types_resolved,
-                    floss_only_types_arg=floss_only_types_resolved,
-                    floss_functions_to_analyze_arg=floss_functions_to_analyze_resolved,
-                    floss_quiet_mode_arg=floss_quiet_resolved,
-                    analyses_to_skip=analyses_to_skip_arg_list
-                )
+                # --- Background Angr Analysis (Mode Aware) ---
+                if ANGR_AVAILABLE:
+                    task_id = "startup-angr"
 
-            logger.info(f"MCP: Successfully loaded analysis for: {abs_input_file}.")
+                    state.set_task(task_id, {
+                        "status": "running",
+                        "progress_percent": 0,
+                        "progress_message": "Starting background pre-analysis...",
+                        "created_at": datetime.datetime.now().isoformat(),
+                        "tool": "startup_auto_analysis"
+                    })
 
-            # --- Background Angr Analysis (Mode Aware) ---
-            if ANGR_AVAILABLE:
-                task_id = "startup-angr"
+                    if not state.monitor_thread_started:
+                        monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
+                        monitor_thread.start()
+                        state.monitor_thread_started = True
 
-                # Register task
-                state.set_task(task_id, {
-                    "status": "running",
-                    "progress_percent": 0,
-                    "progress_message": "Starting background pre-analysis...",
-                    "created_at": datetime.datetime.now().isoformat(),
-                    "tool": "startup_auto_analysis"
-                })
+                    def _shellcode_aware_angr_worker(fpath, tid):
+                        import angr
 
-                # Start Monitor
-                if not state.monitor_thread_started:
-                    monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
-                    monitor_thread.start()
-                    state.monitor_thread_started = True
+                        try:
+                            _update_progress(tid, 1, "Loading Angr Project...")
 
-                # Define Inline Worker to capture args variables correctly
-                def _shellcode_aware_angr_worker(fpath, tid):
-                    import angr
+                            if args.mode == 'shellcode':
+                                arch = "amd64" if "64" in floss_fmt else "x86"
+                                _update_progress(tid, 5, f"Loading raw shellcode as {arch}...")
+                                proj = angr.Project(fpath, main_opts={'backend': 'blob', 'arch': arch}, auto_load_libs=False)
+                            else:
+                                proj = angr.Project(fpath, auto_load_libs=False)
 
-                    try:
-                        _update_progress(tid, 1, "Loading Angr Project...")
+                            state.angr_project = proj
+                            _update_progress(tid, 20, "Building Control Flow Graph (Heavy)...")
 
-                        if args.mode == 'shellcode':
-                            # Derive arch from floss_format or default to x86
-                            arch = "amd64" if "64" in floss_fmt else "x86"
-                            _update_progress(tid, 5, f"Loading raw shellcode as {arch}...")
-                            proj = angr.Project(fpath, main_opts={'backend': 'blob', 'arch': arch}, auto_load_libs=False)
-                        else:
-                            proj = angr.Project(fpath, auto_load_libs=False)
+                            cfg = proj.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
+                            state.angr_cfg = cfg
+                            _update_progress(tid, 80, "CFG generated. Identifying loops...")
 
-                        state.angr_project = proj
-                        _update_progress(tid, 20, "Building Control Flow Graph (Heavy)...")
+                            loop_finder = proj.analyses.LoopFinder(kb=proj.kb)
+                            raw_loops = {}
+                            for loop in loop_finder.loops:
+                                try:
+                                    node = cfg.model.get_any_node(loop.entry.addr)
+                                    if node and node.function_address:
+                                        func_addr = node.function_address
+                                        if func_addr not in raw_loops: raw_loops[func_addr] = []
+                                        block_count = len(list(loop.body_nodes))
+                                        raw_loops[func_addr].append({
+                                            "entry": hex(loop.entry.addr),
+                                            "blocks": block_count,
+                                            "subloops": bool(loop.subloops)
+                                        })
+                                except Exception: continue
 
-                        # Build CFG
-                        cfg = proj.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
-                        state.angr_cfg = cfg
-                        _update_progress(tid, 80, "CFG generated. Identifying loops...")
+                            state.angr_loop_cache = raw_loops
+                            state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
 
-                        # Pre-calc Loops
-                        loop_finder = proj.analyses.LoopFinder(kb=proj.kb)
-                        raw_loops = {}
-                        for loop in loop_finder.loops:
-                            try:
-                                node = cfg.model.get_any_node(loop.entry.addr)
-                                if node and node.function_address:
-                                    func_addr = node.function_address
-                                    if func_addr not in raw_loops: raw_loops[func_addr] = []
-                                    block_count = len(list(loop.body_nodes))
-                                    raw_loops[func_addr].append({
-                                        "entry": hex(loop.entry.addr),
-                                        "blocks": block_count,
-                                        "subloops": bool(loop.subloops)
-                                    })
-                            except Exception: continue
+                            state.update_task(tid, status="completed",
+                                              result={"message": "Analysis ready."},
+                                              progress_percent=100,
+                                              progress_message="Startup analysis complete.")
+                            print(f"\n[*] Background Angr Analysis finished.")
 
-                        state.angr_loop_cache = raw_loops
-                        state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
+                        except Exception as ex:
+                            state.update_task(tid, status="failed", error=str(ex))
+                            _update_progress(tid, 0, f"Failed: {ex}")
 
-                        # Finish
-                        state.update_task(tid, status="completed",
-                                          result={"message": "Analysis ready."},
-                                          progress_percent=100,
-                                          progress_message="Startup analysis complete.")
-                        print(f"\n[*] Background Angr Analysis finished.")
+                    angr_thread = threading.Thread(
+                        target=_shellcode_aware_angr_worker,
+                        args=(abs_input_file, task_id),
+                        daemon=True
+                    )
+                    angr_thread.start()
+                    logger.info("MCP: Background Angr analysis thread started.")
 
-                    except Exception as ex:
-                        state.update_task(tid, status="failed", error=str(ex))
-                        _update_progress(tid, 0, f"Failed: {ex}")
+            except Exception as e:
+                logger.critical(f"MCP: Failed to pre-load file: {str(e)}", exc_info=True)
+                if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
+                    temp_pe_obj_for_preload.close()
+                state.filepath = None
+                state.pe_data = None
+                state.pe_object = None
+                logger.error("MCP server startup aborted due to pre-load failure.")
+                sys.exit(1)
+        else:
+            logger.info("MCP Server: No --input-file provided. Server starting without a pre-loaded file.")
+            logger.info("Use the 'open_file' tool to load a PE file for analysis.")
 
-                # Start the thread
-                angr_thread = threading.Thread(
-                    target=_shellcode_aware_angr_worker,
-                    args=(abs_input_file, task_id),
-                    daemon=True
-                )
-                angr_thread.start()
-                logger.info("MCP: Background Angr analysis thread started.")
+        logger.info("The MCP server is ready.")
 
-            logger.info("The MCP server is ready.")
-
-        except Exception as e:
-            logger.critical(f"MCP: Failed to start server environment: {str(e)}", exc_info=True)
-            if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
-                temp_pe_obj_for_preload.close()
-            state.filepath = None
-            state.pe_data = None
-            state.pe_object = None
-            logger.error("MCP server startup aborted.")
-            sys.exit(1)
-
-        if args.mcp_transport=="sse":
-            mcp_server.settings.host=args.mcp_host
-            mcp_server.settings.port=args.mcp_port
-            mcp_server.settings.log_level=logging.getLevelName(log_level).lower()
-            logger.info(f"Starting MCP server (SSE) on http://{mcp_server.settings.host}:{mcp_server.settings.port}")
+        if args.mcp_transport in ("sse", "streamable-http"):
+            mcp_server.settings.host = args.mcp_host
+            mcp_server.settings.port = args.mcp_port
+            mcp_server.settings.log_level = logging.getLevelName(log_level).lower()
+            transport_label = "streamable-http" if args.mcp_transport == "streamable-http" else "SSE (deprecated)"
+            logger.info(f"Starting MCP server ({transport_label}) on http://{args.mcp_host}:{args.mcp_port}")
         else:
             logger.info("Starting MCP server (stdio).")
 
@@ -355,7 +359,7 @@ def main():
     else:
         try:
             if args.mode == 'shellcode':
-                print(f"[*] CLI Mode: Shellcode Analysis ({abs_input_file})")
+                print(f"[*] CLI Mode: Shellcode Analysis ({abs_input_file})")  # abs_input_file guaranteed non-None in CLI mode
                 with open(abs_input_file, 'rb') as f:
                     data = f.read()
 
