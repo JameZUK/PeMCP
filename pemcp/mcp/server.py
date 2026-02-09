@@ -16,11 +16,11 @@ tool_decorator = mcp_server.tool()
 # --- MCP Feedback Helpers ---
 
 def _check_pe_loaded(tool_name: str) -> None:
-    """Raise a descriptive RuntimeError if no PE file has been loaded."""
+    """Raise a descriptive RuntimeError if no file has been loaded."""
     if state.pe_data is None or state.filepath is None:
         raise RuntimeError(
-            f"[{tool_name}] No PE file is currently loaded. "
-            "Use the 'open_file' tool to load a PE file for analysis, "
+            f"[{tool_name}] No file is currently loaded. "
+            "Use the 'open_file' tool to load a file for analysis (supports PE, ELF, Mach-O, shellcode), "
             "or start the server with --input-file to pre-load one. "
             "If a file was provided at startup, it may have failed — check the server logs."
         )
@@ -38,7 +38,7 @@ def _check_angr_ready(tool_name: str) -> None:
         )
     if state.filepath is None:
         raise RuntimeError(
-            f"[{tool_name}] No PE file is loaded. Cannot perform binary analysis."
+            f"[{tool_name}] No file is loaded. Cannot perform binary analysis."
         )
     # Check if background angr startup is still running
     startup_task = state.get_task("startup-angr")
