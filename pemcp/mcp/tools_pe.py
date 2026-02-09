@@ -29,28 +29,45 @@ if ANGR_AVAILABLE:
 async def open_file(
     ctx: Context,
     file_path: str,
-    mode: str = "pe",
+    mode: str = "auto",
     analyses_to_skip: Optional[List[str]] = None,
     start_angr_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Opens and analyses a PE file or raw shellcode, making it available for all other tools.
+    Opens and analyses a binary file, making it available for all other tools.
+    Supports PE, ELF, Mach-O, and raw shellcode. Auto-detection is the default.
     This replaces any previously loaded file. Progress is reported during analysis.
 
     Args:
         ctx: The MCP Context object.
         file_path: (str) Absolute or relative path to the file to analyse.
-        mode: (str) Analysis mode — 'pe' (default) or 'shellcode' for raw binaries.
+        mode: (str) Analysis mode — 'auto' (default, detects from magic bytes), 'pe', 'elf', 'macho', or 'shellcode'.
         analyses_to_skip: (Optional[List[str]]) List of analyses to skip: 'peid', 'yara', 'capa', 'floss'.
         start_angr_background: (bool) If True (default) and angr is available, start background CFG analysis.
 
     Returns:
-        A dictionary with status, filepath, and summary of what was loaded.
+        A dictionary with status, filepath, detected format, and summary of what was loaded.
     """
     abs_path = str(Path(file_path).resolve())
 
     if not os.path.isfile(abs_path):
         raise RuntimeError(f"[open_file] File not found: {abs_path}")
+
+    # Auto-detect format from magic bytes
+    if mode == "auto":
+        with open(abs_path, 'rb') as f:
+            magic = f.read(4)
+        if magic[:2] == b'MZ':
+            mode = "pe"
+        elif magic == b'\x7fELF':
+            mode = "elf"
+        elif magic in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
+                       b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
+                       b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
+            mode = "macho"
+        else:
+            mode = "pe"  # fallback to PE, pefile will report errors if invalid
+        await ctx.info(f"Auto-detected format: {mode}")
 
     await ctx.info(f"Opening file: {abs_path} (mode: {mode})")
 
@@ -105,6 +122,42 @@ async def open_file(
 
                 await asyncio.to_thread(_run_floss)
 
+            await ctx.report_progress(100, 100)
+
+        elif mode in ("elf", "macho"):
+            # ELF / Mach-O mode — lightweight load with hashes and strings
+            await ctx.report_progress(5, 100)
+            format_label = "ELF" if mode == "elf" else "Mach-O"
+            await ctx.info(f"Loading {format_label} binary...")
+
+            def _load_non_pe():
+                with open(abs_path, 'rb') as f:
+                    raw_data = f.read()
+                state.pe_object = MockPE(raw_data)
+                state.filepath = abs_path
+                state.pe_data = {
+                    "filepath": abs_path,
+                    "mode": mode,
+                    "format": format_label,
+                    "file_hashes": _parse_file_hashes(raw_data),
+                    "basic_ascii_strings": [
+                        {"offset": hex(o), "string": s}
+                        for o, s in _extract_strings_from_data(raw_data, 5)
+                    ],
+                    "note": (
+                        f"This is a {format_label} binary. PE-specific tools (imports, exports, sections, etc.) "
+                        f"are not applicable. Use the format-specific tools instead: "
+                        + (
+                            "elf_analyze, elf_dwarf_info" if mode == "elf"
+                            else "macho_analyze"
+                        )
+                        + ". Angr-based tools (decompilation, CFG, symbolic execution) work on all formats."
+                    ),
+                }
+
+            await asyncio.to_thread(_load_non_pe)
+            await ctx.report_progress(50, 100)
+            await ctx.info(f"{format_label} binary loaded. Use format-specific tools or angr tools for analysis.")
             await ctx.report_progress(100, 100)
 
         else:
@@ -216,13 +269,21 @@ async def open_file(
         await ctx.report_progress(100, 100)
         await ctx.info(f"File loaded successfully: {abs_path}")
 
-        return {
+        result = {
             "status": "success",
             "filepath": abs_path,
             "mode": mode,
             "analyses_skipped": skip_list if skip_list else "none",
             "angr_background": "started" if (start_angr_background and ANGR_AVAILABLE) else "not started",
         }
+        if mode in ("elf", "macho"):
+            format_label = "ELF" if mode == "elf" else "Mach-O"
+            result["suggested_tools"] = (
+                ["elf_analyze", "elf_dwarf_info"] if mode == "elf"
+                else ["macho_analyze"]
+            ) + ["detect_binary_format", "decompile_function_with_angr", "get_function_cfg"]
+            result["note"] = f"{format_label} binary loaded. PE-specific tools are not applicable. Use the suggested tools for analysis."
+        return result
 
     except Exception as e:
         # Clean up on failure

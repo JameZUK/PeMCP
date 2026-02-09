@@ -31,6 +31,7 @@ import pemcp.mcp.tools_angr
 import pemcp.mcp.tools_angr_extended
 import pemcp.mcp.tools_pe_extended
 import pemcp.mcp.tools_new_libs
+import pemcp.mcp.tools_binary_formats
 import pemcp.mcp.tools_misc
 
 
@@ -39,7 +40,7 @@ def main():
 
     # --- Input & Mode ---
     parser.add_argument("--input-file", type=str, default=None, help="Path to the file to be analyzed. Required for CLI mode. Optional for MCP server mode (use open_file tool instead).")
-    parser.add_argument("--mode", choices=["pe", "shellcode"], default="pe", help="Analysis mode. Use 'shellcode' for raw binaries (default: pe).")
+    parser.add_argument("--mode", choices=["auto", "pe", "elf", "macho", "shellcode"], default="auto", help="Analysis mode: 'auto' (default, detects from magic bytes), 'pe', 'elf', 'macho', or 'shellcode'.")
 
     # --- External Resources ---
     parser.add_argument("-d", "--db", dest="peid_db", default=None, help=f"Path to PEiD userdb.txt. If not specified, defaults to '{DEFAULT_PEID_DB_PATH}'. Downloads if not found.")
@@ -199,8 +200,25 @@ def main():
                     logger.critical(f"Input path for MCP server is not a file: {abs_input_file}")
                     sys.exit(1)
 
+                # --- Auto-detect format if mode is 'auto' ---
+                effective_mode = args.mode
+                if effective_mode == 'auto':
+                    with open(abs_input_file, 'rb') as f:
+                        magic = f.read(4)
+                    if magic[:2] == b'MZ':
+                        effective_mode = 'pe'
+                    elif magic == b'\x7fELF':
+                        effective_mode = 'elf'
+                    elif magic in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
+                                   b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
+                                   b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
+                        effective_mode = 'macho'
+                    else:
+                        effective_mode = 'pe'  # fallback
+                    logger.info(f"Auto-detected format: {effective_mode}")
+
                 # --- Loading Logic with Mode Support ---
-                if args.mode == 'shellcode':
+                if effective_mode == 'shellcode':
                     with open(abs_input_file, 'rb') as f:
                         raw_data = f.read()
                     state.pe_object = MockPE(raw_data)
@@ -223,6 +241,23 @@ def main():
                             args.regex_pattern
                         )
                         _perform_unified_string_sifting(state.pe_data)
+
+                elif effective_mode in ('elf', 'macho'):
+                    with open(abs_input_file, 'rb') as f:
+                        raw_data = f.read()
+                    state.pe_object = MockPE(raw_data)
+                    state.filepath = abs_input_file
+                    format_label = "ELF" if effective_mode == "elf" else "Mach-O"
+
+                    state.pe_data = {
+                        "filepath": abs_input_file,
+                        "mode": effective_mode,
+                        "format": format_label,
+                        "file_hashes": _parse_file_hashes(raw_data),
+                        "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
+                        "note": f"{format_label} binary loaded. Use format-specific tools (elf_analyze/macho_analyze) and angr tools for analysis.",
+                    }
+                    logger.info(f"Loaded {format_label} binary: {abs_input_file}")
 
                 else:
                     temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
@@ -269,11 +304,12 @@ def main():
                         try:
                             _update_progress(tid, 1, "Loading Angr Project...")
 
-                            if args.mode == 'shellcode':
+                            if effective_mode == 'shellcode':
                                 arch = "amd64" if "64" in floss_fmt else "x86"
                                 _update_progress(tid, 5, f"Loading raw shellcode as {arch}...")
                                 proj = angr.Project(fpath, main_opts={'backend': 'blob', 'arch': arch}, auto_load_libs=False)
                             else:
+                                # angr natively supports PE, ELF, and Mach-O via CLE
                                 proj = angr.Project(fpath, auto_load_libs=False)
 
                             state.angr_project = proj
