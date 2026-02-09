@@ -39,6 +39,7 @@ import networkx as nx
 from typing import Dict, Any, Optional, List, Tuple, Set, Union, Type
 
 from pemcp.state import AnalyzerState
+from pemcp.user_config import get_config_value
 
 # --- Global State Instance ---
 state = AnalyzerState()
@@ -55,7 +56,7 @@ except ImportError:
 DATA_DIR = Path(os.getenv("PEMCP_DATA_DIR", Path(__file__).resolve().parent.parent))
 
 # --- VirusTotal API Configuration ---
-VT_API_KEY = os.getenv("VT_API_KEY")
+VT_API_KEY = get_config_value("vt_api_key")
 VT_API_URL_FILE_REPORT = "https://www.virustotal.com/api/v3/files/"
 
 # --- Optional Library Imports & Availability Flags ---

@@ -20,8 +20,9 @@ def _check_pe_loaded(tool_name: str) -> None:
     if state.pe_data is None or state.filepath is None:
         raise RuntimeError(
             f"[{tool_name}] No PE file is currently loaded. "
-            "The server must be started with --input-file to pre-load a file for analysis. "
-            "If a file was provided, startup may have failed — check the server logs."
+            "Use the 'open_file' tool to load a PE file for analysis, "
+            "or start the server with --input-file to pre-load one. "
+            "If a file was provided at startup, it may have failed — check the server logs."
         )
 
 def _check_angr_ready(tool_name: str) -> None:

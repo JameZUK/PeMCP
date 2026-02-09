@@ -12,10 +12,11 @@ from typing import Dict, Any, Optional, List, Tuple
 
 from pemcp.config import (
     state, logger, Context,
-    REQUESTS_AVAILABLE, VT_API_KEY, VT_API_URL_FILE_REPORT,
+    REQUESTS_AVAILABLE, VT_API_URL_FILE_REPORT,
     ANGR_AVAILABLE, CAPA_AVAILABLE, FLOSS_AVAILABLE,
     STRINGSIFTER_AVAILABLE, YARA_AVAILABLE,
 )
+from pemcp.user_config import get_config_value, set_config_value, get_masked_config
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_data_key_available, _check_mcp_response_size
 from pemcp.parsers.strings import _decode_single_byte_xor, _format_hex_dump_lines
 
@@ -76,11 +77,14 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
         }, tool_name)
 
 
-    if not VT_API_KEY:
-        await ctx.warning("VirusTotal API key (VT_API_KEY) is not configured. Skipping VirusTotal lookup.")
+    # Read API key at runtime (supports set_api_key and env var changes)
+    vt_api_key = get_config_value("vt_api_key")
+
+    if not vt_api_key:
+        await ctx.warning("VirusTotal API key is not configured. Set it with set_api_key('vt_api_key', '<your-key>') or the VT_API_KEY environment variable.")
         return await _check_mcp_response_size(ctx, {
             "status": "api_key_missing",
-            "message": "VirusTotal API key (VT_API_KEY) is not configured in the environment.",
+            "message": "VirusTotal API key is not configured. Use the set_api_key tool or set the VT_API_KEY environment variable.",
             "query_hash_type": hash_type_used,
             "query_hash": main_hash_value
         }, tool_name)
@@ -94,7 +98,7 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
             "query_hash": main_hash_value
         }, tool_name)
 
-    headers = {"x-apikey": VT_API_KEY}
+    headers = {"x-apikey": vt_api_key}
     api_url = f"{VT_API_URL_FILE_REPORT}{main_hash_value}"
     response_payload: Dict[str, Any] = {
         "status": "pending",
@@ -741,3 +745,75 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
         response["hint"] = "Task is still processing. Poll again shortly with check_task_status."
 
     return response
+
+
+@tool_decorator
+async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, str]:
+    """
+    Stores an API key in the user's persistent configuration (~/.pemcp/config.json).
+    The key is saved securely (file permissions restricted to owner only) and will
+    be recalled automatically in future sessions.
+
+    Supported key names:
+    - 'vt_api_key': VirusTotal API key (used by get_virustotal_report_for_loaded_file)
+
+    Note: Environment variables (e.g. VT_API_KEY) always take priority over stored keys.
+
+    Args:
+        ctx: The MCP Context object.
+        key_name: (str) The configuration key name (e.g. 'vt_api_key').
+        key_value: (str) The API key value to store.
+
+    Returns:
+        A dictionary confirming the key was saved.
+    """
+    allowed_keys = {"vt_api_key"}
+    if key_name not in allowed_keys:
+        raise ValueError(
+            f"[set_api_key] Unknown key '{key_name}'. "
+            f"Supported keys: {', '.join(sorted(allowed_keys))}"
+        )
+
+    if not key_value or not key_value.strip():
+        raise ValueError("[set_api_key] key_value must not be empty.")
+
+    set_config_value(key_name, key_value.strip())
+    await ctx.info(f"API key '{key_name}' saved to persistent configuration.")
+
+    return {
+        "status": "success",
+        "message": f"Key '{key_name}' saved successfully. It will be used automatically in future sessions.",
+        "note": "Environment variables always take priority over stored keys.",
+    }
+
+
+@tool_decorator
+async def get_config(ctx: Context) -> Dict[str, Any]:
+    """
+    Retrieves the current PeMCP configuration, including stored API keys (masked)
+    and which keys are overridden by environment variables.
+
+    This tool does not depend on a PE file being loaded.
+
+    Args:
+        ctx: The MCP Context object.
+
+    Returns:
+        A dictionary containing the current configuration with sensitive values masked.
+    """
+    await ctx.info("Retrieving current configuration.")
+    config = get_masked_config()
+
+    # Add server capability info
+    config["_server_info"] = {
+        "angr_available": ANGR_AVAILABLE,
+        "capa_available": CAPA_AVAILABLE,
+        "floss_available": FLOSS_AVAILABLE,
+        "yara_available": YARA_AVAILABLE,
+        "stringsifter_available": STRINGSIFTER_AVAILABLE,
+        "requests_available": REQUESTS_AVAILABLE,
+        "file_loaded": state.filepath is not None,
+        "loaded_filepath": state.filepath,
+    }
+
+    return config
