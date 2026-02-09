@@ -16,6 +16,7 @@ class AnalyzerState:
         self.angr_cfg = None
         self.angr_loop_cache = None
         self.angr_loop_cache_config = None
+        self.angr_hooks: Dict[str, Dict[str, Any]] = {}  # addr_hex -> hook info
 
         # Background Tasks
         self._task_lock = threading.Lock()
@@ -49,6 +50,7 @@ class AnalyzerState:
         self.angr_cfg = None
         self.angr_loop_cache = None
         self.angr_loop_cache_config = None
+        self.angr_hooks = {}
 
     def close_pe(self):
         if self.pe_object:
