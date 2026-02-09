@@ -49,6 +49,26 @@ py-tlsh
 # Embedded file/firmware detection
 binwalk
 
+# --- .NET Binary Analysis (Optional) ---
+# .NET PE metadata parser (CLR headers, metadata tables, streams)
+dnfile
+# .NET CIL bytecode disassembler (Mandiant FLARE)
+dncil
+
+# --- Go Binary Analysis (Optional) ---
+# Go binary reverse engineering (compiler version, packages, symbols)
+pygore
+
+# --- Rust Binary Analysis (Optional) ---
+# Rust binary metadata extraction (compiler, crates, toolchain)
+rustbininfo
+# Rust symbol demangling
+rust-demangler
+
+# --- ELF/Linux Binary Analysis (Optional) ---
+# ELF and DWARF parser (headers, symbols, debug info)
+pyelftools
+
 # --- Test Dependencies ---
 # Install with: pip install -r requirements.txt -r requirements-test.txt
 # pytest
