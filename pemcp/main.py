@@ -28,6 +28,7 @@ from pemcp.mcp.server import mcp_server
 import pemcp.mcp.tools_pe
 import pemcp.mcp.tools_strings
 import pemcp.mcp.tools_angr
+import pemcp.mcp.tools_angr_extended
 import pemcp.mcp.tools_misc
 
 
