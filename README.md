@@ -1,6 +1,6 @@
-# PeMCP — Advanced PE Analysis & MCP Server
+# PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of Portable Executable (PE) files and raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **60+ specialised tools** to interactively explore, decompile, and analyse binaries.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **120+ specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -17,7 +17,7 @@ PeMCP bridges the gap between high-level AI reasoning and low-level binary instr
 - [Configuration](#configuration)
 - [MCP Tools Reference](#mcp-tools-reference)
 - [Architecture & Design](#architecture--design)
-- [Shellcode Analysis](#shellcode-analysis)
+- [Multi-Format Analysis](#multi-format-analysis)
 - [Contributing](#contributing)
 - [Licence](#licence)
 - [Disclaimer](#disclaimer)
@@ -26,36 +26,73 @@ PeMCP bridges the gap between high-level AI reasoning and low-level binary instr
 
 ## Key Features
 
+### Multi-Format Binary Support
+
+PeMCP automatically detects and analyses binaries across all major platforms:
+
+- **PE (Windows)** — Full parsing of DOS/NT Headers, Imports/Exports, Resources, TLS, Debug, Load Config, Rich Header, Overlay, and more.
+- **ELF (Linux)** — Headers, sections, segments, symbols, dynamic dependencies, DWARF debug info.
+- **Mach-O (macOS)** — Headers, load commands, segments, symbols, dynamic libraries, code signatures.
+- **.NET Assemblies** — CLR headers, metadata tables, type/method definitions, CIL bytecode disassembly.
+- **Go Binaries** — Compiler version, packages, function names, type definitions (works on stripped binaries via pclntab).
+- **Rust Binaries** — Compiler version, crate dependencies, toolchain info, symbol demangling.
+- **Raw Shellcode** — Architecture-aware loading with FLOSS string extraction.
+
 ### Advanced Binary Analysis (Powered by Angr)
 
-Beyond standard static analysis, PeMCP integrates the **Angr** binary analysis framework:
+36 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
 
 - **Decompilation** — Convert assembly into human-readable C-like pseudocode on the fly.
 - **Control Flow Graph (CFG)** — Generate and traverse function blocks and edges.
 - **Symbolic Execution** — Automatically find inputs to reach specific code paths.
 - **Emulation** — Execute functions with concrete arguments using the Unicorn engine.
 - **Slicing & Dominators** — Perform forward/backward slicing to track data flow and identify critical code dependencies.
+- **Reaching Definitions & Data Dependencies** — Track how values propagate through registers and memory.
+- **Function Hooking** — Replace functions with custom SimProcedures for analysis.
+- **Value Set Analysis** — Determine possible values of variables at each program point.
+- **Binary Diffing** — Compare two binaries to find added/removed/modified functions.
+- **Code Cave Detection** — Find unused space in binaries for patching.
+- **C++ Class Recovery** — Identify vtables and class hierarchies.
+- **Packing Detection** — Heuristic analysis of entropy and structure anomalies.
 
 ### Comprehensive Static Analysis
 
-- **PE Structure** — Full parsing of DOS/NT Headers, Imports/Exports, Resources, TLS, Debug, Load Config, Rich Header, Overlay, and more.
+- **PE Structure** — 24 dedicated tools for every PE data directory and header.
 - **Signatures** — Authenticode validation (Signify), certificate parsing (Cryptography), packer detection (PEiD), and YARA scanning.
 - **Capabilities** — Integrated Capa analysis to map binary behaviours to the MITRE ATT&CK framework.
 - **Strings** — FLOSS integration for extracting static, stack, tight, and decoded strings, ranked by relevance using StringSifter.
+- **Crypto Analysis** — Detect crypto constants (AES S-box, DES, RC4), scan for API hashes, entropy analysis.
+- **Deobfuscation** — Multi-byte XOR brute-forcing, format string detection, wide string extraction.
+
+### Extended Library Integrations
+
+- **LIEF** — Multi-format binary parsing and modification (PE/ELF/Mach-O section editing).
+- **Capstone** — Multi-architecture standalone disassembly (x86, ARM, MIPS, etc.).
+- **Keystone** — Multi-architecture assembly (generate patches from mnemonics).
+- **Speakeasy** — Windows API emulation for malware analysis (full PE and shellcode).
+- **Un{i}packer** — Automatic PE unpacking (UPX, ASPack, FSG, etc.).
+- **Binwalk** — Embedded file and firmware detection.
+- **ppdeep/TLSH** — Fuzzy hashing for sample similarity comparison.
+- **dnfile/dncil** — .NET metadata parsing and CIL bytecode disassembly.
+- **pygore** — Go binary reverse engineering.
+- **rustbininfo** — Rust binary metadata extraction.
+- **pyelftools** — ELF and DWARF debug info parsing.
 
 ### Dynamic File Loading & API Key Management
 
+- **Auto-Detection** — `open_file` automatically detects PE/ELF/Mach-O from magic bytes. No need to specify the format.
 - **No Pre-loading Required** — The MCP server starts without needing a file path. Use the `open_file` tool to load files dynamically.
 - **Persistent Configuration** — API keys are stored securely in `~/.pemcp/config.json` and recalled automatically across sessions.
 - **Progress Reporting** — File loading and analysis report progress to the MCP client in real time.
 
 ### Robust Architecture
 
-- **Modular Package** — Clean `pemcp/` package structure with separated concerns (parsers, MCP tools, CLI, configuration).
+- **Modular Package** — Clean `pemcp/` package structure with 8 tool modules, separated concerns (parsers, MCP tools, CLI, configuration).
 - **Docker-First Design** — No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Thread-Safe State** — Centralised `AnalyzerState` class with locking for concurrent access.
 - **Background Tasks** — Long-running operations (symbolic execution, Angr CFG) run asynchronously with heartbeat monitoring.
 - **Smart Truncation** — MCP responses are automatically truncated to fit within 64KB limits whilst preserving structural integrity.
+- **Graceful Degradation** — All 20+ optional libraries are detected at startup. Tools that require unavailable libraries return clear error messages instead of crashing.
 
 ---
 
@@ -198,11 +235,14 @@ To use the Docker image with Claude Code:
 
 Once configured, you can interact with PeMCP through Claude Code naturally:
 
-1. **"Open this sample for analysis"** — Claude calls `open_file` with the path
-2. **"What does this binary do?"** — Claude retrieves the triage report, imports, capabilities
-3. **"Decompile the main function"** — Claude uses Angr tools to decompile
-4. **"Check if it's on VirusTotal"** — Claude queries the VT API
-5. **"Close the file"** — Claude calls `close_file` to free resources
+1. **"Open this sample for analysis"** — Claude calls `open_file` with the path (auto-detects PE/ELF/Mach-O)
+2. **"What format is this?"** — Claude calls `detect_binary_format` to identify format and suggest tools
+3. **"What does this binary do?"** — Claude retrieves the triage report, imports, capabilities
+4. **"Decompile the main function"** — Claude uses Angr tools to decompile (works on PE, ELF, Mach-O)
+5. **"Is this a .NET binary?"** — Claude calls `dotnet_analyze` for CLR metadata and CIL disassembly
+6. **"Analyse this Go binary"** — Claude calls `go_analyze` for packages, functions, compiler version
+7. **"Check if it's on VirusTotal"** — Claude queries the VT API
+8. **"Close the file"** — Claude calls `close_file` to free resources
 
 API keys can be set interactively: *"Set my VirusTotal API key to abc123"* — Claude calls `set_api_key`, and the key persists across sessions.
 
@@ -264,6 +304,18 @@ Optional packages can be added individually:
 - `pip install flare-floss vivisect` — Advanced string extraction
 - `pip install flare-stringsifter` — ML-based string ranking
 - `pip install "angr[unicorn]"` — Decompilation, CFG, symbolic execution
+- `pip install lief` — Multi-format binary parsing (PE/ELF/Mach-O)
+- `pip install capstone` — Multi-architecture disassembly
+- `pip install keystone-engine` — Multi-architecture assembly
+- `pip install speakeasy-emulator` — Windows API emulation
+- `pip install ppdeep py-tlsh` — Fuzzy hashing (ssdeep/TLSH)
+- `pip install dnfile dncil` — .NET assembly analysis
+- `pip install pygore` — Go binary analysis
+- `pip install rustbininfo rust-demangler` — Rust binary analysis
+- `pip install pyelftools` — ELF/DWARF analysis
+- `pip install binwalk` — Embedded file detection
+- `pip install unipacker` — Automatic PE unpacking
+- `pip install dotnetfile` — .NET PE metadata
 
 ---
 
@@ -336,7 +388,7 @@ PeMCP stores API keys persistently in `~/.pemcp/config.json` with restricted fil
 | Option | Description |
 |---|---|
 | `--input-file PATH` | File to analyse (required for CLI, optional for MCP) |
-| `--mode {pe,shellcode}` | Analysis mode (default: pe) |
+| `--mode {auto,pe,elf,macho,shellcode}` | Analysis mode (default: auto, detects from magic bytes) |
 | `--mcp-server` | Start in MCP server mode |
 | `--mcp-transport {stdio,streamable-http,sse}` | Transport protocol (default: stdio) |
 | `--mcp-host HOST` | Server host for HTTP transports (default: 127.0.0.1) |
@@ -351,15 +403,16 @@ PeMCP stores API keys persistently in `~/.pemcp/config.json` with restricted fil
 
 ## MCP Tools Reference
 
-PeMCP exposes 60+ tools organised into the following categories.
+PeMCP exposes **122 tools** organised into the following categories.
 
 ### File Management
 
 | Tool | Description |
 |---|---|
-| `open_file` | Load and analyse a PE file or shellcode. Reports progress during analysis. |
+| `open_file` | Load and analyse a binary (PE/ELF/Mach-O/shellcode). Auto-detects format from magic bytes. |
 | `close_file` | Close the loaded file and clear analysis data from memory. |
-| `reanalyze_loaded_pe_file` | Re-run analysis with different options (skip/enable specific analyses). |
+| `reanalyze_loaded_pe_file` | Re-run PE analysis with different options (skip/enable specific analyses). |
+| `detect_binary_format` | Auto-detect binary format and suggest appropriate analysis tools. |
 
 ### Configuration & Utilities
 
@@ -369,8 +422,9 @@ PeMCP exposes 60+ tools organised into the following categories.
 | `get_config` | View current configuration, available libraries, and loaded file status. |
 | `get_current_datetime` | Retrieve current UTC and local date/time. |
 | `check_task_status` | Monitor progress of background tasks (e.g., Angr CFG generation). |
+| `get_extended_capabilities` | List all available tools and library versions. |
 
-### PE Structure Analysis
+### PE Structure Analysis (29 tools)
 
 | Tool | Description |
 |---|---|
@@ -400,6 +454,25 @@ PeMCP exposes 60+ tools organised into the following categories.
 | `get_checksum_verification_info` | PE checksum verification. |
 | `get_pefile_warnings_info` | Warnings from the pefile parser. |
 
+### PE Extended Analysis (14 tools)
+
+| Tool | Description |
+|---|---|
+| `get_section_permissions` | Human-readable section permission matrix (RWX). |
+| `get_pe_metadata` | Compilation timestamps, linker info, subsystem, DLL characteristics. |
+| `extract_resources` | Extract and decode PE resources by type. |
+| `extract_manifest` | Extract and parse embedded application manifest XML. |
+| `get_load_config_details` | Extended load config (SEH, CFG, RFG, CET details). |
+| `extract_wide_strings` | Extract UTF-16LE wide strings from the binary. |
+| `detect_format_strings` | Detect printf/scanf format strings (format string vuln hunting). |
+| `detect_compression_headers` | Detect embedded compressed data (zlib, gzip, LZMA, etc.). |
+| `deobfuscate_xor_multi_byte` | Multi-byte XOR deobfuscation with known key. |
+| `bruteforce_xor_key` | Brute-force single and multi-byte XOR keys against known plaintext. |
+| `detect_crypto_constants` | Detect crypto constants (AES S-box, DES, SHA, RC4, etc.). |
+| `analyze_entropy_by_offset` | Sliding-window entropy analysis to detect packed/encrypted regions. |
+| `scan_for_api_hashes` | Detect API hashing patterns (ROR13, CRC32, DJB2, FNV). |
+| `get_import_hash_analysis` | Import hash (imphash) with per-DLL analysis and anomaly detection. |
+
 ### Signature & Capability Analysis
 
 | Tool | Description |
@@ -409,7 +482,7 @@ PeMCP exposes 60+ tools organised into the following categories.
 | `get_capa_analysis_info` | Capa capability rules overview with filtering. |
 | `get_capa_rule_match_details` | Detailed match info for a specific Capa rule. |
 
-### String Analysis
+### String Analysis (10 tools)
 
 | Tool | Description |
 |---|---|
@@ -422,6 +495,7 @@ PeMCP exposes 60+ tools organised into the following categories.
 | `get_string_usage_context` | Disassembly context showing where a string is used. |
 | `fuzzy_search_strings` | Fuzzy matching to find similar strings. |
 | `find_and_decode_encoded_strings` | Multi-layer Base64/Hex/XOR decoding with heuristics. |
+| `search_binary_content` | Search for byte patterns, regex, or strings across the raw binary. |
 
 ### Triage & Forensics
 
@@ -430,7 +504,7 @@ PeMCP exposes 60+ tools organised into the following categories.
 | `get_triage_report` | Automated summary of suspicious indicators, imports, and capabilities. |
 | `get_virustotal_report_for_loaded_file` | Query VirusTotal for the file hash. |
 
-### Deobfuscation
+### Deobfuscation & Utilities
 
 | Tool | Description |
 |---|---|
@@ -439,7 +513,7 @@ PeMCP exposes 60+ tools organised into the following categories.
 | `is_mostly_printable_ascii` | Check if a string is mostly printable. |
 | `get_hex_dump` | Hex dump of a file region. |
 
-### Binary Analysis (Angr)
+### Binary Analysis — Core Angr (14 tools)
 
 | Tool | Description |
 |---|---|
@@ -458,6 +532,65 @@ PeMCP exposes 60+ tools organised into the following categories.
 | `scan_for_indirect_jumps` | Indirect jumps/calls (dynamic control flow) in a function. |
 | `patch_binary_memory` | Patch the loaded binary in memory with new bytes. |
 
+### Binary Analysis — Extended Angr (22 tools)
+
+| Tool | Description |
+|---|---|
+| `get_reaching_definitions` | Track how values propagate through registers and memory. |
+| `get_data_dependencies` | Data dependency graph for a function. |
+| `hook_function` | Replace a function with a custom SimProcedure. |
+| `list_hooks` | List all active function hooks. |
+| `unhook_function` | Remove a previously set hook. |
+| `get_calling_conventions` | Detect calling conventions for functions. |
+| `get_function_variables` | Recover local variables and parameters. |
+| `disassemble_at_address` | Disassemble N instructions at a given address. |
+| `identify_library_functions` | Identify standard library functions (libc, etc.). |
+| `get_control_dependencies` | Control dependency analysis for a function. |
+| `propagate_constants` | Constant propagation analysis. |
+| `diff_binaries` | Compare two binaries for added/removed/modified functions. |
+| `detect_self_modifying_code` | Detect code that writes to executable memory. |
+| `find_code_caves` | Find unused executable space for patching. |
+| `get_call_graph` | Generate full or filtered inter-procedural call graph. |
+| `find_path_with_custom_input` | Symbolic execution with custom constraints. |
+| `emulate_with_watchpoints` | Emulate with memory/register watchpoints. |
+| `get_annotated_disassembly` | Rich disassembly with resolved names and comments. |
+| `get_value_set_analysis` | Determine possible values at program points. |
+| `detect_packing` | Heuristic packing/encryption detection. |
+| `save_patched_binary` | Save a patched binary to disk. |
+| `identify_cpp_classes` | Recover C++ vtables and class hierarchies. |
+
+### Extended Library Tools (13 tools)
+
+| Tool | Description |
+|---|---|
+| `parse_binary_with_lief` | Multi-format binary parsing with LIEF (PE/ELF/Mach-O). |
+| `modify_pe_section` | Modify PE section properties (name, characteristics). |
+| `disassemble_raw_bytes` | Disassemble raw bytes with Capstone (any architecture). |
+| `assemble_instruction` | Assemble mnemonics to bytes with Keystone. |
+| `patch_with_assembly` | Assemble and patch instructions into the binary. |
+| `compute_similarity_hashes` | Compute ssdeep and TLSH fuzzy hashes. |
+| `compare_file_similarity` | Compare two files using fuzzy hash similarity. |
+| `emulate_pe_with_windows_apis` | Full Windows API emulation with Speakeasy. |
+| `emulate_shellcode_with_speakeasy` | Emulate shellcode with Windows API hooks. |
+| `auto_unpack_pe` | Automatically unpack packed PEs (UPX, ASPack, FSG, etc.). |
+| `parse_dotnet_metadata` | Parse .NET metadata with dotnetfile. |
+| `scan_for_embedded_files` | Detect embedded files/firmware with Binwalk. |
+| `get_extended_capabilities` | List all available tools and library versions. |
+
+### Multi-Format Binary Analysis (9 tools)
+
+| Tool | Description |
+|---|---|
+| `detect_binary_format` | Auto-detect format (PE/.NET/ELF/Mach-O/Go/Rust) from magic bytes. |
+| `dotnet_analyze` | Comprehensive .NET metadata: CLR header, types, methods, assembly refs, user strings. |
+| `dotnet_disassemble_method` | Disassemble .NET CIL bytecode to human-readable opcodes. |
+| `go_analyze` | Go binary analysis: compiler version, packages, functions (works on stripped binaries). |
+| `rust_analyze` | Rust binary metadata: compiler version, crate dependencies, toolchain. |
+| `rust_demangle_symbols` | Demangle Rust symbol names to human-readable form. |
+| `elf_analyze` | Comprehensive ELF analysis: headers, sections, segments, symbols, dynamic deps. |
+| `elf_dwarf_info` | Extract DWARF debug info: compilation units, functions, source files. |
+| `macho_analyze` | Mach-O analysis: headers, load commands, segments, symbols, dylibs, code signatures. |
+
 ---
 
 ## Architecture & Design
@@ -465,32 +598,36 @@ PeMCP exposes 60+ tools organised into the following categories.
 ### Package Structure
 
 ```
-PeMCP.py                    # Entry point (thin wrapper)
+PeMCP.py                        # Entry point (thin wrapper)
 pemcp/
-├── __init__.py             # Package metadata
-├── __main__.py             # python -m pemcp support
-├── state.py                # Thread-safe AnalyzerState
-├── config.py               # Imports, availability flags, constants
-├── user_config.py          # Persistent API key storage (~/.pemcp/)
-├── utils.py                # Utility functions
-├── hashing.py              # ssdeep implementation
-├── mock.py                 # MockPE for shellcode mode
-├── background.py           # Background task management
-├── resources.py            # PEiD/capa rule downloads
+├── __init__.py                 # Package metadata
+├── __main__.py                 # python -m pemcp support
+├── state.py                    # Thread-safe AnalyzerState
+├── config.py                   # Imports, availability flags, constants
+├── user_config.py              # Persistent API key storage (~/.pemcp/)
+├── utils.py                    # Utility functions
+├── hashing.py                  # ssdeep implementation
+├── mock.py                     # MockPE for non-PE/shellcode mode
+├── background.py               # Background task management
+├── resources.py                # PEiD/capa rule downloads
 ├── parsers/
-│   ├── pe.py               # PE structure parsing
-│   ├── capa.py             # Capa integration
-│   ├── floss.py            # FLOSS integration
-│   ├── signatures.py       # PEiD/YARA scanning
-│   └── strings.py          # String utilities
+│   ├── pe.py                   # PE structure parsing
+│   ├── capa.py                 # Capa integration
+│   ├── floss.py                # FLOSS integration
+│   ├── signatures.py           # PEiD/YARA scanning
+│   └── strings.py              # String utilities
 ├── cli/
-│   └── printers.py         # CLI output formatting
+│   └── printers.py             # CLI output formatting
 └── mcp/
-    ├── server.py           # MCP server setup & helpers
-    ├── tools_pe.py         # File management & PE data tools
-    ├── tools_strings.py    # String analysis tools
-    ├── tools_angr.py       # Binary analysis tools
-    └── tools_misc.py       # VT, deobfuscation, triage, config tools
+    ├── server.py               # MCP server setup & helpers
+    ├── tools_pe.py             # File management & PE data tools (29 tools)
+    ├── tools_strings.py        # String analysis tools (10 tools)
+    ├── tools_angr.py           # Core angr tools (14 tools)
+    ├── tools_angr_extended.py  # Extended angr tools (22 tools)
+    ├── tools_pe_extended.py    # Extended PE analysis tools (14 tools)
+    ├── tools_new_libs.py       # LIEF/Capstone/Keystone/Speakeasy tools (13 tools)
+    ├── tools_binary_formats.py # .NET/Go/Rust/ELF/Mach-O tools (9 tools)
+    └── tools_misc.py           # VT, deobfuscation, triage, config tools (11 tools)
 ```
 
 ### Design Principles
@@ -502,7 +639,47 @@ pemcp/
 
 ---
 
-## Shellcode Analysis
+## Multi-Format Analysis
+
+### Auto-Detection (Recommended)
+
+PeMCP automatically detects the binary format from magic bytes:
+
+```
+open_file("/path/to/binary")  # Auto-detects PE, ELF, or Mach-O
+```
+
+### ELF Binaries (Linux)
+
+```bash
+# CLI mode
+python PeMCP.py --input-file binary.elf --mode elf
+
+# MCP mode — use elf_analyze, elf_dwarf_info, plus all angr tools
+open_file("/path/to/binary", mode="elf")
+```
+
+### Mach-O Binaries (macOS)
+
+```bash
+# CLI mode
+python PeMCP.py --input-file binary.macho --mode macho
+
+# MCP mode — use macho_analyze, plus all angr tools
+open_file("/path/to/binary", mode="macho")
+```
+
+### .NET, Go, and Rust Binaries
+
+These format-specific tools work on any loaded binary:
+
+```
+dotnet_analyze("/path/to/assembly.exe")     # .NET CLR metadata
+go_analyze("/path/to/go-binary")            # Go packages and functions
+rust_analyze("/path/to/rust-binary")        # Rust crate dependencies
+```
+
+### Shellcode Analysis
 
 PeMCP supports raw shellcode analysis:
 
