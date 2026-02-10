@@ -922,7 +922,7 @@ pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 104 tools e
 | Variable | Default | Description |
 |---|---|---|
 | `PEMCP_TEST_URL` | `http://127.0.0.1:8082` | Server URL to test against |
-| `PEMCP_TEST_TRANSPORT` | `streamable-http` | Transport protocol (`streamable-http` or `sse`) |
+| `PEMCP_TEST_TRANSPORT` | `auto` | Transport: `auto` (try streamable-http then SSE), `streamable-http`, or `sse` |
 | `PEMCP_TEST_SAMPLE` | *(not set)* | Path to a sample file for `open_file` tests |
 
 ```bash
