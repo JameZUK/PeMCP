@@ -4,6 +4,9 @@ import os
 import struct
 import math
 import json
+import shutil
+import subprocess
+import re
 
 from typing import Dict, Any, Optional, List
 
@@ -71,11 +74,20 @@ except ImportError:
     pass
 
 BINWALK_AVAILABLE = False
+BINWALK_CLI_ONLY = False
 try:
     import binwalk
-    BINWALK_AVAILABLE = True
-except ImportError:
-    pass
+    # Verify the Python API actually has the scan function we need
+    if hasattr(binwalk, 'scan'):
+        BINWALK_AVAILABLE = True
+    else:
+        # Module imported but missing scan() — fall back to CLI
+        BINWALK_CLI_ONLY = bool(shutil.which("binwalk"))
+        BINWALK_AVAILABLE = BINWALK_CLI_ONLY
+except Exception:
+    # Python module unavailable — check for CLI tool
+    BINWALK_CLI_ONLY = bool(shutil.which("binwalk"))
+    BINWALK_AVAILABLE = BINWALK_CLI_ONLY
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +100,23 @@ def _check_lib(lib_name: str, available: bool, tool_name: str):
             f"[{tool_name}] The '{lib_name}' library is not installed. "
             f"Install with: pip install {lib_name}"
         )
+
+
+def _safe_slice(value, n):
+    """Safely slice a value to at most *n* items.
+
+    Speakeasy report fields may be lists, dicts, or other types.
+    Slicing a dict raises ``TypeError: unhashable type: 'slice'``,
+    so we handle each type explicitly.
+    """
+    if isinstance(value, (list, tuple)):
+        return value[:n]
+    if isinstance(value, dict):
+        keys = list(value.keys())[:n]
+        return {k: value[k] for k in keys}
+    if isinstance(value, str):
+        return value[:n]
+    return value
 
 
 # ===================================================================
@@ -614,10 +643,10 @@ async def emulate_pe_with_windows_apis(
             "status": "completed",
             "total_api_calls": len(report.get('api_calls', [])),
             "api_calls": api_calls,
-            "strings_found": report.get('strings', [])[:100],
-            "network_activity": report.get('network', [])[:50],
-            "file_activity": report.get('file_access', [])[:50],
-            "registry_activity": report.get('registry', [])[:50],
+            "strings_found": _safe_slice(report.get('strings', []), 100),
+            "network_activity": _safe_slice(report.get('network', []), 50),
+            "file_activity": _safe_slice(report.get('file_access', []), 50),
+            "registry_activity": _safe_slice(report.get('registry', []), 50),
         }
 
     result = await asyncio.to_thread(_emulate)
@@ -690,8 +719,8 @@ async def emulate_shellcode_with_speakeasy(
             "architecture": architecture,
             "total_api_calls": len(report.get('api_calls', [])),
             "api_calls": api_calls,
-            "strings_found": report.get('strings', [])[:100],
-            "network_activity": report.get('network', [])[:50],
+            "strings_found": _safe_slice(report.get('strings', []), 100),
+            "network_activity": _safe_slice(report.get('network', []), 50),
         }
 
     result = await asyncio.to_thread(_emulate)
@@ -851,17 +880,48 @@ async def scan_for_embedded_files(
     _check_lib("binwalk", BINWALK_AVAILABLE, "scan_for_embedded_files")
     _check_pe_loaded("scan_for_embedded_files")
 
+    def _scan_python_api():
+        """Use the binwalk Python API (v2.x)."""
+        results = []
+        for module in binwalk.scan(state.filepath, signature=True, quiet=True, extract=False):
+            for result in module.results:
+                results.append({
+                    "offset": hex(result.offset),
+                    "description": result.description,
+                })
+                if len(results) >= limit:
+                    break
+        return results
+
+    def _scan_cli():
+        """Fallback: parse output of the binwalk CLI tool."""
+        proc = subprocess.run(
+            ["binwalk", "--quiet", state.filepath],
+            capture_output=True, text=True, timeout=60,
+        )
+        results = []
+        # binwalk output: "DECIMAL       HEXADECIMAL     DESCRIPTION"
+        # then lines like "12345         0x3039          Zip archive data, ..."
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r'^(\d+)\s+(0x[0-9A-Fa-f]+)\s+(.+)$', line)
+            if m:
+                results.append({
+                    "offset": m.group(2),
+                    "description": m.group(3),
+                })
+                if len(results) >= limit:
+                    break
+        return results
+
     def _scan():
         try:
-            results = []
-            for module in binwalk.scan(state.filepath, signature=True, quiet=True, extract=False):
-                for result in module.results:
-                    results.append({
-                        "offset": hex(result.offset),
-                        "description": result.description,
-                    })
-                    if len(results) >= limit:
-                        break
+            if BINWALK_CLI_ONLY:
+                results = _scan_cli()
+            else:
+                results = _scan_python_api()
             return {
                 "total_found": len(results),
                 "embedded_files": results[:limit],
@@ -893,5 +953,5 @@ async def get_extended_capabilities(ctx: Context) -> Dict[str, Any]:
         "dotnetfile": {"available": DOTNETFILE_AVAILABLE, "purpose": ".NET PE metadata parsing"},
         "ppdeep": {"available": PPDEEP_AVAILABLE, "purpose": "ssdeep fuzzy hashing"},
         "tlsh": {"available": TLSH_AVAILABLE, "purpose": "TLSH locality-sensitive hashing"},
-        "binwalk": {"available": BINWALK_AVAILABLE, "purpose": "Embedded file/firmware detection"},
+        "binwalk": {"available": BINWALK_AVAILABLE, "cli_only": BINWALK_CLI_ONLY, "purpose": "Embedded file/firmware detection"},
     }
