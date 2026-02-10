@@ -9,6 +9,7 @@
 #   ./run.sh                              Start HTTP MCP server
 #   ./run.sh --stdio                      Start stdio MCP server
 #   ./run.sh --analyze samples/mal.exe    Analyze a file (CLI mode)
+#   ./run.sh --samples /path/to/files     Mount a custom samples directory
 #   ./run.sh --build                      Build the container image
 #   ./run.sh --shell                      Open a shell in the container
 #   ./run.sh --help                       Show this help
@@ -17,6 +18,7 @@ set -euo pipefail
 
 IMAGE_NAME="pemcp-toolkit"
 CONTAINER_PORT="${PEMCP_PORT:-8082}"
+SAMPLES_DIR="${PEMCP_SAMPLES:-$(cd "$(dirname "$0")" && pwd)/samples}"
 
 # --- Detect container runtime ---
 detect_runtime() {
@@ -65,7 +67,7 @@ build_image() {
 common_args() {
     local args=(
         --rm
-        -v "$(cd "$(dirname "$0")" && pwd)/samples:/app/samples:ro"
+        -v "$SAMPLES_DIR:/app/samples:ro"
         -v "pemcp-data:/home/pemcp/.pemcp"
     )
 
@@ -152,29 +154,60 @@ show_help() {
 PeMCP Container Helper
 
 Usage:
-  ./run.sh                               Start HTTP MCP server (default)
-  ./run.sh --stdio                       Start stdio MCP server
-  ./run.sh --analyze <file> [opts]       Analyze a file in CLI mode
-  ./run.sh --build                       Build/rebuild the container image
-  ./run.sh --shell                       Open a shell in the container
-  ./run.sh --help                        Show this help
+  ./run.sh [--samples <dir>] <command>
+
+Commands:
+  (default)                              Start HTTP MCP server
+  --stdio                                Start stdio MCP server
+  --analyze <file> [opts]                Analyze a file in CLI mode
+  --build                                Build/rebuild the container image
+  --shell                                Open a shell in the container
+  --help                                 Show this help
+
+Options:
+  --samples <dir>   Mount a custom directory as /app/samples (read-only).
+                    Default: ./samples/ next to this script.
 
 Environment variables:
-  VT_API_KEY      VirusTotal API key (passed into container)
-  PEMCP_PORT      Host port for HTTP mode (default: 8082)
+  VT_API_KEY        VirusTotal API key (passed into container)
+  PEMCP_PORT        Host port for HTTP mode (default: 8082)
+  PEMCP_SAMPLES     Default samples directory (overridden by --samples)
 
 Examples:
-  VT_API_KEY=abc123 ./run.sh
-  ./run.sh --analyze samples/suspicious.exe
-  ./run.sh --stdio --input-file /app/samples/test.dll
-  PEMCP_PORT=9000 ./run.sh
+  ./run.sh                                         # HTTP server, default samples/
+  ./run.sh --stdio                                 # stdio server for Claude Code
+  ./run.sh --samples ~/malware-zoo --stdio         # Custom samples directory
+  ./run.sh --analyze samples/suspicious.exe        # Analyze a single file
+  VT_API_KEY=abc123 PEMCP_PORT=9000 ./run.sh       # Custom port + API key
+  PEMCP_SAMPLES=~/samples ./run.sh --stdio         # Via environment variable
 
 Notes:
-  - Place sample files in ./samples/ (auto-mounted to /app/samples/)
+  - Files in the samples directory are mounted read-only at /app/samples/
+  - Use open_file("/app/samples/yourfile.exe") in MCP mode to load them
   - Analysis cache persists in a named volume (pemcp-data)
   - Auto-detects Docker or Podman
 EOF
 }
+
+# --- Parse global flags ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --samples)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --samples requires a directory path."
+                exit 1
+            fi
+            SAMPLES_DIR="$(cd "$2" 2>/dev/null && pwd)" || {
+                echo "Error: Samples directory not found: $2"
+                exit 1
+            }
+            shift 2
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
 
 # --- Main ---
 case "${1:-}" in
