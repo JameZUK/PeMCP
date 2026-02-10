@@ -19,7 +19,7 @@ from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_respon
 from pemcp.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from pemcp.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
 from pemcp.parsers.floss import _parse_floss_analysis
-from pemcp.background import _console_heartbeat_loop, _update_progress
+from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
 from pemcp.mock import MockPE
 
 if ANGR_AVAILABLE:
@@ -120,6 +120,9 @@ async def open_file(
         A dictionary with status, filepath, detected format, and summary of what was loaded.
     """
     abs_path = str(Path(file_path).resolve())
+
+    # Enforce path sandboxing (configured via --allowed-paths)
+    state.check_path_allowed(abs_path)
 
     if not os.path.isfile(abs_path):
         raise RuntimeError(f"[open_file] File not found: {abs_path}")
@@ -324,65 +327,11 @@ async def open_file(
 
         # Start background angr analysis if requested
         if start_angr_background and ANGR_AVAILABLE and state.filepath:
-            task_id = "startup-angr"
-
-            state.set_task(task_id, {
-                "status": "running",
-                "progress_percent": 0,
-                "progress_message": "Starting background pre-analysis...",
-                "created_at": datetime.datetime.now().isoformat(),
-                "tool": "open_file_angr_auto",
-            })
-
-            if not state.monitor_thread_started:
-                monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
-                monitor_thread.start()
-                state.monitor_thread_started = True
-
-            def _angr_worker(fpath, tid):
-                try:
-                    _update_progress(tid, 1, "Loading Angr Project...")
-                    if mode == "shellcode":
-                        proj = angr.Project(fpath, main_opts={'backend': 'blob', 'arch': 'amd64'}, auto_load_libs=False)
-                    else:
-                        proj = angr.Project(fpath, auto_load_libs=False)
-                    state.angr_project = proj
-                    _update_progress(tid, 20, "Building Control Flow Graph...")
-                    cfg = proj.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
-                    state.angr_cfg = cfg
-                    _update_progress(tid, 80, "Identifying loops...")
-                    loop_finder = proj.analyses.LoopFinder(kb=proj.kb)
-                    raw_loops = {}
-                    for loop in loop_finder.loops:
-                        try:
-                            node = cfg.model.get_any_node(loop.entry.addr)
-                            if node and node.function_address:
-                                func_addr = node.function_address
-                                if func_addr not in raw_loops:
-                                    raw_loops[func_addr] = []
-                                raw_loops[func_addr].append({
-                                    "entry": hex(loop.entry.addr),
-                                    "blocks": len(list(loop.body_nodes)),
-                                    "subloops": bool(loop.subloops),
-                                })
-                        except Exception:
-                            continue
-                    state.angr_loop_cache = raw_loops
-                    state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
-                    state.update_task(tid, status="completed",
-                                      result={"message": "Analysis ready."},
-                                      progress_percent=100,
-                                      progress_message="Background analysis complete.")
-                except Exception as ex:
-                    state.update_task(tid, status="failed", error=str(ex))
-                    _update_progress(tid, 0, f"Failed: {ex}")
-
-            angr_thread = threading.Thread(
-                target=_angr_worker,
-                args=(abs_path, task_id),
-                daemon=True,
+            start_angr_background_fn(
+                abs_path,
+                mode=mode,
+                tool_label="open_file_angr_auto",
             )
-            angr_thread.start()
             await ctx.info("Background Angr analysis started. Use check_task_status('startup-angr') to monitor.")
 
         await ctx.report_progress(100, 100)
