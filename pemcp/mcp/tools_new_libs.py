@@ -656,8 +656,8 @@ async def emulate_shellcode_with_speakeasy(
         try:
             addr = se.load_shellcode(state.filepath if not shellcode_hex else None, sc_data, arch_val)
             se.run_shellcode(addr, timeout=timeout_seconds)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Speakeasy emulation ended with exception (may be expected): {e}")
 
         api_calls = []
         report = se.get_report()
@@ -753,8 +753,8 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
         # CLR header
         try:
             result["clr_version"] = str(dn.clr_header.RuntimeVersion) if hasattr(dn, 'clr_header') else None
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Could not read CLR version: {e}")
 
         # Type definitions
         types = []
@@ -766,8 +766,8 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
                 })
                 if len(types) >= limit:
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Error reading .NET TypeDef table: {e}")
         result["type_definitions"] = types
 
         # Method definitions
@@ -780,8 +780,8 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
                 })
                 if len(methods) >= limit:
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Error reading .NET MethodDef table: {e}")
         result["method_definitions"] = methods
 
         # Assembly references
@@ -794,8 +794,8 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
                 })
                 if len(refs) >= limit:
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Error reading .NET AssemblyRef table: {e}")
         result["assembly_references"] = refs
 
         # User strings
@@ -806,8 +806,8 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
                     user_strings.append(str(s))
                 if len(user_strings) >= limit:
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Error reading .NET user strings: {e}")
         result["user_strings"] = user_strings
 
         return result

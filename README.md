@@ -259,6 +259,58 @@ API keys can be set interactively: *"Set my VirusTotal API key to abc123"* — C
 
 Docker handles all complex dependencies (Angr, Unicorn, Vivisect) automatically.
 
+#### Quick Start with `run.sh`
+
+The included `run.sh` helper auto-detects Docker or Podman and handles image building, volume mounts, and environment setup:
+
+```bash
+# Start HTTP MCP server (builds image if needed)
+./run.sh
+
+# Start stdio MCP server (for Claude Code)
+./run.sh --stdio
+
+# Analyse a file in CLI mode
+./run.sh --analyze samples/suspicious.exe
+
+# Open a shell in the container
+./run.sh --shell
+
+# Build/rebuild the image
+./run.sh --build
+```
+
+Set environment variables as needed:
+
+```bash
+VT_API_KEY=abc123 PEMCP_PORT=9000 ./run.sh
+```
+
+Or copy `.env.example` to `.env` and fill in your values — `run.sh` loads it automatically.
+
+#### Docker Compose
+
+For more control, use Docker Compose directly:
+
+```bash
+# Start HTTP MCP server
+docker compose up pemcp-http
+
+# Start stdio MCP server
+docker compose run --rm -i pemcp-stdio
+
+# Build only
+docker compose build
+```
+
+The `docker-compose.yml` defines two services:
+- **`pemcp-http`** — Network-accessible MCP server with healthcheck and restart policy
+- **`pemcp-stdio`** — For Claude Code / MCP client integration (behind the `stdio` profile)
+
+Both services use a named `pemcp-data` volume for persistent cache and configuration.
+
+#### Manual Docker Commands
+
 ```bash
 # Build the image
 docker build -t pemcp-toolkit .
@@ -446,6 +498,7 @@ docker run --rm -i \
 | `--mcp-transport {stdio,streamable-http,sse}` | Transport protocol (default: stdio) |
 | `--mcp-host HOST` | Server host for HTTP transports (default: 127.0.0.1) |
 | `--mcp-port PORT` | Server port for HTTP transports (default: 8082) |
+| `--allowed-paths PATH [PATH ...]` | Restrict `open_file` to these directories (security sandbox for HTTP mode) |
 | `--skip-capa` | Skip capa capability analysis |
 | `--skip-floss` | Skip FLOSS string analysis |
 | `--skip-peid` | Skip PEiD signature scanning |
@@ -738,6 +791,50 @@ open_file("/path/to/shellcode.bin", mode="shellcode")
 ```
 
 Use `--floss-format sc64` (64-bit) or `--floss-format sc32` (32-bit) to provide architecture hints to FLOSS and Angr.
+
+---
+
+## Security
+
+### Path Sandboxing
+
+When running PeMCP in HTTP mode (`--mcp-transport streamable-http`), any MCP client can call `open_file` to read files on the server. Use `--allowed-paths` to restrict access:
+
+```bash
+# Only allow access to /app/samples and /tmp
+python PeMCP.py --mcp-server --mcp-transport streamable-http \
+  --allowed-paths /app/samples /tmp
+
+# Docker with sandboxing
+docker run --rm -it -p 8082:8082 \
+  -v "$(pwd)/samples:/app/samples" \
+  pemcp-toolkit \
+  --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
+  --allowed-paths /app/samples
+```
+
+If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
+
+### Other Security Measures
+
+- **Non-root Docker**: The container runs as `pemcp` (uid 1000), not root.
+- **API key storage**: Keys are stored in `~/.pemcp/config.json` with 0o600 (owner-only) permissions.
+- **Zip-slip protection**: Archive extraction validates member paths against directory traversal.
+- **No hardcoded secrets**: API keys are sourced from environment variables or the config file.
+
+### Testing
+
+Install test dependencies and run the integration test suite:
+
+```bash
+pip install -r requirements-test.txt
+
+# Start the server in one terminal
+python PeMCP.py --mcp-server --mcp-transport streamable-http
+
+# Run tests in another terminal
+pytest mcp_test_client.py -v
+```
 
 ---
 

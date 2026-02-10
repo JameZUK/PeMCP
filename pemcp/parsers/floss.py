@@ -31,43 +31,6 @@ else:
     VivWorkspace = None  # type: ignore
 
 
-def perform_floss_analysis(args):
-    """
-    Controller function to perform FLOSS analysis based on command-line arguments.
-    """
-    logger.info(f"Starting FLOSS analysis for {args.filepath}")
-
-    disabled_types = [t.strip() for t in args.floss_disable.split(',')] if args.floss_disable else []
-    only_types = [t.strip() for t in args.floss_only.split(',')] if args.floss_only else []
-
-    # --- MODIFIED: Added regex_search_pattern=args.regex_pattern ---
-    floss_results = _parse_floss_analysis(
-        pe_filepath_str=args.filepath,
-        min_length=args.min_length,
-        floss_verbose_level=args.verbose,
-        floss_script_debug_level=Actual_DebugLevel_Floss.DEFAULT, # Or map from script verbosity
-        floss_format_hint=args.floss_format,
-        floss_disabled_types=disabled_types,
-        floss_only_types=only_types,
-        floss_functions_to_analyze=[], # Placeholder for function analysis
-        quiet_mode_for_floss_progress=args.quiet,
-        regex_search_pattern=args.regex_pattern
-    )
-
-    output_path = args.output
-    if not output_path:
-        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-        filename = Path(args.filepath).stem
-        output_path = f"{filename}_floss_results_{timestamp}.json"
-
-    try:
-        with open(output_path, 'w') as f:
-            json.dump(floss_results, f, indent=4)
-        logger.info(f"FLOSS analysis results saved to {output_path}")
-    except Exception as e:
-        logger.error(f"Failed to save FLOSS results to {output_path}: {e}")
-
-
 # --- FLOSS Analysis Helper Functions ---
 def _setup_floss_logging(script_verbose_level: int, floss_internal_verbose_level: int):
     """
@@ -431,10 +394,10 @@ def _parse_floss_analysis(
                 if isinstance(string_item, dict) and "string" in string_item:
                     contextual_item = string_item.copy()
                     contextual_item["source_type"] = source_type.replace("_strings", "")
-                    all_strings_with_context.append(contextual_item)
+                    all_found_strings.append(contextual_item)
 
         matched_strings = []
-        for string_item in all_strings_with_context:
+        for string_item in all_found_strings:
             string_to_search = string_item["string"]
             if pattern.search(string_to_search):
                 matched_strings.append(string_item)
