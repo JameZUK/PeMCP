@@ -264,8 +264,8 @@ async def find_path_to_address(
                     "valid_memory_range": f"{hex(valid_min)} - {hex(valid_max)}",
                     "tip": "Check 'sections' or 'function_complexity' to find valid addresses."
                 }
-        except Exception:
-            pass # If validation fails, let the solver try anyway just in case
+        except Exception as e:
+            logger.debug(f"Address validation check failed (proceeding anyway): {e}")
     # -----------------------------------------
 
     # --- Internal Logic ---
@@ -342,7 +342,7 @@ async def find_path_to_address(
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing solver...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "find_path_to_address"
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _solve_path))
@@ -441,7 +441,7 @@ async def emulate_function_execution(
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing emulation...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "emulate_function_execution"
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _core_emulation))
@@ -565,7 +565,7 @@ async def analyze_binary_loops(
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Starting loop analysis...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "analyze_binary_loops"
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _core_logic))

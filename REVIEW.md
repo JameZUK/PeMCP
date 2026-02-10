@@ -2,9 +2,9 @@
 
 ## Overview
 
-PeMCP is a comprehensive PE (Portable Executable) file analysis toolkit written in Python. It provides two operational modes: a CLI mode for generating full analysis reports, and an MCP (Model-Context-Protocol) server mode exposing 40+ tools for interactive binary exploration by AI agents. The project integrates numerous binary analysis libraries including pefile, angr, FLOSS, capa, YARA, and StringSifter.
+PeMCP is a comprehensive multi-format binary analysis toolkit written in Python (~14.5K LOC). It provides two operational modes: a CLI mode for generating full analysis reports, and an MCP (Model Context Protocol) server mode exposing 104+ tools for interactive binary exploration by AI agents. The project integrates numerous binary analysis libraries including pefile, angr, FLOSS, capa, YARA, LIEF, Capstone, Keystone, Speakeasy, and StringSifter.
 
-**Reviewed files:** `PeMCP.py` (6,697 lines), `mcp_test_client.py` (420 lines), `Dockerfile`, `requirements.txt`, `FastPrompt.txt`
+**Reviewed structure:** `pemcp/` package (12 modules across `pemcp/`, `pemcp/parsers/`, `pemcp/cli/`, `pemcp/mcp/`), `mcp_test_client.py`, `Dockerfile`, `docker-compose.yml`, `run.sh`, `requirements.txt`
 
 ---
 
@@ -12,169 +12,114 @@ PeMCP is a comprehensive PE (Portable Executable) file analysis toolkit written 
 
 ### Strengths
 
-1. **Graceful degradation model**: The optional dependency handling is well-designed. Each heavy library (angr, capa, FLOSS, YARA, etc.) is wrapped in try/except with availability flags, allowing the tool to function in reduced-capability mode when dependencies are missing.
+1. **Clean modular structure**: The codebase is well-organized into a proper Python package:
+   - `pemcp/config.py` — Central imports and availability flags
+   - `pemcp/state.py` — Thread-safe `AnalyzerState` with locking
+   - `pemcp/cache.py` — Disk-based analysis cache with gzip compression and LRU eviction
+   - `pemcp/parsers/` — PE, FLOSS, capa, signatures, strings parsers
+   - `pemcp/cli/` — CLI output formatting
+   - `pemcp/mcp/` — MCP server and 8 tool modules
 
-2. **Centralized state management**: The `AnalyzerState` class (`PeMCP.py:73`) encapsulates global state cleanly, which is better than scattered global variables. The `close_pe()` and `reset_angr()` cleanup methods are useful.
+2. **Graceful degradation model**: 30+ optional libraries detected at startup with availability flags. Tools return clear error messages when dependencies are missing rather than crashing.
 
-3. **Smart response size management**: The `_check_mcp_response_size()` function (`PeMCP.py:3767`) implements intelligent truncation with a 64KB limit, using iterative heuristics to shrink responses rather than hard-failing. This is a practical solution for MCP token limits.
+3. **Thread-safe state management**: `AnalyzerState` uses `threading.Lock` for background task access (`_task_lock`). Task operations (`get_task`, `set_task`, `update_task`) are properly synchronized.
 
-4. **Background task infrastructure**: The heartbeat monitoring system (`PeMCP.py:152`) and background task management with progress tracking is a thoughtful addition for long-running operations like angr CFG generation.
+4. **Smart response size management**: The `_check_mcp_response_size()` function implements intelligent truncation with a 64KB limit, using iterative heuristics to shrink responses rather than hard-failing.
 
-5. **Shellcode support**: The `MockPE` class (`PeMCP.py:510`) providing a PE-like interface for raw shellcode is a clean abstraction enabling code reuse.
+5. **Analysis caching**: Results cached to `~/.pemcp/cache/` as gzip-compressed JSON (~12x compression), keyed by SHA256. LRU eviction, version-aware invalidation, and 2-char prefix directory layout (git-style sharding).
 
-6. **Dynamic tool generation**: The `_create_mcp_tool_for_key()` factory (`PeMCP.py:3909`) reduces boilerplate by generating MCP tool endpoints dynamically for each PE data key.
+6. **Path sandboxing**: The `--allowed-paths` option restricts `open_file` to specified directories, providing security for HTTP-mode deployments.
 
-### Weaknesses
+7. **Docker/Podman support**: Docker Compose for standard deployments and a `run.sh` helper script that auto-detects Docker vs Podman for quick usage.
 
-1. **Monolithic single-file architecture**: At 6,697 lines, `PeMCP.py` contains everything - parsing, analysis, CLI output, MCP server, utility classes, and the entry point. This makes the codebase difficult to navigate, test, and maintain. Logical modules would be:
-   - `pe_parser.py` - All `_parse_*` functions
-   - `cli_output.py` - All `_print_*_cli` functions
-   - `mcp_tools.py` - MCP tool definitions
-   - `analyzers.py` - FLOSS, capa, YARA, PEiD integration
-   - `utils.py` - SSDeep, hex dump, string extraction
-   - `state.py` - AnalyzerState and global configuration
+8. **Multi-format binary support**: Auto-detects PE, ELF, Mach-O from magic bytes, plus shellcode mode — all sharing common infrastructure.
 
-2. **Pure-Python SSDeep implementation**: The `SSDeep` class (`PeMCP.py:286-508`) is a full reimplementation of ssdeep hashing. While this avoids a native dependency, it's ~220 lines of complex hashing code that would be better served by the `ssdeep` or `ppdeep` PyPI package with a fallback to this implementation.
+### Areas for Improvement
 
----
+1. **No `pyproject.toml`**: The project can't be installed with `pip install -e .`. A modern `pyproject.toml` would improve the development workflow.
 
-## Code Quality Issues
+2. **No version pinning**: Dependencies in `requirements.txt` are unpinned, making builds non-reproducible. Consider a constraints file or lock file.
 
-### Critical
-
-1. **Variable shadowing bug in `find_path_to_address`** (`PeMCP.py:5496`):
-   ```python
-   state = state.angr_project.factory.entry_state(add_options=stability_options)
-   simgr = state.angr_project.factory.simulation_manager(state)
-   ```
-   The local variable `state` (angr SimState) shadows the global `state` (AnalyzerState). The second line then tries to call `.angr_project` on the angr SimState, which will fail at runtime. This is a functional bug that will cause `find_path_to_address` to crash.
-
-2. **Duplicate imports** (`PeMCP.py:40,55` and `PeMCP.py:54,66`):
-   ```python
-   import re        # line 40
-   import re        # line 55 (duplicate)
-   import copy      # line 54
-   from pathlib import Path
-   import copy      # line 66 (duplicate)
-   ```
-   While harmless, this indicates copy-paste accumulation and lack of import hygiene.
-
-3. **Bare `except` clauses** (multiple locations, e.g., `PeMCP.py:101`, `183`, `268`, `890`, `920`):
-   ```python
-   except:
-       pass
-   ```
-   These silently swallow all exceptions including `KeyboardInterrupt` and `SystemExit`. They should at minimum be `except Exception`.
-
-### High
-
-4. **Thread safety concerns**: The `AnalyzerState` object is accessed from multiple threads (main thread, angr background thread, heartbeat monitor thread) without any locking mechanism. While CPython's GIL provides some protection for simple attribute reads/writes, dictionary mutations like `state.background_tasks[task_id]["status"] = "completed"` from background threads while the main thread iterates over keys (`PeMCP.py:164`) could lead to race conditions.
-
-5. **Mutable default argument** (`PeMCP.py:5578`):
-   ```python
-   async def emulate_function_execution(..., args_hex: List[str] = [], ...):
-   ```
-   Using a mutable default argument (`[]`) is a well-known Python anti-pattern. Should be `None` with a default assignment inside the function.
-
-6. **Inconsistent error handling in MCP tools**: Some tools raise `RuntimeError` on failures, others return error dictionaries, and some do both. For example, `decompile_function_with_angr` returns `{"error": ...}` on KeyError but raises `RuntimeError` if angr isn't available. MCP clients need to handle two different error signaling mechanisms.
-
-### Medium
-
-7. **Compressed/minified code blocks**: Several sections use extremely dense single-line formatting that harms readability:
-   - `PeMCP.py:882`: `sym_class_file=getattr(pefile,'IMAGE_SYM_CLASS_FILE',103);sym_class_section=...`
-   - `PeMCP.py:1122-1134`: Entire signature parsing logic on a few lines with semicolons
-   - `PeMCP.py:3745-3746`: `"has_dos_header":'dos_header'in state.pe_data and state.pe_data['dos_header']is not None and"error"not in state.pe_data['dos_header']`
-
-   This style makes debugging and code review significantly harder.
-
-8. **Hardcoded VirusTotal API URL and capa rules version** (`PeMCP.py:148`, `783`):
-   ```python
-   VT_API_URL_FILE_REPORT = "https://www.virustotal.com/api/v3/files/"
-   CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.1.0.zip"
-   ```
-   The capa rules URL is pinned to v9.1.0. There's no mechanism to update this without editing the source.
-
-9. **Interactive pip install in a "Docker-compatible" tool** (`PeMCP.py:108-142`): The docstring says "Removed interactive dependency installation (Docker-compatible)" but the pefile import block still has an interactive prompt for pip install. This contradicts the stated design goal.
+3. **Pure-Python SSDeep implementation**: The `hashing.py` module contains ~229 lines of reimplemented ssdeep. The project already depends on `ppdeep` — this module serves as a fallback but could be simplified.
 
 ---
 
-## Security Considerations
+## Code Quality
 
-1. **VirusTotal API key in environment variable**: Using `VT_API_KEY` from the environment (`PeMCP.py:147`) is the correct approach. No hardcoded keys were found.
+### Fixed Issues (Previously Identified)
 
-2. **No input validation on file paths in MCP mode**: The `--input-file` argument is resolved to an absolute path, but there's no sandboxing or path traversal prevention for MCP mode. In a networked SSE deployment, clients cannot specify arbitrary file paths (the file is pre-loaded), which mitigates this.
+These issues from the original review have been resolved:
 
-3. **`zipfile.extractall()` usage** (`PeMCP.py:987`): The `ensure_capa_rules_exist` function uses `zip_ref.extractall()` which is vulnerable to zip-slip attacks (path traversal via `../` in archive entries). Since the zip URL is hardcoded to a GitHub release, the practical risk is low, but defense-in-depth would call for validating member paths.
+- **Variable shadowing in `find_path_to_address`**: Fixed — uses `entry_st` instead of `state` (`tools_angr.py:281`)
+- **Mutable default `args_hex: List[str] = []`**: Fixed — now `Optional[List[str]] = None` (`tools_angr.py:363`)
+- **Bare `except:` clauses**: All replaced with `except Exception:` throughout
+- **Monolithic single-file architecture**: Fully refactored into a proper package structure
+- **No non-root Docker user**: Added `pemcp:pemcp` user (uid 1000)
+- **Missing files in Docker image**: `userdb.txt` and `FastPrompt.txt` now copied
+- **Docker healthcheck**: Added for HTTP mode
+- **Zip-slip vulnerability**: Fixed with path traversal validation in `resources.py`
+- **Test server URL hardcoded**: Now configurable via `PEMCP_TEST_SERVER_URL` env var
+- **Duplicate angr worker code**: Consolidated into single `angr_background_worker()` in `background.py`
+- **Dead code in `parsers/floss.py`**: Removed `perform_floss_analysis()` (unreachable, referenced undefined `args`)
+- **Regex matching bug in FLOSS**: Fixed `all_strings_with_context` (undefined variable) to `all_found_strings`
+- **Naive `datetime.now()`**: All task timestamps now use `datetime.timezone.utc`
+- **Silent exception swallowing**: Key `except Exception: pass` blocks now use `logger.debug()` for diagnostics
 
-4. **HTTP download without checksum verification**: Both the PEiD database and capa rules are downloaded over HTTPS but without hash verification. If the upstream source is compromised, malicious rules could be injected.
+### Remaining Items
 
-5. **`subprocess.check_call` for pip**: The pefile install fallback (`PeMCP.py:123`) uses `subprocess.check_call` with `sys.executable`, which is acceptable. No shell injection vectors are present.
+1. **Broad `except Exception:` in data parsing**: ~30 instances across MCP tool modules where exceptions are caught broadly. Most are in defensive feature-extraction blocks (acceptable pattern for binary analysis where malformed inputs are common), but some could be narrowed.
+
+2. **Inconsistent error handling**: Some tools raise `RuntimeError`, others return error dictionaries. MCP clients must handle both. A consistent approach would improve the API.
+
+3. **Compressed code blocks**: Some lines in `tools_pe.py` use very dense formatting (`"has_dos_header":'dos_header'in state.pe_data and...`) which impacts readability.
 
 ---
 
-## Dockerfile Review
+## Security
 
-The Dockerfile (`Dockerfile:1-45`) is well-structured:
+1. **API key handling**: VT_API_KEY via environment variable or `~/.pemcp/config.json` (0o600 permissions). No hardcoded secrets.
 
-- **Good**: Uses Python 3.11 on Debian Bullseye (stable base).
-- **Good**: Layer caching strategy separates heavy deps (angr, FLOSS, capa) from lighter ones.
-- **Good**: Cleans apt lists to reduce image size.
-- **Issue**: No non-root user is created. The container runs as root, which is acceptable for a local analysis tool but not ideal for any networked deployment.
-- **Issue**: No `HEALTHCHECK` instruction for the SSE server mode.
-- **Issue**: Dependencies are installed without version pinning (e.g., `pefile` instead of `pefile==2024.8.26`). This means builds are not reproducible, and a breaking upstream change could silently break the image.
-- **Missing**: The `userdb.txt` and `FastPrompt.txt` files are not copied into the image.
+2. **Path sandboxing**: `--allowed-paths` restricts file access in HTTP mode. Warning logged when running network transport without it.
+
+3. **Zip extraction**: Zip-slip protection validates member paths before extraction.
+
+4. **Non-root Docker**: Container runs as `pemcp` user (uid 1000).
+
+5. **HTTP downloads**: PEiD database and capa rules downloaded over HTTPS but without hash verification. Low practical risk (hardcoded GitHub URLs) but defense-in-depth would benefit from checksums.
 
 ---
 
-## Test Suite Review (`mcp_test_client.py`)
+## Dockerfile
+
+- **Base**: Python 3.11 on Debian Bookworm (stable, OpenSSL 3.x compatible)
+- **Layer caching**: Heavy deps (angr, FLOSS, capa) in separate layer from core deps
+- **oscrypto patch**: Pinned to specific commit for OpenSSL 3.x compatibility — fragile if commit disappears
+- **Best-effort installs**: Complex deps (speakeasy, unipacker) installed with `|| true` fallback
+- **`.dockerignore`**: Excludes `.git`, docs, tests, IDE files from build context
+- **Docker Compose**: HTTP and stdio service profiles with named volumes
+- **`run.sh` helper**: Auto-detects Docker/Podman, handles builds and common run patterns
+
+---
+
+## Test Suite
 
 ### Strengths
 
-- Good coverage of the MCP tool surface area with parameterized tests for PE data retrieval tools.
-- Robust helper function `call_tool_and_assert_success()` with proper edge case handling (JSON vs raw text, single-item list wrapping).
-- Error-path testing via `call_tool_and_expect_server_error_in_result()`.
-- Fuzzy search test validates end-to-end with a prerequisite check pattern.
+- Good integration test coverage of MCP tool surface area
+- Robust helper function `call_tool_and_assert_success()` with JSON/text handling
+- Error-path testing via `call_tool_and_expect_server_error_in_result()`
+- Configurable server URL via `PEMCP_TEST_SERVER_URL` environment variable
+- Test dependencies documented in `requirements-test.txt`
 
-### Weaknesses
+### Areas for Improvement
 
-1. **No unit tests**: All tests are integration tests requiring a running MCP server. There are no unit tests for core parsing functions, the SSDeep implementation, hex dump formatting, or string extraction.
-
-2. **Tests use `asyncio.run()` inside sync methods** (`PeMCP.py` test client, multiple locations): Each test creates a new event loop and a new MCP session. This is slow and creates many connections. Pytest-asyncio with a session-scoped fixture would be more efficient.
-
-3. **Hardcoded server URL** (`mcp_test_client.py:39`): `SERVER_BASE_URL = "http://127.0.0.1:8082"` should be configurable via environment variable.
-
-4. **Commented-out test** (`mcp_test_client.py:372-379`): The `TestReanalyzeTool` class is fully commented out with no explanation.
-
-5. **No tests for angr-based tools**: The entire angr tool suite (decompilation, CFG, symbolic execution, emulation, slicing) has zero test coverage.
-
----
-
-## Dependencies Review
-
-The dependency set is appropriate for the tool's scope. Key observations:
-
-- **`networkx`** is imported directly (`PeMCP.py:60`) but not listed in `requirements.txt`. It's pulled in transitively by angr, but should be listed explicitly if used directly.
-- **`httpx`** is used in the test client but not in `requirements.txt`.
-- **`pytest`** is used in the test client but not in `requirements.txt` (should be in a dev/test extras).
-- **No version constraints** in `requirements.txt`. This is risky for reproducibility, especially with fast-moving projects like angr and capa.
-
----
-
-## Recommendations (Priority Order)
-
-1. **Fix the `state` variable shadowing bug** in `find_path_to_address` - this is a runtime crash.
-2. **Replace bare `except:` with `except Exception:`** throughout.
-3. **Fix the mutable default argument** `args_hex: List[str] = []`.
-4. **Add threading locks** to `AnalyzerState` for background task access.
-5. **Add version pins** to `requirements.txt` for reproducible builds.
-6. **Split the monolith** into logical modules when the codebase grows further.
-7. **Add unit tests** for core parsing and utility functions.
-8. **Add a non-root user** to the Dockerfile for SSE deployments.
-9. **Validate zip member paths** in `ensure_capa_rules_exist`.
-10. **Make test server URL configurable** via environment variable.
+1. **No unit tests**: All tests are integration tests requiring a running server. Core parsing, hashing, and utility functions have no unit test coverage.
+2. **No angr tool tests**: The 36 angr-based tools have zero test coverage.
+3. **No multi-format tests**: ELF, Mach-O, .NET, Go, and Rust analysis tools are untested.
+4. **No CI pipeline**: No GitHub Actions or similar for automated testing.
 
 ---
 
 ## Summary
 
-PeMCP is a capable and feature-rich binary analysis toolkit with a well-thought-out architecture for AI agent integration via MCP. The graceful degradation model for optional dependencies and the smart response size management are notable design decisions. The primary areas for improvement are the monolithic file structure, the `state` shadowing bug in symbolic execution, thread safety for background tasks, and the lack of unit test coverage. The codebase would also benefit from consistent code formatting throughout, as some sections are quite compressed.
+PeMCP is a well-architected, feature-rich binary analysis toolkit with a clean modular structure and thoughtful integration patterns for AI agents via MCP. The codebase demonstrates good engineering practices: graceful degradation for optional dependencies, thread-safe state management, disk-based analysis caching, and intelligent response size management. The Docker/Podman tooling provides accessible deployment options. Key areas for further improvement are dependency version pinning, unit test coverage, and a CI pipeline.
