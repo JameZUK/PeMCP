@@ -880,7 +880,7 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 
 ### Testing
 
-PeMCP includes a comprehensive integration test suite (`mcp_test_client.py`) that covers all **104 MCP tools** across 19 test categories. The tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool.
+PeMCP includes a comprehensive integration test suite (`mcp_test_client.py`) that covers all **104 MCP tools** across 19 test categories. The tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool. Tests gracefully skip when a tool is unavailable (older server build) or a required library is not installed.
 
 #### Quick Start
 
@@ -964,7 +964,7 @@ The test suite is organised into 19 classes:
 | `TestExtendedLibraries` | 9 extended library tools (LIEF, Capstone, Keystone, Speakeasy, etc.) | `optional_lib` |
 | `TestMultiFormat` | 8 multi-format tools (ELF, Mach-O, .NET, Go, Rust) | `optional_lib` |
 | `TestErrorHandling` | Invalid inputs, nonexistent files, bad addresses | mixed |
-| `TestToolDiscovery` | Verifies all 104 tools are registered on the server | `no_file` |
+| `TestToolDiscovery` | Lists server tools and reports coverage (warns on missing) | `no_file` |
 
 ---
 
