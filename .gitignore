@@ -1,4 +1,46 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+dist/
+build/
+*.so
+*.whl
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+
+# PeMCP runtime artifacts
+capa_rules_store/
+samples/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project-specific
 PeMCP_original.py

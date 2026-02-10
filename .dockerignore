@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Python caches
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+dist
+build
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# Documentation (not needed in image)
+REVIEW.md
+ANGR_CAPABILITY_REVIEW.md
+LICENSE
+
+# Environment and local config
+.env
+.env.*
+!.env.example
+
+# Test files
+mcp_test_client.py
+.pytest_cache
+
+# Docker
+docker-compose.yml
+Dockerfile
+
+# Samples (mounted at runtime, not baked in)
+samples/
+
+# OS files
+.DS_Store
+Thumbs.db
