@@ -12,6 +12,9 @@ class AnalyzerState:
         self.pefile_version: Optional[str] = None
         self.loaded_from_cache: bool = False
 
+        # Path sandboxing for network-exposed MCP servers
+        self.allowed_paths: Optional[List[str]] = None  # None = no restriction
+
         # Angr State
         self.angr_project = None
         self.angr_cfg = None
@@ -45,6 +48,23 @@ class AnalyzerState:
         """Thread-safe snapshot of current task IDs."""
         with self._task_lock:
             return list(self.background_tasks.keys())
+
+    def check_path_allowed(self, file_path: str) -> None:
+        """Raise RuntimeError if the path is outside all allowed directories."""
+        import os
+        if self.allowed_paths is None:
+            return  # No restriction configured
+        resolved = os.path.realpath(file_path)
+        for allowed in self.allowed_paths:
+            allowed_resolved = os.path.realpath(allowed)
+            # Allow if the file is exactly the allowed path or inside it
+            if resolved == allowed_resolved or resolved.startswith(allowed_resolved + os.sep):
+                return
+        raise RuntimeError(
+            f"Access denied: '{file_path}' is outside the allowed paths. "
+            f"Allowed: {self.allowed_paths}. "
+            "Configure with --allowed-paths at server startup."
+        )
 
     def reset_angr(self):
         self.angr_project = None

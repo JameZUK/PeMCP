@@ -17,7 +17,7 @@ from pemcp.config import (
     CAPA_RULES_SUBDIR_NAME,
 )
 from pemcp.mock import MockPE
-from pemcp.background import _console_heartbeat_loop, _update_progress
+from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background
 from pemcp.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from pemcp.parsers.strings import _extract_strings_from_data, _format_hex_dump_lines, _perform_unified_string_sifting
 from pemcp.parsers.floss import _parse_floss_analysis
@@ -94,6 +94,7 @@ def main():
     mcp_group.add_argument("--mcp-host", type=str, default="127.0.0.1", help="MCP server host (default: 127.0.0.1).")
     mcp_group.add_argument("--mcp-port", type=int, default=8082, help="MCP server port (default: 8082).")
     mcp_group.add_argument("--mcp-transport", type=str, default="stdio", choices=["stdio", "sse", "streamable-http"], help="MCP transport protocol: 'stdio' (default), 'streamable-http' (recommended for network), or 'sse' (deprecated).")
+    mcp_group.add_argument("--allowed-paths", nargs="+", default=None, help="Restrict open_file to these directories (security sandbox for HTTP mode). Accepts multiple paths.")
 
     args = None
     try:
@@ -192,6 +193,16 @@ def main():
             logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.");
             sys.exit(1)
 
+        # Configure path sandboxing
+        if args.allowed_paths:
+            state.allowed_paths = [str(Path(p).resolve()) for p in args.allowed_paths]
+            logger.info(f"Path sandboxing enabled. Allowed paths: {state.allowed_paths}")
+        elif args.mcp_transport in ("sse", "streamable-http"):
+            logger.warning(
+                "Running in network mode without --allowed-paths. "
+                "MCP clients can open arbitrary files. Consider using --allowed-paths for security."
+            )
+
         # --- Optional Pre-loading (only when --input-file is provided) ---
         if abs_input_file:
             logger.info(f"MCP Server: Loading input file: {abs_input_file} (Mode: {args.mode})")
@@ -283,78 +294,13 @@ def main():
 
                 # --- Background Angr Analysis (Mode Aware) ---
                 if ANGR_AVAILABLE:
-                    task_id = "startup-angr"
-
-                    state.set_task(task_id, {
-                        "status": "running",
-                        "progress_percent": 0,
-                        "progress_message": "Starting background pre-analysis...",
-                        "created_at": datetime.datetime.now().isoformat(),
-                        "tool": "startup_auto_analysis"
-                    })
-
-                    if not state.monitor_thread_started:
-                        monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
-                        monitor_thread.start()
-                        state.monitor_thread_started = True
-
-                    def _shellcode_aware_angr_worker(fpath, tid):
-                        import angr
-
-                        try:
-                            _update_progress(tid, 1, "Loading Angr Project...")
-
-                            if effective_mode == 'shellcode':
-                                arch = "amd64" if "64" in floss_fmt else "x86"
-                                _update_progress(tid, 5, f"Loading raw shellcode as {arch}...")
-                                proj = angr.Project(fpath, main_opts={'backend': 'blob', 'arch': arch}, auto_load_libs=False)
-                            else:
-                                # angr natively supports PE, ELF, and Mach-O via CLE
-                                proj = angr.Project(fpath, auto_load_libs=False)
-
-                            state.angr_project = proj
-                            _update_progress(tid, 20, "Building Control Flow Graph (Heavy)...")
-
-                            cfg = proj.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
-                            state.angr_cfg = cfg
-                            _update_progress(tid, 80, "CFG generated. Identifying loops...")
-
-                            loop_finder = proj.analyses.LoopFinder(kb=proj.kb)
-                            raw_loops = {}
-                            for loop in loop_finder.loops:
-                                try:
-                                    node = cfg.model.get_any_node(loop.entry.addr)
-                                    if node and node.function_address:
-                                        func_addr = node.function_address
-                                        if func_addr not in raw_loops: raw_loops[func_addr] = []
-                                        block_count = len(list(loop.body_nodes))
-                                        raw_loops[func_addr].append({
-                                            "entry": hex(loop.entry.addr),
-                                            "blocks": block_count,
-                                            "subloops": bool(loop.subloops)
-                                        })
-                                except Exception: continue
-
-                            state.angr_loop_cache = raw_loops
-                            state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
-
-                            state.update_task(tid, status="completed",
-                                              result={"message": "Analysis ready."},
-                                              progress_percent=100,
-                                              progress_message="Startup analysis complete.")
-                            print(f"\n[*] Background Angr Analysis finished.")
-
-                        except Exception as ex:
-                            state.update_task(tid, status="failed", error=str(ex))
-                            _update_progress(tid, 0, f"Failed: {ex}")
-
-                    angr_thread = threading.Thread(
-                        target=_shellcode_aware_angr_worker,
-                        args=(abs_input_file, task_id),
-                        daemon=True
+                    arch_hint = "amd64" if "64" in floss_fmt else "x86"
+                    start_angr_background(
+                        abs_input_file,
+                        mode=effective_mode,
+                        arch_hint=arch_hint,
+                        tool_label="startup_auto_analysis",
                     )
-                    angr_thread.start()
-                    logger.info("MCP: Background Angr analysis thread started.")
 
             except Exception as e:
                 logger.critical(f"MCP: Failed to pre-load file: {str(e)}", exc_info=True)
