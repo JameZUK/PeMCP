@@ -11,7 +11,9 @@ flare-floss
 flare-capa
 
 # --- String Analysis & Ranking ---
-stringsifter
+flare-stringsifter
+joblib
+numpy
 rapidfuzz
 
 # --- Signatures, Cryptography & Scanning ---
