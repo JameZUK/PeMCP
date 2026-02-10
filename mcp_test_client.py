@@ -194,8 +194,13 @@ async def managed_mcp_session() -> AsyncGenerator[ClientSession, None]:
         pytest.fail(
             f"Cannot connect to MCP server at {SERVER_URL} "
             f"(tried: {', '.join(l for l, _ in attempts)}): {root}\n"
+            f"\n"
             f"Start the server first:\n"
-            f"  python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file <sample>"
+            f"  python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file <sample>\n"
+            f"\n"
+            f"If using Docker/Podman, add --mcp-host 0.0.0.0 (or use ./run.sh):\n"
+            f"  podman run --rm -it -p 8082:8082 pemcp-toolkit \\\n"
+            f"    --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 --input-file <sample>"
         )
 
     # --- Phase 2: Yield the session (test errors propagate cleanly) ---
