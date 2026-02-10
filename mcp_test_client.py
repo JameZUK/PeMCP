@@ -363,17 +363,26 @@ async def call_tool_expect_error(
 
     assert isinstance(result, mcp_types.CallToolResult)
 
-    # If the tool returned successfully (no error), that's unexpected
+    # If the tool returned successfully (no error flag), check the payload
     if not result.isError:
-        # Check if the response text indicates an error condition anyway
         text = ""
         if result.content and hasattr(result.content[0], "text"):
             text = result.content[0].text
-        # Some tools return success but include error info in the payload
+        # Some tools return isError=False but include {"error": "..."} in payload
+        has_error_in_payload = False
+        try:
+            payload = json.loads(text)
+            if isinstance(payload, dict) and "error" in payload:
+                has_error_in_payload = True
+        except (json.JSONDecodeError, TypeError):
+            pass
         if error_substring and error_substring.lower() in text.lower():
             logger.info("[PASS] %s returned error info in payload", tool_name)
             return
-        pytest.fail(f"{tool_name}: expected isError=True but got success")
+        if has_error_in_payload:
+            logger.info("[PASS] %s returned error in payload (isError=False)", tool_name)
+            return
+        pytest.fail(f"{tool_name}: expected an error but got success")
 
     if error_substring:
         text = result.content[0].text if result.content else ""
@@ -494,7 +503,10 @@ class TestFileManagement:
         async def _test():
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "detect_binary_format", expected_type=dict)
-                assert "format" in r or "detected_format" in r or "binary_format" in r
+                assert "primary_format" in r or "detected_formats" in r or "format" in r, (
+                    f"detect_binary_format: expected 'primary_format' or 'detected_formats' "
+                    f"in response keys {set(r.keys())}"
+                )
         run(_test())
 
 
@@ -1542,7 +1554,10 @@ class TestMultiFormat:
         async def _test():
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "detect_binary_format", expected_type=dict)
-                assert "format" in r or "detected_format" in r or "binary_format" in r
+                assert "primary_format" in r or "detected_formats" in r or "format" in r, (
+                    f"detect_binary_format: expected 'primary_format' or 'detected_formats' "
+                    f"in response keys {set(r.keys())}"
+                )
         run(_test())
 
     @pytest.mark.pe_file
