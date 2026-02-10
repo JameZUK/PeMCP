@@ -569,127 +569,433 @@ async def find_and_decode_encoded_strings(
 
     return await _check_mcp_response_size(ctx, final_results[:limit], "find_and_decode_encoded_strings", "the 'limit' parameter or by adjusting filters")
 
+# ===================================================================
+#  Suspicious Import Database (risk-categorized)
+# ===================================================================
+
+SUSPICIOUS_IMPORTS_DB = {
+    # CRITICAL — Process injection / code execution
+    "CreateRemoteThread": "CRITICAL", "NtCreateThreadEx": "CRITICAL",
+    "RtlCreateUserThread": "CRITICAL", "WriteProcessMemory": "CRITICAL",
+    "NtWriteVirtualMemory": "CRITICAL", "VirtualAllocEx": "CRITICAL",
+    "NtAllocateVirtualMemory": "CRITICAL", "QueueUserAPC": "CRITICAL",
+    "NtQueueApcThread": "CRITICAL", "SetWindowsHookEx": "CRITICAL",
+    "NtMapViewOfSection": "CRITICAL", "NtUnmapViewOfSection": "CRITICAL",
+    "ZwMapViewOfSection": "CRITICAL",
+    # CRITICAL — Credential theft / privilege escalation
+    "MiniDumpWriteDump": "CRITICAL", "LsaEnumerateLogonSessions": "CRITICAL",
+    "AdjustTokenPrivileges": "CRITICAL", "ImpersonateLoggedOnUser": "CRITICAL",
+    "OpenProcessToken": "CRITICAL", "DuplicateToken": "CRITICAL",
+    "LdrLoadDll": "CRITICAL",
+    # HIGH — Anti-analysis / evasion
+    "IsDebuggerPresent": "HIGH", "CheckRemoteDebuggerPresent": "HIGH",
+    "NtQueryInformationProcess": "HIGH", "OutputDebugString": "HIGH",
+    "GetTickCount": "HIGH", "QueryPerformanceCounter": "HIGH",
+    "NtSetInformationThread": "HIGH",
+    # HIGH — Networking (C2 potential)
+    "InternetOpen": "HIGH", "InternetConnect": "HIGH",
+    "HttpOpenRequest": "HIGH", "HttpSendRequest": "HIGH",
+    "URLDownloadToFile": "HIGH", "URLDownloadToCacheFile": "HIGH",
+    "WinHttpOpen": "HIGH", "WinHttpConnect": "HIGH",
+    # HIGH — Process/service manipulation
+    "OpenProcess": "HIGH", "TerminateProcess": "HIGH",
+    "CreateService": "HIGH", "StartService": "HIGH",
+    "ShellExecute": "HIGH", "WinExec": "HIGH",
+    "CreateProcess": "HIGH",
+    # MEDIUM — Registry / persistence
+    "RegSetValueEx": "MEDIUM", "RegCreateKeyEx": "MEDIUM",
+    "RegDeleteKey": "MEDIUM", "RegDeleteValue": "MEDIUM",
+    # MEDIUM — Crypto (ransomware indicators)
+    "CryptEncrypt": "MEDIUM", "CryptDecrypt": "MEDIUM",
+    "CryptAcquireContext": "MEDIUM", "BCryptEncrypt": "MEDIUM",
+    "CryptDeriveKey": "MEDIUM", "CryptGenKey": "MEDIUM",
+    # MEDIUM — File operations (dropper indicators)
+    "CreateFileMapping": "MEDIUM", "MapViewOfFile": "MEDIUM",
+    "VirtualProtect": "MEDIUM", "SetFileAttributes": "MEDIUM",
+    # MEDIUM — Socket-level networking
+    "WSAStartup": "MEDIUM", "connect": "MEDIUM",
+    "send": "MEDIUM", "recv": "MEDIUM", "socket": "MEDIUM",
+    "bind": "MEDIUM", "listen": "MEDIUM", "accept": "MEDIUM",
+}
+
+
 @tool_decorator
 async def get_triage_report(
     ctx: Context,
     sifter_score_threshold: float = 8.0,
-    indicator_limit: int = 15
+    indicator_limit: int = 20
 ) -> Dict[str, Any]:
     """
-    Runs an automated triage workflow to find the most suspicious indicators
-    and behaviors in the analyzed file, returning a condensed summary.
+    Comprehensive automated triage of the loaded binary. Analyses entropy, packing
+    indicators, digital signatures, suspicious imports (risk-categorized), capa
+    capabilities, network IOCs, and section anomalies in a single call.
+
+    Designed to give an AI analyst a complete first-look assessment without needing
+    to call multiple individual tools.
 
     Args:
         ctx: The MCP Context object.
-        sifter_score_threshold: (float) The minimum sifter score for a string to be considered a high-value indicator.
-        indicator_limit: (int) The max number of items to return for each category in the report.
+        sifter_score_threshold: (float) Min sifter score for high-value string indicators.
+        indicator_limit: (int) Max items per category in the report.
 
     Returns:
-        A dictionary summarizing the most critical findings.
+        A comprehensive triage dictionary with sections for packing, signatures,
+        imports, capabilities, network IOCs, section anomalies, and risk score.
     """
-    await ctx.info(f"Generating automated triage report...")
+    import math
+
+    await ctx.info("Generating comprehensive triage report...")
 
     _check_pe_loaded("get_triage_report")
 
-    triage_report = {
-        "HighValueIndicators": [],
-        "SuspiciousCapabilities": [],
-        "SuspiciousImports": [],
-        # "SignatureAndPacker": state.pe_data.get('peid_matches', {}), # Optional inclusion
+    risk_score = 0  # Cumulative risk score (higher = more suspicious)
+
+    triage_report: Dict[str, Any] = {
+        "file_info": {},
+        "packing_assessment": {},
+        "digital_signature": {},
+        "suspicious_imports": [],
+        "suspicious_capabilities": [],
+        "network_iocs": {},
+        "section_anomalies": [],
+        "high_value_strings": [],
+        "risk_score": 0,
+        "risk_level": "UNKNOWN",
+        "suggested_next_tools": [],
     }
 
-    # --- 1. Find High-Value String Indicators ---
-    all_strings = []
-    # Collect strings from FLOSS results safely
+    # ===================================================================
+    # 0. Basic file info
+    # ===================================================================
+    file_hashes = state.pe_data.get('file_hashes', {})
+    triage_report["file_info"] = {
+        "filepath": state.filepath,
+        "md5": file_hashes.get('md5'),
+        "sha256": file_hashes.get('sha256'),
+        "mode": state.pe_data.get('mode', 'pe'),
+        "loaded_from_cache": state.loaded_from_cache,
+    }
+
+    # ===================================================================
+    # 1. Packing Assessment (entropy + PEiD + import count + section names)
+    # ===================================================================
+    sections_data = state.pe_data.get('sections', [])
+    peid_data = state.pe_data.get('peid_matches', {})
+    imports_data = state.pe_data.get('imports', [])
+
+    max_entropy = 0.0
+    high_entropy_sections = []
+    for sec in sections_data:
+        if isinstance(sec, dict):
+            ent = sec.get('entropy', 0.0)
+            if isinstance(ent, (int, float)) and ent > max_entropy:
+                max_entropy = ent
+            name = sec.get('name', '')
+            chars = sec.get('characteristics_str', sec.get('characteristics', ''))
+            is_exec = 'EXECUTE' in str(chars).upper() or 'CODE' in str(chars).upper()
+            if ent > 7.0 and is_exec:
+                high_entropy_sections.append({"name": name, "entropy": round(ent, 3)})
+                risk_score += 3
+            elif ent > 7.0:
+                high_entropy_sections.append({"name": name, "entropy": round(ent, 3)})
+                risk_score += 1
+
+    # Count total imported functions
+    total_import_funcs = 0
+    for dll_entry in imports_data:
+        if isinstance(dll_entry, dict):
+            total_import_funcs += len(dll_entry.get('symbols', []))
+
+    # PEiD matches
+    ep_matches = peid_data.get('ep_matches', [])
+    heuristic_matches = peid_data.get('heuristic_matches', [])
+    packer_names = [m.get('name', m.get('match', 'unknown')) for m in (ep_matches + heuristic_matches) if isinstance(m, dict)]
+    if packer_names:
+        risk_score += 4
+
+    # Known packer section names
+    PACKER_SECTION_NAMES = {'UPX0', 'UPX1', 'UPX2', '.aspack', '.adata', '.nsp0', '.nsp1',
+                            '.perplex', '.themida', '.vmp0', '.vmp1', '.enigma1', '.petite'}
+    suspicious_section_names = []
+    for sec in sections_data:
+        if isinstance(sec, dict):
+            name = sec.get('name', '').strip()
+            if name in PACKER_SECTION_NAMES:
+                suspicious_section_names.append(name)
+                risk_score += 3
+
+    is_likely_packed = (
+        bool(packer_names)
+        or len(high_entropy_sections) > 0
+        or total_import_funcs < 10
+        or bool(suspicious_section_names)
+    )
+
+    triage_report["packing_assessment"] = {
+        "likely_packed": is_likely_packed,
+        "max_section_entropy": round(max_entropy, 3),
+        "high_entropy_executable_sections": high_entropy_sections,
+        "peid_matches": packer_names[:5],
+        "total_import_functions": total_import_funcs,
+        "minimal_imports": total_import_funcs < 10,
+        "packer_section_names": suspicious_section_names,
+    }
+
+    # ===================================================================
+    # 2. Digital Signature Assessment
+    # ===================================================================
+    sig_data = state.pe_data.get('digital_signature', {})
+    sig_present = sig_data.get('embedded_signature_present', False) if isinstance(sig_data, dict) else False
+    sig_valid = None
+    sig_signer = None
+    if isinstance(sig_data, dict):
+        sig_valid = sig_data.get('validation_result')
+        # Try to extract signer from various possible locations
+        certs = sig_data.get('certificates', sig_data.get('signer_info', []))
+        if isinstance(certs, list) and certs:
+            first_cert = certs[0] if isinstance(certs[0], dict) else {}
+            sig_signer = first_cert.get('subject', first_cert.get('signer'))
+
+    if not sig_present:
+        risk_score += 1  # Unsigned binaries are slightly more suspicious
+
+    triage_report["digital_signature"] = {
+        "present": sig_present,
+        "valid": sig_valid,
+        "signer": sig_signer,
+    }
+
+    # ===================================================================
+    # 3. Suspicious Imports (risk-categorized)
+    # ===================================================================
+    found_imports = []
+    if isinstance(imports_data, list):
+        for dll_entry in imports_data:
+            if not isinstance(dll_entry, dict):
+                continue
+            dll_name = dll_entry.get('dll_name', 'Unknown')
+            for sym in dll_entry.get('symbols', []):
+                func_name = sym.get('name', '')
+                if not func_name:
+                    continue
+                # Check against database (partial match for A/W suffix variants)
+                for susp_name, severity in SUSPICIOUS_IMPORTS_DB.items():
+                    if susp_name in func_name:
+                        found_imports.append({
+                            "function": func_name,
+                            "dll": dll_name,
+                            "risk": severity,
+                        })
+                        if severity == "CRITICAL":
+                            risk_score += 3
+                        elif severity == "HIGH":
+                            risk_score += 2
+                        elif severity == "MEDIUM":
+                            risk_score += 1
+                        break  # Only match highest severity per function
+
+    # Sort by severity
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2}
+    found_imports.sort(key=lambda x: severity_order.get(x['risk'], 3))
+    triage_report["suspicious_imports"] = found_imports[:indicator_limit]
+    triage_report["suspicious_import_summary"] = {
+        "critical": sum(1 for i in found_imports if i['risk'] == 'CRITICAL'),
+        "high": sum(1 for i in found_imports if i['risk'] == 'HIGH'),
+        "medium": sum(1 for i in found_imports if i['risk'] == 'MEDIUM'),
+    }
+
+    # ===================================================================
+    # 4. Capa Capabilities (severity-mapped)
+    # ===================================================================
+    CAPA_SEVERITY_MAP = {
+        "anti-analysis": "High", "collection": "High",
+        "credential-access": "High", "defense-evasion": "High",
+        "execution": "High", "impact": "High",
+        "persistence": "High", "privilege-escalation": "High",
+        "lateral-movement": "High",
+        "communication": "Medium", "data-manipulation": "Medium",
+        "discovery": "Medium", "c2": "High",
+    }
+
+    if 'capa_analysis' in state.pe_data:
+        capa_analysis = state.pe_data['capa_analysis']
+        if isinstance(capa_analysis.get('results'), dict):
+            capa_rules = capa_analysis['results'].get('rules', {})
+            for rule_name, rule_details in capa_rules.items():
+                meta = rule_details.get('meta', {})
+                namespace = meta.get('namespace', '').split('/')[0]
+                severity = CAPA_SEVERITY_MAP.get(namespace, "Low")
+                if severity in ["High", "Medium"]:
+                    triage_report["suspicious_capabilities"].append({
+                        "capability": meta.get('name', rule_name),
+                        "namespace": meta.get('namespace'),
+                        "severity": severity,
+                    })
+                    if severity == "High":
+                        risk_score += 2
+                    else:
+                        risk_score += 1
+
+            triage_report["suspicious_capabilities"].sort(key=lambda x: x['severity'])
+            triage_report["suspicious_capabilities"] = triage_report["suspicious_capabilities"][:indicator_limit]
+
+    # ===================================================================
+    # 5. Network IOC Extraction (IPs, URLs, domains from strings)
+    # ===================================================================
+    ip_pattern = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+    url_pattern = re.compile(r'(?:https?|ftp)://[^\s\'"<>]+', re.IGNORECASE)
+    domain_pattern = re.compile(r'\b(?:[a-zA-Z0-9-]+\.)+(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion)\b', re.IGNORECASE)
+    registry_pattern = re.compile(r'(?:HKLM|HKCU|HKCR|HKU|HKCC|Software)\\[^\s\'"]+', re.IGNORECASE)
+
+    all_string_values = set()
+
+    # Gather strings from all sources
     if 'floss_analysis' in state.pe_data and isinstance(state.pe_data['floss_analysis'], dict):
         floss_strings = state.pe_data['floss_analysis'].get('strings')
         if isinstance(floss_strings, dict):
             for str_list in floss_strings.values():
                 if isinstance(str_list, list):
-                    all_strings.extend(str_list)
+                    for s in str_list:
+                        if isinstance(s, dict):
+                            all_string_values.add(s.get('string', ''))
+                        elif isinstance(s, str):
+                            all_string_values.add(s)
 
-    # Collect strings from Basic ASCII
     basic_strings = state.pe_data.get('basic_ascii_strings')
     if isinstance(basic_strings, list):
-        all_strings.extend(basic_strings)
+        for s in basic_strings:
+            if isinstance(s, dict):
+                all_string_values.add(s.get('string', ''))
+            elif isinstance(s, str):
+                all_string_values.add(s)
 
-    # Filter high-value strings
+    all_text = '\n'.join(all_string_values)
+
+    found_ips = set()
+    for m in ip_pattern.finditer(all_text):
+        ip = m.group()
+        # Filter private/loopback/broadcast
+        octets = ip.split('.')
+        if all(0 <= int(o) <= 255 for o in octets):
+            first = int(octets[0])
+            if first not in (0, 10, 127, 255) and not (first == 192 and int(octets[1]) == 168) and not (first == 172 and 16 <= int(octets[1]) <= 31):
+                found_ips.add(ip)
+
+    found_urls = set()
+    for m in url_pattern.finditer(all_text):
+        found_urls.add(m.group())
+
+    found_domains = set()
+    for m in domain_pattern.finditer(all_text):
+        found_domains.add(m.group().lower())
+
+    found_registry = set()
+    for m in registry_pattern.finditer(all_text):
+        found_registry.add(m.group())
+
+    if found_ips or found_urls or found_domains:
+        risk_score += 3
+
+    triage_report["network_iocs"] = {
+        "ip_addresses": sorted(found_ips)[:indicator_limit],
+        "urls": sorted(found_urls)[:indicator_limit],
+        "domains": sorted(found_domains)[:indicator_limit],
+        "registry_paths": sorted(found_registry)[:indicator_limit],
+    }
+
+    # ===================================================================
+    # 6. Section Anomalies
+    # ===================================================================
+    anomalies = []
+    for sec in sections_data:
+        if not isinstance(sec, dict):
+            continue
+        name = sec.get('name', '').strip()
+        chars = str(sec.get('characteristics_str', sec.get('characteristics', '')))
+        vsize = sec.get('virtual_size', sec.get('Misc_VirtualSize', 0))
+        rsize = sec.get('raw_size', sec.get('SizeOfRawData', 0))
+        ent = sec.get('entropy', 0.0)
+
+        if 'WRITE' in chars.upper() and 'EXECUTE' in chars.upper():
+            anomalies.append({"section": name, "issue": "Write+Execute (W+X)", "severity": "HIGH"})
+            risk_score += 2
+        if isinstance(vsize, int) and isinstance(rsize, int) and vsize > 0 and rsize == 0:
+            anomalies.append({"section": name, "issue": "Virtual size > 0 but raw size = 0 (runtime unpacking)", "severity": "MEDIUM"})
+            risk_score += 1
+        if isinstance(vsize, int) and isinstance(rsize, int) and rsize > 0 and vsize > rsize * 10:
+            anomalies.append({"section": name, "issue": f"Virtual size ({vsize}) >> raw size ({rsize})", "severity": "MEDIUM"})
+            risk_score += 1
+
+    triage_report["section_anomalies"] = anomalies[:indicator_limit]
+
+    # ===================================================================
+    # 7. High-Value String Indicators
+    # ===================================================================
     high_value_strings = []
-    for s in all_strings:
-        if isinstance(s, dict) and s.get('sifter_score', 0.0) >= sifter_score_threshold:
-            # Only include if it has a category (e.g. IP, URL) or is very highly ranked
-            if s.get('category') or s.get('sifter_score', 0.0) >= 9.0:
-                high_value_strings.append(s)
+    for s_text in all_string_values:
+        if not s_text:
+            continue
+        # Check for high-value patterns in strings
+        for s in (state.pe_data.get('basic_ascii_strings', []) +
+                  list(all_string_values)):
+            pass  # Already collected above
+        break
 
-    # Deduplicate and sort
-    # Use string value as unique key
-    unique_indicators = {s['string']: s for s in high_value_strings}
+    # Use sifter scores if available
+    for source in [state.pe_data.get('basic_ascii_strings', [])]:
+        if isinstance(source, list):
+            for s in source:
+                if isinstance(s, dict) and s.get('sifter_score', 0.0) >= sifter_score_threshold:
+                    if s.get('category') or s.get('sifter_score', 0.0) >= 9.0:
+                        high_value_strings.append(s)
+
+    if 'floss_analysis' in state.pe_data and isinstance(state.pe_data['floss_analysis'], dict):
+        floss_strings = state.pe_data['floss_analysis'].get('strings')
+        if isinstance(floss_strings, dict):
+            for str_list in floss_strings.values():
+                if isinstance(str_list, list):
+                    for s in str_list:
+                        if isinstance(s, dict) and s.get('sifter_score', 0.0) >= sifter_score_threshold:
+                            if s.get('category') or s.get('sifter_score', 0.0) >= 9.0:
+                                high_value_strings.append(s)
+
+    unique_indicators = {s.get('string', str(s)): s for s in high_value_strings if isinstance(s, dict)}
     sorted_indicators = sorted(unique_indicators.values(), key=lambda x: x.get('sifter_score', 0.0), reverse=True)
-    triage_report["HighValueIndicators"] = sorted_indicators[:indicator_limit]
+    triage_report["high_value_strings"] = sorted_indicators[:indicator_limit]
 
-    # --- 2. Find High-Severity Capa Capabilities ---
-    CAPA_SEVERITY_MAP = {
-        # High severity namespaces
-        "anti-analysis": "High",
-        "collection": "High",
-        "credential-access": "High",
-        "defense-evasion": "High",
-        "execution": "High",
-        "impact": "High",
-        "persistence": "High",
-        "privilege-escalation": "High",
-        "caching": "High",
-        # Medium severity
-        "bootloader": "Medium",
-        "communication": "Medium",
-        "data-manipulation": "Medium",
-        "discovery": "Medium",
-    }
+    # ===================================================================
+    # 8. Risk Score & Suggested Next Tools
+    # ===================================================================
+    triage_report["risk_score"] = risk_score
 
-    # BUG FIX: Added safe checks for 'results' being None
-    if 'capa_analysis' in state.pe_data:
-        capa_analysis = state.pe_data['capa_analysis']
-        # Ensure results exist and are a dictionary
-        if isinstance(capa_analysis.get('results'), dict):
-            capa_rules = capa_analysis['results'].get('rules', {})
+    if risk_score >= 15:
+        triage_report["risk_level"] = "CRITICAL"
+    elif risk_score >= 8:
+        triage_report["risk_level"] = "HIGH"
+    elif risk_score >= 4:
+        triage_report["risk_level"] = "MEDIUM"
+    elif risk_score >= 1:
+        triage_report["risk_level"] = "LOW"
+    else:
+        triage_report["risk_level"] = "BENIGN"
 
-            for rule_name, rule_details in capa_rules.items():
-                meta = rule_details.get('meta', {})
-                namespace = meta.get('namespace', '').split('/')[0]
-                severity = CAPA_SEVERITY_MAP.get(namespace, "Low")
+    # Context-aware tool suggestions
+    suggested = []
+    if is_likely_packed:
+        suggested.append("auto_unpack_pe — attempt automatic unpacking")
+        suggested.append("get_pe_data(key='peid_matches') — review packer signatures")
+    else:
+        if not triage_report["suspicious_capabilities"]:
+            suggested.append("get_capa_analysis_info — run capa for capability detection")
+        suggested.append("find_and_decode_encoded_strings — hunt for obfuscated IOCs")
+    if not found_ips and not found_urls:
+        suggested.append("search_floss_strings — search for network indicators with regex")
+    if risk_score >= 8:
+        suggested.append("get_virustotal_report_for_loaded_file — check community reputation")
+    suggested.append("classify_binary_purpose — determine if GUI app, service, DLL, etc.")
+    triage_report["suggested_next_tools"] = suggested[:5]
 
-                if severity in ["High", "Medium"]:
-                    triage_report["SuspiciousCapabilities"].append({
-                        "capability": meta.get('name', rule_name),
-                        "namespace": meta.get('namespace'),
-                        "severity": severity
-                    })
-
-            triage_report["SuspiciousCapabilities"].sort(key=lambda x: x['severity'], reverse=True)
-            triage_report["SuspiciousCapabilities"] = triage_report["SuspiciousCapabilities"][:indicator_limit]
-
-    # --- 3. Find Suspicious Imports ---
-    SUSPICIOUS_IMPORTS = {
-        'CreateRemoteThread', 'WriteProcessMemory', 'VirtualAllocEx', 'ShellExecute',
-        'LdrLoadDll', 'IsDebuggerPresent', 'URLDownloadToFile', 'InternetOpen',
-        'HttpSendRequest', 'RegSetValueEx', 'AdjustTokenPrivileges'
-    }
-
-    if 'imports' in state.pe_data and isinstance(state.pe_data['imports'], list):
-        for dll_entry in state.pe_data['imports']:
-            dll_name = dll_entry.get('dll_name', 'Unknown')
-            for sym in dll_entry.get('symbols', []):
-                func_name = sym.get('name')
-                if func_name and any(susp in func_name for susp in SUSPICIOUS_IMPORTS):
-                    triage_report["SuspiciousImports"].append({
-                        "function": func_name,
-                        "dll": dll_name,
-                        "address": sym.get('address')
-                    })
-
-    triage_report["SuspiciousImports"] = triage_report["SuspiciousImports"][:indicator_limit]
-
-    return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "This tool has no size-limiting parameters.")
+    return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "the 'indicator_limit' parameter")
 
 @tool_decorator
 async def get_current_datetime(ctx: Context) -> Dict[str,str]:
@@ -892,3 +1198,192 @@ async def remove_cached_analysis(ctx: Context, sha256_hash: str) -> Dict[str, An
     if existed:
         return {"status": "success", "message": f"Cache entry for {sha[:16]}... removed."}
     return {"status": "not_found", "message": f"No cache entry found for {sha[:16]}..."}
+
+
+# ===================================================================
+#  Binary Purpose Classification
+# ===================================================================
+
+@tool_decorator
+async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
+    """
+    Classifies the loaded binary by purpose and type using PE header analysis,
+    import patterns, section characteristics, and resource presence.
+
+    Categories: GUI Application, Console Application, DLL/Library, System Service,
+    Device Driver, Installer/SFX, .NET Assembly, and more.
+
+    Returns:
+        A dictionary with the primary classification, confidence indicators,
+        and supporting evidence.
+    """
+    await ctx.info("Classifying binary purpose...")
+    _check_pe_loaded("classify_binary_purpose")
+
+    classifications = []
+    evidence = []
+
+    mode = state.pe_data.get('mode', 'pe')
+
+    # Non-PE formats
+    if mode in ('elf', 'macho', 'shellcode'):
+        return {
+            "primary_type": mode.upper(),
+            "classifications": [mode.upper()],
+            "evidence": [f"File loaded in {mode} mode"],
+            "note": "Detailed classification is PE-specific. Use format-specific tools for analysis.",
+        }
+
+    pe_data = state.pe_data
+    sections_data = pe_data.get('sections', [])
+    imports_data = pe_data.get('imports', [])
+    version_info = pe_data.get('version_info', {})
+    resources = pe_data.get('resources_summary', [])
+    nt_headers = pe_data.get('nt_headers', {})
+    com_descriptor = pe_data.get('com_descriptor', {})
+
+    # Extract key header fields
+    file_header = nt_headers.get('file_header', {})
+    optional_header = nt_headers.get('optional_header', {})
+    characteristics = file_header.get('characteristics', file_header.get('Characteristics', 0))
+    subsystem = optional_header.get('subsystem', optional_header.get('Subsystem', 0))
+    dll_characteristics = optional_header.get('dll_characteristics', optional_header.get('DllCharacteristics', 0))
+
+    # Gather all import function names
+    all_import_names = set()
+    all_dll_names = set()
+    for dll_entry in imports_data:
+        if isinstance(dll_entry, dict):
+            dll_name = dll_entry.get('dll_name', '').lower()
+            all_dll_names.add(dll_name)
+            for sym in dll_entry.get('symbols', []):
+                name = sym.get('name', '')
+                if name:
+                    all_import_names.add(name)
+
+    # ---- DLL Check ----
+    is_dll = False
+    if isinstance(characteristics, int):
+        is_dll = bool(characteristics & 0x2000)  # IMAGE_FILE_DLL
+    elif isinstance(characteristics, str) and 'DLL' in characteristics.upper():
+        is_dll = True
+
+    if is_dll:
+        classifications.append("DLL/Library")
+        evidence.append("FILE_HEADER.Characteristics has IMAGE_FILE_DLL flag")
+
+    # ---- Subsystem Check ----
+    subsystem_val = subsystem
+    if isinstance(subsystem, str):
+        if 'GUI' in subsystem.upper():
+            subsystem_val = 2
+        elif 'CONSOLE' in subsystem.upper():
+            subsystem_val = 3
+        elif 'NATIVE' in subsystem.upper():
+            subsystem_val = 1
+        elif 'EFI' in subsystem.upper():
+            subsystem_val = 10
+
+    if subsystem_val == 2:
+        classifications.append("GUI Application")
+        evidence.append("Subsystem: Windows GUI")
+    elif subsystem_val == 3:
+        classifications.append("Console Application")
+        evidence.append("Subsystem: Windows Console")
+    elif subsystem_val == 1:
+        classifications.append("Native/Kernel-mode")
+        evidence.append("Subsystem: Native (kernel-mode driver or boot program)")
+    elif isinstance(subsystem_val, int) and 10 <= subsystem_val <= 13:
+        classifications.append("EFI Application")
+        evidence.append(f"Subsystem: EFI ({subsystem_val})")
+
+    # ---- .NET Assembly ----
+    if com_descriptor and isinstance(com_descriptor, dict) and com_descriptor.get('cb', com_descriptor.get('size', 0)):
+        classifications.append(".NET Assembly")
+        evidence.append("COM/.NET descriptor (IMAGE_COR20_HEADER) present")
+
+    # ---- Driver Detection ----
+    driver_dlls = {'ntoskrnl.exe', 'hal.dll', 'ndis.sys', 'wdm.sys', 'ntdll.dll'}
+    driver_imports = {'IoCreateDevice', 'IoDeleteDevice', 'IoCreateSymbolicLink',
+                      'KeInitializeDpc', 'MmMapIoSpace', 'ExAllocatePool',
+                      'ObReferenceObjectByHandle', 'PsCreateSystemThread'}
+    if all_dll_names & driver_dlls or all_import_names & driver_imports:
+        classifications.append("Device Driver")
+        evidence.append(f"Driver DLLs/imports detected: {(all_dll_names & driver_dlls) | (all_import_names & driver_imports)}")
+
+    # ---- System Service Detection ----
+    service_imports = {'StartServiceCtrlDispatcherA', 'StartServiceCtrlDispatcherW',
+                       'RegisterServiceCtrlHandlerA', 'RegisterServiceCtrlHandlerW',
+                       'RegisterServiceCtrlHandlerExA', 'RegisterServiceCtrlHandlerExW'}
+    if all_import_names & service_imports:
+        classifications.append("Windows Service")
+        evidence.append(f"Service dispatcher imports: {all_import_names & service_imports}")
+
+    # ---- Installer/SFX Detection ----
+    installer_indicators = []
+    # Check for NSIS/InnoSetup/InstallShield sections or resources
+    for sec in sections_data:
+        if isinstance(sec, dict):
+            name = sec.get('name', '').strip()
+            if name in ('.ndata', '.nsis'):
+                installer_indicators.append(f"NSIS section: {name}")
+    # Check version info
+    if isinstance(version_info, dict):
+        for key in ('FileDescription', 'ProductName', 'InternalName', 'OriginalFilename'):
+            val = str(version_info.get(key, '')).lower()
+            if any(kw in val for kw in ('setup', 'install', 'uninstall', 'updater')):
+                installer_indicators.append(f"Version info '{key}' contains installer keyword: {val}")
+    # Check for large overlay (common in SFX)
+    overlay = pe_data.get('overlay_data', {})
+    if isinstance(overlay, dict) and overlay.get('size', 0) > 100000:
+        installer_indicators.append(f"Large overlay ({overlay.get('size')} bytes) — common in SFX archives")
+
+    if installer_indicators:
+        classifications.append("Installer/SFX")
+        evidence.extend(installer_indicators)
+
+    # ---- Networking Tool Detection ----
+    net_dlls = {'ws2_32.dll', 'winhttp.dll', 'wininet.dll', 'urlmon.dll', 'mswsock.dll'}
+    if len(all_dll_names & net_dlls) >= 2:
+        classifications.append("Networking-Heavy")
+        evidence.append(f"Multiple networking DLLs: {all_dll_names & net_dlls}")
+
+    # ---- Crypto-Heavy Detection ----
+    crypto_dlls = {'advapi32.dll', 'bcrypt.dll', 'ncrypt.dll', 'crypt32.dll'}
+    crypto_funcs = {'CryptEncrypt', 'CryptDecrypt', 'BCryptEncrypt', 'BCryptDecrypt',
+                    'CryptDeriveKey', 'CryptGenKey', 'CryptAcquireContext'}
+    if all_import_names & crypto_funcs:
+        classifications.append("Crypto-Heavy")
+        evidence.append(f"Cryptographic API imports: {all_import_names & crypto_funcs}")
+
+    # ---- GUI Evidence ----
+    gui_dlls = {'user32.dll', 'gdi32.dll', 'comctl32.dll', 'comdlg32.dll', 'uxtheme.dll'}
+    gui_funcs = {'CreateWindowExA', 'CreateWindowExW', 'ShowWindow', 'MessageBoxA',
+                 'MessageBoxW', 'DialogBoxParamA', 'DialogBoxParamW', 'GetDC'}
+    if len(all_dll_names & gui_dlls) >= 2 or all_import_names & gui_funcs:
+        if "GUI Application" not in classifications:
+            classifications.append("GUI Application")
+        evidence.append(f"GUI DLLs: {all_dll_names & gui_dlls}")
+
+    # ---- Primary Classification ----
+    # Prioritize: Driver > Service > .NET > DLL > Installer > GUI > Console > Unknown
+    priority_order = ["Device Driver", "Native/Kernel-mode", "Windows Service",
+                      ".NET Assembly", "Installer/SFX", "DLL/Library",
+                      "GUI Application", "Console Application", "EFI Application"]
+    primary = "Unknown PE"
+    for p in priority_order:
+        if p in classifications:
+            primary = p
+            break
+
+    return {
+        "primary_type": primary,
+        "classifications": classifications,
+        "evidence": evidence,
+        "is_dll": is_dll,
+        "subsystem": subsystem,
+        "has_overlay": bool(overlay.get('size', 0) > 0) if isinstance(overlay, dict) else False,
+        "has_dotnet": ".NET Assembly" in classifications,
+        "import_dll_count": len(all_dll_names),
+        "import_function_count": len(all_import_names),
+    }

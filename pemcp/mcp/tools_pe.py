@@ -26,6 +26,71 @@ if ANGR_AVAILABLE:
     import angr
 
 
+def _build_quick_indicators(pe_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Build quick-look indicators from pe_data for the open_file response."""
+    indicators: Dict[str, Any] = {}
+
+    # File hashes
+    hashes = pe_data.get('file_hashes', {})
+    indicators["sha256"] = hashes.get('sha256')
+    indicators["md5"] = hashes.get('md5')
+
+    # Section stats
+    sections = pe_data.get('sections', [])
+    indicators["section_count"] = len(sections)
+    max_ent = 0.0
+    for sec in sections:
+        if isinstance(sec, dict):
+            ent = sec.get('entropy', 0.0)
+            if isinstance(ent, (int, float)) and ent > max_ent:
+                max_ent = ent
+    indicators["max_section_entropy"] = round(max_ent, 3)
+    indicators["high_entropy"] = max_ent > 7.0
+
+    # Import count
+    imports = pe_data.get('imports', [])
+    total_funcs = 0
+    dll_count = 0
+    for dll_entry in imports:
+        if isinstance(dll_entry, dict):
+            dll_count += 1
+            total_funcs += len(dll_entry.get('symbols', []))
+    indicators["import_dll_count"] = dll_count
+    indicators["import_function_count"] = total_funcs
+    indicators["minimal_imports"] = total_funcs < 10
+
+    # PEiD packer detection
+    peid = pe_data.get('peid_matches', {})
+    ep_matches = peid.get('ep_matches', []) if isinstance(peid, dict) else []
+    heuristic = peid.get('heuristic_matches', []) if isinstance(peid, dict) else []
+    packer_names = [m.get('name', m.get('match', '?')) for m in (ep_matches + heuristic) if isinstance(m, dict)]
+    indicators["peid_detections"] = packer_names[:3] if packer_names else []
+
+    # Digital signature
+    sig_data = pe_data.get('digital_signature', {})
+    if isinstance(sig_data, dict):
+        indicators["is_signed"] = sig_data.get('embedded_signature_present', False)
+    else:
+        indicators["is_signed"] = False
+
+    # Packing likelihood
+    indicators["likely_packed"] = bool(packer_names) or max_ent > 7.2 or total_funcs < 10
+
+    # Capa high-severity count
+    capa_high = 0
+    capa_data = pe_data.get('capa_analysis', {})
+    if isinstance(capa_data, dict) and isinstance(capa_data.get('results'), dict):
+        for rule_details in capa_data['results'].get('rules', {}).values():
+            meta = rule_details.get('meta', {})
+            ns = meta.get('namespace', '').split('/')[0]
+            if ns in ('anti-analysis', 'collection', 'credential-access', 'defense-evasion',
+                       'execution', 'impact', 'persistence', 'privilege-escalation', 'c2'):
+                capa_high += 1
+    indicators["capa_high_severity_count"] = capa_high
+
+    return indicators
+
+
 @tool_decorator
 async def open_file(
     ctx: Context,
@@ -338,6 +403,10 @@ async def open_file(
                 else ["macho_analyze"]
             ) + ["detect_binary_format", "decompile_function_with_angr", "get_function_cfg"]
             result["note"] = f"{format_label} binary loaded. PE-specific tools are not applicable. Use the suggested tools for analysis."
+        elif mode == "pe" and state.pe_data:
+            # Quick indicators for PE files — instant first-look data
+            result["quick_indicators"] = _build_quick_indicators(state.pe_data)
+            result["suggested_next"] = "Call get_triage_report for comprehensive automated analysis."
         return result
 
     except Exception as e:
@@ -661,99 +730,113 @@ async def get_full_analysis_results(ctx: Context, limit: int) -> Dict[str, Any]:
     limit_info = "the 'limit' parameter (to request fewer top-level keys) or use more specific data retrieval tools"
     return await _check_mcp_response_size(ctx, data_to_send, "get_full_analysis_results", limit_info)
 
-def _create_mcp_tool_for_key(key_name: str, tool_description: str):
-    async def _tool_func(ctx: Context, limit: int, offset: Optional[int] = 0) -> Any:
-        await ctx.info(f"Request for '{key_name}'. Limit: {limit}, Offset: {offset}")
-        if not (isinstance(limit, int) and limit > 0):
-            raise ValueError(f"Parameter 'limit' for '{key_name}' must be a positive integer.")
-
-        _check_pe_loaded(f"get_{key_name}_info")
-
-        original_data = state.pe_data.get(key_name)
-        if original_data is None:
-            await ctx.warning(f"Data for '{key_name}' not found in analyzed results. Returning empty structure.")
-            # For empty structure, size check is trivial but let's be consistent
-            return await _check_mcp_response_size(ctx, {}, f"get_{key_name}_info")
-
-
-        # Apply offset first if data is a list
-        processed_data = original_data
-        if isinstance(original_data, list) and offset is not None:
-            if not (isinstance(offset, int) and offset >= 0):
-                await ctx.warning(f"Invalid 'offset' value '{offset}' for '{key_name}'. Using offset 0.")
-                offset = 0
-            if offset > 0:
-                processed_data = original_data[offset:]
-        elif offset != 0 and offset is not None: # Offset provided but not applicable
-            await ctx.warning(f"Parameter 'offset' is provided but not applicable for data type '{type(original_data).__name__}' of key '{key_name}'. Ignoring offset.")
-
-        # Apply limit
-        data_to_send: Any
-        if isinstance(processed_data, list):
-            data_to_send = processed_data[:limit]
-        elif isinstance(processed_data, dict): # Offset doesn't apply to dicts in this simple way
-            try:
-                data_to_send = dict(list(processed_data.items())[:limit])
-            except Exception as e_dict_limit:
-                await ctx.warning(f"Could not apply generic dictionary limit for '{key_name}': {e_dict_limit}. Will check size of full data for this key.")
-                data_to_send = processed_data # Send full dict if limiting failed, size check will catch if too big
-        else: # For other types, limit might not be directly applicable in this way
-            await ctx.info(f"Data for key '{key_name}' is type '{type(processed_data).__name__}'. 'limit' parameter acknowledged but not directly used for slicing this type.")
-            data_to_send = processed_data
-
-        limit_info_str = f"the 'limit' or 'offset' parameters for data key '{key_name}'"
-        return await _check_mcp_response_size(ctx, data_to_send, f"get_{key_name}_info", limit_info_str)
-
-    _tool_func.__name__ = f"get_{key_name}_info"
-    doc = f"""Retrieves the '{key_name}' portion of the PE analysis results for the pre-loaded file.
-
-Prerequisites:
-- A PE file must have been successfully pre-loaded at server startup.
-
-Args:
-    ctx: The MCP Context object.
-    limit: (int) Mandatory. Limits the number of items returned. Must be a positive integer.
-           For lists, it's the number of elements. For dictionaries, it's the number of top-level key-value pairs.
-    offset: (Optional[int], default 0) Specifies the starting index for lists. Ignored for dictionaries.
-
-Returns:
-    The data associated with '{key_name}'. Structure depends on the key:
-    - {tool_description}
-    The return type is typically a dictionary or a list of dictionaries.
-
-Raises:
-    RuntimeError: If no PE file is currently loaded.
-    ValueError: If limit is not a positive integer, or if the response size exceeds the server limit.
-"""
-    _tool_func.__doc__ = doc
-    return tool_decorator(_tool_func)
-
-TOOL_DEFINITIONS = {
-    "file_hashes":"Cryptographic hashes (MD5, SHA1, SHA256, ssdeep) for the entire loaded PE file. Output is a dictionary.",
-    "dos_header":"Detailed breakdown of the DOS_HEADER structure from the PE file. Output is a dictionary.",
-    "nt_headers":"Detailed breakdown of NT_HEADERS, including File Header and Optional Header. Output is a dictionary.",
-    "data_directories":"Information on all Data Directories (e.g., import, export, resource tables), including their RVAs and sizes. Output is a list of dictionaries.",
-    "sections":"Detailed information for each section in the PE file (name, RVA, size, characteristics, entropy, hashes). Output is a list of dictionaries.",
-    "imports":"List of imported DLLs and, for each DLL, the imported symbols (functions/ordinals). Output is a list of dictionaries.",
-    "exports":"Information on exported symbols from the PE file, including name, RVA, ordinal, and any forwarders. Output is a dictionary.",
-    "resources_summary":"A summary list of resources found in the PE file, detailing type, ID/name, language, RVA, and size. Output is a list of dictionaries.",
-    "version_info":"Version information extracted from the PE file's version resource (e.g., FileVersion, ProductName). Output is a dictionary.",
-    "debug_info":"Details from the debug directory, which may include PDB paths or CodeView information. Output is a list of dictionaries.",
-    "digital_signature":"Information about the PE file's Authenticode digital signature, including certificate details and validation status (if 'cryptography' and 'signify' libs are available). Output is a dictionary.",
-    "peid_matches":"Results from PEiD-like signature scanning, indicating potential packers or compilers. Includes entry-point and heuristic matches. Output is a dictionary.",
-    "yara_matches":"Results from YARA scanning, listing any matched rules, tags, metadata, and string identifiers. Output is a list of dictionaries.",
-    # "floss_analysis" will have its own dedicated tool due to complexity.
-    "rich_header":"Decoded Microsoft Rich Header information, often indicating compiler/linker versions. Output is a dictionary.",
-    "delay_load_imports":"Information on delay-loaded imported DLLs and their symbols. Output is a list of dictionaries.",
-    "tls_info":"Details from the Thread Local Storage (TLS) directory, including any callback function addresses. Output is a dictionary.",
-    "load_config":"Information from the Load Configuration directory, including flags like Control Flow Guard (CFG) status. Output is a dictionary.",
-    "com_descriptor":"Information from the .NET COM Descriptor (IMAGE_COR20_HEADER) if the PE is a .NET assembly. Output is a dictionary.",
-    "overlay_data":"Information about any data appended to the end of the PE file (overlay), including offset, size, and hashes. Output is a dictionary.",
-    "base_relocations":"Details of base relocations within the PE file. Output is a list of dictionaries.",
-    "bound_imports":"Information on bound imports, if present. Output is a list of dictionaries.",
-    "exception_data":"Data from the exception directory (e.g., RUNTIME_FUNCTION entries for x64). Output is a list of dictionaries.",
-    "coff_symbols":"COFF (Common Object File Format) symbol table entries, if present. Output is a list of dictionaries.",
-    "checksum_verification":"Verification of the PE file's checksum against the value in the Optional Header. Output is a dictionary.",
-    "pefile_warnings":"Any warnings generated by the 'pefile' library during parsing. Output is a list of strings."
+PE_DATA_KEYS = {
+    "file_hashes": "Cryptographic hashes (MD5, SHA1, SHA256, ssdeep).",
+    "dos_header": "DOS_HEADER structure.",
+    "nt_headers": "NT_HEADERS (File Header + Optional Header).",
+    "data_directories": "Data Directory entries (import, export, resource tables, etc.).",
+    "sections": "Section details (name, RVA, size, characteristics, entropy, hashes).",
+    "imports": "Imported DLLs and their symbols (functions/ordinals).",
+    "exports": "Exported symbols (name, RVA, ordinal, forwarders).",
+    "resources_summary": "Resource entries (type, ID/name, language, RVA, size).",
+    "version_info": "Version resource (FileVersion, ProductName, etc.).",
+    "debug_info": "Debug directory (PDB paths, CodeView info).",
+    "digital_signature": "Authenticode signature and certificate details.",
+    "peid_matches": "PEiD packer/compiler signature matches.",
+    "yara_matches": "YARA rule match results.",
+    "rich_header": "Microsoft Rich Header (compiler/linker versions).",
+    "delay_load_imports": "Delay-loaded imported DLLs and symbols.",
+    "tls_info": "TLS directory details including callback addresses.",
+    "load_config": "Load Configuration directory (CFG, security cookie, etc.).",
+    "com_descriptor": ".NET COM Descriptor (IMAGE_COR20_HEADER).",
+    "overlay_data": "Overlay data appended after the PE (offset, size, hashes).",
+    "base_relocations": "Base relocation entries.",
+    "bound_imports": "Bound import entries.",
+    "exception_data": "Exception directory (RUNTIME_FUNCTION entries for x64).",
+    "coff_symbols": "COFF symbol table entries.",
+    "checksum_verification": "PE checksum verification result.",
+    "pefile_warnings": "Warnings from the pefile library during parsing.",
 }
-for key, desc in TOOL_DEFINITIONS.items(): globals()[f"get_{key}_info"] = _create_mcp_tool_for_key(key, desc)
+
+
+@tool_decorator
+async def get_pe_data(
+    ctx: Context,
+    key: str,
+    limit: int = 50,
+    offset: Optional[int] = 0,
+) -> Any:
+    """
+    Retrieves a specific portion of the PE analysis results by key name.
+    This is the unified data retrieval tool for all PE structure data.
+
+    Use key='list' to discover all available data keys and their descriptions.
+
+    Args:
+        ctx: The MCP Context object.
+        key: (str) The data key to retrieve (e.g. 'imports', 'sections', 'file_hashes').
+             Use 'list' to see all available keys.
+        limit: (int) Max items to return. For lists: element count. For dicts: key count. Default 50.
+        offset: (Optional[int]) Starting index for list data. Ignored for dicts. Default 0.
+
+    Returns:
+        The requested analysis data, or a list of available keys when key='list'.
+    """
+    if key == "list":
+        _check_pe_loaded("get_pe_data")
+        available = {}
+        for k, desc in PE_DATA_KEYS.items():
+            val = state.pe_data.get(k)
+            if val is not None:
+                if isinstance(val, list):
+                    available[k] = {"description": desc, "type": "list", "count": len(val)}
+                elif isinstance(val, dict):
+                    available[k] = {"description": desc, "type": "dict", "keys": len(val)}
+                else:
+                    available[k] = {"description": desc, "type": type(val).__name__}
+            else:
+                available[k] = {"description": desc, "status": "not_available"}
+        return available
+
+    await ctx.info(f"Request for PE data key '{key}'. Limit: {limit}, Offset: {offset}")
+
+    if not (isinstance(limit, int) and limit > 0):
+        raise ValueError("Parameter 'limit' must be a positive integer.")
+
+    _check_pe_loaded("get_pe_data")
+
+    if key not in PE_DATA_KEYS:
+        return {
+            "error": f"Unknown key '{key}'.",
+            "available_keys": list(PE_DATA_KEYS.keys()),
+            "hint": "Use key='list' for detailed descriptions of each key.",
+        }
+
+    original_data = state.pe_data.get(key)
+    if original_data is None:
+        await ctx.warning(f"Data for '{key}' not found in analyzed results. It may have been skipped.")
+        return await _check_mcp_response_size(ctx, {}, "get_pe_data")
+
+    # Apply offset for lists
+    processed_data = original_data
+    if isinstance(original_data, list) and offset is not None:
+        if not (isinstance(offset, int) and offset >= 0):
+            await ctx.warning(f"Invalid 'offset' value '{offset}'. Using offset 0.")
+            offset = 0
+        if offset > 0:
+            processed_data = original_data[offset:]
+
+    # Apply limit
+    data_to_send: Any
+    if isinstance(processed_data, list):
+        data_to_send = processed_data[:limit]
+    elif isinstance(processed_data, dict):
+        try:
+            data_to_send = dict(list(processed_data.items())[:limit])
+        except Exception:
+            data_to_send = processed_data
+    else:
+        data_to_send = processed_data
+
+    limit_info_str = f"the 'limit' or 'offset' parameters for data key '{key}'"
+    return await _check_mcp_response_size(ctx, data_to_send, "get_pe_data", limit_info_str)
