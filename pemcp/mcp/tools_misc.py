@@ -626,9 +626,14 @@ async def get_triage_report(
     indicator_limit: int = 20
 ) -> Dict[str, Any]:
     """
-    Comprehensive automated triage of the loaded binary. Analyses entropy, packing
-    indicators, digital signatures, suspicious imports (risk-categorized), capa
-    capabilities, network IOCs, and section anomalies in a single call.
+    Comprehensive automated triage of the loaded binary. Works across PE, ELF,
+    Mach-O, and shellcode formats with format-specific analysis sections.
+
+    Analyses entropy, packing indicators, digital signatures, suspicious imports
+    (risk-categorized), capa capabilities, network IOCs, section anomalies,
+    timestamp anomalies, Rich header, overlay/appended data, resource anomalies,
+    import anomalies, YARA matches, header corruption, and platform-specific
+    security features (ELF: PIE/NX/RELRO/canaries, Mach-O: code signing/PIE).
 
     Designed to give an AI analyst a complete first-look assessment without needing
     to call multiple individual tools.
@@ -639,8 +644,26 @@ async def get_triage_report(
         indicator_limit: (int) Max items per category in the report.
 
     Returns:
-        A comprehensive triage dictionary with sections for packing, signatures,
-        imports, capabilities, network IOCs, section anomalies, and risk score.
+        A comprehensive triage dictionary with sections:
+        - file_info: path, hashes, mode, file size
+        - timestamp_analysis: compilation timestamp anomalies (PE)
+        - packing_assessment: entropy, PEiD, import count analysis
+        - digital_signature: signing status and signer info
+        - rich_header_summary: build environment fingerprint (PE)
+        - suspicious_imports: risk-categorized API imports
+        - import_anomalies: ordinal-only imports, non-standard DLLs
+        - suspicious_capabilities: capa MITRE ATT&CK matches
+        - network_iocs: IPs, URLs, domains, registry paths
+        - section_anomalies: W+X, size mismatches
+        - overlay_analysis: appended data with embedded signature detection
+        - resource_anomalies: nested PEs, large RCDATA payloads
+        - yara_matches: matched YARA rules
+        - header_anomalies: pefile warnings, checksum, entry point issues
+        - high_value_strings: ML-ranked high-value strings
+        - elf_security: PIE, NX, RELRO, stack canaries, stripped status (ELF)
+        - macho_security: PIE, code signing, entitlements (Mach-O)
+        - risk_score / risk_level: cumulative risk assessment
+        - suggested_next_tools: format-aware recommended next analysis steps
     """
     import math
 
@@ -652,13 +675,22 @@ async def get_triage_report(
 
     triage_report: Dict[str, Any] = {
         "file_info": {},
+        "timestamp_analysis": {},
         "packing_assessment": {},
         "digital_signature": {},
+        "rich_header_summary": {},
         "suspicious_imports": [],
+        "import_anomalies": {},
         "suspicious_capabilities": [],
         "network_iocs": {},
         "section_anomalies": [],
+        "overlay_analysis": {},
+        "resource_anomalies": [],
+        "yara_matches": [],
+        "header_anomalies": [],
         "high_value_strings": [],
+        "elf_security": {},
+        "macho_security": {},
         "risk_score": 0,
         "risk_level": "UNKNOWN",
         "suggested_next_tools": [],
@@ -668,13 +700,86 @@ async def get_triage_report(
     # 0. Basic file info
     # ===================================================================
     file_hashes = state.pe_data.get('file_hashes', {})
+    analysis_mode = state.pe_data.get('mode', 'pe')
+    file_size = 0
+    try:
+        if state.filepath and os.path.isfile(state.filepath):
+            file_size = os.path.getsize(state.filepath)
+    except Exception:
+        pass
+
     triage_report["file_info"] = {
         "filepath": state.filepath,
         "md5": file_hashes.get('md5'),
         "sha256": file_hashes.get('sha256'),
-        "mode": state.pe_data.get('mode', 'pe'),
+        "mode": analysis_mode,
+        "file_size": file_size,
         "loaded_from_cache": state.loaded_from_cache,
     }
+
+    # ===================================================================
+    # 0a. Timestamp Anomaly Detection (PE only)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        ts_anomalies = []
+        nt_headers = state.pe_data.get('nt_headers', {})
+        file_header = nt_headers.get('file_header', {})
+        # Extract raw TimeDateStamp value
+        raw_ts = None
+        for key in ('TimeDateStamp', 'timedatestamp'):
+            candidate = file_header.get(key)
+            if isinstance(candidate, dict):
+                raw_ts = candidate.get('Value', candidate.get('value'))
+            elif isinstance(candidate, (int, float)):
+                raw_ts = candidate
+            if raw_ts is not None:
+                break
+
+        ts_info: Dict[str, Any] = {"raw_timestamp": raw_ts}
+        if raw_ts is not None and isinstance(raw_ts, (int, float)):
+            try:
+                compile_dt = datetime.datetime.utcfromtimestamp(int(raw_ts))
+                ts_info["compile_date"] = compile_dt.isoformat() + "Z"
+                now = datetime.datetime.utcnow()
+                # Future timestamp
+                if compile_dt > now:
+                    ts_anomalies.append("Compilation timestamp is in the future")
+                    risk_score += 2
+                # Epoch zero (1970-01-01)
+                if int(raw_ts) == 0:
+                    ts_anomalies.append("Timestamp is epoch zero (zeroed/wiped)")
+                    risk_score += 1
+                # Very old (before Windows NT era, ~1993)
+                elif compile_dt.year < 1993:
+                    ts_anomalies.append(f"Timestamp predates Windows NT era ({compile_dt.year})")
+                    risk_score += 1
+                # Known fake timestamps used by Delphi
+                elif int(raw_ts) == 0x2A425E19:
+                    ts_anomalies.append("Delphi signature timestamp (0x2A425E19) — may be Delphi-compiled or spoofed")
+                # Known Borland timestamp
+                elif int(raw_ts) == 0x19610714:
+                    ts_anomalies.append("Borland linker signature timestamp")
+            except (OSError, ValueError, OverflowError):
+                ts_anomalies.append("Timestamp value overflows or is unparseable")
+                risk_score += 1
+
+        # Check debug directory timestamps for mismatches
+        debug_info = state.pe_data.get('debug_info', [])
+        if isinstance(debug_info, list) and raw_ts is not None:
+            for dbg_entry in debug_info:
+                if isinstance(dbg_entry, dict):
+                    dbg_ts = dbg_entry.get('TimeDateStamp', dbg_entry.get('timedatestamp'))
+                    if isinstance(dbg_ts, dict):
+                        dbg_ts = dbg_ts.get('Value', dbg_ts.get('value'))
+                    if isinstance(dbg_ts, (int, float)) and dbg_ts != 0 and abs(int(dbg_ts) - int(raw_ts)) > 86400:
+                        ts_anomalies.append("Debug directory timestamp differs from PE header by >24h (possible timestomping)")
+                        risk_score += 2
+                        break
+
+        ts_info["anomalies"] = ts_anomalies
+        triage_report["timestamp_analysis"] = ts_info
+    else:
+        triage_report["timestamp_analysis"] = {"note": f"Not applicable for {analysis_mode} mode"}
 
     # ===================================================================
     # 1. Packing Assessment (entropy + PEiD + import count + section names)
@@ -764,6 +869,40 @@ async def get_triage_report(
         "valid": sig_valid,
         "signer": sig_signer,
     }
+
+    # ===================================================================
+    # 2a. Rich Header Summary (PE only — build environment fingerprint)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        rich_data = state.pe_data.get('rich_header')
+        if rich_data and isinstance(rich_data, dict):
+            entries = rich_data.get('decoded_entries', rich_data.get('entries', []))
+            compiler_ids = set()
+            product_names = set()
+            for entry in (entries if isinstance(entries, list) else []):
+                if isinstance(entry, dict):
+                    comp_id = entry.get('comp_id', entry.get('CompID'))
+                    prod = entry.get('product_name', entry.get('product', ''))
+                    if comp_id is not None:
+                        compiler_ids.add(comp_id)
+                    if prod:
+                        product_names.add(str(prod))
+            triage_report["rich_header_summary"] = {
+                "present": True,
+                "entry_count": len(entries) if isinstance(entries, list) else 0,
+                "unique_compiler_ids": len(compiler_ids),
+                "products_used": sorted(product_names)[:10],
+                "checksum_valid": rich_data.get('checksum_valid', rich_data.get('valid')),
+                "raw_hash": rich_data.get('hash', rich_data.get('checksum')),
+            }
+            # Rich header checksum mismatch can indicate tampering
+            if rich_data.get('checksum_valid') is False:
+                risk_score += 1
+                triage_report["rich_header_summary"]["anomaly"] = "Rich header checksum mismatch — possible tampering"
+        else:
+            triage_report["rich_header_summary"] = {"present": False, "note": "No Rich header (MinGW, Go, Rust, or stripped)"}
+    else:
+        triage_report["rich_header_summary"] = {"note": f"Not applicable for {analysis_mode} mode"}
 
     # ===================================================================
     # 3. Suspicious Imports (risk-categorized)
@@ -929,6 +1068,355 @@ async def get_triage_report(
     triage_report["section_anomalies"] = anomalies[:indicator_limit]
 
     # ===================================================================
+    # 6a. Overlay / Appended Data Analysis (PE only)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        overlay_data = state.pe_data.get('overlay_data')
+        if overlay_data and isinstance(overlay_data, dict):
+            overlay_size = overlay_data.get('size', 0)
+            overlay_offset = overlay_data.get('offset')
+            overlay_info: Dict[str, Any] = {
+                "present": True,
+                "offset": overlay_offset,
+                "size": overlay_size,
+                "md5": overlay_data.get('md5'),
+                "sha256": overlay_data.get('sha256'),
+            }
+            # Check if overlay is a large proportion of the file
+            if file_size > 0 and overlay_size > 0:
+                overlay_pct = round((overlay_size / file_size) * 100, 1)
+                overlay_info["percent_of_file"] = overlay_pct
+                if overlay_pct > 50:
+                    overlay_info["note"] = "Overlay is >50% of file — likely contains appended data, resources, or embedded payload"
+                    risk_score += 2
+
+            # Check for embedded PE signatures in the overlay sample hex
+            sample_hex = overlay_data.get('sample_hex', '')
+            embedded_sigs = []
+            if sample_hex:
+                # MZ header
+                if '4d5a' in sample_hex.lower()[:20]:
+                    embedded_sigs.append("PE/MZ header detected at overlay start")
+                    risk_score += 3
+                # PK (ZIP) header
+                if '504b0304' in sample_hex.lower()[:20]:
+                    embedded_sigs.append("ZIP/PK archive detected at overlay start")
+                # 7z header
+                if '377abcaf271c' in sample_hex.lower()[:20]:
+                    embedded_sigs.append("7-Zip archive detected at overlay start")
+                # RAR header
+                if '526172211a07' in sample_hex.lower()[:20]:
+                    embedded_sigs.append("RAR archive detected at overlay start")
+                # PDF header
+                if '25504446' in sample_hex.lower()[:20]:
+                    embedded_sigs.append("PDF document detected at overlay start")
+            overlay_info["embedded_signatures"] = embedded_sigs
+            triage_report["overlay_analysis"] = overlay_info
+        else:
+            triage_report["overlay_analysis"] = {"present": False}
+    else:
+        triage_report["overlay_analysis"] = {"note": f"Not applicable for {analysis_mode} mode"}
+
+    # ===================================================================
+    # 6b. Import Anomalies (ordinal-only imports, unusual DLLs)
+    # ===================================================================
+    if analysis_mode == 'pe' and isinstance(imports_data, list):
+        ordinal_only_imports = []
+        unusual_dll_imports = []
+        COMMON_DLLS = {
+            'kernel32.dll', 'ntdll.dll', 'user32.dll', 'advapi32.dll', 'gdi32.dll',
+            'ole32.dll', 'oleaut32.dll', 'shell32.dll', 'shlwapi.dll', 'msvcrt.dll',
+            'ws2_32.dll', 'wininet.dll', 'crypt32.dll', 'comctl32.dll', 'comdlg32.dll',
+            'rpcrt4.dll', 'secur32.dll', 'winhttp.dll', 'urlmon.dll', 'version.dll',
+            'imagehlp.dll', 'psapi.dll', 'iphlpapi.dll', 'setupapi.dll', 'winspool.drv',
+            'mscoree.dll', 'msvcp140.dll', 'vcruntime140.dll', 'ucrtbase.dll',
+            'api-ms-win-crt-runtime-l1-1-0.dll', 'api-ms-win-crt-heap-l1-1-0.dll',
+            'api-ms-win-crt-stdio-l1-1-0.dll', 'api-ms-win-crt-string-l1-1-0.dll',
+            'api-ms-win-crt-math-l1-1-0.dll', 'api-ms-win-crt-locale-l1-1-0.dll',
+        }
+
+        for dll_entry in imports_data:
+            if not isinstance(dll_entry, dict):
+                continue
+            dll_name = dll_entry.get('dll_name', '')
+            dll_lower = dll_name.lower()
+            # Check for unusual DLLs (not in the common set and not api-ms-win-*)
+            if dll_lower and dll_lower not in COMMON_DLLS and not dll_lower.startswith('api-ms-win-'):
+                unusual_dll_imports.append(dll_name)
+            for sym in dll_entry.get('symbols', []):
+                if isinstance(sym, dict):
+                    name = sym.get('name', '')
+                    ordinal = sym.get('ordinal')
+                    if (not name or name.startswith('ord(')) and ordinal is not None:
+                        ordinal_only_imports.append({"dll": dll_name, "ordinal": ordinal})
+
+        import_anom: Dict[str, Any] = {}
+        if ordinal_only_imports:
+            import_anom["ordinal_only_imports"] = ordinal_only_imports[:indicator_limit]
+            import_anom["ordinal_only_count"] = len(ordinal_only_imports)
+            if len(ordinal_only_imports) > 5:
+                risk_score += 1  # Many ordinal-only imports can indicate evasion
+        if unusual_dll_imports:
+            import_anom["non_standard_dlls"] = sorted(set(unusual_dll_imports))[:indicator_limit]
+        triage_report["import_anomalies"] = import_anom
+    else:
+        triage_report["import_anomalies"] = {"note": f"Not applicable for {analysis_mode} mode" if analysis_mode != 'pe' else "No imports data"}
+
+    # ===================================================================
+    # 6c. Resource Anomalies (PE only — nested PEs, high-entropy resources)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        res_anomalies = []
+        resources = state.pe_data.get('resources_summary', [])
+        if isinstance(resources, list):
+            for res in resources:
+                if not isinstance(res, dict):
+                    continue
+                res_size = res.get('size', 0)
+                res_type = res.get('type', '')
+                # Suspiciously large resources
+                if isinstance(res_size, int) and res_size > 500000:
+                    res_anomalies.append({
+                        "type": res_type,
+                        "size": res_size,
+                        "issue": f"Large resource ({res_size} bytes) — may contain embedded payload",
+                        "severity": "MEDIUM",
+                    })
+                # RCDATA or custom type with large sizes are suspicious
+                if res_type in ('RT_RCDATA', 'RCDATA', '10') and isinstance(res_size, int) and res_size > 50000:
+                    res_anomalies.append({
+                        "type": res_type,
+                        "size": res_size,
+                        "issue": "Large RCDATA resource — common vector for embedded payloads",
+                        "severity": "HIGH",
+                    })
+                    risk_score += 1
+
+        # Check if PE object has resource data we can scan for embedded PEs
+        if state.pe_object and hasattr(state.pe_object, 'DIRECTORY_ENTRY_RESOURCE'):
+            try:
+                for res_type_entry in state.pe_object.DIRECTORY_ENTRY_RESOURCE.entries:
+                    if hasattr(res_type_entry, 'directory') and res_type_entry.directory:
+                        for res_id_entry in res_type_entry.directory.entries:
+                            if hasattr(res_id_entry, 'directory') and res_id_entry.directory:
+                                for res_lang_entry in res_id_entry.directory.entries:
+                                    if hasattr(res_lang_entry, 'data') and hasattr(res_lang_entry.data, 'struct'):
+                                        try:
+                                            data_rva = res_lang_entry.data.struct.OffsetToData
+                                            data_size = res_lang_entry.data.struct.Size
+                                            res_bytes = state.pe_object.get_data(data_rva, min(data_size, 4))
+                                            if len(res_bytes) >= 2 and res_bytes[:2] == b'MZ':
+                                                type_id = getattr(res_type_entry, 'id', None)
+                                                type_str = str(type_id) if type_id else 'unknown'
+                                                res_anomalies.append({
+                                                    "type": type_str,
+                                                    "size": data_size,
+                                                    "issue": "Embedded PE (MZ header) found inside resource",
+                                                    "severity": "CRITICAL",
+                                                })
+                                                risk_score += 4
+                                        except Exception:
+                                            pass
+            except Exception:
+                pass
+
+        triage_report["resource_anomalies"] = res_anomalies[:indicator_limit]
+    else:
+        triage_report["resource_anomalies"] = []
+
+    # ===================================================================
+    # 6d. YARA Match Integration
+    # ===================================================================
+    yara_data = state.pe_data.get('yara_matches', [])
+    if isinstance(yara_data, list) and yara_data:
+        yara_summary = []
+        for match in yara_data:
+            if isinstance(match, dict):
+                yara_summary.append({
+                    "rule": match.get('rule', match.get('name', 'unknown')),
+                    "tags": match.get('tags', []),
+                    "meta": match.get('meta', {}),
+                })
+                risk_score += 2  # Each YARA rule match adds risk
+            elif isinstance(match, str):
+                yara_summary.append({"rule": match})
+                risk_score += 2
+        triage_report["yara_matches"] = yara_summary[:indicator_limit]
+    else:
+        triage_report["yara_matches"] = []
+
+    # ===================================================================
+    # 6e. Header Anomalies & Corruption Detection
+    # ===================================================================
+    header_anomalies = []
+    if analysis_mode == 'pe':
+        # Check pefile warnings for corruption indicators
+        pefile_warnings = state.pe_data.get('pefile_warnings', [])
+        if isinstance(pefile_warnings, list) and pefile_warnings:
+            for warn in pefile_warnings[:10]:
+                header_anomalies.append({
+                    "issue": str(warn),
+                    "severity": "MEDIUM",
+                    "source": "pefile_parser",
+                })
+            if len(pefile_warnings) > 3:
+                risk_score += 1  # Many warnings indicate a malformed binary
+
+        # Checksum verification
+        checksum_info = state.pe_data.get('checksum_verification', {})
+        if isinstance(checksum_info, dict):
+            if checksum_info.get('valid') is False:
+                header_anomalies.append({
+                    "issue": f"PE checksum mismatch: header={checksum_info.get('header_checksum')}, computed={checksum_info.get('computed_checksum')}",
+                    "severity": "LOW",
+                    "source": "checksum",
+                })
+                # Mismatched checksums are common for unsigned binaries, low risk
+
+        # Check for suspicious entry point
+        nt_headers = state.pe_data.get('nt_headers', {})
+        opt_header = nt_headers.get('optional_header', {})
+        ep_rva = opt_header.get('AddressOfEntryPoint', opt_header.get('addressofentrypoint'))
+        if isinstance(ep_rva, dict):
+            ep_rva = ep_rva.get('Value', ep_rva.get('value'))
+        if isinstance(ep_rva, int):
+            # EP outside any section
+            ep_in_section = False
+            for sec in sections_data:
+                if isinstance(sec, dict):
+                    sec_va = sec.get('virtual_address', sec.get('VirtualAddress', 0))
+                    sec_vs = sec.get('virtual_size', sec.get('Misc_VirtualSize', 0))
+                    if isinstance(sec_va, int) and isinstance(sec_vs, int):
+                        if sec_va <= ep_rva < sec_va + sec_vs:
+                            ep_in_section = True
+                            sec_name = sec.get('name', '').strip()
+                            # EP not in .text or CODE section is unusual
+                            if sec_name.lower() not in ('.text', 'code', '.code', ''):
+                                header_anomalies.append({
+                                    "issue": f"Entry point is in '{sec_name}' section (not .text/CODE)",
+                                    "severity": "MEDIUM",
+                                    "source": "entry_point",
+                                })
+                                risk_score += 1
+                            break
+            if not ep_in_section and ep_rva != 0:
+                header_anomalies.append({
+                    "issue": "Entry point address does not fall within any section",
+                    "severity": "HIGH",
+                    "source": "entry_point",
+                })
+                risk_score += 3
+
+        # Section name anomalies (non-printable characters)
+        for sec in sections_data:
+            if isinstance(sec, dict):
+                name = sec.get('name', '')
+                if name and any(ord(c) < 32 or ord(c) > 126 for c in name.replace('\x00', '')):
+                    header_anomalies.append({
+                        "issue": f"Section '{repr(name)}' contains non-printable characters",
+                        "severity": "MEDIUM",
+                        "source": "section_names",
+                    })
+                    risk_score += 1
+                    break  # Only report once
+
+    triage_report["header_anomalies"] = header_anomalies[:indicator_limit]
+
+    # ===================================================================
+    # 6f. ELF Security Features (ELF only)
+    # ===================================================================
+    if analysis_mode == 'elf':
+        elf_sec: Dict[str, Any] = {}
+        try:
+            if state.filepath and os.path.isfile(state.filepath):
+                with open(state.filepath, 'rb') as f:
+                    elf_header = f.read(64)
+
+                if len(elf_header) >= 20:
+                    elf_sec["class"] = "64-bit" if elf_header[4] == 2 else "32-bit"
+                    elf_sec["endianness"] = "little-endian" if elf_header[5] == 1 else "big-endian"
+                    # e_type at offset 16 (2 bytes)
+                    import struct as _struct
+                    byte_order = '<' if elf_header[5] == 1 else '>'
+                    e_type = _struct.unpack_from(byte_order + 'H', elf_header, 16)[0]
+                    TYPE_MAP = {0: 'ET_NONE', 1: 'ET_REL', 2: 'ET_EXEC', 3: 'ET_DYN', 4: 'ET_CORE'}
+                    elf_sec["type"] = TYPE_MAP.get(e_type, f'unknown({e_type})')
+                    # ET_DYN with entry point suggests PIE
+                    elf_sec["is_pie"] = (e_type == 3)
+                    if not elf_sec["is_pie"]:
+                        risk_score += 1  # Non-PIE binaries lack ASLR
+
+                # Read full binary to check for security features in section names / segments
+                with open(state.filepath, 'rb') as f:
+                    full_data = f.read()
+
+                # Check for common security indicators in the binary
+                elf_sec["has_stack_canary"] = b'__stack_chk_fail' in full_data
+                elf_sec["has_fortify"] = b'__fortify_fail' in full_data or b'__chk_fail' in full_data
+                elf_sec["stripped"] = b'.symtab' not in full_data
+                if elf_sec["stripped"]:
+                    elf_sec["note_stripped"] = "Symbol table stripped — harder to analyze"
+
+                # Check for RELRO by looking for GNU_RELRO segment marker
+                elf_sec["has_gnu_relro"] = b'GNU_RELRO' in full_data or b'.got.plt' in full_data
+
+                # Check for NX / executable stack
+                # The PT_GNU_STACK segment flags determine if stack is executable
+                elf_sec["has_nx_indicator"] = b'GNU_STACK' in full_data
+
+        except Exception as e:
+            elf_sec["error"] = f"ELF security check failed: {e}"
+        triage_report["elf_security"] = elf_sec
+    else:
+        triage_report["elf_security"] = {}
+
+    # ===================================================================
+    # 6g. Mach-O Security Features (Mach-O only)
+    # ===================================================================
+    if analysis_mode == 'macho':
+        macho_sec: Dict[str, Any] = {}
+        try:
+            if state.filepath and os.path.isfile(state.filepath):
+                with open(state.filepath, 'rb') as f:
+                    macho_header = f.read(32)
+                    full_data = f.seek(0) or f.read()
+
+                if len(macho_header) >= 16:
+                    import struct as _struct
+                    magic = _struct.unpack_from('<I', macho_header, 0)[0]
+                    is_64 = magic in (0xFEEDFACF, 0xCFFAEDFE)
+                    is_le = magic in (0xFEEDFACE, 0xFEEDFACF)
+                    macho_sec["bits"] = "64-bit" if is_64 else "32-bit"
+                    byte_order = '<' if is_le else '>'
+
+                    # Read filetype at offset 12
+                    filetype = _struct.unpack_from(byte_order + 'I', macho_header, 12)[0]
+                    FILETYPE_MAP = {1: 'MH_OBJECT', 2: 'MH_EXECUTE', 6: 'MH_DYLIB',
+                                    8: 'MH_BUNDLE', 9: 'MH_DYLIB_STUB', 11: 'MH_DSYM'}
+                    macho_sec["filetype"] = FILETYPE_MAP.get(filetype, f'unknown({filetype})')
+
+                    # Check flags at offset 24 (32-bit) or same for 64-bit
+                    flags_offset = 24
+                    flags = _struct.unpack_from(byte_order + 'I', macho_header, flags_offset)[0]
+                    macho_sec["is_pie"] = bool(flags & 0x200000)  # MH_PIE
+                    macho_sec["no_heap_execution"] = bool(flags & 0x1000000)  # MH_NO_HEAP_EXECUTION
+                    macho_sec["has_restrict"] = bool(flags & 0x00000080)  # MH_RESTRICT segment
+
+                # Check for code signature
+                macho_sec["has_code_signature"] = b'__LINKEDIT' in full_data and b'\xfa\xde\x0c\xc0' in full_data
+                # Check for entitlements
+                macho_sec["has_entitlements"] = b'</plist>' in full_data and b'<key>' in full_data
+
+                if not macho_sec.get("is_pie", True):
+                    risk_score += 1
+
+        except Exception as e:
+            macho_sec["error"] = f"Mach-O security check failed: {e}"
+        triage_report["macho_security"] = macho_sec
+    else:
+        triage_report["macho_security"] = {}
+
+    # ===================================================================
     # 7. High-Value String Indicators
     # ===================================================================
     high_value_strings = []
@@ -979,21 +1467,40 @@ async def get_triage_report(
     else:
         triage_report["risk_level"] = "BENIGN"
 
-    # Context-aware tool suggestions
+    # Context-aware, format-aware tool suggestions
     suggested = []
-    if is_likely_packed:
-        suggested.append("auto_unpack_pe — attempt automatic unpacking")
-        suggested.append("get_pe_data(key='peid_matches') — review packer signatures")
-    else:
-        if not triage_report["suspicious_capabilities"]:
-            suggested.append("get_capa_analysis_info — run capa for capability detection")
-        suggested.append("find_and_decode_encoded_strings — hunt for obfuscated IOCs")
-    if not found_ips and not found_urls:
-        suggested.append("search_floss_strings — search for network indicators with regex")
+    if analysis_mode == 'pe':
+        if is_likely_packed:
+            suggested.append("auto_unpack_pe — attempt automatic unpacking")
+            suggested.append("get_pe_data(key='peid_matches') — review packer signatures")
+        else:
+            if not triage_report["suspicious_capabilities"]:
+                suggested.append("get_capa_analysis_info — run capa for capability detection")
+            suggested.append("find_and_decode_encoded_strings — hunt for obfuscated IOCs")
+        if not found_ips and not found_urls:
+            suggested.append("search_floss_strings — search for network indicators with regex")
+        if triage_report.get("overlay_analysis", {}).get("present"):
+            suggested.append("scan_for_embedded_files — scan overlay for embedded binaries")
+        if triage_report.get("resource_anomalies"):
+            suggested.append("get_pe_data(key='resources_summary') — inspect suspicious resources")
+        suggested.append("classify_binary_purpose — determine if GUI app, service, DLL, etc.")
+    elif analysis_mode == 'elf':
+        suggested.append("elf_analyze — full ELF header, section, and symbol analysis")
+        suggested.append("elf_dwarf_info — extract debug symbols and source file names")
+        if triage_report.get("elf_security", {}).get("stripped"):
+            suggested.append("decompile_function — use angr to decompile stripped functions")
+        suggested.append("parse_binary_with_lief — cross-format binary analysis")
+    elif analysis_mode == 'macho':
+        suggested.append("macho_analyze — full Mach-O load commands, segments, and symbols")
+        suggested.append("parse_binary_with_lief — cross-format binary analysis")
+    elif analysis_mode == 'shellcode':
+        suggested.append("emulate_shellcode_with_speakeasy — emulate with Windows API hooks")
+        suggested.append("disassemble_raw_bytes — disassemble the shellcode")
+    # Universal suggestions
     if risk_score >= 8:
         suggested.append("get_virustotal_report_for_loaded_file — check community reputation")
-    suggested.append("classify_binary_purpose — determine if GUI app, service, DLL, etc.")
-    triage_report["suggested_next_tools"] = suggested[:5]
+    suggested.append("compute_similarity_hashes — compute ssdeep/TLSH for sample clustering")
+    triage_report["suggested_next_tools"] = suggested[:7]
 
     return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "the 'indicator_limit' parameter")
 
