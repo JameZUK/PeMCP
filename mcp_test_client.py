@@ -29,7 +29,8 @@ Usage:
 
 Environment variables:
     PEMCP_TEST_URL         Server URL (default: http://127.0.0.1:8082)
-    PEMCP_TEST_TRANSPORT   Transport: "streamable-http" (default) or "sse"
+    PEMCP_TEST_TRANSPORT   Transport: "auto" (default), "streamable-http", or "sse"
+                           "auto" tries streamable-http first, falls back to SSE
     PEMCP_TEST_SAMPLE      Path to a sample file for open_file tests (optional)
 """
 
@@ -40,7 +41,7 @@ import logging
 import os
 import re
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, AsyncExitStack
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -91,60 +92,117 @@ if not _have_streamable_http and not _have_sse:
 # Configuration
 # ---------------------------------------------------------------------------
 SERVER_URL = os.environ.get("PEMCP_TEST_URL", "http://127.0.0.1:8082")
-TRANSPORT = os.environ.get("PEMCP_TEST_TRANSPORT", "streamable-http")
+TRANSPORT = os.environ.get("PEMCP_TEST_TRANSPORT", "auto")
 SAMPLE_FILE = os.environ.get("PEMCP_TEST_SAMPLE", "")
-
-# ---------------------------------------------------------------------------
-# Pytest custom markers
-# ---------------------------------------------------------------------------
-def pytest_configure(config):
-    config.addinivalue_line("markers", "no_file: test does not require a loaded file")
-    config.addinivalue_line("markers", "pe_file: test requires a loaded PE file")
-    config.addinivalue_line("markers", "angr: test uses Angr (may be slow)")
-    config.addinivalue_line("markers", "optional_lib: test requires an optional library")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Session Management
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _extract_root_cause(exc: BaseException) -> str:
+    """Dig into ExceptionGroup / BaseExceptionGroup to find the real error."""
+    if hasattr(exc, "exceptions"):  # ExceptionGroup / BaseExceptionGroup
+        causes = []
+        for sub in exc.exceptions:
+            causes.append(_extract_root_cause(sub))
+        return "; ".join(causes)
+    return f"{type(exc).__name__}: {exc}"
+
+
+@asynccontextmanager
+async def _connect_streamable_http(url: str) -> AsyncGenerator[ClientSession, None]:
+    """Open a streamable-http session."""
+    async with streamablehttp_client(url) as (read_stream, write_stream, _):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            yield session
+
+
+@asynccontextmanager
+async def _connect_sse(url: str) -> AsyncGenerator[ClientSession, None]:
+    """Open an SSE session."""
+    async with sse_client(url) as (read_stream, write_stream):
+        async with ClientSession(read_stream, write_stream) as session:
+            await session.initialize()
+            yield session
+
+
 @asynccontextmanager
 async def managed_mcp_session() -> AsyncGenerator[ClientSession, None]:
-    """Connect to the PeMCP server using the configured transport."""
+    """Connect to the PeMCP server.
+
+    Transport selection (PEMCP_TEST_TRANSPORT env var):
+      "auto"             — try streamable-http first, fall back to SSE (default)
+      "streamable-http"  — only streamable-http
+      "sse"              — only SSE
+
+    The connection phase (with fallback) is fully separated from the
+    yield phase so that test assertion errors propagate cleanly and are
+    never swallowed by the fallback logic.
+    """
     transport = TRANSPORT.lower()
 
-    try:
-        if transport == "sse" and _have_sse:
-            url = urljoin(SERVER_URL, "/sse")
-            async with sse_client(url) as (read_stream, write_stream):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    yield session
-        elif _have_streamable_http:
-            url = urljoin(SERVER_URL, "/mcp")
-            async with streamablehttp_client(url) as (read_stream, write_stream, _):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    yield session
-        elif _have_sse:
-            url = urljoin(SERVER_URL, "/sse")
-            async with sse_client(url) as (read_stream, write_stream):
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    yield session
+    # Build an ordered list of (label, connect_fn) to try
+    attempts: list[tuple[str, Any]] = []
+    if transport == "sse":
+        if _have_sse:
+            attempts.append(("SSE", lambda: _connect_sse(urljoin(SERVER_URL, "/sse"))))
         else:
-            pytest.fail("No MCP transport available.")
+            pytest.fail("SSE transport requested but not available in this MCP SDK.")
+    elif transport == "streamable-http":
+        if _have_streamable_http:
+            attempts.append(("streamable-http", lambda: _connect_streamable_http(urljoin(SERVER_URL, "/mcp"))))
+        else:
+            pytest.fail("Streamable-HTTP transport requested but not available in this MCP SDK.")
+    else:  # "auto"
+        if _have_streamable_http:
+            attempts.append(("streamable-http", lambda: _connect_streamable_http(urljoin(SERVER_URL, "/mcp"))))
+        if _have_sse:
+            attempts.append(("SSE", lambda: _connect_sse(urljoin(SERVER_URL, "/sse"))))
 
-    except httpx.ConnectError as exc:
+    if not attempts:
+        pytest.fail("No MCP transport available. Install the MCP SDK: pip install -U 'mcp[cli]'")
+
+    # --- Phase 1: Connection (with fallback) ---
+    # Uses AsyncExitStack so the transport context managers stay open
+    # across the yield, but fallback errors don't swallow test failures.
+    stack = AsyncExitStack()
+    session: Optional[ClientSession] = None
+    last_error: Optional[BaseException] = None
+
+    for label, connect_fn in attempts:
+        try:
+            session = await stack.enter_async_context(connect_fn())
+            logger.info("Connected via %s transport.", label)
+            break  # success
+        except BaseException as exc:
+            # Connection/init failed — reset stack and try next transport
+            await stack.aclose()
+            stack = AsyncExitStack()
+            root = _extract_root_cause(exc)
+            last_error = exc
+            remaining = len(attempts) - attempts.index((label, connect_fn)) - 1
+            if remaining > 0:
+                logger.warning("%s transport failed: %s. Trying next transport...", label, root)
+            else:
+                logger.warning("%s transport failed: %s", label, root)
+
+    if session is None:
+        await stack.aclose()
+        root = _extract_root_cause(last_error) if last_error else "unknown"
         pytest.fail(
-            f"Cannot connect to MCP server at {SERVER_URL}: {exc}\n"
-            f"Start the server first: python PeMCP.py --mcp-server --mcp-transport streamable-http"
+            f"Cannot connect to MCP server at {SERVER_URL} "
+            f"(tried: {', '.join(l for l, _ in attempts)}): {root}\n"
+            f"Start the server first:\n"
+            f"  python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file <sample>"
         )
-    except Exception as exc:
-        detail = str(exc)
-        if isinstance(exc, mcp_types.JSONRPCError):
-            detail = f"Code={exc.code}, Message='{exc.message}'"
-        pytest.fail(f"Session setup error: {type(exc).__name__} — {detail}")
+
+    # --- Phase 2: Yield the session (test errors propagate cleanly) ---
+    try:
+        yield session
+    finally:
+        await stack.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1628,7 +1686,7 @@ if __name__ == "__main__":
     print()
     print("Environment variables:")
     print(f"  PEMCP_TEST_URL       = {SERVER_URL}")
-    print(f"  PEMCP_TEST_TRANSPORT = {TRANSPORT}")
+    print(f"  PEMCP_TEST_TRANSPORT = {TRANSPORT}  (auto|streamable-http|sse)")
     print(f"  PEMCP_TEST_SAMPLE    = {SAMPLE_FILE or '(not set)'}")
     print()
     print("Start the server first:")
