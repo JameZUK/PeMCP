@@ -890,6 +890,13 @@ pip install -r requirements-test.txt
 # Start the server with a sample file loaded (terminal 1)
 python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe
 
+# Or via Docker/Podman (note: --mcp-host 0.0.0.0 is required for container networking)
+./run.sh --input-file /app/samples/test.exe
+# Or manually:
+podman run --rm -it -p 8082:8082 -v ./samples:/app/samples:ro pemcp-toolkit \
+  --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
+  --input-file /app/samples/test.exe
+
 # Run all tests (terminal 2)
 pytest mcp_test_client.py -v
 ```
