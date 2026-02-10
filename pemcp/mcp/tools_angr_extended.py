@@ -452,7 +452,7 @@ async def get_reaching_definitions(
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing RDA...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "get_reaching_definitions",
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _rda))
@@ -568,7 +568,7 @@ async def get_data_dependencies(
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing DDG...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "get_data_dependencies",
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _ddg))
@@ -973,7 +973,7 @@ async def diff_binaries(
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing BinDiff...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "diff_binaries",
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _diff))
@@ -1414,7 +1414,7 @@ async def find_path_with_custom_input(
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing custom solver...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "find_path_with_custom_input",
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _solve))
@@ -1581,7 +1581,7 @@ async def emulate_with_watchpoints(
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing watchpoint emulation...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "emulate_with_watchpoints",
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _emulate))
@@ -1765,7 +1765,7 @@ async def get_value_set_analysis(
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing VFG...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "get_value_set_analysis",
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _vsa))
@@ -2107,7 +2107,7 @@ async def identify_cpp_classes(
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing class identification...",
-            "created_at": datetime.datetime.now().isoformat(),
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "identify_cpp_classes",
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _identify))

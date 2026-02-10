@@ -17,7 +17,7 @@ def _console_heartbeat_loop():
     while True:
         time.sleep(30)
 
-        current_time_str = datetime.datetime.now().strftime('%H:%M:%S')
+        current_time_str = datetime.datetime.now(datetime.timezone.utc).strftime('%H:%M:%S')
 
         # Thread-safe snapshot of task IDs and their data
         task_ids = state.get_all_task_ids()
@@ -36,7 +36,7 @@ def _console_heartbeat_loop():
                 # Calculate elapsed time
                 try:
                     start_time = datetime.datetime.fromisoformat(task["created_at"])
-                    elapsed = datetime.datetime.now() - start_time
+                    elapsed = datetime.datetime.now(datetime.timezone.utc) - start_time
                     elapsed_str = str(elapsed).split('.')[0]  # Remove microseconds
                 except Exception:
                     elapsed_str = "?"
@@ -82,28 +82,37 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
         print(f"\n[!] Task {task_id[:8]} failed: {e}")
 
 
-def _startup_angr_analysis_worker(filepath: str, task_id: str):
+def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch_hint: str = "amd64"):
     """
-    Background thread that performs heavy Angr analysis immediately upon script startup.
+    Unified background worker for Angr analysis.  Supports PE, ELF, Mach-O,
+    and shellcode (via ``mode='shellcode'``).
+
+    This is the single implementation used by both CLI startup pre-loading
+    and the ``open_file`` MCP tool.
     """
     import angr  # imported here since this only runs when ANGR_AVAILABLE is True
 
     try:
-        _update_progress(task_id, 1, "Initializing Angr Project...")
+        _update_progress(task_id, 1, "Loading Angr Project...")
 
-        # 1. Load Project
-        project = angr.Project(filepath, auto_load_libs=False)
+        # 1. Load Project (mode-aware)
+        if mode == "shellcode":
+            _update_progress(task_id, 5, f"Loading raw shellcode as {arch_hint}...")
+            project = angr.Project(
+                filepath,
+                main_opts={"backend": "blob", "arch": arch_hint},
+                auto_load_libs=False,
+            )
+        else:
+            project = angr.Project(filepath, auto_load_libs=False)
 
-        # Update Global Project
         state.angr_project = project
-        _update_progress(task_id, 10, "Project loaded. Starting CFG generation (Heavy)...")
+        _update_progress(task_id, 20, "Building Control Flow Graph...")
 
-        # 2. Build CFG (The heaviest step)
+        # 2. Build CFG (the heaviest step)
         cfg = project.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
-
-        # Update Global CFG
         state.angr_cfg = cfg
-        _update_progress(task_id, 75, "CFG generated. identifying loops...")
+        _update_progress(task_id, 80, "Identifying loops...")
 
         # 3. Pre-calculate Loops
         loop_finder = project.analyses.LoopFinder(kb=project.kb)
@@ -113,25 +122,62 @@ def _startup_angr_analysis_worker(filepath: str, task_id: str):
                 node = cfg.model.get_any_node(loop.entry.addr)
                 if node and node.function_address:
                     func_addr = node.function_address
-                    if func_addr not in raw_loops: raw_loops[func_addr] = []
+                    if func_addr not in raw_loops:
+                        raw_loops[func_addr] = []
                     raw_loops[func_addr].append({
                         "entry": hex(loop.entry.addr),
                         "blocks": len(list(loop.body_nodes)),
-                        "subloops": bool(loop.subloops)
+                        "subloops": bool(loop.subloops),
                     })
-            except Exception: continue
+            except Exception:
+                continue
 
-        # Update Global Loop Cache
         state.angr_loop_cache = raw_loops
         state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
 
         # 4. Mark Complete
-        state.update_task(task_id, status="completed",
-                          result={"message": "Startup analysis completed successfully."})
-        _update_progress(task_id, 100, "Startup pre-analysis complete.")
-        print(f"\n[*] Background Startup Analysis finished.")
+        state.update_task(
+            task_id,
+            status="completed",
+            result={"message": "Analysis ready."},
+            progress_percent=100,
+            progress_message="Background analysis complete.",
+        )
+        print(f"\n[*] Background Angr Analysis finished.")
 
     except Exception as e:
-        logger.error(f"Startup Angr analysis failed: {e}")
+        logger.error(f"Background Angr analysis failed: {e}", exc_info=True)
         state.update_task(task_id, status="failed", error=str(e))
         _update_progress(task_id, 0, f"Failed: {e}")
+
+
+def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "amd64",
+                          task_id: str = "startup-angr", tool_label: str = "startup"):
+    """
+    Register a background task and launch ``angr_background_worker`` in a
+    daemon thread.  Returns the *task_id* so callers can track it.
+
+    This is the single entry-point used by ``main.py`` startup and the
+    ``open_file`` MCP tool — no more duplicated worker code.
+    """
+    state.set_task(task_id, {
+        "status": "running",
+        "progress_percent": 0,
+        "progress_message": "Starting background pre-analysis...",
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "tool": tool_label,
+    })
+
+    if not state.monitor_thread_started:
+        monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
+        monitor_thread.start()
+        state.monitor_thread_started = True
+
+    angr_thread = threading.Thread(
+        target=angr_background_worker,
+        args=(filepath, task_id, mode, arch_hint),
+        daemon=True,
+    )
+    angr_thread.start()
+    logger.info(f"Background Angr analysis thread started (task_id={task_id}).")
+    return task_id
