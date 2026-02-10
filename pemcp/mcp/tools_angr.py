@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, List
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper
+from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address
 
 if ANGR_AVAILABLE:
     import angr
@@ -153,30 +154,17 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
 
     await ctx.info(f"Requesting Angr decompilation for: {function_address}")
     _check_angr_ready("decompile_function_with_angr")
-    try: target_addr = int(function_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    target_addr = _parse_addr(function_address)
 
     def _decompile():
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
-
-        addr_to_use = target_addr
-
-        # Check if address exists; if not, try correcting RVA -> VA
-        if addr_to_use not in state.angr_cfg.functions:
-            # Try adding ImageBase if available
-            if state.pe_object and hasattr(state.pe_object, 'OPTIONAL_HEADER') and state.pe_object.OPTIONAL_HEADER:
-                image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
-                potential_va = target_addr + image_base
-                if potential_va in state.angr_cfg.functions:
-                    addr_to_use = potential_va
+        _ensure_project_and_cfg()
 
         try:
-            func = state.angr_cfg.functions[addr_to_use]
+            func, addr_to_use = _resolve_function_address(target_addr)
         except KeyError:
             return {
-                "error": f"No function found at {hex(target_addr)} (or adjusted VA {hex(addr_to_use)}).",
+                "error": f"No function found at {hex(target_addr)} (or adjusted VA).",
                 "hint": "Verify the address. If using an offset, ensure it matches the ImageBase."
             }
 
@@ -198,26 +186,14 @@ async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any
 
     await ctx.info(f"Requesting CFG for: {function_address}")
     _check_angr_ready("get_function_cfg")
-    try: target_addr = int(function_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    target_addr = _parse_addr(function_address)
 
     def _extract_graph():
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
-
-        addr_to_use = target_addr
-
-        # Smart RVA check
-        if addr_to_use not in state.angr_cfg.functions:
-            if state.pe_object and hasattr(state.pe_object, 'OPTIONAL_HEADER') and state.pe_object.OPTIONAL_HEADER:
-                image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
-                potential_va = target_addr + image_base
-                if potential_va in state.angr_cfg.functions:
-                    addr_to_use = potential_va
+        _ensure_project_and_cfg()
 
         try:
-            func = state.angr_cfg.functions[addr_to_use]
+            func, addr_to_use = _resolve_function_address(target_addr)
         except KeyError:
             return {"error": f"No function found at {hex(target_addr)}."}
 
@@ -242,10 +218,8 @@ async def find_path_to_address(
     """
 
     _check_angr_ready("find_path_to_address")
-    try:
-        target = int(target_address, 16)
-        avoid = int(avoid_address, 16) if avoid_address else None
-    except ValueError: raise ValueError("Invalid address format. Provide hex addresses (e.g. '0x401000').")
+    target = _parse_addr(target_address, "target_address")
+    avoid = _parse_addr(avoid_address, "avoid_address") if avoid_address else None
 
     # --- IMPROVEMENT: Fail Fast Validation ---
     # Check if the address is actually mapped in the binary
@@ -271,8 +245,7 @@ async def find_path_to_address(
     # --- Internal Logic ---
     def _solve_path(task_id_for_progress=None):
 
-        if state.angr_project is None:
-            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        _ensure_project_and_cfg()
 
         stability_options = {
             angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
@@ -372,15 +345,14 @@ async def emulate_function_execution(
     if args_hex is None:
         args_hex = []
     _check_angr_ready("emulate_function_execution")
+    target = _parse_addr(function_address)
     try:
-        target = int(function_address, 16)
         args = [int(a, 16) for a in args_hex]
-    except ValueError: raise ValueError("Invalid format for address or arguments.")
+    except ValueError: raise ValueError("Invalid format for arguments.")
 
     def _core_emulation(task_id_for_progress=None):
 
-        if state.angr_project is None:
-            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        _ensure_project_and_cfg()
 
         try:
             add_options = {angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY, angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS}
@@ -590,13 +562,11 @@ async def get_function_xrefs(
 
     await ctx.info(f"Requesting X-Refs for: {function_address} (Limit: {limit})")
     _check_angr_ready("angr_tool")
-    try: target_addr = int(function_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    target_addr = _parse_addr(function_address)
 
     def _get_xrefs():
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        _ensure_project_and_cfg()
         try:
             func = state.angr_cfg.functions[target_addr]
         except KeyError:
@@ -638,14 +608,12 @@ async def get_backward_slice(
 
     await ctx.info(f"Calculating backward reachability for: {target_address} (Limit: {limit})")
     _check_angr_ready("angr_tool")
-    try: target_addr = int(target_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    target_addr = _parse_addr(target_address)
 
     def _slice():
         import networkx as nx
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        _ensure_project_and_cfg()
 
         try:
             # Get the node. If exact match fails, try to find the block containing this addr
@@ -692,14 +660,12 @@ async def get_forward_slice(
 
     await ctx.info(f"Calculating forward reachability from: {source_address} (Limit: {limit})")
     _check_angr_ready("angr_tool")
-    try: source_addr = int(source_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    source_addr = _parse_addr(source_address)
 
     def _slice():
         import networkx as nx
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        _ensure_project_and_cfg()
 
         try:
             source_node = state.angr_cfg.model.get_any_node(source_addr)
@@ -740,14 +706,12 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
 
     await ctx.info(f"Calculating dominators for: {target_address}")
     _check_angr_ready("angr_tool")
-    try: target_addr = int(target_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    target_addr = _parse_addr(target_address)
 
     def _find_dominators():
         import networkx as nx
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        _ensure_project_and_cfg()
 
         try:
             target_node = state.angr_cfg.model.get_any_node(target_addr)
@@ -824,8 +788,7 @@ async def get_function_complexity_list(
 
     def _analyze():
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        _ensure_project_and_cfg()
 
         funcs_data = []
         for addr, func in state.angr_cfg.functions.items():
@@ -878,13 +841,11 @@ async def extract_function_constants(
     await ctx.info(f"Extracting constants from: {function_address} (Limit: {limit})")
 
     _check_angr_ready("angr_tool")
-    try: target_addr = int(function_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    target_addr = _parse_addr(function_address)
 
     def _extract():
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        _ensure_project_and_cfg()
 
         try:
             func = state.angr_cfg.functions[target_addr]
@@ -953,8 +914,7 @@ async def get_global_data_refs(
     await ctx.info(f"Scanning global refs in: {function_address} (Limit: {limit})")
 
     _check_angr_ready("angr_tool")
-    try: target_addr = int(function_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    target_addr = _parse_addr(function_address)
 
     def _scan_refs():
 
@@ -1008,13 +968,11 @@ async def scan_for_indirect_jumps(
     await ctx.info(f"Scanning for indirect jumps in: {function_address} (Limit: {limit})")
 
     _check_angr_ready("angr_tool")
-    try: target_addr = int(function_address, 16)
-    except ValueError: raise ValueError("Invalid address format.")
+    target_addr = _parse_addr(function_address)
 
     def _scan_jumps():
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+        _ensure_project_and_cfg()
 
         try:
             func = state.angr_cfg.functions[target_addr]
@@ -1059,14 +1017,14 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
 
     await ctx.info(f"Patching memory at {address}")
     _check_angr_ready("angr_tool")
+    addr = _parse_addr(address)
     try:
-        addr = int(address, 16)
         patch_data = bytes.fromhex(patch_bytes_hex)
-    except ValueError: raise ValueError("Invalid address or hex data.")
+    except ValueError: raise ValueError("Invalid hex data format.")
 
     def _patch():
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        _ensure_project_and_cfg()
         try:
             state.angr_project.loader.memory.store(addr, patch_data)
             state.angr_cfg = None # Invalidate CFG

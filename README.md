@@ -711,15 +711,31 @@ pemcp/
 ├── cli/
 │   └── printers.py             # CLI output formatting
 └── mcp/
-    ├── server.py               # MCP server setup & helpers
-    ├── tools_pe.py             # File management & PE data tools (6 tools)
-    ├── tools_strings.py        # String analysis tools (10 tools)
-    ├── tools_angr.py           # Core angr tools (15 tools)
-    ├── tools_angr_extended.py  # Extended angr tools (22 tools)
-    ├── tools_pe_extended.py    # Extended PE analysis tools (14 tools)
-    ├── tools_new_libs.py       # LIEF/Capstone/Keystone/Speakeasy tools (13 tools)
-    ├── tools_binary_formats.py # .NET/Go/Rust/ELF/Mach-O tools (9 tools)
-    └── tools_misc.py           # VT, deobfuscation, triage, config, cache tools (15 tools)
+    ├── __init__.py
+    ├── server.py                — MCP server setup & validation helpers
+    ├── _angr_helpers.py         — Shared angr utilities (project/CFG init, address resolution)
+    ├── _format_helpers.py       — Shared binary format helpers
+    ├── tools_pe.py              — File management & PE data retrieval
+    ├── tools_pe_extended.py     — Extended PE analysis (resources, manifests)
+    ├── tools_strings.py         — String analysis & fuzzy search
+    ├── tools_angr.py            — Core angr tools (decompile, CFG, symbolic exec)
+    ├── tools_angr_disasm.py     — Angr disassembly & function recovery
+    ├── tools_angr_dataflow.py   — Angr data flow analysis
+    ├── tools_angr_hooks.py      — Angr function hooking
+    ├── tools_angr_forensic.py   — Angr forensic & advanced analysis
+    ├── tools_new_libs.py        — LIEF/Capstone/Keystone/Speakeasy
+    ├── tools_dotnet.py          — .NET analysis (dnfile/dncil)
+    ├── tools_go.py              — Go binary analysis (pygore)
+    ├── tools_rust.py            — Rust binary analysis
+    ├── tools_elf.py             — ELF analysis (pyelftools)
+    ├── tools_macho.py           — Mach-O analysis (LIEF)
+    ├── tools_format_detect.py   — Auto binary format detection
+    ├── tools_virustotal.py      — VirusTotal API integration
+    ├── tools_deobfuscation.py   — Hex dump & deobfuscation tools
+    ├── tools_triage.py          — Comprehensive triage report
+    ├── tools_cache.py           — Analysis cache management
+    ├── tools_config.py          — Configuration & utility tools
+    └── tools_classification.py  — Binary purpose classification
 ```
 
 ### Design Principles
