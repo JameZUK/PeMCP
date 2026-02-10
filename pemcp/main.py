@@ -28,11 +28,24 @@ from pemcp.mcp.server import mcp_server
 import pemcp.mcp.tools_pe
 import pemcp.mcp.tools_strings
 import pemcp.mcp.tools_angr
-import pemcp.mcp.tools_angr_extended
+import pemcp.mcp.tools_angr_disasm
+import pemcp.mcp.tools_angr_dataflow
+import pemcp.mcp.tools_angr_hooks
+import pemcp.mcp.tools_angr_forensic
 import pemcp.mcp.tools_pe_extended
 import pemcp.mcp.tools_new_libs
-import pemcp.mcp.tools_binary_formats
-import pemcp.mcp.tools_misc
+import pemcp.mcp.tools_dotnet
+import pemcp.mcp.tools_go
+import pemcp.mcp.tools_rust
+import pemcp.mcp.tools_elf
+import pemcp.mcp.tools_macho
+import pemcp.mcp.tools_format_detect
+import pemcp.mcp.tools_virustotal
+import pemcp.mcp.tools_deobfuscation
+import pemcp.mcp.tools_triage
+import pemcp.mcp.tools_cache
+import pemcp.mcp.tools_config
+import pemcp.mcp.tools_classification
 
 
 def main():
