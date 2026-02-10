@@ -44,6 +44,16 @@ from pemcp.user_config import get_config_value
 # --- Global State Instance ---
 state = AnalyzerState()
 
+# --- Analysis Cache Instance ---
+from pemcp.cache import AnalysisCache  # noqa: E402
+
+_cache_enabled = get_config_value("cache_enabled")
+_cache_max_mb = get_config_value("cache_max_size_mb")
+analysis_cache = AnalysisCache(
+    max_size_mb=int(_cache_max_mb) if _cache_max_mb else 500,
+    enabled=(_cache_enabled != "false"),
+)
+
 # --- Ensure pefile is available (Critical Dependency) ---
 try:
     import pefile
