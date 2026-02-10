@@ -1,6 +1,6 @@
 # PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **100+ specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **104 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -311,7 +311,7 @@ Optional packages can be added individually:
 - `pip install rapidfuzz` — Fuzzy string search
 - `pip install flare-capa` — Capability detection
 - `pip install flare-floss vivisect` — Advanced string extraction
-- `pip install flare-stringsifter` — ML-based string ranking
+- `pip install flare-stringsifter joblib numpy` — ML-based string ranking
 - `pip install "angr[unicorn]"` — Decompilation, CFG, symbolic execution
 - `pip install lief` — Multi-format binary parsing (PE/ELF/Mach-O)
 - `pip install capstone` — Multi-architecture disassembly
@@ -456,7 +456,7 @@ docker run --rm -i \
 
 ## MCP Tools Reference
 
-PeMCP exposes **103 tools** organised into the following categories.
+PeMCP exposes **104 tools** organised into the following categories.
 
 ### File Management
 
@@ -537,7 +537,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 
 | Tool | Description |
 |---|---|
-| `get_triage_report` | **Comprehensive automated triage** — packing assessment (entropy/PEiD/imports), digital signature check, risk-categorized suspicious imports (CRITICAL/HIGH/MEDIUM), capa capabilities, network IOC extraction (IPs/URLs/domains/registry), section anomalies, cumulative risk score, and suggested next tools. |
+| `get_triage_report` | **Comprehensive automated triage** (25+ dimensions) — packing assessment, digital signatures, timestamp anomalies, Rich header fingerprint, suspicious imports & delay-load evasion, capa capabilities, network IOCs, section anomalies, overlay/appended data analysis, resource anomalies (nested PE detection), YARA matches, header corruption detection, TLS callback detection, security mitigations (ASLR/DEP/CFG/CET/XFG), version info spoofing, .NET indicators, export anomalies, high-value strings, ELF security features (PIE/NX/RELRO/canaries), Mach-O security (code signing/PIE), cumulative risk score, and format-aware tool suggestions. |
 | `classify_binary_purpose` | Classify binary type (GUI app, console app, DLL, service, driver, installer, .NET assembly) from headers, imports, and resources. |
 | `get_virustotal_report_for_loaded_file` | Query VirusTotal for the file hash. |
 
@@ -659,14 +659,14 @@ pemcp/
 │   └── printers.py             # CLI output formatting
 └── mcp/
     ├── server.py               # MCP server setup & helpers
-    ├── tools_pe.py             # File management & PE data tools (29 tools)
+    ├── tools_pe.py             # File management & PE data tools (6 tools)
     ├── tools_strings.py        # String analysis tools (10 tools)
-    ├── tools_angr.py           # Core angr tools (14 tools)
+    ├── tools_angr.py           # Core angr tools (15 tools)
     ├── tools_angr_extended.py  # Extended angr tools (22 tools)
     ├── tools_pe_extended.py    # Extended PE analysis tools (14 tools)
     ├── tools_new_libs.py       # LIEF/Capstone/Keystone/Speakeasy tools (13 tools)
     ├── tools_binary_formats.py # .NET/Go/Rust/ELF/Mach-O tools (9 tools)
-    └── tools_misc.py           # VT, deobfuscation, triage, config, cache tools (14 tools)
+    └── tools_misc.py           # VT, deobfuscation, triage, config, cache tools (15 tools)
 ```
 
 ### Design Principles

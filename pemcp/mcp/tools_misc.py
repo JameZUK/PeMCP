@@ -629,10 +629,11 @@ async def get_triage_report(
     Comprehensive automated triage of the loaded binary. Works across PE, ELF,
     Mach-O, and shellcode formats with format-specific analysis sections.
 
-    Analyses entropy, packing indicators, digital signatures, suspicious imports
-    (risk-categorized), capa capabilities, network IOCs, section anomalies,
-    timestamp anomalies, Rich header, overlay/appended data, resource anomalies,
-    import anomalies, YARA matches, header corruption, and platform-specific
+    Analyses 25+ dimensions including entropy, packing, digital signatures,
+    suspicious imports, capa capabilities, network IOCs, section anomalies,
+    timestamps, Rich header, overlay data, resources, YARA, header corruption,
+    TLS callbacks, security mitigations (CFG/CET/ASLR/DEP), delay-load evasion,
+    version info spoofing, .NET indicators, export anomalies, and platform-specific
     security features (ELF: PIE/NX/RELRO/canaries, Mach-O: code signing/PIE).
 
     Designed to give an AI analyst a complete first-look assessment without needing
@@ -659,6 +660,12 @@ async def get_triage_report(
         - resource_anomalies: nested PEs, large RCDATA payloads
         - yara_matches: matched YARA rules
         - header_anomalies: pefile warnings, checksum, entry point issues
+        - tls_callbacks: TLS callback detection (anti-debug/unpacking)
+        - security_mitigations: ASLR, DEP, CFG, CET, XFG status (PE)
+        - delay_load_risks: suspicious APIs hidden in delay-load imports
+        - version_info_anomalies: filename mismatch, company spoofing
+        - dotnet_indicators: .NET assembly detection and flags
+        - export_anomalies: ordinal-only and forwarded exports
         - high_value_strings: ML-ranked high-value strings
         - elf_security: PIE, NX, RELRO, stack canaries, stripped status (ELF)
         - macho_security: PIE, code signing, entitlements (Mach-O)
@@ -688,6 +695,12 @@ async def get_triage_report(
         "resource_anomalies": [],
         "yara_matches": [],
         "header_anomalies": [],
+        "tls_callbacks": {},
+        "security_mitigations": {},
+        "delay_load_risks": {},
+        "version_info_anomalies": {},
+        "dotnet_indicators": {},
+        "export_anomalies": {},
         "high_value_strings": [],
         "elf_security": {},
         "macho_security": {},
@@ -1323,7 +1336,230 @@ async def get_triage_report(
     triage_report["header_anomalies"] = header_anomalies[:indicator_limit]
 
     # ===================================================================
-    # 6f. ELF Security Features (ELF only)
+    # 6f. TLS Callback Detection (PE only — classic anti-analysis)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        tls_data = state.pe_data.get('tls_info')
+        if tls_data and isinstance(tls_data, dict):
+            callbacks = tls_data.get('callbacks', [])
+            if isinstance(callbacks, list) and len(callbacks) > 0:
+                triage_report["tls_callbacks"] = {
+                    "present": True,
+                    "callback_count": len(callbacks),
+                    "callback_addresses": [cb.get('va', cb.get('rva', '?')) for cb in callbacks[:10]],
+                    "warning": "TLS callbacks execute BEFORE the entry point — classic anti-debugging / unpacking technique",
+                }
+                risk_score += 5  # TLS callbacks are a strong malware/packer indicator
+            else:
+                triage_report["tls_callbacks"] = {"present": True, "callback_count": 0, "note": "TLS directory present but no callbacks"}
+        else:
+            triage_report["tls_callbacks"] = {"present": False}
+    else:
+        triage_report["tls_callbacks"] = {}
+
+    # ===================================================================
+    # 6g. Security Mitigations (PE only — CFG/CET/XFG/DEP/ASLR)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        mitigations: Dict[str, Any] = {}
+        # DLL characteristics flags (ASLR, DEP, SEH, etc.)
+        nt_hdr = state.pe_data.get('nt_headers', {})
+        opt_hdr = nt_hdr.get('optional_header', {})
+        dll_chars = opt_hdr.get('DllCharacteristics', opt_hdr.get('dll_characteristics'))
+        if isinstance(dll_chars, dict):
+            dll_chars = dll_chars.get('Value', dll_chars.get('value', 0))
+        if isinstance(dll_chars, int):
+            mitigations["aslr"] = bool(dll_chars & 0x0040)  # IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE
+            mitigations["dep_nx"] = bool(dll_chars & 0x0100)  # IMAGE_DLLCHARACTERISTICS_NX_COMPAT
+            mitigations["no_seh"] = bool(dll_chars & 0x0400)  # IMAGE_DLLCHARACTERISTICS_NO_SEH
+            mitigations["high_entropy_aslr"] = bool(dll_chars & 0x0020)  # IMAGE_DLLCHARACTERISTICS_HIGH_ENTROPY_VA
+            mitigations["force_integrity"] = bool(dll_chars & 0x0080)  # IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY
+            mitigations["guard_cf"] = bool(dll_chars & 0x4000)  # IMAGE_DLLCHARACTERISTICS_GUARD_CF
+            # No ASLR or DEP is suspicious for modern binaries
+            if not mitigations["aslr"]:
+                risk_score += 1
+            if not mitigations["dep_nx"]:
+                risk_score += 1
+
+        # Load config guard flags (CFG/CET/XFG details)
+        load_config = state.pe_data.get('load_config')
+        if load_config and isinstance(load_config, dict):
+            guard_flags = load_config.get('guard_flags_list', [])
+            if isinstance(guard_flags, list):
+                mitigations["cfg_instrumented"] = any('CF_INSTRUMENTED' in f for f in guard_flags)
+                mitigations["xfg_enabled"] = any('XFG_ENABLED' in f for f in guard_flags)
+                mitigations["cet_shadow_stack"] = any('CET_SHADOW_STACK' in f for f in guard_flags)
+                mitigations["retpoline"] = any('RETPOLINE' in f for f in guard_flags)
+                mitigations["security_cookie_unused"] = any('SECURITY_COOKIE_UNUSED' in f for f in guard_flags)
+                if mitigations.get("security_cookie_unused"):
+                    risk_score += 1  # Disabled stack cookie
+
+        triage_report["security_mitigations"] = mitigations
+    else:
+        triage_report["security_mitigations"] = {}
+
+    # ===================================================================
+    # 6h. Delay-Load Suspicious API Detection (PE only)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        delay_imports = state.pe_data.get('delay_load_imports', [])
+        if isinstance(delay_imports, list) and delay_imports:
+            delay_suspicious = []
+            delay_total_funcs = 0
+            for dll_entry in delay_imports:
+                if not isinstance(dll_entry, dict):
+                    continue
+                dll_name = dll_entry.get('dll_name', dll_entry.get('name', 'Unknown'))
+                for sym in dll_entry.get('symbols', []):
+                    if isinstance(sym, dict):
+                        delay_total_funcs += 1
+                        func_name = sym.get('name', '')
+                        if not func_name:
+                            continue
+                        for susp_name, severity in SUSPICIOUS_IMPORTS_DB.items():
+                            if susp_name in func_name:
+                                delay_suspicious.append({
+                                    "function": func_name,
+                                    "dll": dll_name,
+                                    "risk": severity,
+                                    "note": "Delay-loaded — only resolved at runtime, harder to detect statically",
+                                })
+                                if severity == "CRITICAL":
+                                    risk_score += 3
+                                elif severity == "HIGH":
+                                    risk_score += 2
+                                break
+            triage_report["delay_load_risks"] = {
+                "delay_load_dll_count": len(delay_imports),
+                "delay_load_function_count": delay_total_funcs,
+                "suspicious_delay_loaded_apis": delay_suspicious[:indicator_limit],
+            }
+        else:
+            triage_report["delay_load_risks"] = {"delay_load_dll_count": 0}
+    else:
+        triage_report["delay_load_risks"] = {}
+
+    # ===================================================================
+    # 6i. Version Info Anomaly Detection (PE only)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        ver_anomalies = []
+        ver_data = state.pe_data.get('version_info', {})
+        if isinstance(ver_data, dict):
+            # Extract string table entries
+            string_entries = {}
+            fi_blocks = ver_data.get('file_info_blocks', [])
+            if isinstance(fi_blocks, list):
+                for block in fi_blocks:
+                    if isinstance(block, dict) and block.get('type') == 'StringFileInfo':
+                        for st in block.get('string_tables', []):
+                            if isinstance(st, dict):
+                                string_entries.update(st.get('entries', {}))
+
+            if string_entries:
+                original_filename = string_entries.get('OriginalFilename', '')
+                internal_name = string_entries.get('InternalName', '')
+                company_name = string_entries.get('CompanyName', '')
+                file_description = string_entries.get('FileDescription', '')
+
+                # Check if original filename matches actual filename
+                if original_filename and state.filepath:
+                    actual_name = os.path.basename(state.filepath)
+                    # Strip extension for comparison
+                    orig_base = os.path.splitext(original_filename)[0].lower()
+                    actual_base = os.path.splitext(actual_name)[0].lower()
+                    if orig_base and actual_base and orig_base != actual_base:
+                        ver_anomalies.append({
+                            "issue": f"OriginalFilename '{original_filename}' does not match actual filename '{actual_name}'",
+                            "severity": "MEDIUM",
+                        })
+                        risk_score += 1
+
+                # Check for known spoofed company names in non-Microsoft binaries
+                SPOOFED_COMPANIES = {'microsoft corporation', 'google llc', 'google inc',
+                                     'apple inc', 'mozilla corporation', 'adobe systems'}
+                if company_name and company_name.lower().strip() in SPOOFED_COMPANIES:
+                    # Only flag if not signed by that company
+                    if not sig_present or (sig_signer and company_name.lower() not in str(sig_signer).lower()):
+                        ver_anomalies.append({
+                            "issue": f"Claims company '{company_name}' but binary is not signed by them",
+                            "severity": "HIGH",
+                        })
+                        risk_score += 3
+
+                triage_report["version_info_anomalies"] = {
+                    "original_filename": original_filename or None,
+                    "internal_name": internal_name or None,
+                    "company_name": company_name or None,
+                    "file_description": file_description or None,
+                    "anomalies": ver_anomalies,
+                }
+            else:
+                triage_report["version_info_anomalies"] = {"note": "No version string table present"}
+        else:
+            triage_report["version_info_anomalies"] = {"note": "No version info"}
+    else:
+        triage_report["version_info_anomalies"] = {}
+
+    # ===================================================================
+    # 6j. .NET Assembly Detection (PE only)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        com_desc = state.pe_data.get('com_descriptor')
+        if com_desc and isinstance(com_desc, dict):
+            flags_list = com_desc.get('flags_list', [])
+            com_struct = com_desc.get('struct', {})
+            triage_report["dotnet_indicators"] = {
+                "is_dotnet": True,
+                "flags": flags_list if isinstance(flags_list, list) else [],
+                "il_only": any('ILONLY' in str(f) for f in flags_list) if isinstance(flags_list, list) else False,
+                "mixed_mode": not any('ILONLY' in str(f) for f in flags_list) if isinstance(flags_list, list) else False,
+                "note": "Use dotnet_analyze for full .NET metadata, types, methods, and user strings",
+            }
+        else:
+            triage_report["dotnet_indicators"] = {"is_dotnet": False}
+    else:
+        triage_report["dotnet_indicators"] = {}
+
+    # ===================================================================
+    # 6k. Export Anomalies (PE only — ordinal-only, forwarded exports)
+    # ===================================================================
+    if analysis_mode == 'pe':
+        exports_data = state.pe_data.get('exports', {})
+        if isinstance(exports_data, dict) and exports_data.get('symbols'):
+            export_syms = exports_data['symbols']
+            ordinal_only_exports = []
+            forwarded_exports = []
+            total_exports = len(export_syms)
+            for exp in export_syms:
+                if isinstance(exp, dict):
+                    if not exp.get('name') and exp.get('ordinal') is not None:
+                        ordinal_only_exports.append(exp.get('ordinal'))
+                    if exp.get('forwarder'):
+                        forwarded_exports.append({
+                            "name": exp.get('name') or f"ord({exp.get('ordinal')})",
+                            "forwards_to": exp.get('forwarder'),
+                        })
+            export_anom: Dict[str, Any] = {
+                "total_exports": total_exports,
+                "dll_name": exports_data.get('name'),
+            }
+            if ordinal_only_exports:
+                export_anom["ordinal_only_count"] = len(ordinal_only_exports)
+                export_anom["ordinal_only_values"] = ordinal_only_exports[:indicator_limit]
+                if len(ordinal_only_exports) > total_exports * 0.5 and total_exports > 5:
+                    risk_score += 1  # Majority ordinal-only exports suggest intentional obfuscation
+            if forwarded_exports:
+                export_anom["forwarded_count"] = len(forwarded_exports)
+                export_anom["forwarded_exports"] = forwarded_exports[:indicator_limit]
+            triage_report["export_anomalies"] = export_anom
+        else:
+            triage_report["export_anomalies"] = {"total_exports": 0}
+    else:
+        triage_report["export_anomalies"] = {}
+
+    # ===================================================================
+    # 6l. ELF Security Features (ELF only)
     # ===================================================================
     if analysis_mode == 'elf':
         elf_sec: Dict[str, Any] = {}
@@ -1483,6 +1719,10 @@ async def get_triage_report(
             suggested.append("scan_for_embedded_files — scan overlay for embedded binaries")
         if triage_report.get("resource_anomalies"):
             suggested.append("get_pe_data(key='resources_summary') — inspect suspicious resources")
+        if triage_report.get("dotnet_indicators", {}).get("is_dotnet"):
+            suggested.append("dotnet_analyze — extract .NET types, methods, and user strings")
+        if triage_report.get("tls_callbacks", {}).get("present") and triage_report["tls_callbacks"].get("callback_count", 0) > 0:
+            suggested.append("get_pe_data(key='tls_info') — inspect TLS callback addresses")
         suggested.append("classify_binary_purpose — determine if GUI app, service, DLL, etc.")
     elif analysis_mode == 'elf':
         suggested.append("elf_analyze — full ELF header, section, and symbol analysis")
