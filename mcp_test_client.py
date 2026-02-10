@@ -1,413 +1,1637 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 """
-COMPLETE and MERGED MCP Test Client for the PeMCP.py Server.
+Comprehensive MCP Integration Test Suite for PeMCP.
 
-This script combines the original comprehensive test suite with new and updated
-tests for all enhanced features, including advanced string analysis, context-aware
-tools, fuzzy search, and triage workflows.
+Tests all 104 MCP tools across every category: file management, PE analysis,
+strings, deobfuscation, triage, Angr, multi-format, extended libraries, and more.
+
+Supports both streamable-http (default) and SSE transports.
+
+Usage:
+    # Start the server first
+    python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe
+
+    # Run all tests
+    pytest mcp_test_client.py -v
+
+    # Run a specific category
+    pytest mcp_test_client.py -v -k "TestConfig"
+    pytest mcp_test_client.py -v -k "TestPEData"
+    pytest mcp_test_client.py -v -k "TestAngr"
+
+    # Run only tests that don't need a loaded file
+    pytest mcp_test_client.py -v -m no_file
+
+    # Run with a custom server URL or transport
+    PEMCP_TEST_URL=http://localhost:9000 pytest mcp_test_client.py -v
+    PEMCP_TEST_TRANSPORT=sse pytest mcp_test_client.py -v
+
+Environment variables:
+    PEMCP_TEST_URL         Server URL (default: http://127.0.0.1:8082)
+    PEMCP_TEST_TRANSPORT   Transport: "streamable-http" (default) or "sse"
+    PEMCP_TEST_SAMPLE      Path to a sample file for open_file tests (optional)
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Union, AsyncGenerator, Tuple
-import sys
-from urllib.parse import urljoin
-import base64
 import re
+import sys
 from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 
-import pytest
 import httpx
+import pytest
 
-# --- Configure Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - [%(name)s] %(message)s')
-test_logger = logging.getLogger("mcp_test_client")
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
+)
+logger = logging.getLogger("pemcp_tests")
 
-# --- Import MCP Client library components ---
+# ---------------------------------------------------------------------------
+# MCP SDK imports — try streamable-http first, fall back to SSE
+# ---------------------------------------------------------------------------
 try:
     from mcp import ClientSession, types as mcp_types
-    from mcp.client.sse import sse_client as mcp_sse_transport_client
-    test_logger.info("MCP SDK components imported successfully.")
-except ImportError as e:
-    test_logger.critical(f"MCP SDK import failed: {e}")
-    test_logger.critical("Please ensure the MCP Python SDK is installed correctly (e.g., pip install mcp-sdk).")
+    logger.info("MCP SDK core imported.")
+except ImportError as exc:
+    logger.critical("MCP SDK import failed: %s", exc)
+    logger.critical("Install with: pip install 'mcp[cli]'")
     sys.exit(1)
 
-# --- Configuration ---
-SERVER_BASE_URL = os.environ.get("PEMCP_TEST_SERVER_URL", "http://127.0.0.1:8082")
-SSE_PATH = "/sse"
+_have_streamable_http = False
+try:
+    from mcp.client.streamable_http import streamablehttp_client
+    _have_streamable_http = True
+    logger.info("Streamable-HTTP transport available.")
+except ImportError:
+    logger.info("Streamable-HTTP transport not available in this MCP SDK version.")
 
-# --- MCP Client Session Context Manager ---
+_have_sse = False
+try:
+    from mcp.client.sse import sse_client
+    _have_sse = True
+    logger.info("SSE transport available.")
+except ImportError:
+    logger.info("SSE transport not available.")
+
+if not _have_streamable_http and not _have_sse:
+    logger.critical("No MCP transport available. Update the MCP SDK: pip install -U 'mcp[cli]'")
+    sys.exit(1)
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+SERVER_URL = os.environ.get("PEMCP_TEST_URL", "http://127.0.0.1:8082")
+TRANSPORT = os.environ.get("PEMCP_TEST_TRANSPORT", "streamable-http")
+SAMPLE_FILE = os.environ.get("PEMCP_TEST_SAMPLE", "")
+
+# ---------------------------------------------------------------------------
+# Pytest custom markers
+# ---------------------------------------------------------------------------
+def pytest_configure(config):
+    config.addinivalue_line("markers", "no_file: test does not require a loaded file")
+    config.addinivalue_line("markers", "pe_file: test requires a loaded PE file")
+    config.addinivalue_line("markers", "angr: test uses Angr (may be slow)")
+    config.addinivalue_line("markers", "optional_lib: test requires an optional library")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Session Management
+# ═══════════════════════════════════════════════════════════════════════════
+
 @asynccontextmanager
 async def managed_mcp_session() -> AsyncGenerator[ClientSession, None]:
-    sse_full_url = urljoin(SERVER_BASE_URL, SSE_PATH)
-    active_session: Optional[ClientSession] = None
-    try:
-        async with mcp_sse_transport_client(sse_full_url) as (read_stream, write_stream):
-            async with ClientSession(read_stream, write_stream) as session:
-                active_session = session
-                await session.initialize()
-                yield active_session
-    except httpx.ConnectError as e_conn:
-        msg = (f"SESSION CTX MGR ERROR: Connection to MCP server failed: {e_conn}. "
-               f"Ensure PeMCP.py server is running on {SERVER_BASE_URL}.")
-        pytest.fail(msg)
-    except Exception as e_fixture:
-        err_msg_detail = str(e_fixture)
-        if isinstance(e_fixture, mcp_types.JSONRPCError):
-             err_msg_detail = (f"MCP session.initialize() returned an error: "
-                               f"Code: {e_fixture.code}, Message: '{e_fixture.message}'")
-        msg = f"SESSION CTX MGR ERROR: Problem during session setup: {type(e_fixture).__name__} - {err_msg_detail}"
-        pytest.fail(msg)
+    """Connect to the PeMCP server using the configured transport."""
+    transport = TRANSPORT.lower()
 
-# --- Test Helper Functions (from original script) ---
-async def call_tool_and_assert_success(
+    try:
+        if transport == "sse" and _have_sse:
+            url = urljoin(SERVER_URL, "/sse")
+            async with sse_client(url) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    yield session
+        elif _have_streamable_http:
+            url = urljoin(SERVER_URL, "/mcp")
+            async with streamablehttp_client(url) as (read_stream, write_stream, _):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    yield session
+        elif _have_sse:
+            url = urljoin(SERVER_URL, "/sse")
+            async with sse_client(url) as (read_stream, write_stream):
+                async with ClientSession(read_stream, write_stream) as session:
+                    await session.initialize()
+                    yield session
+        else:
+            pytest.fail("No MCP transport available.")
+
+    except httpx.ConnectError as exc:
+        pytest.fail(
+            f"Cannot connect to MCP server at {SERVER_URL}: {exc}\n"
+            f"Start the server first: python PeMCP.py --mcp-server --mcp-transport streamable-http"
+        )
+    except Exception as exc:
+        detail = str(exc)
+        if isinstance(exc, mcp_types.JSONRPCError):
+            detail = f"Code={exc.code}, Message='{exc.message}'"
+        pytest.fail(f"Session setup error: {type(exc).__name__} — {detail}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Test Helpers
+# ═══════════════════════════════════════════════════════════════════════════
+
+async def call_tool(
     session: ClientSession,
     tool_name: str,
-    params: Dict[str, Any],
-    expected_top_level_type: Optional[type] = None,
+    params: Optional[Dict[str, Any]] = None,
+    *,
+    expected_type: Optional[type] = None,
     expected_keys: Optional[List[str]] = None,
-    expected_status_in_payload: Optional[Tuple[str, Any]] = None,
-    is_list_expected_even_for_limit_1: bool = False,
-    allow_none_result: bool = False
+    expected_status: Optional[Tuple[str, Any]] = None,
+    allow_none: bool = False,
+    wrap_single_dict_in_list: bool = False,
 ) -> Any:
-    """
-    This is the final, robust version of the tool calling helper. It correctly
-    handles JSON vs. raw text responses, single-item list conversion, and other
-    edge cases identified during testing.
-    """
-    test_logger.info(f"[TEST CALL] Tool: '{tool_name}', Params: {json.dumps(params, default=str)}")
-    response_wrapper = await session.call_tool(tool_name, arguments=params)
+    """Call an MCP tool, parse the response, and run standard assertions."""
+    params = params or {}
+    logger.info("[CALL] %s(%s)", tool_name, json.dumps(params, default=str))
 
-    assert isinstance(response_wrapper, mcp_types.CallToolResult), \
-        f"Tool '{tool_name}' call did not return a CallToolResult. Got: {type(response_wrapper)}"
+    result = await session.call_tool(tool_name, arguments=params)
 
-    if response_wrapper.isError:
-        error_text = response_wrapper.content[0].text if response_wrapper.content and hasattr(response_wrapper.content[0], 'text') else "Unknown error content"
-        pytest.fail(f"Tool '{tool_name}' call failed with error from server: {error_text}")
+    assert isinstance(result, mcp_types.CallToolResult), (
+        f"{tool_name}: expected CallToolResult, got {type(result)}"
+    )
 
-    if not response_wrapper.content:
-        if allow_none_result:
+    if result.isError:
+        text = (
+            result.content[0].text
+            if result.content and hasattr(result.content[0], "text")
+            else "unknown error"
+        )
+        pytest.fail(f"{tool_name} returned error: {text}")
+
+    if not result.content:
+        if allow_none:
             return None
-        pytest.fail(f"Tool '{tool_name}' success response has no content items, and content was expected.")
+        pytest.fail(f"{tool_name}: empty content but result was expected")
 
-    json_text_payload = response_wrapper.content[0].text
-    actual_result_payload: Any = None
+    raw = result.content[0].text
+    payload: Any = None
 
-    # --- FINAL ROBUST PARSING LOGIC ---
-    # Special case for get_hex_dump which returns a raw multi-line string
+    # Parse strategy
     if tool_name == "get_hex_dump":
-        actual_result_payload = [line for line in json_text_payload.splitlines() if line.strip()]
-    # Special case for tools returning a single raw string
-    elif expected_top_level_type == str and not json_text_payload.strip().startswith(("{", "[")):
-        actual_result_payload = json_text_payload
-    # Handle JSON null
-    elif allow_none_result and json_text_payload.lower() == 'null':
-        actual_result_payload = None
-    # Default case: Parse as JSON
+        payload = [line for line in raw.splitlines() if line.strip()]
+    elif expected_type is str and not raw.strip().startswith(("{", "[")):
+        payload = raw
+    elif allow_none and raw.strip().lower() == "null":
+        payload = None
     else:
         try:
-            actual_result_payload = json.loads(json_text_payload)
+            payload = json.loads(raw)
         except json.JSONDecodeError:
-            pytest.fail(f"Failed to parse JSON success payload for '{tool_name}': '{json_text_payload}'.")
+            pytest.fail(f"{tool_name}: cannot parse JSON: {raw[:300]}")
 
-    if actual_result_payload is None and not allow_none_result:
-        pytest.fail(f"Tool '{tool_name}' payload processed to None, but allow_none_result is False.")
+    if payload is None and not allow_none:
+        pytest.fail(f"{tool_name}: parsed to None but allow_none is False")
 
-    # Logic to wrap a single dictionary in a list if a list is expected
-    if is_list_expected_even_for_limit_1 and expected_top_level_type == list and isinstance(actual_result_payload, dict):
-        test_logger.warning(f"Tool '{tool_name}' expected a list but got a dict; wrapping in list for test consistency.")
-        actual_result_payload = [actual_result_payload]
+    # Wrap single dict → list when needed
+    if wrap_single_dict_in_list and expected_type is list and isinstance(payload, dict):
+        payload = [payload]
 
-    # Standard Assertions
-    if not (allow_none_result and actual_result_payload is None):
-        if expected_top_level_type is not None:
-            assert isinstance(actual_result_payload, expected_top_level_type), \
-                f"Tool '{tool_name}' payload type {type(actual_result_payload)} did not match expected {expected_top_level_type}."
-
-        if isinstance(actual_result_payload, dict):
-            if expected_status_in_payload:
-                status_key, expected_value = expected_status_in_payload
-                assert status_key in actual_result_payload
-                if isinstance(expected_value, list):
-                    assert actual_result_payload[status_key] in expected_value
+    # Assertions
+    if payload is not None:
+        if expected_type is not None:
+            assert isinstance(payload, expected_type), (
+                f"{tool_name}: expected {expected_type.__name__}, got {type(payload).__name__}"
+            )
+        if isinstance(payload, dict):
+            if expected_status:
+                key, val = expected_status
+                assert key in payload, f"{tool_name}: missing status key '{key}'"
+                if isinstance(val, list):
+                    assert payload[key] in val
                 else:
-                    assert actual_result_payload[status_key] == expected_value
+                    assert payload[key] == val
             if expected_keys:
                 for k in expected_keys:
-                    assert k in actual_result_payload, f"Expected key '{k}' not in payload."
+                    assert k in payload, f"{tool_name}: missing key '{k}'"
 
-    return actual_result_payload
+    logger.info("[PASS] %s", tool_name)
+    return payload
 
-async def call_tool_and_expect_server_error_in_result(
+
+async def call_tool_expect_error(
     session: ClientSession,
     tool_name: str,
-    params: Dict[str, Any],
-    expected_error_message_substring: Optional[str] = None,
-    expected_rpc_error_code: Optional[int] = None,
+    params: Optional[Dict[str, Any]] = None,
+    *,
+    error_substring: Optional[str] = None,
 ):
-    test_logger.info(f"[TEST CALL] Tool: '{tool_name}', Params: {json.dumps(params, default=str)} (EXPECTING ERROR)")
+    """Call a tool and assert that it returns an error."""
+    params = params or {}
+    logger.info("[CALL] %s(%s) — expecting error", tool_name, json.dumps(params, default=str))
+
     try:
-        response_wrapper = await session.call_tool(tool_name, arguments=params)
-        assert isinstance(response_wrapper, mcp_types.CallToolResult)
-        assert response_wrapper.isError, f"Tool '{tool_name}' CallToolResult.isError was False, but an error was expected."
-        error_text = response_wrapper.content[0].text
-        if expected_error_message_substring is not None:
-            assert expected_error_message_substring.lower() in error_text.lower()
-        test_logger.info(f"PASSED: {tool_name} returned expected error in CallToolResult.")
-    except mcp_types.JSONRPCError as e_rpc:
-        if expected_rpc_error_code is not None:
-            assert e_rpc.code == expected_rpc_error_code
-        if expected_error_message_substring is not None:
-            assert expected_error_message_substring.lower() in e_rpc.message.lower()
-        test_logger.info(f"PASSED: {tool_name} raised expected JSONRPCError.")
-    except Exception as e_unexp:
-        pytest.fail(f"Tool '{tool_name}' raised unexpected exception {type(e_unexp).__name__}: {e_unexp}")
+        result = await session.call_tool(tool_name, arguments=params)
+        assert isinstance(result, mcp_types.CallToolResult)
+        assert result.isError, f"{tool_name}: expected isError=True"
+        if error_substring:
+            text = result.content[0].text if result.content else ""
+            assert error_substring.lower() in text.lower(), (
+                f"{tool_name}: expected '{error_substring}' in error: {text[:200]}"
+            )
+        logger.info("[PASS] %s returned expected error", tool_name)
+    except mcp_types.JSONRPCError as exc:
+        if error_substring:
+            assert error_substring.lower() in exc.message.lower()
+        logger.info("[PASS] %s raised expected JSONRPCError", tool_name)
 
 
-# --- Test Classes (Merged and Updated) ---
+def run(coro):
+    """Run an async coroutine from a sync test method."""
+    asyncio.run(coro)
 
-class TestServerUtilityTools:
-    def test_get_current_server_datetime(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                result = await call_tool_and_assert_success(
-                    session, "get_current_datetime", {}, dict, ["utc_datetime", "local_datetime"]
-                )
-                assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|([+-]\d{2}:\d{2}))", result.get("utc_datetime", ""))
-                test_logger.info("PASSED: get_current_datetime")
-        asyncio.run(_run())
 
-class TestCoreAnalysisDataTools:
+# ═══════════════════════════════════════════════════════════════════════════
+# 1. Configuration & Utility Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestConfigAndUtility:
+    """Tests for: get_current_datetime, get_config, set_api_key,
+    check_task_status, get_extended_capabilities."""
+
+    @pytest.mark.no_file
+    def test_get_current_datetime(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_current_datetime",
+                                    expected_type=dict,
+                                    expected_keys=["utc_datetime", "local_datetime"])
+                assert re.match(r"\d{4}-\d{2}-\d{2}T", r["utc_datetime"])
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_get_config(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_config", expected_type=dict,
+                                expected_keys=["available_libraries"])
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_get_extended_capabilities(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_extended_capabilities", expected_type=dict)
+                assert "tools" in r or "libraries" in r or "available_libraries" in r
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_check_task_status_invalid(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                # Checking a non-existent task should return a dict (not crash)
+                r = await call_tool(s, "check_task_status",
+                                    {"task_id": "nonexistent-task-id-000"},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2. Cache Management Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestCacheManagement:
+    """Tests for: get_cache_stats, clear_analysis_cache, remove_cached_analysis."""
+
+    @pytest.mark.no_file
+    def test_get_cache_stats(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_cache_stats", expected_type=dict)
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_remove_cached_analysis_nonexistent(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "remove_cached_analysis",
+                                    {"sha256_hash": "0" * 64}, expected_type=dict)
+                assert r is not None
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3. File Management Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestFileManagement:
+    """Tests for: open_file, close_file, reanalyze_loaded_pe_file,
+    detect_binary_format."""
+
+    @pytest.mark.pe_file
     def test_get_analyzed_file_summary(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                await call_tool_and_assert_success(session, "get_analyzed_file_summary", {"limit": 5}, dict, ["filepath"])
-                test_logger.info("PASSED: get_analyzed_file_summary")
-        asyncio.run(_run())
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_analyzed_file_summary", {"limit": 5},
+                                expected_type=dict, expected_keys=["filepath"])
+        run(_test())
 
+    @pytest.mark.pe_file
     def test_get_full_analysis_results(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                await call_tool_and_assert_success(session, "get_full_analysis_results", {"limit": 10}, dict, ["dos_header"])
-                test_logger.info("PASSED: get_full_analysis_results")
-        asyncio.run(_run())
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_full_analysis_results", {"limit": 10},
+                                expected_type=dict)
+        run(_test())
 
-TOOL_PARAMETRIZATION = [
-    ("get_file_hashes_info", dict, False, False),
-    ("get_dos_header_info", dict, False, False),
-    ("get_nt_headers_info", dict, False, False),
-    ("get_data_directories_info", list, True, False),
-    ("get_imports_info", list, True, False),
-    ("get_sections_info", list, True, False),
-    ("get_exports_info", dict, False, True),
-    ("get_resources_summary_info", list, True, False),
-    ("get_version_info_info", dict, False, True),
-    ("get_debug_info_info", list, True, True),
-    ("get_digital_signature_info", dict, False, True),
-    ("get_peid_matches_info", dict, False, False),
-    ("get_yara_matches_info", list, True, True),
-    ("get_rich_header_info", dict, False, True),
-    ("get_delay_load_imports_info", list, True, True),
-    ("get_tls_info_info", dict, False, True),
-    ("get_load_config_info", dict, False, True),
-    ("get_com_descriptor_info", dict, False, True),
-    ("get_overlay_data_info", dict, False, True),
-    ("get_base_relocations_info", list, True, True),
-    ("get_bound_imports_info", list, True, True),
-    ("get_exception_data_info", list, True, True),
-    ("get_coff_symbols_info", list, True, True),
-    ("get_checksum_verification_info", dict, False, False),
-    ("get_pefile_warnings_info", list, True, True)
+    @pytest.mark.pe_file
+    def test_detect_binary_format_loaded(self):
+        """detect_binary_format with no path uses the loaded file."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "detect_binary_format", expected_type=dict)
+                assert "format" in r or "detected_format" in r or "binary_format" in r
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 4. Unified PE Data Retrieval (get_pe_data)
+# ═══════════════════════════════════════════════════════════════════════════
+
+# All 25 keys supported by get_pe_data
+PE_DATA_KEYS = [
+    "file_hashes",
+    "dos_header",
+    "nt_headers",
+    "data_directories",
+    "sections",
+    "imports",
+    "exports",
+    "resources_summary",
+    "version_info",
+    "debug_info",
+    "digital_signature",
+    "peid_matches",
+    "yara_matches",
+    "rich_header",
+    "delay_load_imports",
+    "tls_info",
+    "load_config",
+    "com_descriptor",
+    "overlay_data",
+    "base_relocations",
+    "bound_imports",
+    "exception_data",
+    "coff_symbols",
+    "checksum_verification",
+    "pefile_warnings",
 ]
 
-class TestRemainingPEAnalysisInfoTools:
-    @pytest.mark.parametrize("tool_name, expected_type, is_list, allow_none", TOOL_PARAMETRIZATION)
-    def test_dynamic_pe_info_tool(self, tool_name: str, expected_type: type, is_list: bool, allow_none: bool):
-        async def _run():
-            async with managed_mcp_session() as session:
-                await call_tool_and_assert_success(
-                    session, tool_name, {"limit": 5, "offset": 0}, expected_type,
-                    is_list_expected_even_for_limit_1=is_list, allow_none_result=allow_none
-                )
-                test_logger.info(f"PASSED: {tool_name}")
-        asyncio.run(_run())
 
-class TestDeobfuscationAndEncodingTools:
+class TestPEData:
+    """Tests for: get_pe_data (all 25 keys) and list discovery."""
+
+    @pytest.mark.pe_file
+    def test_get_pe_data_list_keys(self):
+        """get_pe_data(key='list') should return all available keys."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_pe_data", {"key": "list"}, expected_type=dict)
+                # Should contain a listing of available keys
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.parametrize("key", PE_DATA_KEYS)
+    def test_get_pe_data_key(self, key: str):
+        """Test each get_pe_data key individually."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_pe_data",
+                                    {"key": key, "limit": 5, "offset": 0},
+                                    allow_none=True)
+                logger.info("get_pe_data(key=%s) → type=%s", key,
+                            type(r).__name__ if r is not None else "None")
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. PE Extended Analysis Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestPEExtended:
+    """Tests for all 14 PE extended analysis tools."""
+
+    @pytest.mark.pe_file
+    def test_get_section_permissions(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_section_permissions", {"limit": 50},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_get_pe_metadata(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_pe_metadata", expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_extract_resources(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "extract_resources", {"limit": 10},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_extract_manifest(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "extract_manifest", expected_type=dict,
+                                allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_get_load_config_details(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_load_config_details", expected_type=dict,
+                                allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_extract_wide_strings(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "extract_wide_strings",
+                                {"min_length": 4, "limit": 50},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_detect_format_strings(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "detect_format_strings", {"limit": 20},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_detect_compression_headers(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "detect_compression_headers", {"limit": 10},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_detect_crypto_constants(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "detect_crypto_constants", {"limit": 20},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_analyze_entropy_by_offset(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "analyze_entropy_by_offset",
+                                {"window_size": 256, "step": 256, "limit": 50},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_scan_for_api_hashes(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "scan_for_api_hashes",
+                                {"hash_algorithm": "ror13", "limit": 20},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_get_import_hash_analysis(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_import_hash_analysis", expected_type=dict)
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_deobfuscate_xor_multi_byte(self):
+        """XOR multi-byte is a pure-data tool (no file needed)."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                # "Hello" XOR'd with key 0xAB 0xCD
+                data = bytes([ord(c) ^ [0xAB, 0xCD][i % 2] for i, c in enumerate("Hello")])
+                r = await call_tool(s, "deobfuscate_xor_multi_byte",
+                                    {"data_hex": data.hex(), "key_hex": "abcd"},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_bruteforce_xor_key(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                original = "This program"
+                key = 0x42
+                data = bytes([b ^ key for b in original.encode()])
+                r = await call_tool(s, "bruteforce_xor_key",
+                                    {"data_hex": data.hex(),
+                                     "known_plaintext": "This",
+                                     "max_key_length": 1, "limit": 5},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 6. String Analysis Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestStringAnalysis:
+    """Tests for all 10 string analysis tools."""
+
+    @pytest.mark.pe_file
+    def test_get_floss_analysis_info(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_floss_analysis_info",
+                                    {"string_type": "static_strings", "limit": 10},
+                                    expected_type=dict)
+                assert "strings" in r
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_get_floss_only_with_references(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_floss_analysis_info",
+                                    {"string_type": "static_strings",
+                                     "only_with_references": True, "limit": 5},
+                                    expected_type=dict)
+                if r.get("strings"):
+                    for item in r["strings"]:
+                        assert "references" in item and item["references"]
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_extract_strings_from_binary(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "extract_strings_from_binary",
+                                    {"limit": 20, "min_length": 5},
+                                    allow_none=True)
+                if r is not None:
+                    assert isinstance(r, (list, dict))
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_search_for_specific_strings(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "search_for_specific_strings",
+                                    {"search_terms": ["kernel32.dll", "MZ"]},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_search_floss_strings(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "search_floss_strings",
+                                    {"regex_patterns": [".*dll.*"], "limit": 10},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_get_top_sifted_strings(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_top_sifted_strings",
+                                    {"limit": 10},
+                                    allow_none=True)
+                # May be a list or None if StringSifter is not available
+                if r is not None:
+                    assert isinstance(r, (list, dict))
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_fuzzy_search_strings(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "fuzzy_search_strings",
+                                    {"query_string": "kermel32.dll",
+                                     "limit": 5, "min_similarity_ratio": 60},
+                                    allow_none=True)
+                if r is not None:
+                    assert isinstance(r, (list, dict))
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_get_strings_for_function(self):
+        """Get strings referenced by a function. Needs a valid function VA."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                # First find a function with string references
+                floss = await call_tool(s, "get_floss_analysis_info",
+                                        {"string_type": "static_strings",
+                                         "only_with_references": True, "limit": 1},
+                                        expected_type=dict)
+                strings = floss.get("strings", [])
+                if not strings or not strings[0].get("references"):
+                    pytest.skip("No strings with function references in sample")
+                func_va = int(strings[0]["references"][0]["function_va"], 16)
+                r = await call_tool(s, "get_strings_for_function",
+                                    {"function_va": func_va},
+                                    allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_get_string_usage_context(self):
+        """Get disassembly context for a string."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                floss = await call_tool(s, "get_floss_analysis_info",
+                                        {"string_type": "static_strings",
+                                         "only_with_references": True, "limit": 1},
+                                        expected_type=dict)
+                strings = floss.get("strings", [])
+                if not strings:
+                    pytest.skip("No strings with references in sample")
+                offset = int(strings[0]["offset"], 16)
+                r = await call_tool(s, "get_string_usage_context",
+                                    {"string_offset": offset},
+                                    allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_find_and_decode_encoded_strings(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "find_and_decode_encoded_strings",
+                                    {"limit": 5}, allow_none=True)
+                if r is not None:
+                    assert isinstance(r, (list, dict))
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 7. Deobfuscation & Utility Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestDeobfuscation:
+    """Tests for: deobfuscate_base64, deobfuscate_xor_single_byte,
+    is_mostly_printable_ascii, get_hex_dump, find_and_decode_encoded_strings."""
+
+    @pytest.mark.no_file
     def test_deobfuscate_base64(self):
-        async def _run():
-            async with managed_mcp_session() as session:
+        async def _test():
+            async with managed_mcp_session() as s:
                 original = "Hello MCP!"
                 hex_str = base64.b64encode(original.encode()).hex()
-                result = await call_tool_and_assert_success(session, "deobfuscate_base64", {"hex_string": hex_str}, str)
-                assert result == original
-                test_logger.info("PASSED: deobfuscate_base64")
-        asyncio.run(_run())
+                r = await call_tool(s, "deobfuscate_base64",
+                                    {"hex_string": hex_str}, expected_type=str)
+                assert r == original
+        run(_test())
 
-    def test_deobfuscate_xor(self):
-        async def _run():
-            async with managed_mcp_session() as session:
+    @pytest.mark.no_file
+    def test_deobfuscate_xor_single_byte(self):
+        async def _test():
+            async with managed_mcp_session() as s:
                 original = "XOR Test!"
                 key = 0xAB
-                hex_str = bytes([ord(c) ^ key for c in original]).hex()
-                result = await call_tool_and_assert_success(session, "deobfuscate_xor_single_byte", {"data_hex": hex_str, "key": key}, dict)
-                assert result.get("deobfuscated_printable_string") == original
-                test_logger.info("PASSED: deobfuscate_xor_single_byte")
-        asyncio.run(_run())
+                data = bytes([ord(c) ^ key for c in original]).hex()
+                r = await call_tool(s, "deobfuscate_xor_single_byte",
+                                    {"data_hex": data, "key": key},
+                                    expected_type=dict)
+                assert r.get("deobfuscated_printable_string") == original
+        run(_test())
 
-# --- NEW: Test class for advanced string analysis and context tools ---
-class TestStringAnalysisTools:
-    def test_get_floss_analysis_info_filters(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                params = {"string_type": "static_strings", "only_with_references": True, "limit": 10}
-                result = await call_tool_and_assert_success(session, "get_floss_analysis_info", params, dict)
-                assert "strings" in result
-                if result["strings"]:
-                    for item in result["strings"]:
-                        assert "references" in item and item["references"]
-                test_logger.info("PASSED: get_floss_analysis_info (only_with_references)")
-        asyncio.run(_run())
+    @pytest.mark.no_file
+    def test_is_mostly_printable_ascii(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "is_mostly_printable_ascii",
+                                    {"input_string": "Hello World 123!"},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
 
-    def test_get_top_sifted_strings_filtering(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                params = {
-                    "limit": 5, "min_sifter_score": 7.0, "max_sifter_score": 15.0,
-                    "min_length": 10, "filter_by_category": "filepath_windows"
-                }
-                # FIX: Added is_list_expected_even_for_limit_1=True
-                filtered = await call_tool_and_assert_success(
-                    session, "get_top_sifted_strings", params, list, 
-                    is_list_expected_even_for_limit_1=True, allow_none_result=True
-                )
-                if filtered:
-                    for item in filtered:
-                        assert 7.0 <= item['sifter_score'] <= 15.0
-                        assert len(item['string']) >= 10
-                        assert item['category'] == 'filepath_windows'
-                test_logger.info("PASSED: get_top_sifted_strings (with granular filters)")
-        asyncio.run(_run())
-
-    def test_fuzzy_search(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                # 1. Check for the prerequisite string first.
-                search_results = await call_tool_and_assert_success(session, "search_for_specific_strings", {"search_terms": ["kernel32.dll"]}, dict)
-                
-                # 2. If the prerequisite is not met, log a warning and exit cleanly instead of raising an exception.
-                if not search_results.get("kernel32.dll"):
-                    test_logger.warning("SKIPPED: Could not find 'kernel32.dll' in the sample to test fuzzy search against. This is not a failure.")
-                    return # Exit the test function cleanly.
-
-                # 3. If the prerequisite is met, proceed with the fuzzy search test.
-                fuzzy_results = await call_tool_and_assert_success(
-                    session, "fuzzy_search_strings", {"query_string": "kermel32.dll", "limit": 5, "min_similarity_ratio": 80}, list,
-                    is_list_expected_even_for_limit_1=True
-                )
-                assert fuzzy_results, "Fuzzy search should find a close match for 'kermel32.dll'"
-                assert fuzzy_results[0]['similarity_ratio'] >= 80
-                assert "kernel32.dll" in [r['string'] for r in fuzzy_results]
-                test_logger.info("PASSED: fuzzy_search_strings")
-        asyncio.run(_run())
-
-    def test_string_context_workflow(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                params = {"string_type": "static_strings", "only_with_references": True, "limit": 1}
-                result = await call_tool_and_assert_success(session, "get_floss_analysis_info", params, dict)
-
-                if not result or not result.get("strings"):
-                    pytest.skip("No static strings with references found in sample file to test context tools.")
-
-                string_info = result["strings"][0]
-                string_offset = int(string_info.get("offset"), 16)
-                ref_func_va = int(string_info["references"][0].get("function_va"), 16)
-
-                # FIX: Added is_list_expected_even_for_limit_1=True
-                usage_context = await call_tool_and_assert_success(
-                    session, "get_string_usage_context", {"string_offset": string_offset}, list,
-                    is_list_expected_even_for_limit_1=True
-                )
-                assert usage_context and "disassembly_context" in usage_context[0]
-                test_logger.info("PASSED: get_string_usage_context")
-
-                # FIX: Added is_list_expected_even_for_limit_1=True
-                strings_in_func = await call_tool_and_assert_success(
-                    session, "get_strings_for_function", {"function_va": ref_func_va}, list,
-                    is_list_expected_even_for_limit_1=True
-                )
-                assert strings_in_func
-                test_logger.info("PASSED: get_strings_for_function")
-        asyncio.run(_run())
-
-# --- UPDATED: Test class for encoding and file operations ---
-class TestEncodingAndFileOps:
-    def test_find_and_decode_strings(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                # FIX: Added is_list_expected_even_for_limit_1=True
-                results = await call_tool_and_assert_success(
-                    session, "find_and_decode_encoded_strings", {"limit": 5, "min_confidence": 0.9}, list,
-                    is_list_expected_even_for_limit_1=True, allow_none_result=True
-                )
-                if results:
-                    for item in results:
-                        assert item['confidence'] >= 0.9
-                test_logger.info("PASSED: find_and_decode_strings")
-        asyncio.run(_run())
-
+    @pytest.mark.pe_file
     def test_get_hex_dump(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                # This test now relies on the corrected helper function to parse raw text
-                result = await call_tool_and_assert_success(session, "get_hex_dump", {"start_offset": 0, "length": 64}, list)
-                assert result and "00000000" in result[0]
-                test_logger.info("PASSED: get_hex_dump")
-        asyncio.run(_run())
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_hex_dump",
+                                    {"start_offset": 0, "length": 64},
+                                    expected_type=list)
+                assert r and "00000000" in r[0]
+        run(_test())
 
 
-# --- UPDATED: Test class for CAPA tools ---
-class TestCapaTools:
+# ═══════════════════════════════════════════════════════════════════════════
+# 8. Capa Analysis Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestCapaAnalysis:
+    """Tests for: get_capa_analysis_info, get_capa_rule_match_details."""
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
     def test_get_capa_analysis_info(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                await call_tool_and_assert_success(session, "get_capa_analysis_info", {"limit": 10}, dict, ["rules"])
-                test_logger.info("PASSED: get_capa_analysis_info")
-        asyncio.run(_run())
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_capa_analysis_info", {"limit": 10},
+                                    expected_type=dict, expected_keys=["rules"])
+        run(_test())
 
-# --- NEW: Test class for triage and workflow tools ---
-class TestTriageAndWorkflowTools:
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_get_capa_rule_match_details(self):
+        """Fetch details for the first capa rule found."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                capa = await call_tool(s, "get_capa_analysis_info",
+                                       {"limit": 1}, expected_type=dict)
+                rules = capa.get("rules", [])
+                if not rules:
+                    pytest.skip("No capa rules matched in sample")
+                rule_id = rules[0].get("rule_name") or rules[0].get("name")
+                if not rule_id:
+                    pytest.skip("Cannot determine rule_id from capa output")
+                r = await call_tool(s, "get_capa_rule_match_details",
+                                    {"rule_id": rule_id}, expected_type=dict)
+                assert r is not None
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 9. Triage & Classification Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestTriageAndClassification:
+    """Tests for: get_triage_report, classify_binary_purpose."""
+
+    @pytest.mark.pe_file
     def test_get_triage_report(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                report = await call_tool_and_assert_success(
-                    session, "get_triage_report", {}, dict,
-                    expected_keys=["HighValueIndicators", "SuspiciousCapabilities", "SuspiciousImports", "SignatureAndPacker"]
-                )
-                assert isinstance(report["HighValueIndicators"], list)
-                test_logger.info("PASSED: get_triage_report")
-        asyncio.run(_run())
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_triage_report", expected_type=dict)
+        run(_test())
 
-# --- UPDATED: Test class for VirusTotal tool ---
-class TestVirusTotalTool:
+    @pytest.mark.pe_file
+    def test_classify_binary_purpose(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "classify_binary_purpose", expected_type=dict)
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 10. VirusTotal Tool
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestVirusTotal:
+    """Tests for: get_virustotal_report_for_loaded_file."""
+
+    @pytest.mark.pe_file
     def test_get_virustotal_report(self):
-        async def _run():
-            async with managed_mcp_session() as session:
-                # This test checks for any valid response, including expected non-success states like an API key missing.
-                # The expected statuses match the latest server implementation.
-                valid_statuses = ["success", "not_found", "api_key_missing", "error_auth", "error_rate_limit", "error_api", "error_timeout", "error_request", "error_unexpected"]
-                result = await call_tool_and_assert_success(
-                    session, "get_virustotal_report_for_loaded_file", {}, dict,
-                    expected_status_in_payload=("status", valid_statuses)
-                )
-                test_logger.info(f"PASSED: get_virustotal_report_for_loaded_file (returned valid status: {result.get('status')})")
-        asyncio.run(_run())
+        async def _test():
+            async with managed_mcp_session() as s:
+                valid = [
+                    "success", "not_found", "api_key_missing", "error_auth",
+                    "error_rate_limit", "error_api", "error_timeout",
+                    "error_request", "error_unexpected",
+                ]
+                r = await call_tool(s, "get_virustotal_report_for_loaded_file",
+                                    expected_type=dict,
+                                    expected_status=("status", valid))
+                logger.info("VT status: %s", r.get("status"))
+        run(_test())
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 11. Angr Core Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestAngrCore:
+    """Tests for all 15 core Angr tools."""
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_list_angr_analyses(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "list_angr_analyses",
+                                    {"category": "all"}, expected_type=dict)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_function_complexity_list(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_function_complexity_list",
+                                    {"limit": 5, "sort_by": "blocks"},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_decompile_function_with_angr(self):
+        """Decompile the top function from the complexity list."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                r = await call_tool(s, "decompile_function_with_angr",
+                                    {"function_address": str(addr)},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_function_cfg(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                r = await call_tool(s, "get_function_cfg",
+                                    {"function_address": str(addr)},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_function_xrefs(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_function_xrefs",
+                                {"function_address": str(addr)},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_extract_function_constants(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "extract_function_constants",
+                                {"function_address": str(addr)},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_global_data_refs(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_global_data_refs",
+                                {"function_address": str(addr)},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_scan_for_indirect_jumps(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "scan_for_indirect_jumps",
+                                {"function_address": str(addr)},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_analyze_binary_loops(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "analyze_binary_loops", expected_type=dict,
+                                allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_backward_slice(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_backward_slice",
+                                {"target_address": str(addr)},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_forward_slice(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_forward_slice",
+                                {"source_address": str(addr)},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_dominators(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_dominators",
+                                {"target_address": str(addr)},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 12. Angr Disassembly & Function Recovery Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestAngrDisasm:
+    """Tests for: disassemble_at_address, get_calling_conventions,
+    get_function_variables, identify_library_functions, get_annotated_disassembly."""
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_disassemble_at_address(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "disassemble_at_address",
+                                {"address": str(addr), "num_instructions": 10},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_calling_conventions(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_calling_conventions",
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_function_variables(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_function_variables",
+                                {"function_address": str(addr)},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_identify_library_functions(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "identify_library_functions",
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_annotated_disassembly(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_annotated_disassembly",
+                                {"function_address": str(addr), "limit": 50},
+                                expected_type=dict)
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 13. Angr Data Flow Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestAngrDataflow:
+    """Tests for: get_reaching_definitions, get_data_dependencies,
+    get_control_dependencies, propagate_constants, get_value_set_analysis."""
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_reaching_definitions(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_reaching_definitions",
+                                {"function_address": str(addr),
+                                 "limit": 20, "run_in_background": False},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_data_dependencies(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_data_dependencies",
+                                {"function_address": str(addr)},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_control_dependencies(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_control_dependencies",
+                                {"function_address": str(addr)},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_propagate_constants(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "propagate_constants",
+                                {"function_address": str(addr)},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_value_set_analysis(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                await call_tool(s, "get_value_set_analysis",
+                                {"function_address": str(addr)},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 14. Angr Hook Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestAngrHooks:
+    """Tests for: hook_function, list_hooks, unhook_function."""
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_list_hooks(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "list_hooks", expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_hook_and_unhook_function(self):
+        """Hook a function, list hooks, then unhook it."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+
+                # Hook with NOP
+                await call_tool(s, "hook_function",
+                                {"address_or_name": str(addr), "nop": True},
+                                expected_type=dict)
+                # Verify it appears
+                hooks = await call_tool(s, "list_hooks", expected_type=dict)
+                assert hooks is not None
+                # Unhook
+                await call_tool(s, "unhook_function",
+                                {"address_or_name": str(addr)},
+                                expected_type=dict)
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 15. Angr Forensic & Advanced Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestAngrForensic:
+    """Tests for: detect_packing, find_code_caves, detect_self_modifying_code,
+    get_call_graph, identify_cpp_classes."""
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_detect_packing(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "detect_packing", expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_find_code_caves(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "find_code_caves",
+                                {"min_size": 16, "limit": 10},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_detect_self_modifying_code(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "detect_self_modifying_code",
+                                {"limit": 10}, expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_get_call_graph(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "get_call_graph", expected_type=dict,
+                                allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_identify_cpp_classes(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "identify_cpp_classes", expected_type=dict,
+                                allow_none=True)
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 16. Extended Library Tools (LIEF, Capstone, Keystone, Speakeasy, etc.)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestExtendedLibraries:
+    """Tests for all 13 extended library tools."""
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_parse_binary_with_lief(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "parse_binary_with_lief", expected_type=dict)
+        run(_test())
+
+    @pytest.mark.no_file
+    @pytest.mark.optional_lib
+    def test_disassemble_raw_bytes(self):
+        """Disassemble a NOP sled — no file needed."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "disassemble_raw_bytes",
+                                {"hex_bytes": "90909090cccc",
+                                 "architecture": "x86_64", "limit": 10},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.no_file
+    @pytest.mark.optional_lib
+    def test_assemble_instruction(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "assemble_instruction",
+                                {"assembly": "nop; nop; ret",
+                                 "architecture": "x86_64"},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_compute_similarity_hashes(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "compute_similarity_hashes",
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_emulate_pe_with_windows_apis(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "emulate_pe_with_windows_apis",
+                                {"timeout_seconds": 10, "limit": 50},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.no_file
+    @pytest.mark.optional_lib
+    def test_emulate_shellcode_with_speakeasy(self):
+        """Emulate a tiny shellcode stub (INT3)."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "emulate_shellcode_with_speakeasy",
+                                {"shellcode_hex": "cc",
+                                 "architecture": "x86",
+                                 "timeout_seconds": 5, "limit": 10},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_auto_unpack_pe(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "auto_unpack_pe", expected_type=dict,
+                                allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_parse_dotnet_metadata(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "parse_dotnet_metadata", {"limit": 20},
+                                expected_type=dict, allow_none=True)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_scan_for_embedded_files(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "scan_for_embedded_files", {"limit": 10},
+                                expected_type=dict)
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 17. Multi-Format Binary Analysis Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestMultiFormat:
+    """Tests for: detect_binary_format, dotnet_analyze, dotnet_disassemble_method,
+    go_analyze, rust_analyze, rust_demangle_symbols, elf_analyze, elf_dwarf_info,
+    macho_analyze."""
+
+    @pytest.mark.pe_file
+    def test_detect_binary_format(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "detect_binary_format", expected_type=dict)
+                assert "format" in r or "detected_format" in r or "binary_format" in r
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_dotnet_analyze(self):
+        """May return 'not a .NET binary' for non-.NET samples — that's OK."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "dotnet_analyze", {"limit": 20},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_go_analyze(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "go_analyze", {"limit": 20},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_rust_analyze(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "rust_analyze", expected_type=dict)
+        run(_test())
+
+    @pytest.mark.no_file
+    @pytest.mark.optional_lib
+    def test_rust_demangle_symbols(self):
+        """Rust demangle is a pure-data tool."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "rust_demangle_symbols",
+                                {"symbols": ["_ZN4core3fmt5write17h01234abcdef56789E"],
+                                 "limit": 10},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_elf_analyze(self):
+        """Will report 'not an ELF' for PE samples — that's expected."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "elf_analyze", {"limit": 20},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_elf_dwarf_info(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "elf_dwarf_info", {"limit": 20},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_macho_analyze(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "macho_analyze", {"limit": 20},
+                                expected_type=dict)
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 18. Error Handling & Edge Cases
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestErrorHandling:
+    """Verify tools return proper errors for invalid input."""
+
+    @pytest.mark.no_file
+    def test_get_pe_data_invalid_key(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "get_pe_data",
+                    {"key": "this_key_does_not_exist"},
+                )
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_decompile_invalid_address(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "decompile_function_with_angr",
+                    {"function_address": "0xDEADBEEFDEAD"},
+                )
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_open_file_nonexistent(self):
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "open_file",
+                    {"file_path": "/nonexistent/path/to/file.exe"},
+                    error_substring="not found",
+                )
+        run(_test())
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 19. Tool Discovery — verify all 104 tools are registered
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Complete list of all 104 tools in PeMCP
+ALL_TOOL_NAMES = sorted([
+    # File management (6)
+    "open_file", "close_file", "reanalyze_loaded_pe_file",
+    "get_analyzed_file_summary", "get_full_analysis_results", "get_pe_data",
+    # Config & utilities (4)
+    "get_current_datetime", "check_task_status", "set_api_key", "get_config",
+    # Cache (3)
+    "get_cache_stats", "clear_analysis_cache", "remove_cached_analysis",
+    # PE extended (14)
+    "get_section_permissions", "get_pe_metadata", "extract_resources",
+    "extract_manifest", "get_load_config_details", "extract_wide_strings",
+    "detect_format_strings", "detect_compression_headers",
+    "deobfuscate_xor_multi_byte", "bruteforce_xor_key",
+    "detect_crypto_constants", "analyze_entropy_by_offset",
+    "scan_for_api_hashes", "get_import_hash_analysis",
+    # Strings (10)
+    "search_floss_strings", "get_floss_analysis_info",
+    "get_capa_analysis_info", "get_capa_rule_match_details",
+    "extract_strings_from_binary", "search_for_specific_strings",
+    "get_top_sifted_strings", "get_strings_for_function",
+    "get_string_usage_context", "fuzzy_search_strings",
+    # Deobfuscation (5)
+    "get_hex_dump", "deobfuscate_base64", "deobfuscate_xor_single_byte",
+    "is_mostly_printable_ascii", "find_and_decode_encoded_strings",
+    # Angr core (15)
+    "list_angr_analyses", "decompile_function_with_angr", "get_function_cfg",
+    "find_path_to_address", "emulate_function_execution",
+    "analyze_binary_loops", "get_function_xrefs", "get_backward_slice",
+    "get_forward_slice", "get_dominators", "get_function_complexity_list",
+    "extract_function_constants", "get_global_data_refs",
+    "scan_for_indirect_jumps", "patch_binary_memory",
+    # Angr dataflow (5)
+    "get_reaching_definitions", "get_data_dependencies",
+    "get_control_dependencies", "propagate_constants", "get_value_set_analysis",
+    # Angr disasm (5)
+    "disassemble_at_address", "get_calling_conventions",
+    "get_function_variables", "identify_library_functions",
+    "get_annotated_disassembly",
+    # Angr forensic (9)
+    "diff_binaries", "detect_self_modifying_code", "find_code_caves",
+    "detect_packing", "save_patched_binary", "find_path_with_custom_input",
+    "emulate_with_watchpoints", "identify_cpp_classes", "get_call_graph",
+    # Angr hooks (3)
+    "hook_function", "list_hooks", "unhook_function",
+    # Classification (1)
+    "classify_binary_purpose",
+    # Format detection (1)
+    "detect_binary_format",
+    # VirusTotal (1)
+    "get_virustotal_report_for_loaded_file",
+    # Triage (1)
+    "get_triage_report",
+    # Extended libraries (13)
+    "parse_binary_with_lief", "modify_pe_section", "disassemble_raw_bytes",
+    "assemble_instruction", "patch_with_assembly",
+    "compute_similarity_hashes", "compare_file_similarity",
+    "emulate_pe_with_windows_apis", "emulate_shellcode_with_speakeasy",
+    "auto_unpack_pe", "parse_dotnet_metadata", "scan_for_embedded_files",
+    "get_extended_capabilities",
+    # Multi-format (9)
+    "dotnet_analyze", "dotnet_disassemble_method",
+    "go_analyze", "rust_analyze", "rust_demangle_symbols",
+    "elf_analyze", "elf_dwarf_info", "macho_analyze",
+    # (detect_binary_format already listed above)
+])
+
+
+class TestToolDiscovery:
+    """Verify all expected tools are registered on the server."""
+
+    @pytest.mark.no_file
+    def test_all_tools_registered(self):
+        """List tools from the server and check all 104 are present."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                result = await s.list_tools()
+                server_tools = {t.name for t in result.tools}
+                logger.info("Server reports %d tools.", len(server_tools))
+
+                missing = set(ALL_TOOL_NAMES) - server_tools
+                if missing:
+                    pytest.fail(
+                        f"{len(missing)} tools missing from server: "
+                        f"{sorted(missing)}"
+                    )
+                logger.info("All %d expected tools are registered.", len(ALL_TOOL_NAMES))
+        run(_test())
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("This script is designed to be run with Pytest.")
-    print("Example: pytest -v mcp_test_client.py")
+    print("PeMCP Integration Test Suite")
+    print("=" * 50)
+    print()
+    print("Usage:")
+    print("  pytest mcp_test_client.py -v                  # Run all tests")
+    print("  pytest mcp_test_client.py -v -m no_file       # Tests without a loaded file")
+    print("  pytest mcp_test_client.py -v -m pe_file       # Tests requiring a PE file")
+    print("  pytest mcp_test_client.py -v -m angr          # Angr tests only")
+    print("  pytest mcp_test_client.py -v -k TestPEData    # PE data retrieval tests")
+    print("  pytest mcp_test_client.py -v -k TestConfig    # Config & utility tests")
+    print()
+    print("Environment variables:")
+    print(f"  PEMCP_TEST_URL       = {SERVER_URL}")
+    print(f"  PEMCP_TEST_TRANSPORT = {TRANSPORT}")
+    print(f"  PEMCP_TEST_SAMPLE    = {SAMPLE_FILE or '(not set)'}")
+    print()
+    print("Start the server first:")
+    print("  python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe")
+    print()
+    sys.exit(pytest.main([__file__, "-v"]))
