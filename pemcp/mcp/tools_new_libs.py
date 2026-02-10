@@ -118,7 +118,7 @@ async def parse_binary_with_lief(ctx: Context, file_path: Optional[str] = None) 
 
         result = {
             "format": str(binary.format).split(".")[-1],
-            "name": binary.name,
+            "name": os.path.basename(target),
             "entrypoint": hex(binary.entrypoint) if binary.entrypoint else None,
         }
 
@@ -594,9 +594,14 @@ async def emulate_pe_with_windows_apis(
         # Collect API call log
         api_calls = []
         for event in se.get_report().get('api_calls', []):
+            args = event.get('args', [])
+            if isinstance(args, (list, tuple)):
+                args = args[:5]
+            else:
+                args = str(args)
             api_calls.append({
                 "api": event.get('api_name', ''),
-                "args": event.get('args', [])[:5],
+                "args": args,
                 "ret_val": event.get('ret_val'),
                 "caller": hex(event['caller']) if event.get('caller') else None,
             })
@@ -651,10 +656,15 @@ async def emulate_shellcode_with_speakeasy(
         else:
             return {"error": "No shellcode provided and no file loaded."}
 
-        arch_val = speakeasy.ARCH_X86 if architecture == "x86" else speakeasy.ARCH_AMD64
+        try:
+            import speakeasy.winenv.arch as _arch
+            arch_val = _arch.ARCH_X86 if architecture == "x86" else _arch.ARCH_AMD64
+        except (ImportError, AttributeError):
+            # Fallback: pass architecture string directly
+            arch_val = architecture
 
         try:
-            addr = se.load_shellcode(state.filepath if not shellcode_hex else None, sc_data, arch_val)
+            addr = se.load_shellcode(state.filepath if not shellcode_hex else None, arch_val, data=sc_data)
             se.run_shellcode(addr, timeout=timeout_seconds)
         except Exception as e:
             logger.debug(f"Speakeasy emulation ended with exception (may be expected): {e}")
@@ -662,9 +672,14 @@ async def emulate_shellcode_with_speakeasy(
         api_calls = []
         report = se.get_report()
         for event in report.get('api_calls', []):
+            args = event.get('args', [])
+            if isinstance(args, (list, tuple)):
+                args = args[:5]
+            else:
+                args = str(args)
             api_calls.append({
                 "api": event.get('api_name', ''),
-                "args": event.get('args', [])[:5],
+                "args": args,
                 "ret_val": event.get('ret_val'),
             })
             if len(api_calls) >= limit:
