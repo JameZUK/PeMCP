@@ -877,8 +877,8 @@ class TestDeobfuscation:
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "is_mostly_printable_ascii",
                                     {"text_input": "Hello World 123!"},
-                                    expected_type=dict)
-                assert r is not None
+                                    expected_type=bool)
+                assert r is True
         run(_test())
 
     @pytest.mark.pe_file
@@ -928,7 +928,8 @@ class TestCapaAnalysis:
                 if not rule_id:
                     pytest.skip("Cannot determine rule_id from capa output")
                 r = await call_tool(s, "get_capa_rule_match_details",
-                                    {"rule_id": rule_id}, expected_type=dict)
+                                    {"rule_id": rule_id, "address_limit": 5},
+                                    expected_type=dict)
                 assert r is not None
         run(_test())
 
