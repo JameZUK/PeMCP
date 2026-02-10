@@ -129,10 +129,16 @@ claude mcp add --scope user pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
 claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --stdio
 ```
 
-The `run.sh` helper auto-detects Docker or Podman, builds the image if needed, and handles volume mounts and environment setup. To pass a VirusTotal API key, set it in your environment or `.env` file:
+**Add using Docker with a custom samples directory:**
 
 ```bash
-claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- /path/to/PeMCP/run.sh --stdio
+claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --samples /path/to/your/samples --stdio
+```
+
+The `run.sh` helper auto-detects Docker or Podman, builds the image if needed, and handles volume mounts and environment setup. The `--samples` flag mounts any local directory into the container at `/app/samples` (read-only), so PeMCP can access your files. To pass a VirusTotal API key, set it in your environment or `.env` file:
+
+```bash
+claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- /path/to/PeMCP/run.sh --samples ~/malware-zoo --stdio
 ```
 
 **Add a remote HTTP server:**
@@ -211,7 +217,7 @@ For system-wide availability across all projects, add PeMCP to `~/.claude.json`:
 
 #### 3. Docker Configuration (via `run.sh`)
 
-To use the Docker image with Claude Code, point the configuration at the `run.sh` helper script:
+To use the Docker image with Claude Code, point the configuration at the `run.sh` helper script. Use `--samples` to specify where your binaries live on the host — they will be mounted read-only at `/app/samples` inside the container:
 
 ```json
 {
@@ -219,7 +225,7 @@ To use the Docker image with Claude Code, point the configuration at the `run.sh
     "pemcp": {
       "type": "stdio",
       "command": "/path/to/PeMCP/run.sh",
-      "args": ["--stdio"],
+      "args": ["--samples", "/path/to/your/samples", "--stdio"],
       "env": {
         "VT_API_KEY": "your-api-key-here"
       }
@@ -228,7 +234,15 @@ To use the Docker image with Claude Code, point the configuration at the `run.sh
 }
 ```
 
-The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, mounts the `./samples` directory (read-only), and persists the analysis cache and configuration in a named `pemcp-data` volume.
+Then in Claude Code, load files using the container path:
+
+```
+open_file("/app/samples/malware.exe")
+```
+
+If `--samples` is omitted, the `./samples/` directory next to `run.sh` is mounted by default. You can also set the `PEMCP_SAMPLES` environment variable instead of using the flag.
+
+The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, and persists the analysis cache and configuration in a named `pemcp-data` volume.
 
 ### Typical Workflow
 
@@ -264,6 +278,9 @@ The included `run.sh` helper auto-detects Docker or Podman and handles image bui
 # Start stdio MCP server (for Claude Code)
 ./run.sh --stdio
 
+# Mount a custom samples directory (read-only at /app/samples)
+./run.sh --samples ~/malware-zoo --stdio
+
 # Analyse a file in CLI mode
 ./run.sh --analyze samples/suspicious.exe
 
@@ -278,6 +295,7 @@ Set environment variables as needed:
 
 ```bash
 VT_API_KEY=abc123 PEMCP_PORT=9000 ./run.sh
+PEMCP_SAMPLES=~/malware-zoo ./run.sh --stdio
 ```
 
 Or copy `.env.example` to `.env` and fill in your values — `run.sh` loads it automatically.
