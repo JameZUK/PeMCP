@@ -10,6 +10,7 @@ class AnalyzerState:
         self.pe_data: Optional[Dict[str, Any]] = None
         self.pe_object: Optional[Any] = None  # pefile.PE or MockPE
         self.pefile_version: Optional[str] = None
+        self.loaded_from_cache: bool = False
 
         # Angr State
         self.angr_project = None

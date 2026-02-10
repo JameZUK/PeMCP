@@ -1,6 +1,6 @@
 # PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **120+ specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **125+ specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -78,10 +78,11 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 - **rustbininfo** — Rust binary metadata extraction.
 - **pyelftools** — ELF and DWARF debug info parsing.
 
-### Dynamic File Loading & API Key Management
+### Dynamic File Loading, Caching & API Key Management
 
 - **Auto-Detection** — `open_file` automatically detects PE/ELF/Mach-O from magic bytes. No need to specify the format.
 - **No Pre-loading Required** — The MCP server starts without needing a file path. Use the `open_file` tool to load files dynamically.
+- **Analysis Caching** — Results are cached to disk in `~/.pemcp/cache/`, keyed by SHA256 hash and compressed with gzip (~12x compression). Re-opening a previously analysed file loads instantly from cache.
 - **Persistent Configuration** — API keys are stored securely in `~/.pemcp/config.json` and recalled automatically across sessions.
 - **Progress Reporting** — File loading and analysis report progress to the MCP client in real time.
 
@@ -127,6 +128,7 @@ claude mcp add --scope user pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
 ```bash
 claude mcp add --scope project pemcp -- docker run --rm -i \
   -v /path/to/samples:/app/samples \
+  -v pemcp-data:/home/pemcp/.pemcp \
   -e VT_API_KEY \
   pemcp-toolkit \
   --mcp-server
@@ -219,6 +221,7 @@ To use the Docker image with Claude Code:
       "args": [
         "run", "--rm", "-i",
         "-v", "/path/to/samples:/app/samples",
+        "-v", "pemcp-data:/home/pemcp/.pemcp",
         "-e", "VT_API_KEY",
         "pemcp-toolkit",
         "--mcp-server"
@@ -230,6 +233,8 @@ To use the Docker image with Claude Code:
   }
 }
 ```
+
+The `pemcp-data` volume persists the analysis cache and configuration between runs.
 
 ### Typical Workflow
 
@@ -262,6 +267,7 @@ docker build -t pemcp-toolkit .
 docker run --rm -it \
   -p 8082:8082 \
   -v "$(pwd)/samples:/app/samples" \
+  -v pemcp-data:/home/pemcp/.pemcp \
   -e VT_API_KEY="your_key" \
   pemcp-toolkit \
   --mcp-server \
@@ -271,9 +277,12 @@ docker run --rm -it \
 # Run as MCP server (stdio, for Claude Code)
 docker run --rm -i \
   -v "$(pwd)/samples:/app/samples" \
+  -v pemcp-data:/home/pemcp/.pemcp \
   pemcp-toolkit \
   --mcp-server
 ```
+
+> **Note:** The `-v pemcp-data:/home/pemcp/.pemcp` mount persists the analysis cache and API key configuration across container restarts. Without it, cached results and stored keys are lost when the container is removed.
 
 ### Option B: Local Installation
 
@@ -383,6 +392,50 @@ PeMCP stores API keys persistently in `~/.pemcp/config.json` with restricted fil
 }
 ```
 
+### Analysis Cache
+
+PeMCP caches analysis results to disk so that re-opening a previously analysed file is near-instant. Cache entries are stored as gzip-compressed JSON in `~/.pemcp/cache/`, keyed by the SHA256 hash of the file contents.
+
+**How it works:**
+
+1. When `open_file` is called, PeMCP computes the SHA256 of the file.
+2. If a cached result exists for that hash, it is loaded directly (typically under 10 ms).
+3. If no cache exists, the full analysis runs and the result is stored for future use.
+4. Cache entries are automatically invalidated when the PeMCP version changes (parser updates).
+5. LRU eviction removes the oldest entries when the cache exceeds its size limit.
+
+**Cache configuration** (via `~/.pemcp/config.json` or environment variables):
+
+| Setting | Environment Variable | Default | Description |
+|---|---|---|---|
+| `cache_enabled` | `PEMCP_CACHE_ENABLED` | `true` | Set to `"false"` to disable caching entirely |
+| `cache_max_size_mb` | `PEMCP_CACHE_MAX_SIZE_MB` | `500` | Maximum total cache size in MB |
+
+**Cache management MCP tools:**
+
+| Tool | Description |
+|---|---|
+| `get_cache_stats` | View cache size, entry count, and per-file details |
+| `clear_analysis_cache` | Remove all cached results |
+| `remove_cached_analysis` | Remove a specific entry by SHA256 hash |
+
+**Bypassing the cache:**
+
+```
+open_file("/path/to/binary", use_cache=False)  # Force fresh analysis
+```
+
+**Docker persistence:**
+
+In Docker, the cache lives inside the container at `/home/pemcp/.pemcp/cache/`. To persist it across container restarts, mount a volume:
+
+```bash
+docker run --rm -i \
+  -v pemcp-data:/home/pemcp/.pemcp \
+  -v "$(pwd)/samples:/app/samples" \
+  pemcp-toolkit --mcp-server
+```
+
 ### Command-Line Options
 
 | Option | Description |
@@ -403,7 +456,7 @@ PeMCP stores API keys persistently in `~/.pemcp/config.json` with restricted fil
 
 ## MCP Tools Reference
 
-PeMCP exposes **122 tools** organised into the following categories.
+PeMCP exposes **125 tools** organised into the following categories.
 
 ### File Management
 
@@ -423,6 +476,9 @@ PeMCP exposes **122 tools** organised into the following categories.
 | `get_current_datetime` | Retrieve current UTC and local date/time. |
 | `check_task_status` | Monitor progress of background tasks (e.g., Angr CFG generation). |
 | `get_extended_capabilities` | List all available tools and library versions. |
+| `get_cache_stats` | View analysis cache statistics (entries, size, utilization). |
+| `clear_analysis_cache` | Clear the entire disk-based analysis cache. |
+| `remove_cached_analysis` | Remove a specific cached analysis by SHA256 hash. |
 
 ### PE Structure Analysis (29 tools)
 
@@ -604,6 +660,7 @@ pemcp/
 ├── __main__.py                 # python -m pemcp support
 ├── state.py                    # Thread-safe AnalyzerState
 ├── config.py                   # Imports, availability flags, constants
+├── cache.py                    # Disk-based analysis cache (gzip/LRU)
 ├── user_config.py              # Persistent API key storage (~/.pemcp/)
 ├── utils.py                    # Utility functions
 ├── hashing.py                  # ssdeep implementation
@@ -627,12 +684,13 @@ pemcp/
     ├── tools_pe_extended.py    # Extended PE analysis tools (14 tools)
     ├── tools_new_libs.py       # LIEF/Capstone/Keystone/Speakeasy tools (13 tools)
     ├── tools_binary_formats.py # .NET/Go/Rust/ELF/Mach-O tools (9 tools)
-    └── tools_misc.py           # VT, deobfuscation, triage, config tools (11 tools)
+    └── tools_misc.py           # VT, deobfuscation, triage, config, cache tools (14 tools)
 ```
 
 ### Design Principles
 
 - **Single-File Analysis Context** — The server holds one file in memory via `AnalyzerState`. All tools operate on this shared context. Use `open_file` and `close_file` to switch between files.
+- **Disk-Based Caching** — Analysis results are cached in `~/.pemcp/cache/` as gzip-compressed JSON, keyed by SHA256. Re-opening a previously analysed file loads from cache in under 10 ms. LRU eviction keeps cache size bounded.
 - **Lazy Loading** — Heavy analysis (Angr CFG) runs in the background. The server is usable immediately.
 - **Smart Truncation** — MCP responses exceeding 64KB are intelligently truncated (lists shortened, strings clipped) whilst preserving structure.
 - **Graceful Degradation** — Optional libraries (Angr, Capa, FLOSS, etc.) are detected at startup. Tools that require unavailable libraries return clear error messages instead of crashing.
