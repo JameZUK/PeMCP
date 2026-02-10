@@ -17,6 +17,134 @@ if ANGR_AVAILABLE:
 
 
 @tool_decorator
+async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, Any]:
+    """
+    Discovery tool: lists all available angr-based analysis capabilities with descriptions.
+    Use this to understand what angr analyses are available before calling specific tools.
+
+    Args:
+        ctx: The MCP Context object.
+        category: Filter by category - 'all', 'decompilation', 'cfg', 'symbolic',
+                  'slicing', 'hooks', 'forensic', or 'comparison'.
+
+    Returns:
+        A dictionary of available analyses grouped by category.
+    """
+    analyses = {
+        "decompilation": [
+            {"tool": "decompile_function_with_angr", "params": "function_address",
+             "description": "Decompile a function to C-like pseudocode."},
+            {"tool": "get_annotated_disassembly", "params": "function_address, include_xrefs",
+             "description": "Disassembly with variable names, xrefs, and comments."},
+            {"tool": "disassemble_at_address", "params": "address, num_instructions",
+             "description": "Raw disassembly at a specific address."},
+        ],
+        "cfg": [
+            {"tool": "get_function_cfg", "params": "function_address",
+             "description": "Control Flow Graph for a function (nodes/edges)."},
+            {"tool": "get_call_graph", "params": "function_address, depth",
+             "description": "Inter-procedural call graph from a function."},
+            {"tool": "get_function_complexity_list", "params": "limit, sort_by",
+             "description": "All functions sorted by cyclomatic complexity."},
+            {"tool": "scan_for_indirect_jumps", "params": "limit",
+             "description": "Find indirect jumps (jump tables, vtables)."},
+        ],
+        "data_flow": [
+            {"tool": "get_forward_slice", "params": "function_address, variable_offset",
+             "description": "Forward data-flow slice from a variable."},
+            {"tool": "get_backward_slice", "params": "function_address, target_address",
+             "description": "Backward slice to understand data origins."},
+            {"tool": "get_reaching_definitions", "params": "function_address",
+             "description": "Reaching definition analysis for a function."},
+            {"tool": "get_data_dependencies", "params": "function_address",
+             "description": "Data dependency analysis for a function."},
+            {"tool": "propagate_constants", "params": "function_address",
+             "description": "Constant propagation analysis."},
+            {"tool": "get_value_set_analysis", "params": "function_address",
+             "description": "Value-set analysis for pointer tracking."},
+        ],
+        "symbolic": [
+            {"tool": "find_path_to_address", "params": "target_address, avoid_addresses, timeout",
+             "description": "Symbolic execution to find input reaching a target address."},
+            {"tool": "emulate_function_execution", "params": "function_address, args, timeout",
+             "description": "Concolic execution of a function with concrete args."},
+            {"tool": "find_path_with_custom_input", "params": "target_address, input_constraints",
+             "description": "Path finding with custom symbolic constraints."},
+            {"tool": "emulate_with_watchpoints", "params": "start_address, watchpoints, timeout",
+             "description": "Emulation with memory/register watchpoints."},
+        ],
+        "structure": [
+            {"tool": "get_function_xrefs", "params": "function_address",
+             "description": "Cross-references (callers/callees) for a function."},
+            {"tool": "get_dominators", "params": "function_address",
+             "description": "Dominator tree for a function's CFG."},
+            {"tool": "get_control_dependencies", "params": "function_address",
+             "description": "Control dependency analysis."},
+            {"tool": "analyze_binary_loops", "params": "function_address",
+             "description": "Loop detection and analysis."},
+            {"tool": "extract_function_constants", "params": "function_address",
+             "description": "Extract constant values used in a function."},
+            {"tool": "get_global_data_refs", "params": "limit",
+             "description": "Global data references across the binary."},
+            {"tool": "get_calling_conventions", "params": "limit",
+             "description": "Detected calling conventions for functions."},
+            {"tool": "get_function_variables", "params": "function_address",
+             "description": "Stack/register variable analysis."},
+            {"tool": "identify_library_functions", "params": "limit",
+             "description": "Identify known library functions (FLIRT signatures)."},
+            {"tool": "identify_cpp_classes", "params": "limit",
+             "description": "Detect C++ class structures (vtables, RTTI)."},
+        ],
+        "forensic": [
+            {"tool": "detect_self_modifying_code", "params": "limit",
+             "description": "Detect self-modifying code patterns."},
+            {"tool": "detect_packing", "params": "(none)",
+             "description": "Detect packing/encryption via entropy and structure analysis."},
+            {"tool": "find_code_caves", "params": "min_size, limit",
+             "description": "Find unused code regions (potential injection sites)."},
+            {"tool": "diff_binaries", "params": "other_file_path",
+             "description": "Diff two binaries for function-level changes."},
+        ],
+        "hooks": [
+            {"tool": "hook_function", "params": "address, return_value",
+             "description": "Hook a function to control its return value."},
+            {"tool": "unhook_function", "params": "address",
+             "description": "Remove a previously installed hook."},
+            {"tool": "list_hooks", "params": "(none)",
+             "description": "List all currently installed hooks."},
+        ],
+        "modification": [
+            {"tool": "patch_binary_memory", "params": "address, hex_bytes",
+             "description": "Patch bytes at a specific address."},
+            {"tool": "save_patched_binary", "params": "output_path",
+             "description": "Save the patched binary to disk."},
+            {"tool": "patch_with_assembly", "params": "address, assembly, architecture",
+             "description": "Patch with assembled instructions (requires Keystone)."},
+        ],
+    }
+
+    angr_available = ANGR_AVAILABLE
+    angr_ready = state.angr_project is not None
+
+    if category != "all" and category in analyses:
+        filtered = {category: analyses[category]}
+    else:
+        filtered = analyses
+
+    total_tools = sum(len(v) for v in filtered.values())
+
+    return {
+        "angr_available": angr_available,
+        "angr_project_loaded": angr_ready,
+        "cfg_available": state.angr_cfg is not None,
+        "total_analyses": total_tools,
+        "categories": filtered,
+        "note": "Call any tool by name with the listed parameters. "
+                "Most tools require angr to be available and a file to be loaded.",
+    }
+
+
+@tool_decorator
 async def decompile_function_with_angr(ctx: Context, function_address: str) -> Dict[str, Any]:
     """
     Decompiles a function into C-like pseudocode using Angr.

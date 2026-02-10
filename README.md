@@ -1,6 +1,6 @@
 # PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **125+ specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **100+ specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -456,13 +456,13 @@ docker run --rm -i \
 
 ## MCP Tools Reference
 
-PeMCP exposes **125 tools** organised into the following categories.
+PeMCP exposes **103 tools** organised into the following categories.
 
 ### File Management
 
 | Tool | Description |
 |---|---|
-| `open_file` | Load and analyse a binary (PE/ELF/Mach-O/shellcode). Auto-detects format from magic bytes. |
+| `open_file` | Load and analyse a binary (PE/ELF/Mach-O/shellcode). Auto-detects format. For PE files, returns `quick_indicators` (hashes, entropy, packing likelihood, import count, signature status, capa severity count). |
 | `close_file` | Close the loaded file and clear analysis data from memory. |
 | `reanalyze_loaded_pe_file` | Re-run PE analysis with different options (skip/enable specific analyses). |
 | `detect_binary_format` | Auto-detect binary format and suggest appropriate analysis tools. |
@@ -480,35 +480,15 @@ PeMCP exposes **125 tools** organised into the following categories.
 | `clear_analysis_cache` | Clear the entire disk-based analysis cache. |
 | `remove_cached_analysis` | Remove a specific cached analysis by SHA256 hash. |
 
-### PE Structure Analysis (29 tools)
+### PE Structure Analysis (5 tools)
 
 | Tool | Description |
 |---|---|
 | `get_analyzed_file_summary` | High-level summary with counts of sections, imports, matches. |
 | `get_full_analysis_results` | Complete analysis data (all keys, with size guard). |
-| `get_file_hashes_info` | MD5, SHA1, SHA256, ssdeep hashes. |
-| `get_dos_header_info` | DOS header structure. |
-| `get_nt_headers_info` | NT headers (File Header + Optional Header). |
-| `get_data_directories_info` | Data directory entries (import, export, resource tables). |
-| `get_sections_info` | Section details (entropy, hashes, characteristics). |
-| `get_imports_info` | Imported DLLs and symbols. |
-| `get_exports_info` | Exported symbols. |
-| `get_resources_summary_info` | Resource entries (type, language, size). |
-| `get_version_info_info` | Version resource data (FileVersion, ProductName). |
-| `get_debug_info_info` | Debug directory (PDB paths, CodeView). |
-| `get_digital_signature_info` | Authenticode signature, certificate details, validation. |
-| `get_rich_header_info` | Rich header (compiler/linker versions). |
-| `get_delay_load_imports_info` | Delay-loaded imports. |
-| `get_tls_info_info` | TLS directory and callbacks. |
-| `get_load_config_info` | Load configuration (CFG, Guard Flags). |
-| `get_com_descriptor_info` | .NET COM descriptor. |
-| `get_overlay_data_info` | Overlay data (offset, size, hashes). |
-| `get_base_relocations_info` | Base relocation entries. |
-| `get_bound_imports_info` | Bound import descriptors. |
-| `get_exception_data_info` | Exception directory (RUNTIME_FUNCTION for x64). |
-| `get_coff_symbols_info` | COFF symbol table entries. |
-| `get_checksum_verification_info` | PE checksum verification. |
-| `get_pefile_warnings_info` | Warnings from the pefile parser. |
+| `get_pe_data` | **Unified data retrieval** — retrieve any PE analysis key by name (e.g., `get_pe_data(key='imports')`). Use `key='list'` to discover all 25 available keys with descriptions and sizes. Supports `limit` and `offset` for pagination. Replaces 25 individual `get_*_info` tools. |
+
+Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_directories`, `sections`, `imports`, `exports`, `resources_summary`, `version_info`, `debug_info`, `digital_signature`, `peid_matches`, `yara_matches`, `rich_header`, `delay_load_imports`, `tls_info`, `load_config`, `com_descriptor`, `overlay_data`, `base_relocations`, `bound_imports`, `exception_data`, `coff_symbols`, `checksum_verification`, `pefile_warnings`.
 
 ### PE Extended Analysis (14 tools)
 
@@ -533,10 +513,10 @@ PeMCP exposes **125 tools** organised into the following categories.
 
 | Tool | Description |
 |---|---|
-| `get_peid_matches_info` | PEiD packer/compiler detection results. |
-| `get_yara_matches_info` | YARA rule match results. |
 | `get_capa_analysis_info` | Capa capability rules overview with filtering. |
 | `get_capa_rule_match_details` | Detailed match info for a specific Capa rule. |
+
+> **Note:** PEiD matches and YARA matches are now accessed via `get_pe_data(key='peid_matches')` and `get_pe_data(key='yara_matches')`.
 
 ### String Analysis (10 tools)
 
@@ -557,7 +537,8 @@ PeMCP exposes **125 tools** organised into the following categories.
 
 | Tool | Description |
 |---|---|
-| `get_triage_report` | Automated summary of suspicious indicators, imports, and capabilities. |
+| `get_triage_report` | **Comprehensive automated triage** — packing assessment (entropy/PEiD/imports), digital signature check, risk-categorized suspicious imports (CRITICAL/HIGH/MEDIUM), capa capabilities, network IOC extraction (IPs/URLs/domains/registry), section anomalies, cumulative risk score, and suggested next tools. |
+| `classify_binary_purpose` | Classify binary type (GUI app, console app, DLL, service, driver, installer, .NET assembly) from headers, imports, and resources. |
 | `get_virustotal_report_for_loaded_file` | Query VirusTotal for the file hash. |
 
 ### Deobfuscation & Utilities
@@ -569,10 +550,11 @@ PeMCP exposes **125 tools** organised into the following categories.
 | `is_mostly_printable_ascii` | Check if a string is mostly printable. |
 | `get_hex_dump` | Hex dump of a file region. |
 
-### Binary Analysis — Core Angr (14 tools)
+### Binary Analysis — Core Angr (15 tools)
 
 | Tool | Description |
 |---|---|
+| `list_angr_analyses` | **Discovery tool** — lists all available angr analysis capabilities grouped by category (decompilation, CFG, symbolic, slicing, forensic, hooks, modification) with parameter descriptions. Call this first to understand available analyses. |
 | `decompile_function_with_angr` | C-like pseudocode for a function at a given address. |
 | `get_function_cfg` | Control flow graph (nodes and edges) for a function. |
 | `find_path_to_address` | Symbolic execution to find inputs reaching a target address. |
