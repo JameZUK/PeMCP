@@ -19,6 +19,8 @@ CONFIG_FILE = CONFIG_DIR / "config.json"
 # Maps config keys to their corresponding environment variable names
 _ENV_VAR_MAP = {
     "vt_api_key": "VT_API_KEY",
+    "cache_enabled": "PEMCP_CACHE_ENABLED",
+    "cache_max_size_mb": "PEMCP_CACHE_MAX_SIZE_MB",
 }
 
 # Keys that contain sensitive values (masked in get_config output)
