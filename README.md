@@ -123,15 +123,16 @@ claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- python /path
 claude mcp add --scope user pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
 ```
 
-**Add using Docker:**
+**Add using Docker (via `run.sh` helper):**
 
 ```bash
-claude mcp add --scope project pemcp -- docker run --rm -i \
-  -v /path/to/samples:/app/samples \
-  -v pemcp-data:/home/pemcp/.pemcp \
-  -e VT_API_KEY \
-  pemcp-toolkit \
-  --mcp-server
+claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --stdio
+```
+
+The `run.sh` helper auto-detects Docker or Podman, builds the image if needed, and handles volume mounts and environment setup. To pass a VirusTotal API key, set it in your environment or `.env` file:
+
+```bash
+claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- /path/to/PeMCP/run.sh --stdio
 ```
 
 **Add a remote HTTP server:**
@@ -208,24 +209,17 @@ For system-wide availability across all projects, add PeMCP to `~/.claude.json`:
 }
 ```
 
-#### 3. Docker Configuration
+#### 3. Docker Configuration (via `run.sh`)
 
-To use the Docker image with Claude Code:
+To use the Docker image with Claude Code, point the configuration at the `run.sh` helper script:
 
 ```json
 {
   "mcpServers": {
     "pemcp": {
       "type": "stdio",
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i",
-        "-v", "/path/to/samples:/app/samples",
-        "-v", "pemcp-data:/home/pemcp/.pemcp",
-        "-e", "VT_API_KEY",
-        "pemcp-toolkit",
-        "--mcp-server"
-      ],
+      "command": "/path/to/PeMCP/run.sh",
+      "args": ["--stdio"],
       "env": {
         "VT_API_KEY": "your-api-key-here"
       }
@@ -234,7 +228,7 @@ To use the Docker image with Claude Code:
 }
 ```
 
-The `pemcp-data` volume persists the analysis cache and configuration between runs.
+The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, mounts the `./samples` directory (read-only), and persists the analysis cache and configuration in a named `pemcp-data` volume.
 
 ### Typical Workflow
 
@@ -311,6 +305,27 @@ Both services use a named `pemcp-data` volume for persistent cache and configura
 
 #### Manual Docker Commands
 
+For most use cases, the `run.sh` helper is the recommended way to run PeMCP in Docker. It handles image building, volume mounts, environment variables, and runtime detection automatically:
+
+```bash
+# Build/rebuild the image
+./run.sh --build
+
+# Start HTTP MCP server (builds image if needed)
+./run.sh
+
+# Start stdio MCP server (for Claude Code)
+./run.sh --stdio
+
+# Analyse a file in CLI mode
+./run.sh --analyze samples/suspicious.exe
+
+# Open a shell in the container
+./run.sh --shell
+```
+
+If you need to run Docker directly (e.g. for custom volume mounts or networking), the equivalent commands are:
+
 ```bash
 # Build the image
 docker build -t pemcp-toolkit .
@@ -334,7 +349,7 @@ docker run --rm -i \
   --mcp-server
 ```
 
-> **Note:** The `-v pemcp-data:/home/pemcp/.pemcp` mount persists the analysis cache and API key configuration across container restarts. Without it, cached results and stored keys are lost when the container is removed.
+> **Note:** The `-v pemcp-data:/home/pemcp/.pemcp` mount persists the analysis cache and API key configuration across container restarts. Without it, cached results and stored keys are lost when the container is removed. The `run.sh` helper configures this volume automatically.
 
 ### Option B: Local Installation
 
@@ -479,9 +494,13 @@ open_file("/path/to/binary", use_cache=False)  # Force fresh analysis
 
 **Docker persistence:**
 
-In Docker, the cache lives inside the container at `/home/pemcp/.pemcp/cache/`. To persist it across container restarts, mount a volume:
+In Docker, the cache lives inside the container at `/home/pemcp/.pemcp/cache/`. The `run.sh` helper automatically mounts a named `pemcp-data` volume to persist the cache and configuration across container restarts:
 
 ```bash
+# run.sh handles volume mounting automatically
+./run.sh --stdio
+
+# Equivalent manual docker command (if not using run.sh)
 docker run --rm -i \
   -v pemcp-data:/home/pemcp/.pemcp \
   -v "$(pwd)/samples:/app/samples" \
@@ -821,7 +840,10 @@ When running PeMCP in HTTP mode (`--mcp-transport streamable-http`), any MCP cli
 python PeMCP.py --mcp-server --mcp-transport streamable-http \
   --allowed-paths /app/samples /tmp
 
-# Docker with sandboxing
+# Docker with sandboxing (via run.sh — extra flags are passed through)
+./run.sh --allowed-paths /app/samples
+
+# Equivalent manual docker command
 docker run --rm -it -p 8082:8082 \
   -v "$(pwd)/samples:/app/samples" \
   pemcp-toolkit \
