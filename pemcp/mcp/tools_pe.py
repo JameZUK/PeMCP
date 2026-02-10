@@ -3,12 +3,13 @@ import os
 import json
 import asyncio
 import datetime
+import hashlib
 import threading
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
 from pemcp.config import (
-    state, logger, Context, pefile,
+    state, logger, Context, pefile, analysis_cache,
     ANGR_AVAILABLE, CAPA_AVAILABLE, FLOSS_AVAILABLE,
     FLOSS_MIN_LENGTH_DEFAULT,
     Actual_DebugLevel_Floss, Actual_StringType_Floss,
@@ -32,11 +33,15 @@ async def open_file(
     mode: str = "auto",
     analyses_to_skip: Optional[List[str]] = None,
     start_angr_background: bool = True,
+    use_cache: bool = True,
 ) -> Dict[str, Any]:
     """
     Opens and analyses a binary file, making it available for all other tools.
     Supports PE, ELF, Mach-O, and raw shellcode. Auto-detection is the default.
     This replaces any previously loaded file. Progress is reported during analysis.
+
+    Previously analysed files are cached in ~/.pemcp/cache/ (keyed by SHA256).
+    Set use_cache=False to force a fresh analysis and ignore any cached results.
 
     Args:
         ctx: The MCP Context object.
@@ -44,6 +49,7 @@ async def open_file(
         mode: (str) Analysis mode — 'auto' (default, detects from magic bytes), 'pe', 'elf', 'macho', or 'shellcode'.
         analyses_to_skip: (Optional[List[str]]) List of analyses to skip: 'peid', 'yara', 'capa', 'floss'.
         start_angr_background: (bool) If True (default) and angr is available, start background CFG analysis.
+        use_cache: (bool) If True (default), check the disk cache for previous analysis results.
 
     Returns:
         A dictionary with status, filepath, detected format, and summary of what was loaded.
@@ -85,123 +91,171 @@ async def open_file(
         state.angr_project = None
         state.angr_cfg = None
 
+    _loaded_from_cache = False
+
     try:
-        if mode == "shellcode":
-            await ctx.report_progress(5, 100)
-            await ctx.info("Loading raw shellcode...")
+        # --- Early hash for cache lookup ---
+        await ctx.report_progress(2, 100)
 
-            def _load_shellcode():
-                with open(abs_path, 'rb') as f:
-                    raw_data = f.read()
-                state.pe_object = MockPE(raw_data)
-                state.filepath = abs_path
-                state.pe_data = {
-                    "filepath": abs_path,
-                    "mode": "shellcode",
-                    "file_hashes": _parse_file_hashes(raw_data),
-                    "basic_ascii_strings": [
-                        {"offset": hex(o), "string": s}
-                        for o, s in _extract_strings_from_data(raw_data, 5)
-                    ],
-                    "floss_analysis": {"status": "Pending..."},
-                }
+        def _read_and_hash():
+            with open(abs_path, 'rb') as f:
+                data = f.read()
+            return data, hashlib.sha256(data).hexdigest()
 
-            await asyncio.to_thread(_load_shellcode)
-            await ctx.report_progress(30, 100)
+        _raw_file_data, _file_sha256 = await asyncio.to_thread(_read_and_hash)
 
-            if "floss" not in skip_list and FLOSS_AVAILABLE:
-                await ctx.info("Running FLOSS analysis on shellcode...")
-
-                def _run_floss():
-                    state.pe_data['floss_analysis'] = _parse_floss_analysis(
-                        abs_path, FLOSS_MIN_LENGTH_DEFAULT, 0,
-                        Actual_DebugLevel_Floss.NONE, "auto",
-                        [], [], [], True,
-                    )
-                    _perform_unified_string_sifting(state.pe_data)
-
-                await asyncio.to_thread(_run_floss)
-
-            await ctx.report_progress(100, 100)
-
-        elif mode in ("elf", "macho"):
-            # ELF / Mach-O mode — lightweight load with hashes and strings
-            await ctx.report_progress(5, 100)
-            format_label = "ELF" if mode == "elf" else "Mach-O"
-            await ctx.info(f"Loading {format_label} binary...")
-
-            def _load_non_pe():
-                with open(abs_path, 'rb') as f:
-                    raw_data = f.read()
-                state.pe_object = MockPE(raw_data)
-                state.filepath = abs_path
-                state.pe_data = {
-                    "filepath": abs_path,
-                    "mode": mode,
-                    "format": format_label,
-                    "file_hashes": _parse_file_hashes(raw_data),
-                    "basic_ascii_strings": [
-                        {"offset": hex(o), "string": s}
-                        for o, s in _extract_strings_from_data(raw_data, 5)
-                    ],
-                    "note": (
-                        f"This is a {format_label} binary. PE-specific tools (imports, exports, sections, etc.) "
-                        f"are not applicable. Use the format-specific tools instead: "
-                        + (
-                            "elf_analyze, elf_dwarf_info" if mode == "elf"
-                            else "macho_analyze"
+        # --- Check cache (all modes) ---
+        if use_cache:
+            cached = analysis_cache.get(_file_sha256, abs_path)
+            if cached is not None:
+                cached_mode = cached.get("mode", "")
+                # Only use cache if the requested mode matches the cached mode
+                if mode == cached_mode or (mode == "pe" and cached_mode not in ("shellcode", "elf", "macho")):
+                    state.filepath = abs_path
+                    state.pe_data = cached
+                    state.loaded_from_cache = True
+                    # Still need a pe_object for tools that access it directly
+                    if mode == "shellcode" or mode in ("elf", "macho"):
+                        state.pe_object = MockPE(_raw_file_data)
+                    else:
+                        state.pe_object = await asyncio.to_thread(
+                            lambda: pefile.PE(abs_path, fast_load=False)
                         )
-                        + ". Angr-based tools (decompilation, CFG, symbolic execution) work on all formats."
-                    ),
-                }
+                    _loaded_from_cache = True
+                    await ctx.info(f"Analysis loaded from cache (SHA256: {_file_sha256[:16]}...)")
+                    await ctx.report_progress(95, 100)
 
-            await asyncio.to_thread(_load_non_pe)
-            await ctx.report_progress(50, 100)
-            await ctx.info(f"{format_label} binary loaded. Use format-specific tools or angr tools for analysis.")
-            await ctx.report_progress(100, 100)
+        if not _loaded_from_cache:
+            state.loaded_from_cache = False
 
-        else:
-            # PE mode
-            await ctx.report_progress(5, 100)
-            await ctx.info("Loading PE file...")
+            if mode == "shellcode":
+                await ctx.report_progress(5, 100)
+                await ctx.info("Loading raw shellcode...")
 
-            def _load_pe():
-                return pefile.PE(abs_path, fast_load=False)
+                def _load_shellcode():
+                    state.pe_object = MockPE(_raw_file_data)
+                    state.filepath = abs_path
+                    state.pe_data = {
+                        "filepath": abs_path,
+                        "mode": "shellcode",
+                        "file_hashes": _parse_file_hashes(_raw_file_data),
+                        "basic_ascii_strings": [
+                            {"offset": hex(o), "string": s}
+                            for o, s in _extract_strings_from_data(_raw_file_data, 5)
+                        ],
+                        "floss_analysis": {"status": "Pending..."},
+                    }
 
-            pe_obj = await asyncio.to_thread(_load_pe)
-            state.filepath = abs_path
-            state.pe_object = pe_obj
+                await asyncio.to_thread(_load_shellcode)
+                await ctx.report_progress(30, 100)
 
-            await ctx.report_progress(15, 100)
-            await ctx.info("Analysing PE structures, signatures, and strings...")
+                if "floss" not in skip_list and FLOSS_AVAILABLE:
+                    await ctx.info("Running FLOSS analysis on shellcode...")
 
-            # Use a shared progress state for the callback
-            _progress_state = {"last": 15}
+                    def _run_floss():
+                        state.pe_data['floss_analysis'] = _parse_floss_analysis(
+                            abs_path, FLOSS_MIN_LENGTH_DEFAULT, 0,
+                            Actual_DebugLevel_Floss.NONE, "auto",
+                            [], [], [], True,
+                        )
+                        _perform_unified_string_sifting(state.pe_data)
 
-            def _progress_cb(step: int, total: int, message: str) -> None:
-                # Map 0-100 analysis progress to 15-95 of overall progress
-                mapped = 15 + int(step * 0.8)
-                _progress_state["last"] = mapped
+                    await asyncio.to_thread(_run_floss)
 
-            def _run_analysis():
-                return _parse_pe_to_dict(
-                    pe_obj, abs_path,
-                    str(DEFAULT_PEID_DB_PATH), None, None, None,
-                    False, False, False,
-                    floss_min_len_arg=FLOSS_MIN_LENGTH_DEFAULT,
-                    floss_verbose_level_arg=0,
-                    floss_script_debug_level_arg=Actual_DebugLevel_Floss.NONE,
-                    floss_format_hint_arg="auto",
-                    floss_disabled_types_arg=[],
-                    floss_only_types_arg=[],
-                    floss_functions_to_analyze_arg=[],
-                    floss_quiet_mode_arg=True,
-                    analyses_to_skip=skip_list,
-                    progress_callback=_progress_cb,
-                )
+                await ctx.report_progress(95, 100)
 
-            state.pe_data = await asyncio.to_thread(_run_analysis)
-            await ctx.report_progress(95, 100)
+                # Store in cache
+                sha = state.pe_data.get("file_hashes", {}).get("sha256")
+                if sha:
+                    analysis_cache.put(sha, state.pe_data, abs_path)
+
+            elif mode in ("elf", "macho"):
+                # ELF / Mach-O mode — lightweight load with hashes and strings
+                await ctx.report_progress(5, 100)
+                format_label = "ELF" if mode == "elf" else "Mach-O"
+                await ctx.info(f"Loading {format_label} binary...")
+
+                def _load_non_pe():
+                    state.pe_object = MockPE(_raw_file_data)
+                    state.filepath = abs_path
+                    state.pe_data = {
+                        "filepath": abs_path,
+                        "mode": mode,
+                        "format": format_label,
+                        "file_hashes": _parse_file_hashes(_raw_file_data),
+                        "basic_ascii_strings": [
+                            {"offset": hex(o), "string": s}
+                            for o, s in _extract_strings_from_data(_raw_file_data, 5)
+                        ],
+                        "note": (
+                            f"This is a {format_label} binary. PE-specific tools (imports, exports, sections, etc.) "
+                            f"are not applicable. Use the format-specific tools instead: "
+                            + (
+                                "elf_analyze, elf_dwarf_info" if mode == "elf"
+                                else "macho_analyze"
+                            )
+                            + ". Angr-based tools (decompilation, CFG, symbolic execution) work on all formats."
+                        ),
+                    }
+
+                await asyncio.to_thread(_load_non_pe)
+                await ctx.report_progress(50, 100)
+                await ctx.info(f"{format_label} binary loaded. Use format-specific tools or angr tools for analysis.")
+                await ctx.report_progress(95, 100)
+
+                # Store in cache
+                sha = state.pe_data.get("file_hashes", {}).get("sha256")
+                if sha:
+                    analysis_cache.put(sha, state.pe_data, abs_path)
+
+            else:
+                # PE mode
+                await ctx.report_progress(5, 100)
+                await ctx.info("Loading PE file...")
+
+                def _load_pe():
+                    return pefile.PE(abs_path, fast_load=False)
+
+                pe_obj = await asyncio.to_thread(_load_pe)
+                state.filepath = abs_path
+                state.pe_object = pe_obj
+
+                await ctx.report_progress(15, 100)
+                await ctx.info("Analysing PE structures, signatures, and strings...")
+
+                # Use a shared progress state for the callback
+                _progress_state = {"last": 15}
+
+                def _progress_cb(step: int, total: int, message: str) -> None:
+                    # Map 0-100 analysis progress to 15-95 of overall progress
+                    mapped = 15 + int(step * 0.8)
+                    _progress_state["last"] = mapped
+
+                def _run_analysis():
+                    return _parse_pe_to_dict(
+                        pe_obj, abs_path,
+                        str(DEFAULT_PEID_DB_PATH), None, None, None,
+                        False, False, False,
+                        floss_min_len_arg=FLOSS_MIN_LENGTH_DEFAULT,
+                        floss_verbose_level_arg=0,
+                        floss_script_debug_level_arg=Actual_DebugLevel_Floss.NONE,
+                        floss_format_hint_arg="auto",
+                        floss_disabled_types_arg=[],
+                        floss_only_types_arg=[],
+                        floss_functions_to_analyze_arg=[],
+                        floss_quiet_mode_arg=True,
+                        analyses_to_skip=skip_list,
+                        progress_callback=_progress_cb,
+                    )
+
+                state.pe_data = await asyncio.to_thread(_run_analysis)
+                await ctx.report_progress(95, 100)
+
+                # Store in cache
+                sha = state.pe_data.get("file_hashes", {}).get("sha256")
+                if sha:
+                    await ctx.info("Caching analysis results...")
+                    analysis_cache.put(sha, state.pe_data, abs_path)
 
         # Start background angr analysis if requested
         if start_angr_background and ANGR_AVAILABLE and state.filepath:
@@ -273,6 +327,7 @@ async def open_file(
             "status": "success",
             "filepath": abs_path,
             "mode": mode,
+            "loaded_from_cache": _loaded_from_cache,
             "analyses_skipped": skip_list if skip_list else "none",
             "angr_background": "started" if (start_angr_background and ANGR_AVAILABLE) else "not started",
         }
@@ -320,6 +375,7 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     state.pe_object = None
     state.pe_data = None
     state.filepath = None
+    state.loaded_from_cache = False
     state.angr_project = None
     state.angr_cfg = None
     state.angr_loop_cache = None
@@ -497,6 +553,11 @@ async def reanalyze_loaded_pe_file(
 
         state.pe_object = new_pe_obj_from_thread
         state.pe_data = new_parsed_data_from_thread
+
+        # Update cache with fresh results
+        sha256 = state.pe_data.get("file_hashes", {}).get("sha256")
+        if sha256:
+            analysis_cache.put(sha256, state.pe_data, state.filepath)
 
         await ctx.info(f"Successfully re-analyzed PE: {state.filepath}")
         skipped_msg_part = f" (Skipped: {', '.join(normalized_analyses_to_skip) if normalized_analyses_to_skip else 'None'})"
