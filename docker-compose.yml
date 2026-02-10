@@ -1,0 +1,60 @@
+# PeMCP Docker Compose Configuration
+#
+# Usage:
+#   HTTP mode (network/web access):
+#     docker compose up pemcp-http
+#
+#   HTTP mode with a pre-loaded file:
+#     docker compose run --rm pemcp-http --input-file /app/samples/malware.exe
+#
+#   stdio mode (for Claude Code / MCP clients):
+#     docker compose run --rm -i pemcp-stdio
+#
+#   Build only:
+#     docker compose build
+#
+# Environment:
+#   Copy .env.example to .env and set your API keys there,
+#   or export VT_API_KEY in your shell before running.
+
+services:
+  pemcp-http:
+    build: .
+    image: pemcp-toolkit:latest
+    ports:
+      - "${PEMCP_PORT:-8082}:8082"
+    volumes:
+      - ./samples:/app/samples:ro
+      - pemcp-data:/home/pemcp/.pemcp
+    environment:
+      - VT_API_KEY=${VT_API_KEY:-}
+    command:
+      - "--mcp-server"
+      - "--mcp-transport"
+      - "streamable-http"
+      - "--mcp-host"
+      - "0.0.0.0"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/mcp')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+  pemcp-stdio:
+    build: .
+    image: pemcp-toolkit:latest
+    stdin_open: true
+    volumes:
+      - ./samples:/app/samples:ro
+      - pemcp-data:/home/pemcp/.pemcp
+    environment:
+      - VT_API_KEY=${VT_API_KEY:-}
+    command: ["--mcp-server"]
+    profiles:
+      - stdio
+
+volumes:
+  pemcp-data:
+    name: pemcp-data
