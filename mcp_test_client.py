@@ -1882,27 +1882,21 @@ class TestExtendedLibraries:
 
     @pytest.mark.pe_file
     @pytest.mark.optional_lib
+    @pytest.mark.angr
     def test_patch_with_assembly(self):
-        """Assemble and patch instructions into the loaded binary."""
+        """Assemble and patch a NOP into the loaded binary via angr."""
         async def _test():
             async with managed_mcp_session() as s:
-                # Get a valid address from the loaded binary
-                summary = await call_tool(s, "get_analyzed_file_summary",
-                                          {"limit": 1}, expected_type=dict,
-                                          allow_none=True)
-                # Use entry point or fall back to a section address
-                sections = await call_tool(s, "get_pe_data",
-                                           {"key": "sections", "limit": 1},
-                                           allow_none=True)
-                addr = "0x1000"  # safe default
-                if sections and isinstance(sections, dict):
-                    sec_list = sections.get("sections", [])
-                    if sec_list and isinstance(sec_list, list):
-                        va = sec_list[0].get("virtual_address")
-                        if va is not None:
-                            addr = hex(va) if isinstance(va, int) else str(va)
+                # Need a valid absolute VA — use angr's function list
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr (needed for valid VA)")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
                 r = await call_tool(s, "patch_with_assembly",
-                                    {"address": addr,
+                                    {"address": str(addr),
                                      "assembly": "nop",
                                      "architecture": "x86_64"},
                                     expected_type=dict, allow_none=True)
