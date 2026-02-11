@@ -34,6 +34,8 @@ services:
       - "streamable-http"
       - "--mcp-host"
       - "0.0.0.0"
+      - "--samples-path"
+      - "/samples"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/mcp')"]
@@ -51,7 +53,7 @@ services:
       - pemcp-data:/app/home/.pemcp
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
-    command: ["--mcp-server"]
+    command: ["--mcp-server", "--samples-path", "/samples"]
     profiles:
       - stdio
 
