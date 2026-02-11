@@ -144,11 +144,14 @@ class AnalysisCache:
                 # Patch session-specific field
                 pe_data["filepath"] = current_filepath
 
-                # Touch LRU timestamp
-                meta = self._load_meta()
-                if sha256 in meta:
-                    meta[sha256]["last_accessed"] = time.time()
-                    self._save_meta(meta)
+                # Touch LRU timestamp (best-effort, non-critical)
+                try:
+                    meta = self._load_meta()
+                    if sha256 in meta:
+                        meta[sha256]["last_accessed"] = time.time()
+                        self._save_meta(meta)
+                except OSError:
+                    pass  # Stale LRU timestamp is acceptable
 
                 logger.info(f"Cache HIT for {sha256[:12]}...")
                 return pe_data

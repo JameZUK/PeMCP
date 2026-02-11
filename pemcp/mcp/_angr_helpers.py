@@ -70,11 +70,12 @@ def _ensure_project_and_cfg():
 
 
 def _parse_addr(hex_string: str, name: str = "address") -> int:
-    """Parse a hex address string to int."""
+    """Parse an address string (hex or decimal) to int."""
     try:
-        return int(hex_string, 16)
+        # int(x, 0) auto-detects base: 0x prefix → hex, plain digits → decimal
+        return int(hex_string, 0)
     except ValueError:
-        raise ValueError(f"Invalid {name} format. Provide a hex string like '0x401000'.")
+        raise ValueError(f"Invalid {name} format. Provide a hex string like '0x401000' or a decimal integer.")
 
 
 def _resolve_function_address(target_addr: int):
