@@ -68,8 +68,10 @@ build_image() {
 common_args() {
     local args=(
         --rm
+        --user "$(id -u):$(id -g)"
+        -e "HOME=/app/home"
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro"
-        -v "pemcp-data:/home/pemcp/.pemcp"
+        -v "pemcp-data:/app/home/.pemcp"
     )
 
     # Pass VT_API_KEY if set
