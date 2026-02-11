@@ -197,7 +197,10 @@ Notes:
 EOF
 }
 
-# --- Parse global flags ---
+# --- Parse all arguments, separating global flags from command + extras ---
+COMMAND=""
+EXTRA_ARGS=()
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --samples)
@@ -212,14 +215,19 @@ while [[ $# -gt 0 ]]; do
             CONTAINER_SAMPLES="/$(basename "$SAMPLES_DIR")"
             shift 2
             ;;
+        --help|-h|--build|--stdio|--analyze|--shell)
+            COMMAND="$1"
+            shift
+            ;;
         *)
-            break
+            EXTRA_ARGS+=("$1")
+            shift
             ;;
     esac
 done
 
 # --- Main ---
-case "${1:-}" in
+case "${COMMAND:-}" in
     --help|-h)
         show_help
         ;;
@@ -227,22 +235,20 @@ case "${1:-}" in
         build_image
         ;;
     --stdio)
-        shift
-        cmd_stdio "$@"
+        cmd_stdio "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
         ;;
     --analyze)
-        shift
-        if [[ $# -lt 1 ]]; then
+        if [[ ${#EXTRA_ARGS[@]} -lt 1 ]]; then
             echo "Error: --analyze requires a file path."
             echo "Usage: ./run.sh --analyze <file>"
             exit 1
         fi
-        cmd_analyze "$@"
+        cmd_analyze "${EXTRA_ARGS[@]}"
         ;;
     --shell)
         cmd_shell
         ;;
     *)
-        cmd_http "$@"
+        cmd_http "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
         ;;
 esac
