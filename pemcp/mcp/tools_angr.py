@@ -174,7 +174,10 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
             return {"function_name": func.name, "address": hex(addr_to_use), "c_pseudocode": dec.codegen.text}
         except Exception as e: return {"error": f"Decompilation failed: {e}"}
 
-    result = await asyncio.to_thread(_decompile)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_decompile), timeout=300)
+    except asyncio.TimeoutError:
+        return {"error": "Decompilation timed out after 300 seconds."}
     return await _check_mcp_response_size(ctx, result, "decompile_function_with_angr")
 
 @tool_decorator
@@ -201,7 +204,10 @@ async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any
         edges_data = [{"src": hex(s.addr), "dst": hex(d.addr)} for s, d in func.graph.edges]
         return {"function_name": func.name, "address": hex(addr_to_use), "nodes": nodes_data, "edges": edges_data}
 
-    result = await asyncio.to_thread(_extract_graph)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_extract_graph), timeout=300)
+    except asyncio.TimeoutError:
+        return {"error": "CFG extraction timed out after 300 seconds."}
     return await _check_mcp_response_size(ctx, result, "get_function_cfg")
 
 @tool_decorator
@@ -380,8 +386,14 @@ async def emulate_function_execution(
 
             if len(simgr.deadended) > 0:
                 final = simgr.deadended[0]
-                try: ret_val = hex(final.solver.eval(final.regs.eax))
-                except Exception: ret_val = "unknown"
+                try:
+                    # Use the architecture-appropriate return register
+                    ret_reg = state.angr_project.arch.register_names.get(
+                        state.angr_project.arch.ret_offset, "eax"
+                    )
+                    ret_val = hex(final.solver.eval(getattr(final.regs, ret_reg)))
+                except Exception:
+                    ret_val = "unknown"
                 return {
                     "status": "success",
                     "return_value": ret_val,
@@ -611,8 +623,6 @@ async def get_backward_slice(
     target_addr = _parse_addr(target_address)
 
     def _slice():
-        import networkx as nx
-
         _ensure_project_and_cfg()
 
         try:
@@ -663,8 +673,6 @@ async def get_forward_slice(
     source_addr = _parse_addr(source_address)
 
     def _slice():
-        import networkx as nx
-
         _ensure_project_and_cfg()
 
         try:
@@ -709,8 +717,6 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
     target_addr = _parse_addr(target_address)
 
     def _find_dominators():
-        import networkx as nx
-
         _ensure_project_and_cfg()
 
         try:
@@ -860,8 +866,9 @@ async def extract_function_constants(
             for insn in block.capstone.insns:
                 # Iterate operands
                 for op in insn.operands:
-                    # 2 corresponds to X86_OP_IMM (Immediate value)
-                    if op.type == 2:
+                    # CS_OP_IMM (Capstone immediate operand, value 2 across all archs)
+                    CS_OP_IMM = 2
+                    if op.type == CS_OP_IMM:
                         val = op.value.imm
                         # Filter out likely noise (small loop counters, etc)
                         if val > 0x1000:

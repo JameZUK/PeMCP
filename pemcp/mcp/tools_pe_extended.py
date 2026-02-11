@@ -125,7 +125,7 @@ async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
     import datetime
     timestamp = fh.TimeDateStamp
     try:
-        compile_time = datetime.datetime.utcfromtimestamp(timestamp).isoformat() + "Z"
+        compile_time = datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc).isoformat()
     except Exception:
         compile_time = "invalid"
 
@@ -859,8 +859,8 @@ async def scan_for_api_hashes(
         file_data = pe.__data__
         matches = []
 
-        # Scan for 4-byte values matching known hashes
-        for i in range(len(file_data) - 3):
+        # Scan for 4-byte aligned values matching known hashes
+        for i in range(0, len(file_data) - 3, 4):
             val = struct.unpack_from('<I', file_data, i)[0]
             if val in hash_to_api:
                 section_name = None

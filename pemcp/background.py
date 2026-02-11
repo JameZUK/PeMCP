@@ -7,6 +7,11 @@ import threading
 import logging
 
 from pemcp.config import state, logger
+from pemcp.state import get_current_state, set_current_state
+
+# Global lock and flag for the heartbeat monitor thread (shared across sessions)
+_monitor_lock = threading.Lock()
+_monitor_started = False
 
 
 def _console_heartbeat_loop():
@@ -60,11 +65,13 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
     """Helper to run a blocking function in a thread and update the registry."""
 
     # Lazy-start the heartbeat monitor on the first background request
-    if not state.monitor_thread_started:
-        monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
-        monitor_thread.start()
-        state.monitor_thread_started = True
-        logger.info("Console heartbeat monitor started.")
+    global _monitor_started
+    with _monitor_lock:
+        if not _monitor_started:
+            monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
+            monitor_thread.start()
+            _monitor_started = True
+            logger.info("Console heartbeat monitor started.")
 
     try:
         # Inject the task_id into the function if it accepts 'task_id_for_progress'
@@ -82,7 +89,8 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
         print(f"\n[!] Task {task_id[:8]} failed: {e}")
 
 
-def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch_hint: str = "amd64"):
+def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch_hint: str = "amd64",
+                           _session_state=None):
     """
     Unified background worker for Angr analysis.  Supports PE, ELF, Mach-O,
     and shellcode (via ``mode='shellcode'``).
@@ -90,6 +98,11 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
     This is the single implementation used by both CLI startup pre-loading
     and the ``open_file`` MCP tool.
     """
+    # Propagate the caller's session state so the StateProxy resolves to the
+    # correct AnalyzerState inside this thread.
+    if _session_state is not None:
+        set_current_state(_session_state)
+
     import angr  # imported here since this only runs when ANGR_AVAILABLE is True
 
     try:
@@ -160,6 +173,9 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
     This is the single entry-point used by ``main.py`` startup and the
     ``open_file`` MCP tool — no more duplicated worker code.
     """
+    # Capture the caller's session state to propagate to the background thread
+    _session_state = get_current_state()
+
     state.set_task(task_id, {
         "status": "running",
         "progress_percent": 0,
@@ -168,14 +184,17 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
         "tool": tool_label,
     })
 
-    if not state.monitor_thread_started:
-        monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
-        monitor_thread.start()
-        state.monitor_thread_started = True
+    global _monitor_started
+    with _monitor_lock:
+        if not _monitor_started:
+            monitor_thread = threading.Thread(target=_console_heartbeat_loop, daemon=True)
+            monitor_thread.start()
+            _monitor_started = True
 
     angr_thread = threading.Thread(
         target=angr_background_worker,
         args=(filepath, task_id, mode, arch_hint),
+        kwargs={"_session_state": _session_state},
         daemon=True,
     )
     angr_thread.start()

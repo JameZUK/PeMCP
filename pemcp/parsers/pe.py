@@ -40,63 +40,98 @@ if SIGNIFY_AVAILABLE:
 
 # --- Refactored PE Parsing Helper Functions ---
 def _parse_file_hashes(data: bytes) -> Dict[str, Optional[str]]:
-    hashes: Dict[str, Optional[str]] = {"md5": None, "sha1": None, "sha256": None, "ssdeep": None}
+    hashes: Dict[str, Optional[str]] = {
+        "md5": None, "sha1": None, "sha256": None, "ssdeep": None,
+    }
     try:
         hashes["md5"] = hashlib.md5(data).hexdigest()
         hashes["sha1"] = hashlib.sha1(data).hexdigest()
         hashes["sha256"] = hashlib.sha256(data).hexdigest()
-        try: hashes["ssdeep"] = ssdeep_hasher.hash(data)
-        except Exception as e_ssdeep: logger.warning(f"ssdeep hash error: {e_ssdeep}"); hashes["ssdeep"] = f"Error: {e_ssdeep}"
-    except Exception as e_hash: logger.warning(f"File hash error: {e_hash}")
+        try:
+            hashes["ssdeep"] = ssdeep_hasher.hash(data)
+        except Exception as e_ssdeep:
+            logger.warning(f"ssdeep hash error: {e_ssdeep}")
+            hashes["ssdeep"] = f"Error: {e_ssdeep}"
+    except Exception as e_hash:
+        logger.warning(f"File hash error: {e_hash}")
     return hashes
 
+
 def _parse_dos_header(pe: pefile.PE) -> Dict[str, Any]:
-    if hasattr(pe, 'DOS_HEADER') and pe.DOS_HEADER: return pe.DOS_HEADER.dump_dict()
+    if hasattr(pe, 'DOS_HEADER') and pe.DOS_HEADER:
+        return pe.DOS_HEADER.dump_dict()
     return {"error": "DOS Header not found or malformed."}
 
+
 def _parse_nt_headers(pe: pefile.PE) -> Tuple[Dict[str, Any], str]:
-    nt_headers_info: Dict[str, Any] = {}; magic_type_str = "Unknown"
-    if hasattr(pe, 'NT_HEADERS') and pe.NT_HEADERS:
-        nt_headers_info['signature'] = hex(pe.NT_HEADERS.Signature)
-        if hasattr(pe.NT_HEADERS, 'FILE_HEADER') and pe.NT_HEADERS.FILE_HEADER:
-            fh_dict = pe.NT_HEADERS.FILE_HEADER.dump_dict()
-            fh_dict['characteristics_list'] = get_file_characteristics(pe.NT_HEADERS.FILE_HEADER.Characteristics)
-            fh_dict['TimeDateStamp_ISO'] = format_timestamp(pe.NT_HEADERS.FILE_HEADER.TimeDateStamp)
-            nt_headers_info['file_header'] = fh_dict
-        else: nt_headers_info['file_header'] = {"error": "File Header not found."}
-        if hasattr(pe.NT_HEADERS, 'OPTIONAL_HEADER') and pe.NT_HEADERS.OPTIONAL_HEADER:
-            oh_dict = pe.NT_HEADERS.OPTIONAL_HEADER.dump_dict()
-            oh_dict['dll_characteristics_list'] = get_dll_characteristics(pe.NT_HEADERS.OPTIONAL_HEADER.DllCharacteristics)
-            magic_val = pe.NT_HEADERS.OPTIONAL_HEADER.Magic
-            magic_type_str = "PE32 (32-bit)" if magic_val==0x10b else "PE32+ (64-bit)" if magic_val==0x20b else "Unknown"
-            oh_dict['pe_type'] = magic_type_str
-            nt_headers_info['optional_header'] = oh_dict
-        else: nt_headers_info['optional_header'] = {"error": "Optional Header not found."}
-    else: nt_headers_info = {"error": "NT Headers not found."}
+    nt_headers_info: Dict[str, Any] = {}
+    magic_type_str = "Unknown"
+
+    if not (hasattr(pe, 'NT_HEADERS') and pe.NT_HEADERS):
+        return {"error": "NT Headers not found."}, magic_type_str
+
+    nt_headers_info['signature'] = hex(pe.NT_HEADERS.Signature)
+
+    if hasattr(pe.NT_HEADERS, 'FILE_HEADER') and pe.NT_HEADERS.FILE_HEADER:
+        fh_dict = pe.NT_HEADERS.FILE_HEADER.dump_dict()
+        fh_dict['characteristics_list'] = get_file_characteristics(
+            pe.NT_HEADERS.FILE_HEADER.Characteristics
+        )
+        fh_dict['TimeDateStamp_ISO'] = format_timestamp(
+            pe.NT_HEADERS.FILE_HEADER.TimeDateStamp
+        )
+        nt_headers_info['file_header'] = fh_dict
+    else:
+        nt_headers_info['file_header'] = {"error": "File Header not found."}
+
+    if hasattr(pe.NT_HEADERS, 'OPTIONAL_HEADER') and pe.NT_HEADERS.OPTIONAL_HEADER:
+        oh_dict = pe.NT_HEADERS.OPTIONAL_HEADER.dump_dict()
+        oh_dict['dll_characteristics_list'] = get_dll_characteristics(
+            pe.NT_HEADERS.OPTIONAL_HEADER.DllCharacteristics
+        )
+        magic_val = pe.NT_HEADERS.OPTIONAL_HEADER.Magic
+        if magic_val == 0x10b:
+            magic_type_str = "PE32 (32-bit)"
+        elif magic_val == 0x20b:
+            magic_type_str = "PE32+ (64-bit)"
+        oh_dict['pe_type'] = magic_type_str
+        nt_headers_info['optional_header'] = oh_dict
+    else:
+        nt_headers_info['optional_header'] = {"error": "Optional Header not found."}
+
     return nt_headers_info, magic_type_str
+
 
 def _parse_data_directories(pe: pefile.PE) -> List[Dict[str, Any]]:
     data_dirs_list = []
     if hasattr(pe, 'OPTIONAL_HEADER') and hasattr(pe.OPTIONAL_HEADER, 'DATA_DIRECTORY'):
         for i, entry in enumerate(pe.OPTIONAL_HEADER.DATA_DIRECTORY):
-            entry_info = entry.dump_dict(); entry_info['name'] = entry.name; entry_info['index'] = i
+            entry_info = entry.dump_dict()
+            entry_info['name'] = entry.name
+            entry_info['index'] = i
             data_dirs_list.append(entry_info)
     return data_dirs_list
+
 
 def _parse_sections(pe: pefile.PE) -> List[Dict[str, Any]]:
     sections_list = []
     if hasattr(pe, 'sections'):
         for section in pe.sections:
             sec_dict = section.dump_dict()
-            sec_dict['name_str'] = section.Name.decode('utf-8','ignore').rstrip('\x00')
+            sec_dict['name_str'] = section.Name.decode('utf-8', 'ignore').rstrip('\x00')
             sec_dict['characteristics_list'] = get_section_characteristics(section.Characteristics)
             sec_dict['entropy'] = section.get_entropy()
             try:
                 section_data = section.get_data()
-                sec_dict['md5']=hashlib.md5(section_data).hexdigest(); sec_dict['sha1']=hashlib.sha1(section_data).hexdigest(); sec_dict['sha256']=hashlib.sha256(section_data).hexdigest()
-                try: sec_dict['ssdeep'] = ssdeep_hasher.hash(section_data)
-                except Exception as e: sec_dict['ssdeep'] = f"Error: {e}"
-            except Exception as e: logger.warning(f"Section hash error {sec_dict['name_str']}: {e}")
+                sec_dict['md5'] = hashlib.md5(section_data).hexdigest()
+                sec_dict['sha1'] = hashlib.sha1(section_data).hexdigest()
+                sec_dict['sha256'] = hashlib.sha256(section_data).hexdigest()
+                try:
+                    sec_dict['ssdeep'] = ssdeep_hasher.hash(section_data)
+                except Exception as e:
+                    sec_dict['ssdeep'] = f"Error: {e}"
+            except Exception as e:
+                logger.warning(f"Section hash error {sec_dict['name_str']}: {e}")
             sections_list.append(sec_dict)
     return sections_list
 

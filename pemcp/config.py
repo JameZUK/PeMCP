@@ -38,11 +38,14 @@ import networkx as nx
 
 from typing import Dict, Any, Optional, List, Tuple, Set, Union, Type
 
-from pemcp.state import AnalyzerState
+from pemcp.state import AnalyzerState, StateProxy
 from pemcp.user_config import get_config_value
 
 # --- Global State Instance ---
-state = AnalyzerState()
+# StateProxy delegates to a per-session AnalyzerState via contextvars.
+# In stdio mode (single client) this is equivalent to a plain AnalyzerState.
+# In HTTP mode each MCP session transparently gets its own state.
+state = StateProxy()
 
 # --- Analysis Cache Instance ---
 from pemcp.cache import AnalysisCache  # noqa: E402
