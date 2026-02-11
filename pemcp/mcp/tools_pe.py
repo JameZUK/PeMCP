@@ -389,21 +389,12 @@ async def close_file(ctx: Context) -> Dict[str, str]:
 
     closed_path = state.filepath
 
-    if state.pe_object:
-        try:
-            state.pe_object.close()
-        except Exception:
-            pass
-
-    state.pe_object = None
+    # Use atomic reset methods (safe for shared references from default state)
+    state.close_pe()
+    state.reset_angr()
     state.pe_data = None
     state.filepath = None
     state.loaded_from_cache = False
-    state.angr_project = None
-    state.angr_cfg = None
-    state.angr_loop_cache = None
-    state.angr_loop_cache_config = None
-    state.angr_hooks = {}
 
     await ctx.info(f"Closed file: {closed_path}")
     return {"status": "success", "message": f"File '{closed_path}' closed and analysis data cleared."}
