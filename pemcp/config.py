@@ -330,11 +330,13 @@ except ImportError:
     pass
 
 SPEAKEASY_AVAILABLE = False
+SPEAKEASY_IMPORT_ERROR = ""
 try:
     import speakeasy  # noqa: F401
     SPEAKEASY_AVAILABLE = True
-except ImportError:
-    pass
+except Exception as e:
+    SPEAKEASY_IMPORT_ERROR = str(e)
+    logger.warning(f"Speakeasy import failed: {type(e).__name__}: {e}")
 
 UNIPACKER_AVAILABLE = False
 try:
