@@ -3,8 +3,16 @@
 """
 Comprehensive MCP Integration Test Suite for PeMCP.
 
-Tests all 104 MCP tools across every category: file management, PE analysis,
+Tests all 104+ MCP tools across every category: file management, PE analysis,
 strings, deobfuscation, triage, Angr, multi-format, extended libraries, and more.
+
+Coverage includes:
+  - Basic success-path tests for every tool
+  - StringSifter integration (rank_with_sifter=True, min_sifter_score filtering)
+  - Parametrized tests for: hash algorithms, architectures, sort keys,
+    FLOSS string types, min_length values
+  - Error/edge-case tests: invalid inputs, missing files, out-of-range params,
+    invalid hex, double-close, no-file-loaded guards
 
 Supports both streamable-http (default) and SSE transports.
 
@@ -448,6 +456,18 @@ class TestConfigAndUtility:
                 assert r is not None
         run(_test())
 
+    @pytest.mark.no_file
+    def test_set_api_key(self):
+        """set_api_key should accept and confirm a dummy key."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "set_api_key",
+                                    {"key_name": "test_dummy_key",
+                                     "key_value": "dummy_value_for_testing"},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. Cache Management Tools
@@ -469,6 +489,15 @@ class TestCacheManagement:
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "remove_cached_analysis",
                                     {"sha256_hash": "0" * 64}, expected_type=dict)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_clear_analysis_cache(self):
+        """clear_analysis_cache should succeed even if cache is empty."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "clear_analysis_cache", expected_type=dict)
                 assert r is not None
         run(_test())
 
@@ -507,6 +536,44 @@ class TestFileManagement:
                     f"detect_binary_format: expected 'primary_format' or 'detected_formats' "
                     f"in response keys {set(r.keys())}"
                 )
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_close_file(self):
+        """close_file should succeed when a file is loaded.
+
+        Note: Each test uses its own MCP session (with inherited state),
+        so closing the file here does not affect other tests.
+        """
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "close_file", expected_type=dict,
+                                    expected_status=("status", "success"))
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_reanalyze_loaded_pe_file(self):
+        """reanalyze_loaded_pe_file should re-parse the currently loaded file."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "reanalyze_loaded_pe_file",
+                                    {"analyses_to_skip": ["floss", "capa"]},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_open_file_with_sample(self):
+        """open_file success path — requires PEMCP_TEST_SAMPLE env var."""
+        async def _test():
+            if not SAMPLE_FILE:
+                pytest.skip("Set PEMCP_TEST_SAMPLE to enable open_file success test")
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "open_file",
+                                    {"file_path": SAMPLE_FILE,
+                                     "analyses_to_skip": ["floss", "capa"]},
+                                    expected_type=dict)
+                assert r is not None
         run(_test())
 
 
@@ -675,6 +742,17 @@ class TestPEExtended:
                 await call_tool(s, "get_import_hash_analysis", expected_type=dict)
         run(_test())
 
+    @pytest.mark.pe_file
+    @pytest.mark.parametrize("algorithm", ["ror13", "djb2", "crc32"])
+    def test_scan_for_api_hashes_algorithms(self, algorithm):
+        """Verify each supported hash_algorithm value."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "scan_for_api_hashes",
+                                {"hash_algorithm": algorithm, "limit": 10},
+                                expected_type=dict)
+        run(_test())
+
     @pytest.mark.no_file
     def test_deobfuscate_xor_multi_byte(self):
         """XOR multi-byte is a pure-data tool (no file needed)."""
@@ -743,6 +821,55 @@ class TestStringAnalysis:
                                     allow_none=True)
                 if r is not None:
                     assert isinstance(r, (list, dict))
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_extract_strings_with_sifter(self):
+        """Exercise the StringSifter ranking path (rank_with_sifter=True)."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "extract_strings_from_binary",
+                                    {"limit": 10, "min_length": 5,
+                                     "rank_with_sifter": True,
+                                     "sort_by_score": True},
+                                    allow_none=True)
+                if r is not None:
+                    assert isinstance(r, (list, dict))
+                    # If sifter ran, entries should have scores
+                    if isinstance(r, list) and r:
+                        assert "sifter_score" in r[0], (
+                            "rank_with_sifter=True but result has no sifter_score"
+                        )
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_extract_strings_with_sifter_score_filter(self):
+        """StringSifter with min_sifter_score filtering."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "extract_strings_from_binary",
+                                    {"limit": 10, "min_length": 5,
+                                     "rank_with_sifter": True,
+                                     "min_sifter_score": 0.5,
+                                     "sort_by_score": True},
+                                    allow_none=True)
+                if r is not None and isinstance(r, list):
+                    for item in r:
+                        assert item.get("sifter_score", 0) >= 0.5
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.parametrize("min_len", [3, 8, 15])
+    def test_extract_strings_min_length(self, min_len):
+        """Verify different min_length values are respected."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "extract_strings_from_binary",
+                                    {"limit": 10, "min_length": min_len},
+                                    allow_none=True)
+                if r is not None and isinstance(r, list):
+                    for item in r:
+                        assert len(item.get("string", "")) >= min_len
         run(_test())
 
     @pytest.mark.pe_file
@@ -826,6 +953,21 @@ class TestStringAnalysis:
                                     {"string_offset": offset},
                                     allow_none=True)
                 assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.parametrize("string_type", [
+        "static_strings", "stack_strings", "tight_strings", "decoded_strings",
+    ])
+    def test_get_floss_string_types(self, string_type):
+        """Test each FLOSS string_type individually."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_floss_analysis_info",
+                                    {"string_type": string_type, "limit": 5},
+                                    expected_type=dict, allow_none=True)
+                if r is not None:
+                    assert "strings" in r or "error" in r or "status" in r
         run(_test())
 
     @pytest.mark.pe_file
@@ -1172,6 +1314,80 @@ class TestAngrCore:
                                 expected_type=dict, allow_none=True)
         run(_test())
 
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    @pytest.mark.parametrize("sort_by", ["blocks", "edges"])
+    def test_get_function_complexity_sort_by(self, sort_by):
+        """Verify each sort_by value for get_function_complexity_list."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "get_function_complexity_list",
+                                    {"limit": 5, "sort_by": sort_by},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_find_path_to_address(self):
+        """find_path_to_address with a known function address."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                r = await call_tool(s, "find_path_to_address",
+                                    {"target_address": str(addr),
+                                     "run_in_background": False},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_emulate_function_execution(self):
+        """Emulate the first function found by the complexity list."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                r = await call_tool(s, "emulate_function_execution",
+                                    {"function_address": str(addr),
+                                     "max_steps": 200,
+                                     "run_in_background": False},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_patch_binary_memory(self):
+        """Patch a byte in memory (NOP at the entry point)."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                r = await call_tool(s, "patch_binary_memory",
+                                    {"address": str(addr),
+                                     "patch_bytes_hex": "90"},
+                                    expected_type=dict)
+                assert r is not None
+        run(_test())
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 12. Angr Disassembly & Function Recovery Tools
@@ -1442,6 +1658,85 @@ class TestAngrForensic:
                                 allow_none=True)
         run(_test())
 
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_diff_binaries(self):
+        """diff_binaries requires a second file — skip if PEMCP_TEST_SAMPLE not set."""
+        async def _test():
+            if not SAMPLE_FILE:
+                pytest.skip("Set PEMCP_TEST_SAMPLE to enable diff_binaries test")
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "diff_binaries",
+                                    {"file_path_b": SAMPLE_FILE,
+                                     "limit": 10,
+                                     "run_in_background": False},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_save_patched_binary(self):
+        """save_patched_binary writes the current binary to a temp path."""
+        async def _test():
+            import tempfile
+            async with managed_mcp_session() as s:
+                with tempfile.NamedTemporaryFile(suffix=".exe", delete=False) as tmp:
+                    tmp_path = tmp.name
+                try:
+                    r = await call_tool(s, "save_patched_binary",
+                                        {"output_path": tmp_path},
+                                        expected_type=dict, allow_none=True)
+                    assert r is not None
+                finally:
+                    import os
+                    if os.path.exists(tmp_path):
+                        os.unlink(tmp_path)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_find_path_with_custom_input(self):
+        """Symbolic execution with custom symbolic inputs."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                r = await call_tool(s, "find_path_with_custom_input",
+                                    {"target_address": str(addr),
+                                     "max_steps": 200,
+                                     "run_in_background": False},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_emulate_with_watchpoints(self):
+        """Emulate a function with memory/register watchpoints."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                complexity = await call_tool(s, "get_function_complexity_list",
+                                             {"limit": 1}, expected_type=dict,
+                                             allow_none=True)
+                funcs = complexity.get("functions", []) if complexity else []
+                if not funcs:
+                    pytest.skip("No functions found by Angr")
+                addr = funcs[0].get("address", funcs[0].get("addr"))
+                r = await call_tool(s, "emulate_with_watchpoints",
+                                    {"function_address": str(addr),
+                                     "watch_registers": ["eax", "ebx"],
+                                     "max_steps": 200,
+                                     "run_in_background": False},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 16. Extended Library Tools (LIEF, Capstone, Keystone, Speakeasy, etc.)
@@ -1540,6 +1835,67 @@ class TestExtendedLibraries:
                                 expected_type=dict)
         run(_test())
 
+    @pytest.mark.no_file
+    @pytest.mark.optional_lib
+    @pytest.mark.parametrize("arch", ["x86", "x86_64", "arm", "arm64"])
+    def test_disassemble_raw_bytes_architectures(self, arch):
+        """Verify disassembly across different architectures."""
+        async def _test():
+            # Use architecture-appropriate bytes
+            test_bytes = {
+                "x86":    "90909090cccc",            # NOP NOP NOP NOP INT3 INT3
+                "x86_64": "90909090cccc",            # NOP NOP NOP NOP INT3 INT3
+                "arm":    "0000a0e10000a0e1",        # MOV R0,R0 x2 (ARM)
+                "arm64":  "1f2003d51f2003d5",        # NOP NOP (AArch64)
+            }
+            async with managed_mcp_session() as s:
+                await call_tool(s, "disassemble_raw_bytes",
+                                {"hex_bytes": test_bytes.get(arch, "90909090"),
+                                 "architecture": arch, "limit": 10},
+                                expected_type=dict)
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_modify_pe_section(self):
+        """Rename a PE section (non-destructive — in-memory only)."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "modify_pe_section",
+                                    {"section_name": ".text",
+                                     "add_characteristics": 0},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.no_file
+    @pytest.mark.optional_lib
+    def test_patch_with_assembly(self):
+        """Assemble and patch instructions at address 0x0 (in-memory)."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "patch_with_assembly",
+                                    {"address": "0x0",
+                                     "assembly": "nop; ret",
+                                     "architecture": "x86_64"},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_compare_file_similarity(self):
+        """compare_file_similarity requires a second file."""
+        async def _test():
+            if not SAMPLE_FILE:
+                pytest.skip("Set PEMCP_TEST_SAMPLE to enable compare_file_similarity test")
+            async with managed_mcp_session() as s:
+                r = await call_tool(s, "compare_file_similarity",
+                                    {"file_path_b": SAMPLE_FILE},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 17. Multi-Format Binary Analysis Tools
@@ -1628,6 +1984,32 @@ class TestMultiFormat:
                                 expected_type=dict)
         run(_test())
 
+    @pytest.mark.pe_file
+    @pytest.mark.optional_lib
+    def test_dotnet_disassemble_method(self):
+        """Disassemble a .NET method by RVA.  Skipped for non-.NET samples."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                # First check if we have .NET metadata at all
+                meta = await call_tool(s, "dotnet_analyze", {"limit": 5},
+                                       expected_type=dict, allow_none=True)
+                if meta is None:
+                    pytest.skip("No .NET metadata available in sample")
+                # Look for a method RVA
+                methods = meta.get("methods") or meta.get("method_table") or []
+                if isinstance(methods, dict):
+                    methods = list(methods.values()) if methods else []
+                if not methods:
+                    pytest.skip("No .NET methods found to disassemble")
+                first = methods[0] if isinstance(methods, list) else methods
+                rva = (first.get("rva") or first.get("method_rva")
+                       or first.get("RVA") or "0x0")
+                r = await call_tool(s, "dotnet_disassemble_method",
+                                    {"method_rva": str(rva), "limit": 50},
+                                    expected_type=dict, allow_none=True)
+                assert r is not None
+        run(_test())
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 18. Error Handling & Edge Cases
@@ -1666,6 +2048,136 @@ class TestErrorHandling:
                     {"file_path": "/nonexistent/path/to/file.exe"},
                     error_substring="not found",
                 )
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_extract_strings_invalid_limit(self):
+        """extract_strings_from_binary should reject limit <= 0."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "extract_strings_from_binary",
+                    {"limit": 0},
+                )
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_extract_strings_no_file(self):
+        """extract_strings_from_binary should error without a loaded file."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                # Close the file first (may already be None in no_file context)
+                await call_tool(s, "close_file", expected_type=dict, allow_none=True)
+                await call_tool_expect_error(
+                    s, "extract_strings_from_binary",
+                    {"limit": 10},
+                    error_substring="no pe file",
+                )
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_deobfuscate_base64_invalid_hex(self):
+        """deobfuscate_base64 with non-hex input should error."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "deobfuscate_base64",
+                    {"hex_string": "not_valid_hex!!"},
+                )
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_search_strings_empty_terms(self):
+        """search_for_specific_strings with empty search_terms list."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                # Empty list — should return empty results or error
+                r = await call_tool(s, "search_for_specific_strings",
+                                    {"search_terms": []},
+                                    expected_type=dict, allow_none=True)
+                # Not a failure; just verifying it doesn't crash
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_angr_invalid_address_format(self):
+        """Angr tools should handle obviously invalid address strings."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "get_function_cfg",
+                    {"function_address": "not_an_address"},
+                )
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_hex_dump_no_file(self):
+        """get_hex_dump should error gracefully with no file loaded."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool(s, "close_file", expected_type=dict, allow_none=True)
+                await call_tool_expect_error(
+                    s, "get_hex_dump",
+                    {"start_offset": 0, "length": 16},
+                )
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_sifter_score_out_of_range(self):
+        """min_sifter_score outside 0.0-1.0 should be rejected."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "extract_strings_from_binary",
+                    {"limit": 10, "rank_with_sifter": True,
+                     "min_sifter_score": 5.0},
+                )
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_patch_binary_invalid_hex(self):
+        """patch_binary_memory should reject invalid hex bytes."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "patch_binary_memory",
+                    {"address": "0x0", "patch_bytes_hex": "ZZZZ"},
+                )
+        run(_test())
+
+    @pytest.mark.no_file
+    def test_close_file_when_none_loaded(self):
+        """close_file with nothing loaded should return no_file status."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                # Ensure nothing is loaded
+                await call_tool(s, "close_file", expected_type=dict, allow_none=True)
+                r = await call_tool(s, "close_file", expected_type=dict)
+                assert r.get("status") == "no_file"
+        run(_test())
+
+    @pytest.mark.pe_file
+    @pytest.mark.angr
+    def test_hook_invalid_address(self):
+        """hook_function with an invalid address should error."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                await call_tool_expect_error(
+                    s, "hook_function",
+                    {"address_or_name": "not_valid_address", "nop": True},
+                )
+        run(_test())
+
+    @pytest.mark.pe_file
+    def test_get_pe_data_multiple_valid_keys(self):
+        """get_pe_data should handle multiple calls with different keys gracefully."""
+        async def _test():
+            async with managed_mcp_session() as s:
+                for key in ["file_hashes", "sections", "imports"]:
+                    r = await call_tool(s, "get_pe_data",
+                                        {"key": key, "limit": 3},
+                                        allow_none=True)
         run(_test())
 
 
