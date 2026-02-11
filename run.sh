@@ -108,6 +108,7 @@ cmd_http() {
         -p "$CONTAINER_PORT:8082" \
         "$IMAGE_NAME" \
         --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
+        --samples-path "$CONTAINER_SAMPLES" \
         "$@"
 }
 
@@ -120,6 +121,7 @@ cmd_stdio() {
         $(common_args) \
         "$IMAGE_NAME" \
         --mcp-server \
+        --samples-path "$CONTAINER_SAMPLES" \
         "$@"
 }
 
