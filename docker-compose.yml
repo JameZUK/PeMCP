@@ -5,7 +5,7 @@
 #     docker compose up pemcp-http
 #
 #   HTTP mode with a pre-loaded file:
-#     docker compose run --rm pemcp-http --input-file /app/samples/malware.exe
+#     docker compose run --rm pemcp-http --input-file /samples/malware.exe
 #
 #   stdio mode (for Claude Code / MCP clients):
 #     docker compose run --rm -i pemcp-stdio
@@ -24,7 +24,7 @@ services:
     ports:
       - "${PEMCP_PORT:-8082}:8082"
     volumes:
-      - ./samples:/app/samples:ro
+      - ./samples:/samples:ro
       - pemcp-data:/home/pemcp/.pemcp
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
@@ -47,7 +47,7 @@ services:
     image: pemcp-toolkit:latest
     stdin_open: true
     volumes:
-      - ./samples:/app/samples:ro
+      - ./samples:/samples:ro
       - pemcp-data:/home/pemcp/.pemcp
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
