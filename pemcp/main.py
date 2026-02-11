@@ -46,6 +46,7 @@ import pemcp.mcp.tools_triage
 import pemcp.mcp.tools_cache
 import pemcp.mcp.tools_config
 import pemcp.mcp.tools_classification
+import pemcp.mcp.tools_samples
 
 
 def main():
@@ -108,6 +109,7 @@ def main():
     mcp_group.add_argument("--mcp-port", type=int, default=8082, help="MCP server port (default: 8082).")
     mcp_group.add_argument("--mcp-transport", type=str, default="stdio", choices=["stdio", "sse", "streamable-http"], help="MCP transport protocol: 'stdio' (default), 'streamable-http' (recommended for network), or 'sse' (deprecated).")
     mcp_group.add_argument("--allowed-paths", nargs="+", default=None, help="Restrict open_file to these directories (security sandbox for HTTP mode). Accepts multiple paths.")
+    mcp_group.add_argument("--samples-path", type=str, default=None, help="Path to the directory containing sample files for analysis. Exposed via the list_samples tool. Falls back to PEMCP_SAMPLES env var if not set.")
 
     args = None
     try:
@@ -215,6 +217,18 @@ def main():
                 "Running in network mode without --allowed-paths. "
                 "MCP clients can open arbitrary files. Consider using --allowed-paths for security."
             )
+
+        # Configure samples directory
+        samples_path = args.samples_path or os.environ.get("PEMCP_SAMPLES")
+        if samples_path:
+            resolved = str(Path(samples_path).resolve())
+            if os.path.isdir(resolved):
+                state.samples_path = resolved
+                logger.info(f"Samples directory configured: {resolved}")
+            else:
+                logger.warning(f"Samples path does not exist or is not a directory: {resolved}")
+        else:
+            logger.info("No samples directory configured. Use --samples-path or set PEMCP_SAMPLES env var to enable the list_samples tool.")
 
         # --- Optional Pre-loading (only when --input-file is provided) ---
         if abs_input_file:

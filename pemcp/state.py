@@ -15,6 +15,9 @@ class AnalyzerState:
         # Path sandboxing for network-exposed MCP servers
         self.allowed_paths: Optional[List[str]] = None  # None = no restriction
 
+        # Samples directory path (configured via --samples-path or PEMCP_SAMPLES env var)
+        self.samples_path: Optional[str] = None
+
         # Angr State
         self.angr_project = None
         self.angr_cfg = None

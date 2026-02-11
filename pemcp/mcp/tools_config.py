@@ -133,6 +133,7 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
         "requests_available": REQUESTS_AVAILABLE,
         "file_loaded": state.filepath is not None,
         "loaded_filepath": state.filepath,
+        "samples_path": state.samples_path,
     }
 
     return config
