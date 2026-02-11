@@ -158,6 +158,9 @@ async def open_file(
         state.filepath = None
         state.angr_project = None
         state.angr_cfg = None
+        state.angr_loop_cache = None
+        state.angr_loop_cache_config = None
+        state.angr_hooks = {}
 
     _loaded_from_cache = False
 
@@ -398,6 +401,7 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     state.angr_cfg = None
     state.angr_loop_cache = None
     state.angr_loop_cache_config = None
+    state.angr_hooks = {}
 
     await ctx.info(f"Closed file: {closed_path}")
     return {"status": "success", "message": f"File '{closed_path}' closed and analysis data cleared."}

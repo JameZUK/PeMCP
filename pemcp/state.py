@@ -1,10 +1,17 @@
-"""Centralized state management for analyzed files."""
+"""Centralized state management for analyzed files.
+
+Supports per-session state isolation via ``StateProxy`` and ``contextvars``.
+In stdio mode (single client) the default state is used transparently.
+In HTTP mode each MCP session gets its own ``AnalyzerState`` instance so
+concurrent clients cannot interfere with each other.
+"""
+import contextvars
 import threading
 from typing import Dict, Any, Optional, List
 
 
 class AnalyzerState:
-    """Centralized state management for analyzed files."""
+    """Per-session state for a single analyzed file."""
     def __init__(self):
         self.filepath: Optional[str] = None
         self.pe_data: Optional[Dict[str, Any]] = None
@@ -83,3 +90,89 @@ class AnalyzerState:
             except Exception:
                 pass
             self.pe_object = None
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped state (HTTP mode isolation)
+# ---------------------------------------------------------------------------
+
+# ContextVar holds the active AnalyzerState for the current async/thread context.
+_current_state_var: contextvars.ContextVar[Optional[AnalyzerState]] = contextvars.ContextVar(
+    '_current_state', default=None,
+)
+
+# Registry: session_key -> AnalyzerState
+_session_registry: Dict[str, AnalyzerState] = {}
+_registry_lock = threading.Lock()
+
+# Default state instance (stdio / fallback)
+_default_state = AnalyzerState()
+
+
+def get_current_state() -> AnalyzerState:
+    """Return the ``AnalyzerState`` for the current context."""
+    s = _current_state_var.get()
+    return s if s is not None else _default_state
+
+
+def set_current_state(state: AnalyzerState) -> None:
+    """Explicitly set the ``AnalyzerState`` for the current context."""
+    _current_state_var.set(state)
+
+
+def get_or_create_session_state(session_key: str) -> AnalyzerState:
+    """Get or lazily create an ``AnalyzerState`` for *session_key*."""
+    with _registry_lock:
+        if session_key not in _session_registry:
+            new_state = AnalyzerState()
+            # Inherit server-level config from the default state
+            new_state.allowed_paths = _default_state.allowed_paths
+            new_state.samples_path = _default_state.samples_path
+            _session_registry[session_key] = new_state
+        return _session_registry[session_key]
+
+
+def activate_session_state(session_key: str) -> AnalyzerState:
+    """Activate the per-session state for the current context and return it."""
+    s = get_or_create_session_state(session_key)
+    _current_state_var.set(s)
+    return s
+
+
+def get_session_key_from_context(ctx) -> str:
+    """Extract a unique session key from an MCP ``Context`` object.
+
+    Falls back to ``"default"`` when no session can be identified (e.g.
+    stdio mode), which transparently collapses to the singleton model.
+    """
+    try:
+        # FastMCP Context wraps a RequestContext
+        if hasattr(ctx, '_request_context'):
+            session = getattr(ctx._request_context, 'session', None)
+            if session is not None:
+                return str(id(session))
+        if hasattr(ctx, 'session'):
+            return str(id(ctx.session))
+    except Exception:
+        pass
+    return "default"
+
+
+class StateProxy:
+    """Transparent proxy that delegates attribute access to the active session
+    ``AnalyzerState`` (via *contextvars*).
+
+    In stdio mode the default state is used.  In HTTP mode the per-session
+    state set by the tool decorator is used.  All existing code that does
+    ``state.pe_data``, ``state.filepath = ...``, etc. works unchanged.
+    """
+
+    def __getattr__(self, name: str):
+        return getattr(get_current_state(), name)
+
+    def __setattr__(self, name: str, value):
+        setattr(get_current_state(), name, value)
+
+    def __repr__(self):
+        current = get_current_state()
+        return f"<StateProxy -> {current!r}>"
