@@ -19,6 +19,7 @@ set -euo pipefail
 IMAGE_NAME="pemcp-toolkit"
 CONTAINER_PORT="${PEMCP_PORT:-8082}"
 SAMPLES_DIR="${PEMCP_SAMPLES:-$(cd "$(dirname "$0")" && pwd)/samples}"
+CONTAINER_SAMPLES="/$(basename "$SAMPLES_DIR")"
 
 # --- Detect container runtime ---
 detect_runtime() {
@@ -67,7 +68,7 @@ build_image() {
 common_args() {
     local args=(
         --rm
-        -v "$SAMPLES_DIR:/app/samples:ro"
+        -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro"
         -v "pemcp-data:/home/pemcp/.pemcp"
     )
 
@@ -89,6 +90,7 @@ common_args() {
 cmd_http() {
     ensure_image
     echo "[*] Starting PeMCP HTTP server on port $CONTAINER_PORT..."
+    echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)"
     echo "[*] MCP endpoint: http://127.0.0.1:$CONTAINER_PORT/mcp"
     echo "[*] Press Ctrl+C to stop."
     echo ""
@@ -104,6 +106,7 @@ cmd_http() {
 cmd_stdio() {
     ensure_image
     echo "[*] Starting PeMCP in stdio MCP mode..." >&2
+    echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)" >&2
     # shellcheck disable=SC2046
     $RUNTIME run -i \
         $(common_args) \
@@ -165,8 +168,10 @@ Commands:
   --help                                 Show this help
 
 Options:
-  --samples <dir>   Mount a custom directory as /app/samples (read-only).
-                    Default: ./samples/ next to this script.
+  --samples <dir>   Mount a custom directory read-only into the container.
+                    The container path mirrors the host folder name
+                    (e.g. --samples ~/Downloads → /Downloads inside).
+                    Default: ./samples/ next to this script (→ /samples).
 
 Environment variables:
   VT_API_KEY        VirusTotal API key (passed into container)
@@ -176,14 +181,15 @@ Environment variables:
 Examples:
   ./run.sh                                         # HTTP server, default samples/
   ./run.sh --stdio                                 # stdio server for Claude Code
-  ./run.sh --samples ~/malware-zoo --stdio         # Custom samples directory
+  ./run.sh --samples ~/malware-zoo --stdio         # Mounted at /malware-zoo
   ./run.sh --analyze samples/suspicious.exe        # Analyze a single file
   VT_API_KEY=abc123 PEMCP_PORT=9000 ./run.sh       # Custom port + API key
   PEMCP_SAMPLES=~/samples ./run.sh --stdio         # Via environment variable
 
 Notes:
-  - Files in the samples directory are mounted read-only at /app/samples/
-  - Use open_file("/app/samples/yourfile.exe") in MCP mode to load them
+  - Files are mounted read-only; the container path mirrors the host folder name
+    (e.g. --samples ~/Downloads → /Downloads/yourfile.exe inside the container)
+  - Default: ./samples/ → /samples/yourfile.exe
   - Analysis cache persists in a named volume (pemcp-data)
   - Auto-detects Docker or Podman
 EOF
@@ -201,6 +207,7 @@ while [[ $# -gt 0 ]]; do
                 echo "Error: Samples directory not found: $2"
                 exit 1
             }
+            CONTAINER_SAMPLES="/$(basename "$SAMPLES_DIR")"
             shift 2
             ;;
         *)
