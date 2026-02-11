@@ -50,6 +50,12 @@ fi
 
 echo "[*] Using container runtime: $RUNTIME"
 
+# --- SELinux: add :z to bind mounts so the container can read files ---
+MOUNT_OPTS="ro"
+if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" != "Disabled" ]]; then
+    MOUNT_OPTS="ro,z"
+fi
+
 # --- Build image if it doesn't exist ---
 ensure_image() {
     if ! $RUNTIME image inspect "$IMAGE_NAME" &>/dev/null; then
@@ -70,7 +76,7 @@ common_args() {
         --rm
         --user "$(id -u):$(id -g)"
         -e "HOME=/app/home"
-        -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro"
+        -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:$MOUNT_OPTS"
         -v "pemcp-data:/app/home/.pemcp"
     )
 
@@ -138,7 +144,7 @@ cmd_analyze() {
     # shellcheck disable=SC2046
     $RUNTIME run -it \
         $(common_args) \
-        -v "$dir:/app/input:ro" \
+        -v "$dir:/app/input:$MOUNT_OPTS" \
         "$IMAGE_NAME" \
         --input-file "/app/input/$base" --verbose \
         "$@"
