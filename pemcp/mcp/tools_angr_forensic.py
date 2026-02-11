@@ -34,7 +34,9 @@ async def diff_binaries(
         run_in_background: Run as background task (default True).
     """
     _check_angr_ready("diff_binaries")
-    if not os.path.isfile(file_path_b):
+    abs_path_b = os.path.abspath(file_path_b)
+    state.check_path_allowed(abs_path_b)
+    if not os.path.isfile(abs_path_b):
         return {"error": f"File not found: {file_path_b}"}
 
     def _diff(task_id_for_progress=None):
@@ -43,7 +45,7 @@ async def diff_binaries(
             _update_progress(task_id_for_progress, 5, "Loading second binary...")
 
         try:
-            proj_b = angr.Project(file_path_b, auto_load_libs=False)
+            proj_b = angr.Project(abs_path_b, auto_load_libs=False)
         except Exception as e:
             return {"error": f"Failed to load second binary: {e}"}
 

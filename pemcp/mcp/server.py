@@ -1,4 +1,6 @@
 """MCP server setup, tool decorator, and validation helpers."""
+import copy
+import functools
 import json
 import logging
 
@@ -8,10 +10,30 @@ from pemcp.config import (
     state, logger, FastMCP, Context,
     ANGR_AVAILABLE, MAX_MCP_RESPONSE_SIZE_BYTES, MAX_MCP_RESPONSE_SIZE_KB,
 )
+from pemcp.state import get_session_key_from_context, activate_session_state
 
 # --- MCP Server Setup ---
 mcp_server = FastMCP("PEFileAnalyzerMCP")
-tool_decorator = mcp_server.tool()
+_raw_tool_decorator = mcp_server.tool()
+
+
+def tool_decorator(func):
+    """MCP tool decorator that activates per-session state before each call.
+
+    Wraps the underlying FastMCP ``tool()`` decorator so that every tool
+    invocation first resolves the correct ``AnalyzerState`` for the current
+    MCP session (relevant in HTTP mode with concurrent clients).
+    """
+    @functools.wraps(func)
+    async def _with_session(*args, **kwargs):
+        # Find the Context argument and activate the matching session state
+        for arg in list(args) + list(kwargs.values()):
+            if isinstance(arg, Context):
+                key = get_session_key_from_context(arg)
+                activate_session_state(key)
+                break
+        return await func(*args, **kwargs)
+    return _raw_tool_decorator(_with_session)
 
 # --- MCP Feedback Helpers ---
 
@@ -98,15 +120,8 @@ async def _check_mcp_response_size(
 
         await ctx.warning(f"Response for '{tool_name}' was {data_size_bytes/1024:.1f}KB. Auto-truncating to fit limits.")
 
-        # Work on a copy to avoid modifying global state if it was a global obj
-        # (Simple shallow copy usually sufficient for top-level modifications)
-        if isinstance(data_to_return, dict):
-            modified_data = data_to_return.copy()
-        elif isinstance(data_to_return, list):
-            modified_data = data_to_return[:]
-        else:
-            # Primitives (str, etc) are immutable, so we just reassign
-            modified_data = data_to_return
+        # Deep copy to avoid mutating shared state (e.g. state.pe_data dicts)
+        modified_data = copy.deepcopy(data_to_return)
 
         # 3. Heuristic: Find the largest element and chop it
         # We iterate up to 5 times to try and make it fit.
