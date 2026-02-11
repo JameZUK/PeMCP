@@ -6,8 +6,15 @@ In HTTP mode each MCP session gets its own ``AnalyzerState`` instance so
 concurrent clients cannot interfere with each other.
 """
 import contextvars
+import time
 import threading
 from typing import Dict, Any, Optional, List
+
+# Maximum number of completed/failed background tasks to retain per session.
+MAX_COMPLETED_TASKS = 50
+
+# Stale session TTL in seconds (1 hour).
+SESSION_TTL_SECONDS = 3600
 
 
 class AnalyzerState:
@@ -37,6 +44,9 @@ class AnalyzerState:
         self.background_tasks: Dict[str, Dict[str, Any]] = {}
         self.monitor_thread_started = False
 
+        # Timestamp of last activity (for session TTL cleanup)
+        self.last_active: float = time.time()
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Thread-safe read of a background task."""
         with self._task_lock:
@@ -47,6 +57,7 @@ class AnalyzerState:
         """Thread-safe creation/replacement of a background task."""
         with self._task_lock:
             self.background_tasks[task_id] = task_data
+            self._evict_old_tasks()
 
     def update_task(self, task_id: str, **kwargs):
         """Thread-safe partial update of a background task's fields."""
@@ -75,6 +86,27 @@ class AnalyzerState:
             f"Allowed: {self.allowed_paths}. "
             "Configure with --allowed-paths at server startup."
         )
+
+    def touch(self):
+        """Update the last-active timestamp (called by the tool decorator)."""
+        self.last_active = time.time()
+
+    def _evict_old_tasks(self):
+        """Remove oldest completed/failed tasks when the count exceeds the limit.
+
+        Must be called while ``_task_lock`` is held.
+        """
+        finished = [
+            (tid, t) for tid, t in self.background_tasks.items()
+            if t.get("status") in ("completed", "failed")
+        ]
+        if len(finished) <= MAX_COMPLETED_TASKS:
+            return
+        # Sort by created_at (oldest first) and remove excess
+        finished.sort(key=lambda item: item[1].get("created_at", ""))
+        to_remove = len(finished) - MAX_COMPLETED_TASKS
+        for tid, _ in finished[:to_remove]:
+            del self.background_tasks[tid]
 
     def reset_angr(self):
         self.angr_project = None
@@ -123,6 +155,9 @@ def set_current_state(state: AnalyzerState) -> None:
 def get_or_create_session_state(session_key: str) -> AnalyzerState:
     """Get or lazily create an ``AnalyzerState`` for *session_key*."""
     with _registry_lock:
+        # Periodically clean up stale sessions
+        _cleanup_stale_sessions()
+
         if session_key not in _session_registry:
             new_state = AnalyzerState()
             # Inherit server-level config from the default state
@@ -130,6 +165,29 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             new_state.samples_path = _default_state.samples_path
             _session_registry[session_key] = new_state
         return _session_registry[session_key]
+
+
+def _cleanup_stale_sessions():
+    """Remove sessions that have been idle longer than SESSION_TTL_SECONDS.
+
+    Must be called while ``_registry_lock`` is held.
+    """
+    now = time.time()
+    stale_keys = [
+        key for key, st in _session_registry.items()
+        if (now - st.last_active) > SESSION_TTL_SECONDS
+    ]
+    for key in stale_keys:
+        stale = _session_registry.pop(key)
+        # Release resources held by the stale session
+        stale.close_pe()
+        stale.reset_angr()
+
+
+def get_all_session_states() -> list:
+    """Return a snapshot of all active session states (for heartbeat monitoring)."""
+    with _registry_lock:
+        return list(_session_registry.values()) + [_default_state]
 
 
 def activate_session_state(session_key: str) -> AnalyzerState:

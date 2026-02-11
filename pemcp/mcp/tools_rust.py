@@ -1,23 +1,14 @@
 """MCP tools for Rust binary analysis."""
 import asyncio
 from typing import Dict, Any, Optional, List
-from pemcp.config import state, logger, Context
+from pemcp.config import state, logger, Context, RUSTBININFO_AVAILABLE, RUST_DEMANGLER_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 from pemcp.mcp._format_helpers import _check_lib, _get_filepath
 
-RUSTBININFO_AVAILABLE = False
-try:
+if RUSTBININFO_AVAILABLE:
     import rustbininfo
-    RUSTBININFO_AVAILABLE = True
-except ImportError:
-    pass
-
-RUST_DEMANGLER_AVAILABLE = False
-try:
+if RUST_DEMANGLER_AVAILABLE:
     import rust_demangler
-    RUST_DEMANGLER_AVAILABLE = True
-except ImportError:
-    pass
 
 
 @tool_decorator

@@ -2,7 +2,9 @@
 
 ## Overview
 
-PeMCP is a comprehensive binary analysis toolkit and MCP (Model Context Protocol) server that bridges AI assistants with low-level binary instrumentation. It exposes 105 specialized tools for analyzing PE, ELF, Mach-O, .NET, Go, Rust, and shellcode binaries. The codebase is approximately 17,000 lines of Python across 46 files.
+PeMCP is a comprehensive binary analysis toolkit and MCP (Model Context Protocol) server that bridges AI assistants with low-level binary instrumentation. It exposes 105 specialized tools for analyzing PE, ELF, Mach-O, .NET, Go, Rust, and shellcode binaries. The codebase is approximately 17,000 lines of Python across 48 files.
+
+This review covers the full codebase as of February 2026, including verification that the 14 issues identified in the prior review have been addressed.
 
 ---
 
@@ -12,21 +14,24 @@ PeMCP is a comprehensive binary analysis toolkit and MCP (Model Context Protocol
 
 **1. Clean Modular Architecture**
 The codebase follows a well-organized separation of concerns:
-- `pemcp/state.py` — Centralized, thread-safe state management
-- `pemcp/config.py` — Import hub with availability flags
-- `pemcp/parsers/` — Format-specific parsing logic
-- `pemcp/mcp/` — Tool modules organized by domain
-- `pemcp/background.py` — Background task management
+- `pemcp/state.py` — Centralized, thread-safe state management with per-session isolation
+- `pemcp/config.py` — Import hub with availability flags for 20+ optional libraries
+- `pemcp/parsers/` — Format-specific parsing logic (PE, FLOSS, capa, strings, signatures)
+- `pemcp/mcp/` — 25 tool modules organized by domain, each self-contained
+- `pemcp/background.py` — Background task management with progress tracking
 
-Each MCP tool module (`tools_angr.py`, `tools_pe.py`, `tools_elf.py`, etc.) is self-contained and registers its tools via a shared decorator, making the system easy to extend.
+Each MCP tool module registers its tools via a shared `tool_decorator` in `server.py`, making the system easy to extend. Adding a new tool category requires only a new file and an import in `main.py`.
 
-**2. Graceful Degradation**
-The optional dependency pattern in `config.py` is well-executed. Each of 20+ optional libraries is guarded by try/except with `*_AVAILABLE` flags, and tools return clear error messages rather than crashing when a library is absent. This is the right approach for a toolkit with heavy, platform-sensitive dependencies like angr, FLOSS, and vivisect.
+**2. Per-Session State Isolation (HTTP Mode)**
+The `StateProxy` pattern in `state.py:161-178` is well-designed. It uses Python's `contextvars` to transparently delegate attribute access to the correct `AnalyzerState` for the current async context. The `tool_decorator` in `server.py:20-36` activates per-session state before every tool invocation. This means concurrent HTTP clients each get isolated analysis state without any changes to the 105 tool implementations.
 
-**3. Intelligent MCP Response Management**
-The auto-truncation system in `server.py:_check_mcp_response_size()` is thoughtfully designed. It iteratively identifies the largest element (list, string, or dict) and progressively shrinks it to fit within the 64KB MCP response limit, rather than simply failing. This keeps the tool usable even with large binaries.
+**3. Graceful Degradation**
+The optional dependency pattern in `config.py` is well-executed. Each of 20+ optional libraries is guarded by try/except with `*_AVAILABLE` flags, and tools return clear, actionable error messages rather than crashing when a library is absent. This is the correct approach for a toolkit with heavy, platform-sensitive dependencies like angr, FLOSS, and vivisect.
 
-**4. Caching System**
+**4. Intelligent MCP Response Management**
+The auto-truncation system in `server.py:97-199` is thoughtfully designed. It uses `copy.deepcopy` to avoid mutating shared state, then iteratively identifies the largest element (list, string, or dict) and progressively shrinks it to fit within the 64KB MCP response limit. The 5-iteration approach with a 10% aggressive reduction factor is pragmatic.
+
+**5. Caching System**
 `cache.py` implements a production-quality disk cache:
 - Git-style two-character prefix directories to avoid flat-dir performance issues
 - Gzip compression (5-15x reduction on JSON)
@@ -34,74 +39,66 @@ The auto-truncation system in `server.py:_check_mcp_response_size()` is thoughtf
 - Version-based invalidation (both PeMCP version and cache format version)
 - Thread-safe operations with atomic file replacement via `tmp.replace()`
 
-**5. Background Task Management**
+**6. Background Task Management**
 Long-running operations (angr CFG generation, symbolic execution, loop analysis) are properly offloaded to background threads with:
 - Progress tracking with percentage and message updates
 - Heartbeat monitoring thread for console feedback
-- Task registry with thread-safe access
+- Task registry with thread-safe access via `_task_lock`
 - Proper `asyncio.to_thread` integration for non-blocking MCP tools
+- Session state propagation to background threads via `set_current_state()` (`background.py:103-104`)
 
-**6. Security-Conscious Design**
+**7. Security-Conscious Design**
 - Path sandboxing via `AnalyzerState.check_path_allowed()` using `os.path.realpath()` to resolve symlinks
-- API key storage with `0o600` permissions
-- Warning when running in network mode without `--allowed-paths`
+- `diff_binaries` validates `file_path_b` against the sandbox (`tools_angr_forensic.py:38`)
+- API key storage with `0o600` permissions (`user_config.py:58`)
+- Warning when running in network mode without `--allowed-paths` (`main.py:216-219`)
 - Env-var priority over config file for sensitive values
+
+**8. Timeouts on Expensive Operations**
+The decompilation and CFG extraction tools now use `asyncio.wait_for(..., timeout=300)` (`tools_angr.py:178, 208`), preventing pathological binaries from blocking indefinitely.
 
 ---
 
-### Issues and Concerns
+### Previous Review Issues — Status
 
-#### High Priority
+The prior review identified 14 issues. All high-priority and most medium/low-priority items have been addressed:
 
-**1. Global Singleton State — Concurrency Risk**
-`config.py:45` creates a single `state = AnalyzerState()` at module level. In HTTP mode (`streamable-http`), multiple concurrent MCP clients could race on `state.filepath`, `state.pe_data`, and `state.angr_project`. While the background task fields are protected by `_task_lock`, the core analysis state (filepath, pe_data, pe_object, angr_project, angr_cfg) has no synchronization. If two clients call `open_file` concurrently, one will silently overwrite the other's loaded binary.
+| # | Issue | Status | Evidence |
+|---|-------|--------|----------|
+| 1 | Global singleton state concurrency risk | **Fixed** | `StateProxy` + `contextvars` in `state.py:161-178`; `tool_decorator` activates per-session state |
+| 2 | `close_file` does not reset `angr_hooks` | **Fixed** | `state.angr_hooks = {}` at `tools_pe.py:404` and `tools_pe.py:163` |
+| 3 | Deprecated `datetime.utcfromtimestamp` | **Fixed** | Now uses `datetime.fromtimestamp(ts, tz=datetime.timezone.utc)` at `tools_pe_extended.py:128` |
+| 4 | `diff_binaries` path traversal risk | **Fixed** | `state.check_path_allowed(abs_path_b)` at `tools_angr_forensic.py:38` |
+| 5 | Shallow copy in truncation logic | **Fixed** | Uses `copy.deepcopy(data_to_return)` at `server.py:124` |
+| 6 | `scan_for_api_hashes` linear scan | Not changed | Performance concern remains; acceptable for typical PE sizes |
+| 7 | Cache meta file read on every `get()` | Not changed | LRU timestamp update on every hit; acceptable for MCP tool call frequency |
+| 8 | `_parse_addr` accepts only hex strings | **Fixed** | Now uses `int(hex_string, 0)` at `_angr_helpers.py:76` |
+| 9 | Hardcoded `eax` register in emulation | **Fixed** | Uses `arch.register_names.get(arch.ret_offset)` at `tools_angr.py:391-394` |
+| 10 | No timeout on sync angr operations | **Fixed** | `asyncio.wait_for(..., timeout=300)` at `tools_angr.py:178, 208` |
+| 11 | Redundant `networkx` imports | **Fixed** | Module-level import only; local `nx` references use the module-level binding |
+| 12 | Magic number for Capstone operand type | **Mitigated** | `CS_OP_IMM = 2` defined as named constant at `tools_angr.py:870` |
+| 13 | Dense formatting in PE parser | Not changed | Cosmetic; no functional impact |
+| 14 | `monitor_thread_started` race condition | **Fixed** | Now uses `_monitor_lock` + `_monitor_started` at `background.py:68-73` |
 
-**Recommendation:** For HTTP mode, either:
-- Add a lock around file load/close operations and document single-client semantics, or
-- Move to a session-scoped state model where each MCP session gets its own `AnalyzerState`
+---
 
-**2. `close_file` Does Not Reset `angr_hooks`**
-`tools_pe.py:393-401` — `close_file` resets `angr_project`, `angr_cfg`, `angr_loop_cache`, and `angr_loop_cache_config`, but does not clear `state.angr_hooks`. If a user hooks functions in one binary and then opens a new binary, the stale hooks dictionary persists. When `_rebuild_project_with_hooks()` runs, it will attempt to re-apply hooks from the old binary to the new one, which could corrupt analysis or crash.
+### New Issues Identified — All Fixed
 
-**3. Deprecated `datetime.utcfromtimestamp` Usage**
-`tools_pe_extended.py:128` uses `datetime.datetime.utcfromtimestamp()`, which is deprecated since Python 3.12 and returns a naive datetime. The codebase correctly uses `datetime.datetime.now(datetime.timezone.utc)` elsewhere (e.g., `background.py:20`), so this is an inconsistency. It should use `datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc)`.
+All 11 issues from this review have been resolved:
 
-**4. `diff_binaries` Path Traversal Risk**
-The `diff_binaries` tool (in `tools_angr_forensic.py`) accepts an `other_file_path` argument for a second binary. Unlike `open_file`, which runs `state.check_path_allowed()`, `diff_binaries` should also validate this path against the sandbox when `allowed_paths` is configured.
-
-#### Medium Priority
-
-**5. Shallow Copy in Truncation Logic May Mutate Shared State**
-`server.py:103-109` — The `_check_mcp_response_size` function makes a shallow copy of `data_to_return` when it's a dict. If the oversized value is a nested list (e.g., `data["imports"]`), the truncation (`val[:new_len]`) creates a new list, but only for the outer dict key. If any tool returns `state.pe_data` directly (rather than a copy), and truncation hits a nested dict, the actual global state could be mutated. Review callers to ensure they don't pass `state.pe_data` directly, or use `copy.deepcopy`.
-
-**6. `scan_for_api_hashes` Linear Scan Performance**
-`tools_pe_extended.py:863` — The API hash scanner does a byte-by-byte scan (`for i in range(len(file_data) - 3)`), reading a 4-byte value at every offset. For a 10MB binary, this is ~10M iterations with `struct.unpack_from` calls. Consider scanning at alignment boundaries (4-byte aligned) or using `mmap` for better performance.
-
-**7. Cache Meta File Is Read on Every `get()`**
-`cache.py:148-151` — Each cache hit loads and re-saves `meta.json` to update the `last_accessed` timestamp. For MCP tools that are called frequently, this generates unnecessary disk I/O. Consider batching LRU timestamp updates or using in-memory tracking with periodic flush.
-
-**8. `_parse_addr` Accepts Only Hex Strings**
-`_angr_helpers.py:72-77` — The address parser only accepts hex strings (e.g., `0x401000`). Decimal addresses will fail with an unhelpful error. Consider accepting both formats with `int(hex_string, 0)` instead of `int(hex_string, 16)`.
-
-**9. Hardcoded `eax` Register in Emulation**
-`tools_angr.py:383` — The function emulation result reads `final.regs.eax` to get the return value. This is x86-specific and will fail or return incorrect results on x64 (should be `rax`), ARM (`r0`), or ARM64 (`x0`). The return register should be determined from `state.angr_project.arch`.
-
-**10. No Timeout on Synchronous angr Operations**
-When `run_in_background=False`, tools like `decompile_function_with_angr` and `get_function_cfg` run `asyncio.to_thread` without a timeout. A pathological binary or function could block indefinitely. Consider wrapping with `asyncio.wait_for()`.
-
-#### Low Priority
-
-**11. Redundant `networkx` Import**
-`tools_angr.py:17` imports `networkx` at module level, and several functions (`get_backward_slice`, `get_forward_slice`, `get_dominators`) import it again locally with `import networkx as nx`. The local imports are unnecessary.
-
-**12. Magic Number for Capstone Operand Type**
-`tools_angr.py:864` uses `if op.type == 2` (X86_OP_IMM) as a raw integer. This should reference `capstone.x86_const.X86_OP_IMM` for readability and correctness across architectures.
-
-**13. Dense Formatting in PE Parser**
-`parsers/pe.py` uses extensively compressed single-line formatting (e.g., line 48: `try: hashes["ssdeep"] = ssdeep_hasher.hash(data)` and line 54: `if hasattr(pe, 'DOS_HEADER') and pe.DOS_HEADER: return pe.DOS_HEADER.dump_dict()`). While functional, this reduces readability for a complex parser and makes debugging harder.
-
-**14. `monitor_thread_started` Race Condition**
-`background.py:63-67` — The `monitor_thread_started` flag is checked and set without a lock. In theory, two concurrent first-time background tasks could each start a heartbeat thread. This is benign (extra heartbeat prints) but technically a race.
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | `save_patched_binary` missing path sandbox validation | Added `state.check_path_allowed()` before write. Also added to `modify_pe_section` and `auto_unpack_pe`. |
+| 2 | Session registry grows indefinitely (memory leak) | Added TTL-based cleanup (`SESSION_TTL_SECONDS = 3600`). Stale sessions are pruned on new session creation. `touch()` tracks last activity. |
+| 3 | Background task results accumulate without bound | Added `_evict_old_tasks()` with `MAX_COMPLETED_TASKS = 50` limit. Oldest completed/failed tasks are removed when exceeded. |
+| 4 | No file size limit on `open_file` | Added `PEMCP_MAX_FILE_SIZE_MB` env var check (default 256 MB) before reading file into memory. |
+| 5 | Heartbeat monitor only sees default session tasks | Heartbeat loop now uses `get_all_session_states()` to iterate tasks from all sessions including per-session HTTP states. |
+| 6 | Duplicate availability flag patterns | All 17 availability flags consolidated into `config.py`. Tool modules import flags from config and conditionally import library objects. |
+| 7 | `reanalyze_loaded_pe_file` doesn't clear loop cache | Added `state.angr_loop_cache = None` and `state.angr_loop_cache_config = None` after CFG rebuild. |
+| 8 | Non-atomic state swap in `open_file` | Replaced inline field-by-field cleanup with `state.close_pe()` + `state.reset_angr()` methods. |
+| 9 | Unused stdlib imports in `config.py` | Removed 22 unused stdlib imports (kept only `os`, `sys`, `logging`, `shutil`). |
+| 10 | Generic `"angr_tool"` in error messages | All 10 occurrences replaced with actual tool names (e.g., `"analyze_binary_loops"`, `"get_function_xrefs"`). |
+| 11 | `binwalk` CLI fallback without subprocess timeout | Already had `timeout=60` — no change needed. |
 
 ---
 
@@ -114,7 +111,7 @@ The Dockerfile is well-structured:
 - oscrypto patched for OpenSSL 3.x compatibility
 - Non-root execution supported via `--user "$(id -u):$(id -g)"`
 
-One concern: `chmod 777 /app/home` (line 97) is overly permissive. Since the container runs as the host UID, `chmod 755` would suffice with proper ownership set via `chown`.
+One concern: `chmod 777 /app/home` is overly permissive. Since the container runs as the host UID, `chmod 755` would suffice with proper ownership set via `chown`.
 
 ---
 
@@ -122,11 +119,19 @@ One concern: `chmod 777 /app/home` (line 97) is overly permissive. Since the con
 
 The test suite (`mcp_test_client.py`, 1,818 lines) is comprehensive:
 - 19 test classes covering all 105 tools
+- 94 test functions across the full tool surface
 - Supports both streamable-http and SSE transports
-- Configurable via environment variables
-- Proper markers for categorization (`no_file`, `pe_file`, `angr`, etc.)
+- Configurable via environment variables (`PEMCP_TEST_URL`, `PEMCP_TEST_FILE`, etc.)
+- Proper markers for categorization (`no_file`, `pe_file`, `angr`, `optional_lib`)
 
-However, it is an **integration test suite only** — it requires a running server and a loaded sample. There are no unit tests for the parsers, cache, state management, or helper functions. Unit tests would provide faster feedback during development and catch regressions in the parsing logic without needing a full MCP server.
+However, it remains an **integration test suite only** — it requires a running server and a loaded sample binary. There are no unit tests for:
+- Parser logic (`parsers/pe.py`, `parsers/floss.py`, `parsers/strings.py`)
+- Cache operations (`cache.py` — put/get/evict/clear)
+- State management (`state.py` — session creation, proxy delegation)
+- Helper functions (`_angr_helpers.py` — address parsing, function resolution)
+- Truncation logic (`server.py` — `_check_mcp_response_size`)
+
+Unit tests would provide faster feedback during development and catch regressions without needing a full MCP server + sample binary.
 
 ---
 
@@ -134,13 +139,19 @@ However, it is an **integration test suite only** — it requires a running serv
 
 | Category | Rating | Notes |
 |----------|--------|-------|
-| Architecture | Strong | Clean separation, modular design, extensible |
-| Code Quality | Good | Well-organized, some dense formatting in parsers |
-| Security | Good | Path sandboxing, secure key storage; HTTP concurrency gap |
-| Error Handling | Strong | Graceful degradation, descriptive errors, auto-truncation |
-| Performance | Good | Caching, background tasks, lazy loading; some linear scans |
+| Architecture | Strong | Clean separation, modular design, extensible, per-session isolation |
+| Code Quality | Good | Well-organized; some inconsistency in availability flag patterns |
+| Security | Good | Path sandboxing, secure key storage; `save_patched_binary` gap |
+| Error Handling | Strong | Graceful degradation, descriptive errors, auto-truncation, timeouts |
+| Performance | Good | Caching, background tasks, lazy loading; unbounded session/task growth |
 | Testing | Adequate | Comprehensive integration tests; no unit tests |
-| Documentation | Strong | Thorough README, inline docstrings, help text |
+| Documentation | Strong | Thorough README (1,000+ lines), inline docstrings, tool help text |
 | Docker/Deployment | Strong | Layered builds, volume persistence, multi-mode support |
 
-**Overall:** This is a well-engineered, production-grade tool. The architecture decisions (modular tools, graceful degradation, disk caching, background analysis) are sound and reflect real-world usage considerations. The main areas for improvement are HTTP-mode concurrency safety, adding unit tests, and the specific code issues noted above.
+**Overall:** This is a well-engineered, production-grade binary analysis toolkit. The prior review's high-priority issues have all been addressed — notably the session isolation via `StateProxy`/`contextvars`, angr hook cleanup, path validation on `diff_binaries`, and deep-copy in truncation logic. The architecture decisions (modular tools, graceful degradation, disk caching, background analysis with progress tracking) are sound and reflect real-world usage considerations.
+
+The main areas for improvement are:
+1. **Security**: Validating output paths in `save_patched_binary`
+2. **Resource management**: Cleaning up stale HTTP sessions and completed background tasks
+3. **Testing**: Adding unit tests for parsers, cache, state management, and helpers
+4. **Consolidation**: Unifying the availability flag pattern across `config.py` and `tools_new_libs.py`

@@ -453,6 +453,9 @@ async def save_patched_binary(
     await ctx.info(f"Saving patched binary to {output_path}")
     _check_angr_ready("save_patched_binary")
 
+    # Validate output path against sandbox
+    state.check_path_allowed(os.path.abspath(output_path))
+
     def _save():
         if state.angr_project is None:
             return {"error": "No angr project loaded. Open a file first."}
