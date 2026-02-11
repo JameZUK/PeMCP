@@ -7,7 +7,7 @@ import threading
 import logging
 
 from pemcp.config import state, logger
-from pemcp.state import get_current_state, set_current_state
+from pemcp.state import get_current_state, set_current_state, get_all_session_states
 
 # Global lock and flag for the heartbeat monitor thread (shared across sessions)
 _monitor_lock = threading.Lock()
@@ -24,15 +24,13 @@ def _console_heartbeat_loop():
 
         current_time_str = datetime.datetime.now(datetime.timezone.utc).strftime('%H:%M:%S')
 
-        # Thread-safe snapshot of task IDs and their data
-        task_ids = state.get_all_task_ids()
-
-        # Check for running tasks
+        # Collect running tasks from ALL sessions (not just the default state)
         running_entries = []
-        for task_id in task_ids:
-            task = state.get_task(task_id)
-            if task and task["status"] == "running":
-                running_entries.append((task_id, task))
+        for session_state in get_all_session_states():
+            for task_id in session_state.get_all_task_ids():
+                task = session_state.get_task(task_id)
+                if task and task["status"] == "running":
+                    running_entries.append((task_id, task))
 
         if running_entries:
             # Print a clean status block

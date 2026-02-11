@@ -1,17 +1,13 @@
 """MCP tools for ELF binary analysis using pyelftools."""
 import asyncio
 from typing import Dict, Any, Optional
-from pemcp.config import state, logger, Context
+from pemcp.config import state, logger, Context, PYELFTOOLS_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 from pemcp.mcp._format_helpers import _check_lib, _get_filepath
 
-PYELFTOOLS_AVAILABLE = False
-try:
+if PYELFTOOLS_AVAILABLE:
     from elftools.elf.elffile import ELFFile
     from elftools.elf.sections import SymbolTableSection
-    PYELFTOOLS_AVAILABLE = True
-except ImportError:
-    pass
 
 
 @tool_decorator

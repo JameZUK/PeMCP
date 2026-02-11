@@ -10,84 +10,34 @@ import re
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import state, logger, Context
+from pemcp.config import (
+    state, logger, Context,
+    LIEF_AVAILABLE, CAPSTONE_AVAILABLE, KEYSTONE_AVAILABLE,
+    SPEAKEASY_AVAILABLE, UNIPACKER_AVAILABLE, DOTNETFILE_AVAILABLE,
+    PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
+)
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_angr_ready, _check_mcp_response_size
 
-# ---------------------------------------------------------------------------
-#  Optional library availability flags
-# ---------------------------------------------------------------------------
-
-LIEF_AVAILABLE = False
-try:
+# Conditionally import library objects for use in tool functions.
+# Availability flags are centralized in config.py.
+if LIEF_AVAILABLE:
     import lief
-    LIEF_AVAILABLE = True
-except ImportError:
-    pass
-
-CAPSTONE_AVAILABLE = False
-try:
+if CAPSTONE_AVAILABLE:
     import capstone
-    CAPSTONE_AVAILABLE = True
-except ImportError:
-    pass
-
-KEYSTONE_AVAILABLE = False
-try:
+if KEYSTONE_AVAILABLE:
     import keystone
-    KEYSTONE_AVAILABLE = True
-except ImportError:
-    pass
-
-SPEAKEASY_AVAILABLE = False
-try:
+if SPEAKEASY_AVAILABLE:
     import speakeasy
-    SPEAKEASY_AVAILABLE = True
-except ImportError:
-    pass
-
-UNIPACKER_AVAILABLE = False
-try:
+if UNIPACKER_AVAILABLE:
     from unipacker.core import UnpackerClient
-    UNIPACKER_AVAILABLE = True
-except ImportError:
-    pass
-
-DOTNETFILE_AVAILABLE = False
-try:
+if DOTNETFILE_AVAILABLE:
     import dotnetfile
-    DOTNETFILE_AVAILABLE = True
-except ImportError:
-    pass
-
-PPDEEP_AVAILABLE = False
-try:
+if PPDEEP_AVAILABLE:
     import ppdeep
-    PPDEEP_AVAILABLE = True
-except ImportError:
-    pass
-
-TLSH_AVAILABLE = False
-try:
+if TLSH_AVAILABLE:
     import tlsh
-    TLSH_AVAILABLE = True
-except ImportError:
-    pass
-
-BINWALK_AVAILABLE = False
-BINWALK_CLI_ONLY = False
-try:
+if BINWALK_AVAILABLE and not BINWALK_CLI_ONLY:
     import binwalk
-    # Verify the Python API actually has the scan function we need
-    if hasattr(binwalk, 'scan'):
-        BINWALK_AVAILABLE = True
-    else:
-        # Module imported but missing scan() — fall back to CLI
-        BINWALK_CLI_ONLY = bool(shutil.which("binwalk"))
-        BINWALK_AVAILABLE = BINWALK_CLI_ONLY
-except Exception:
-    # Python module unavailable — check for CLI tool
-    BINWALK_CLI_ONLY = bool(shutil.which("binwalk"))
-    BINWALK_AVAILABLE = BINWALK_CLI_ONLY
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +181,10 @@ async def modify_pe_section(
     await ctx.info(f"Modifying section {section_name}")
     _check_lib("lief", LIEF_AVAILABLE, "modify_pe_section")
     _check_pe_loaded("modify_pe_section")
+
+    # Validate output path against sandbox if provided
+    if output_path:
+        state.check_path_allowed(os.path.abspath(output_path))
 
     def _modify():
         binary = lief.parse(state.filepath)
@@ -750,6 +704,9 @@ async def auto_unpack_pe(
     if not output_path:
         base, ext = os.path.splitext(state.filepath)
         output_path = f"{base}_unpacked{ext}"
+
+    # Validate output path against sandbox
+    state.check_path_allowed(os.path.abspath(output_path))
 
     def _unpack():
         try:

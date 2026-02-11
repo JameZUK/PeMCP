@@ -82,69 +82,23 @@ The prior review identified 14 issues. All high-priority and most medium/low-pri
 
 ---
 
-### New Issues Identified
+### New Issues Identified — All Fixed
 
-#### High Priority
+All 11 issues from this review have been resolved:
 
-**1. `save_patched_binary` Missing Path Sandbox Validation**
-`tools_angr_forensic.py:441-518` — The `save_patched_binary` tool accepts an `output_path` argument and writes a binary file to disk without calling `state.check_path_allowed()`. In HTTP mode with `--allowed-paths` configured, a client could write a patched binary to an arbitrary location on the filesystem (e.g., overwriting system files or dropping files outside the sandbox).
-
-This is the same class of issue as the `diff_binaries` path traversal that was fixed — write operations are more dangerous than reads.
-
-**Recommendation:** Add `state.check_path_allowed(os.path.abspath(output_path))` before the write operation, consistent with `diff_binaries` and `open_file`.
-
-**2. Session Registry Grows Indefinitely (HTTP Mode Memory Leak)**
-`state.py:105` — `_session_registry: Dict[str, AnalyzerState] = {}` accumulates entries for every HTTP session but never removes them. Each `AnalyzerState` holds references to `pe_data` (potentially megabytes of analysis JSON), `pe_object`, `angr_project`, and `angr_cfg`. In a long-running HTTP server with many clients, this constitutes an unbounded memory leak.
-
-**Recommendation:** Implement one of:
-- A TTL-based cleanup (e.g., remove sessions idle for >1 hour)
-- A `close_session` tool or automatic cleanup on MCP session disconnect
-- A maximum session count with LRU eviction
-
-**3. Background Task Results Accumulate Without Bound**
-`state.background_tasks` in `AnalyzerState` stores completed task results forever. Each completed task retains its full `result` dict (which can be large for angr analyses). There is no eviction or cleanup mechanism.
-
-**Recommendation:** Either cap the number of completed tasks (e.g., keep last 50) or clear the `result` field after it has been retrieved once via `check_task_status`.
-
-#### Medium Priority
-
-**4. No File Size Limit on `open_file`**
-`tools_pe.py:172-176` — The `open_file` tool reads the entire file into memory for SHA256 hashing before any analysis begins. A multi-gigabyte file would consume that much RAM. There is no configurable maximum file size to protect the server.
-
-**Recommendation:** Add a configurable `max_file_size` (default e.g., 256MB) and reject files exceeding it before reading.
-
-**5. Heartbeat Monitor Only Sees Default Session Tasks (HTTP Mode)**
-`background.py:28` — The heartbeat thread calls `state.get_all_task_ids()`, which goes through `StateProxy`. However, the heartbeat thread runs in a plain daemon thread context without any session activated, so `get_current_state()` returns `_default_state`. In HTTP mode, background tasks started by per-session states are invisible to the heartbeat monitor.
-
-**Recommendation:** The heartbeat monitor should iterate `_session_registry` to collect tasks from all sessions, or background tasks should be registered in a global (non-session-specific) registry.
-
-**6. Duplicate Availability Flag Patterns**
-`config.py` defines availability flags for core libraries (angr, capa, FLOSS, signify, etc.) at module level with logging. `tools_new_libs.py:20-91` independently defines its own availability flags (LIEF, Capstone, Keystone, Speakeasy, etc.) with a simpler pattern and no logging. This split creates two different discovery patterns for the same concept and means `get_extended_capabilities` must aggregate from both sources.
-
-**Recommendation:** Consolidate all availability flags into `config.py` for a single source of truth, or extract a shared `_try_import()` helper.
-
-**7. `reanalyze_loaded_pe_file` Does Not Clear Loop Cache**
-`tools_pe.py:570-577` — When `pre_analyze_angr=True`, the re-analysis builds a new angr project and CFG, but does not clear `state.angr_loop_cache` or `state.angr_loop_cache_config`. Subsequent `analyze_binary_loops` calls may return stale loop data from the previous CFG.
-
-**Recommendation:** Add `state.angr_loop_cache = None` and `state.angr_loop_cache_config = None` after rebuilding the angr project in `reanalyze_loaded_pe_file`.
-
-**8. Race Condition in `open_file` State Assignment (HTTP Mode)**
-`tools_pe.py:151-163` — When closing the previous file and opening a new one, the state fields (`pe_object`, `pe_data`, `filepath`, `angr_project`, etc.) are set individually across multiple statements. If another tool is called concurrently on the same session (unlikely but possible with pipelined requests), it could see an inconsistent state where `filepath` is None but `pe_data` still holds old data, or vice versa.
-
-**Recommendation:** Consider a single atomic state swap: build the new state in local variables, then replace all fields at once.
-
-#### Low Priority
-
-**9. `config.py` Imports All Standard Library Modules at Top Level**
-`config.py:7-31` imports 25 standard library modules unconditionally (including `mmap`, `zipfile`, `subprocess`, `codecs`, etc.), even though many are only used by specific tool modules. While Python module imports are cached and individually fast, this increases the import surface and startup time unnecessarily.
-
-**Recommendation:** Move rarely-used imports to the modules that need them.
-
-**10. Inconsistent Tool Name in `_check_angr_ready` Error Messages**
-Several tools pass a generic string `"angr_tool"` to `_check_angr_ready()` (e.g., `tools_angr.py:452, 576, 793`) instead of the actual tool name. This makes error messages less actionable for the MCP client.
-
-**11. `binwalk` CLI Fallback Uses `subprocess` Without Timeout**
-`tools_new_libs.py` (binwalk CLI fallback path) invokes `subprocess.run(["binwalk", ...])` without a `timeout` parameter. A malformed file could cause binwalk to hang indefinitely.
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | `save_patched_binary` missing path sandbox validation | Added `state.check_path_allowed()` before write. Also added to `modify_pe_section` and `auto_unpack_pe`. |
+| 2 | Session registry grows indefinitely (memory leak) | Added TTL-based cleanup (`SESSION_TTL_SECONDS = 3600`). Stale sessions are pruned on new session creation. `touch()` tracks last activity. |
+| 3 | Background task results accumulate without bound | Added `_evict_old_tasks()` with `MAX_COMPLETED_TASKS = 50` limit. Oldest completed/failed tasks are removed when exceeded. |
+| 4 | No file size limit on `open_file` | Added `PEMCP_MAX_FILE_SIZE_MB` env var check (default 256 MB) before reading file into memory. |
+| 5 | Heartbeat monitor only sees default session tasks | Heartbeat loop now uses `get_all_session_states()` to iterate tasks from all sessions including per-session HTTP states. |
+| 6 | Duplicate availability flag patterns | All 17 availability flags consolidated into `config.py`. Tool modules import flags from config and conditionally import library objects. |
+| 7 | `reanalyze_loaded_pe_file` doesn't clear loop cache | Added `state.angr_loop_cache = None` and `state.angr_loop_cache_config = None` after CFG rebuild. |
+| 8 | Non-atomic state swap in `open_file` | Replaced inline field-by-field cleanup with `state.close_pe()` + `state.reset_angr()` methods. |
+| 9 | Unused stdlib imports in `config.py` | Removed 22 unused stdlib imports (kept only `os`, `sys`, `logging`, `shutil`). |
+| 10 | Generic `"angr_tool"` in error messages | All 10 occurrences replaced with actual tool names (e.g., `"analyze_binary_loops"`, `"get_function_xrefs"`). |
+| 11 | `binwalk` CLI fallback without subprocess timeout | Already had `timeout=60` — no change needed. |
 
 ---
 

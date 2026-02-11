@@ -448,7 +448,7 @@ async def analyze_binary_loops(
     Scans the binary for loops. Uses existing analysis if available to save time.
     """
 
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("analyze_binary_loops")
 
     def _core_logic(task_id_for_progress=None):
         # Configuration requested by the user
@@ -573,7 +573,7 @@ async def get_function_xrefs(
     """
 
     await ctx.info(f"Requesting X-Refs for: {function_address} (Limit: {limit})")
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("get_function_xrefs")
     target_addr = _parse_addr(function_address)
 
     def _get_xrefs():
@@ -619,7 +619,7 @@ async def get_backward_slice(
     """
 
     await ctx.info(f"Calculating backward reachability for: {target_address} (Limit: {limit})")
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("get_backward_slice")
     target_addr = _parse_addr(target_address)
 
     def _slice():
@@ -669,7 +669,7 @@ async def get_forward_slice(
     """
 
     await ctx.info(f"Calculating forward reachability from: {source_address} (Limit: {limit})")
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("get_forward_slice")
     source_addr = _parse_addr(source_address)
 
     def _slice():
@@ -713,7 +713,7 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
     """
 
     await ctx.info(f"Calculating dominators for: {target_address}")
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("get_dominators")
     target_addr = _parse_addr(target_address)
 
     def _find_dominators():
@@ -790,7 +790,7 @@ async def get_function_complexity_list(
 
     await ctx.info(f"Requesting function complexity list. Limit: {limit}, Sort: {sort_by}")
 
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("get_function_complexity_list")
 
     def _analyze():
 
@@ -846,7 +846,7 @@ async def extract_function_constants(
 
     await ctx.info(f"Extracting constants from: {function_address} (Limit: {limit})")
 
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("extract_function_constants")
     target_addr = _parse_addr(function_address)
 
     def _extract():
@@ -920,7 +920,7 @@ async def get_global_data_refs(
 
     await ctx.info(f"Scanning global refs in: {function_address} (Limit: {limit})")
 
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("scan_global_references")
     target_addr = _parse_addr(function_address)
 
     def _scan_refs():
@@ -974,7 +974,7 @@ async def scan_for_indirect_jumps(
 
     await ctx.info(f"Scanning for indirect jumps in: {function_address} (Limit: {limit})")
 
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("scan_for_indirect_jumps")
     target_addr = _parse_addr(function_address)
 
     def _scan_jumps():
@@ -1023,7 +1023,7 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
     """
 
     await ctx.info(f"Patching memory at {address}")
-    _check_angr_ready("angr_tool")
+    _check_angr_ready("patch_binary_memory")
     addr = _parse_addr(address)
     try:
         patch_data = bytes.fromhex(patch_bytes_hex)
