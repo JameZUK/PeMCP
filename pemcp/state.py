@@ -117,10 +117,14 @@ class AnalyzerState:
 
     def close_pe(self):
         if self.pe_object:
-            try:
-                self.pe_object.close()
-            except Exception:
-                pass
+            # Close the PE object if we own it.  Sessions that inherited
+            # the reference from _default_state must NOT close it (doing
+            # so would invalidate the object for all other sessions).
+            if self is _default_state or self.pe_object is not _default_state.pe_object:
+                try:
+                    self.pe_object.close()
+                except Exception:
+                    pass
             self.pe_object = None
 
 
@@ -153,7 +157,22 @@ def set_current_state(state: AnalyzerState) -> None:
 
 
 def get_or_create_session_state(session_key: str) -> AnalyzerState:
-    """Get or lazily create an ``AnalyzerState`` for *session_key*."""
+    """Get or lazily create an ``AnalyzerState`` for *session_key*.
+
+    For stdio mode (``"default"``), returns the global ``_default_state``
+    directly so that files pre-loaded at startup via ``--input-file`` are
+    immediately available to tool calls.
+
+    For HTTP sessions, a new ``AnalyzerState`` is created and inherits the
+    server-level configuration **and** any pre-loaded file data from the
+    default state.  Each session can subsequently call ``open_file`` to
+    load a different file without affecting other sessions.
+    """
+    # In stdio mode there is only one client — use the default state
+    # directly so startup pre-loading works transparently.
+    if session_key == "default":
+        return _default_state
+
     with _registry_lock:
         # Periodically clean up stale sessions
         _cleanup_stale_sessions()
@@ -163,6 +182,18 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             # Inherit server-level config from the default state
             new_state.allowed_paths = _default_state.allowed_paths
             new_state.samples_path = _default_state.samples_path
+            # Inherit any pre-loaded file data so HTTP clients can
+            # immediately access files loaded at startup via --input-file.
+            # Each session gets a shared reference; calling open_file
+            # replaces the reference on the session only.
+            if _default_state.filepath is not None:
+                new_state.filepath = _default_state.filepath
+                new_state.pe_data = _default_state.pe_data
+                new_state.pe_object = _default_state.pe_object
+                new_state.pefile_version = _default_state.pefile_version
+                new_state.loaded_from_cache = _default_state.loaded_from_cache
+                new_state.angr_project = _default_state.angr_project
+                new_state.angr_cfg = _default_state.angr_cfg
             _session_registry[session_key] = new_state
         return _session_registry[session_key]
 
@@ -171,6 +202,8 @@ def _cleanup_stale_sessions():
     """Remove sessions that have been idle longer than SESSION_TTL_SECONDS.
 
     Must be called while ``_registry_lock`` is held.
+    Only releases resources that are owned by the session (not inherited
+    from ``_default_state``).
     """
     now = time.time()
     stale_keys = [
@@ -179,9 +212,12 @@ def _cleanup_stale_sessions():
     ]
     for key in stale_keys:
         stale = _session_registry.pop(key)
-        # Release resources held by the stale session
-        stale.close_pe()
-        stale.reset_angr()
+        # Only close/reset resources that belong to this session, not
+        # shared references inherited from the default state.
+        if stale.pe_object is not None and stale.pe_object is not _default_state.pe_object:
+            stale.close_pe()
+        if stale.angr_project is not None and stale.angr_project is not _default_state.angr_project:
+            stale.reset_angr()
 
 
 def get_all_session_states() -> list:
