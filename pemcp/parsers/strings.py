@@ -15,6 +15,10 @@ if STRINGSIFTER_AVAILABLE:
 
 
 def _extract_strings_from_data(data_bytes: bytes, min_length: int = 5) -> List[Tuple[int, str]]:
+    # Ensure we have a concrete bytes/bytearray (not memoryview, mmap, etc.)
+    # so that iteration yields ints, not single-byte bytes objects.
+    if not isinstance(data_bytes, (bytes, bytearray)):
+        data_bytes = bytes(data_bytes)
     strings_found = []
     current_string = ""
     current_offset = -1
@@ -42,6 +46,9 @@ def _search_specific_strings_in_data(data_bytes: bytes, search_terms: List[str])
     return results
 
 def _format_hex_dump_lines(data_chunk: bytes, start_address: int = 0, bytes_per_line: int = 16) -> List[str]:
+    # Ensure concrete bytes so iteration yields ints
+    if not isinstance(data_chunk, (bytes, bytearray)):
+        data_chunk = bytes(data_chunk)
     lines = []
     for i in range(0, len(data_chunk), bytes_per_line):
         chunk = data_chunk[i:i+bytes_per_line]
