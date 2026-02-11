@@ -252,6 +252,12 @@ except ImportError:
 
 # --- Angr Integration ---
 ANGR_AVAILABLE = False
+
+# Suppress noisy unicorn_engine messages that appear when the native
+# unicornlib.so cannot be loaded.  Angr already degrades gracefully;
+# these INFO/ERROR lines only confuse users.
+logging.getLogger("angr.state_plugins.unicorn_engine").setLevel(logging.CRITICAL)
+
 try:
     import angr
     import angr.analyses.decompiler
