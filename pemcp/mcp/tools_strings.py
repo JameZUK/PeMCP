@@ -596,9 +596,13 @@ async def extract_strings_from_binary(
         file_data = state.pe_object.__data__
         found = _extract_strings_from_data(file_data, min_length)
         results = [{"offset": hex(offset), "string": s} for offset, s in found]
+    except Exception as e:
+        await ctx.error(f"String extraction error: {e}")
+        raise RuntimeError(f"Failed during string extraction: {e}") from e
 
-        # --- StringSifter Integration Logic ---
-        if rank_with_sifter:
+    # --- StringSifter Integration Logic ---
+    if rank_with_sifter:
+        try:
             await ctx.info("Ranking extracted strings with StringSifter...")
 
             # Get just the string values for ranking
@@ -624,14 +628,17 @@ async def extract_strings_from_binary(
             # Sort by score if requested
             if sort_by_score:
                 results.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=True)
+        except Exception as e:
+            await ctx.error(f"StringSifter ranking error: {e}")
+            raise RuntimeError(f"Failed during StringSifter ranking: {e}") from e
 
+    try:
         data_to_send = results[:limit]
         limit_info_str = "the 'limit' parameter or by adjusting 'min_sifter_score'"
         return await _check_mcp_response_size(ctx, data_to_send, "extract_strings_from_binary", limit_info_str)
-
     except Exception as e:
-        await ctx.error(f"String extraction/ranking error: {e}")
-        raise RuntimeError(f"Failed during string extraction: {e}") from e
+        await ctx.error(f"Response formatting error: {e}")
+        raise RuntimeError(f"Failed formatting string extraction results: {e}") from e
 
 
 @tool_decorator
