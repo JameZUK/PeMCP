@@ -1,6 +1,6 @@
 # PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **104 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **105 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -108,13 +108,13 @@ The fastest way to add PeMCP to Claude Code is with the `claude mcp add` command
 **Add to the current project (recommended):**
 
 ```bash
-claude mcp add --scope project pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
+claude mcp add --scope project pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server --samples-path /path/to/samples
 ```
 
 **Add with a VirusTotal API key:**
 
 ```bash
-claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
+claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server --samples-path /path/to/samples
 ```
 
 **Add globally for all projects (user scope):**
@@ -182,7 +182,7 @@ Add a `.mcp.json` file to your project root (an example is included in this repo
 }
 ```
 
-Adjust the `command` path if PeMCP is installed elsewhere:
+Adjust the `command` path if PeMCP is installed elsewhere. Use `--samples-path` to point at your samples directory so the `list_samples` tool can discover files, or set the `PEMCP_SAMPLES` environment variable:
 
 ```json
 {
@@ -190,7 +190,7 @@ Adjust the `command` path if PeMCP is installed elsewhere:
     "pemcp": {
       "type": "stdio",
       "command": "python",
-      "args": ["/path/to/PeMCP/PeMCP.py", "--mcp-server"],
+      "args": ["/path/to/PeMCP/PeMCP.py", "--mcp-server", "--samples-path", "/path/to/samples"],
       "env": {
         "VT_API_KEY": "your-api-key-here"
       }
@@ -248,14 +248,15 @@ The `run.sh` helper automatically detects Docker or Podman, builds the image on 
 
 Once configured, you can interact with PeMCP through Claude Code naturally:
 
-1. **"Open this sample for analysis"** — Claude calls `open_file` with the path (auto-detects PE/ELF/Mach-O)
-2. **"What format is this?"** — Claude calls `detect_binary_format` to identify format and suggest tools
-3. **"What does this binary do?"** — Claude retrieves the triage report, imports, capabilities
-4. **"Decompile the main function"** — Claude uses Angr tools to decompile (works on PE, ELF, Mach-O)
-5. **"Is this a .NET binary?"** — Claude calls `dotnet_analyze` for CLR metadata and CIL disassembly
-6. **"Analyse this Go binary"** — Claude calls `go_analyze` for packages, functions, compiler version
-7. **"Check if it's on VirusTotal"** — Claude queries the VT API
-8. **"Close the file"** — Claude calls `close_file` to free resources
+1. **"What samples are available?"** — Claude calls `list_samples` to discover files in the configured samples directory
+2. **"Open this sample for analysis"** — Claude calls `open_file` with the path (auto-detects PE/ELF/Mach-O)
+3. **"What format is this?"** — Claude calls `detect_binary_format` to identify format and suggest tools
+4. **"What does this binary do?"** — Claude retrieves the triage report, imports, capabilities
+5. **"Decompile the main function"** — Claude uses Angr tools to decompile (works on PE, ELF, Mach-O)
+6. **"Is this a .NET binary?"** — Claude calls `dotnet_analyze` for CLR metadata and CIL disassembly
+7. **"Analyse this Go binary"** — Claude calls `go_analyze` for packages, functions, compiler version
+8. **"Check if it's on VirusTotal"** — Claude queries the VT API
+9. **"Close the file"** — Claude calls `close_file` to free resources
 
 API keys can be set interactively: *"Set my VirusTotal API key to abc123"* — Claude calls `set_api_key`, and the key persists across sessions.
 
@@ -359,7 +360,8 @@ docker run --rm -it \
   pemcp-toolkit \
   --mcp-server \
   --mcp-transport streamable-http \
-  --mcp-host 0.0.0.0
+  --mcp-host 0.0.0.0 \
+  --samples-path /samples
 
 # Run as MCP server (stdio, for Claude Code)
 docker run --rm -i \
@@ -368,7 +370,8 @@ docker run --rm -i \
   -v "$(pwd)/samples:/samples:ro" \
   -v pemcp-data:/app/home/.pemcp \
   pemcp-toolkit \
-  --mcp-server
+  --mcp-server \
+  --samples-path /samples
 ```
 
 > **Note:** The `-v pemcp-data:/app/home/.pemcp` mount persists the analysis cache and API key configuration across container restarts. Without it, cached results and stored keys are lost when the container is removed. The `run.sh` helper configures this volume automatically.
@@ -435,11 +438,14 @@ Starts the MCP server. The `--input-file` is optional — files can be loaded dy
 # Start without a file (recommended for Claude Code)
 python PeMCP.py --mcp-server
 
+# Start with a samples directory (enables the list_samples tool)
+python PeMCP.py --mcp-server --samples-path ./samples
+
 # Start with a pre-loaded file
 python PeMCP.py --mcp-server --input-file malware.exe
 
 # Start with streamable-http transport (for network access)
-python PeMCP.py --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 --mcp-port 8082
+python PeMCP.py --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 --mcp-port 8082 --samples-path ./samples
 ```
 
 #### Transport Options
@@ -528,7 +534,7 @@ docker run --rm -i \
   -e HOME=/app/home \
   -v pemcp-data:/app/home/.pemcp \
   -v "$(pwd)/samples:/samples:ro" \
-  pemcp-toolkit --mcp-server
+  pemcp-toolkit --mcp-server --samples-path /samples
 ```
 
 ### Command-Line Options
@@ -542,6 +548,7 @@ docker run --rm -i \
 | `--mcp-host HOST` | Server host for HTTP transports (default: 127.0.0.1) |
 | `--mcp-port PORT` | Server port for HTTP transports (default: 8082) |
 | `--allowed-paths PATH [PATH ...]` | Restrict `open_file` to these directories (security sandbox for HTTP mode) |
+| `--samples-path PATH` | Path to the samples directory. Enables the `list_samples` tool for AI clients to discover available files. Falls back to the `PEMCP_SAMPLES` environment variable if not set. |
 | `--skip-capa` | Skip capa capability analysis |
 | `--skip-floss` | Skip FLOSS string analysis |
 | `--skip-peid` | Skip PEiD signature scanning |
@@ -552,9 +559,9 @@ docker run --rm -i \
 
 ## MCP Tools Reference
 
-PeMCP exposes **104 tools** organised into the following categories.
+PeMCP exposes **105 tools** organised into the following categories.
 
-### File Management
+### File Management & Sample Discovery
 
 | Tool | Description |
 |---|---|
@@ -562,6 +569,7 @@ PeMCP exposes **104 tools** organised into the following categories.
 | `close_file` | Close the loaded file and clear analysis data from memory. |
 | `reanalyze_loaded_pe_file` | Re-run PE analysis with different options (skip/enable specific analyses). |
 | `detect_binary_format` | Auto-detect binary format and suggest appropriate analysis tools. |
+| `list_samples` | List files in the configured samples directory. Supports flat (top-level only) and recursive listing, glob pattern filtering (e.g. `*.exe`), and returns file metadata including size and magic-byte format hints (PE/ELF/Mach-O/ZIP/etc.). Configured via `--samples-path` or `PEMCP_SAMPLES`. |
 
 ### Configuration & Utilities
 
@@ -778,7 +786,8 @@ pemcp/
     ├── tools_triage.py          — Comprehensive triage report
     ├── tools_cache.py           — Analysis cache management
     ├── tools_config.py          — Configuration & utility tools
-    └── tools_classification.py  — Binary purpose classification
+    ├── tools_classification.py  — Binary purpose classification
+    └── tools_samples.py         — Sample directory listing & discovery
 ```
 
 ### Design Principles
@@ -874,7 +883,8 @@ docker run --rm -it -p 8082:8082 \
   -v "$(pwd)/samples:/samples:ro" \
   pemcp-toolkit \
   --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
-  --allowed-paths /samples
+  --allowed-paths /samples \
+  --samples-path /samples
 ```
 
 If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
@@ -888,7 +898,7 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 
 ### Testing
 
-PeMCP includes a comprehensive integration test suite (`mcp_test_client.py`) that covers all **104 MCP tools** across 19 test categories. The tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool. Tests gracefully skip when a tool is unavailable (older server build) or a required library is not installed.
+PeMCP includes a comprehensive integration test suite (`mcp_test_client.py`) that covers all **105 MCP tools** across 19 test categories. The tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool. Tests gracefully skip when a tool is unavailable (older server build) or a required library is not installed.
 
 #### Quick Start
 
@@ -896,7 +906,7 @@ PeMCP includes a comprehensive integration test suite (`mcp_test_client.py`) tha
 pip install -r requirements-test.txt
 
 # Start the server with a sample file loaded (terminal 1)
-python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe
+python PeMCP.py --mcp-server --mcp-transport streamable-http --samples-path ./samples --input-file samples/test.exe
 
 # Or via Docker/Podman (note: --mcp-host 0.0.0.0 is required for container networking)
 ./run.sh --input-file /samples/test.exe
@@ -905,7 +915,7 @@ podman run --rm -it -p 8082:8082 \
   --user "$(id -u):$(id -g)" -e HOME=/app/home \
   -v ./samples:/samples:ro pemcp-toolkit \
   --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
-  --input-file /samples/test.exe
+  --samples-path /samples --input-file /samples/test.exe
 
 # Run all tests (terminal 2)
 pytest mcp_test_client.py -v
@@ -931,7 +941,7 @@ pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
 pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
 pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
 pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 104 tools exist
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 105 tools exist
 ```
 
 #### Environment Variables
