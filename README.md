@@ -135,7 +135,7 @@ claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --stdio
 claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --samples /path/to/your/samples --stdio
 ```
 
-The `run.sh` helper auto-detects Docker or Podman, builds the image if needed, and handles volume mounts and environment setup. The `--samples` flag mounts any local directory into the container at `/app/samples` (read-only), so PeMCP can access your files. To pass a VirusTotal API key, set it in your environment or `.env` file:
+The `run.sh` helper auto-detects Docker or Podman, builds the image if needed, and handles volume mounts and environment setup. The `--samples` flag mounts any local directory read-only into the container, mirroring the host folder name (e.g. `--samples ~/Downloads` mounts at `/Downloads`). To pass a VirusTotal API key, set it in your environment or `.env` file:
 
 ```bash
 claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- /path/to/PeMCP/run.sh --samples ~/malware-zoo --stdio
@@ -217,7 +217,7 @@ For system-wide availability across all projects, add PeMCP to `~/.claude.json`:
 
 #### 3. Docker Configuration (via `run.sh`)
 
-To use the Docker image with Claude Code, point the configuration at the `run.sh` helper script. Use `--samples` to specify where your binaries live on the host — they will be mounted read-only at `/app/samples` inside the container:
+To use the Docker image with Claude Code, point the configuration at the `run.sh` helper script. Use `--samples` to specify where your binaries live on the host — the container path mirrors the host folder name (e.g. `--samples ~/Downloads` → `/Downloads`):
 
 ```json
 {
@@ -234,15 +234,15 @@ To use the Docker image with Claude Code, point the configuration at the `run.sh
 }
 ```
 
-Then in Claude Code, load files using the container path:
+Then in Claude Code, load files using the container path (which mirrors the host folder name):
 
 ```
-open_file("/app/samples/malware.exe")
+open_file("/samples/malware.exe")
 ```
 
-If `--samples` is omitted, the `./samples/` directory next to `run.sh` is mounted by default. You can also set the `PEMCP_SAMPLES` environment variable instead of using the flag.
+If `--samples` is omitted, the `./samples/` directory next to `run.sh` is mounted by default (at `/samples`). You can also set the `PEMCP_SAMPLES` environment variable instead of using the flag.
 
-The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, and persists the analysis cache and configuration in a named `pemcp-data` volume.
+The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, runs as your host UID (not root), and persists the analysis cache and configuration in a named `pemcp-data` volume.
 
 ### Typical Workflow
 
@@ -278,7 +278,7 @@ The included `run.sh` helper auto-detects Docker or Podman and handles image bui
 # Start stdio MCP server (for Claude Code)
 ./run.sh --stdio
 
-# Mount a custom samples directory (read-only at /app/samples)
+# Mount a custom samples directory (read-only, mirrors host folder name)
 ./run.sh --samples ~/malware-zoo --stdio
 
 # Analyse a file in CLI mode
@@ -350,9 +350,11 @@ docker build -t pemcp-toolkit .
 
 # Run as MCP server (streamable-http)
 docker run --rm -it \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/app/home \
   -p 8082:8082 \
-  -v "$(pwd)/samples:/app/samples" \
-  -v pemcp-data:/home/pemcp/.pemcp \
+  -v "$(pwd)/samples:/samples:ro" \
+  -v pemcp-data:/app/home/.pemcp \
   -e VT_API_KEY="your_key" \
   pemcp-toolkit \
   --mcp-server \
@@ -361,13 +363,15 @@ docker run --rm -it \
 
 # Run as MCP server (stdio, for Claude Code)
 docker run --rm -i \
-  -v "$(pwd)/samples:/app/samples" \
-  -v pemcp-data:/home/pemcp/.pemcp \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/app/home \
+  -v "$(pwd)/samples:/samples:ro" \
+  -v pemcp-data:/app/home/.pemcp \
   pemcp-toolkit \
   --mcp-server
 ```
 
-> **Note:** The `-v pemcp-data:/home/pemcp/.pemcp` mount persists the analysis cache and API key configuration across container restarts. Without it, cached results and stored keys are lost when the container is removed. The `run.sh` helper configures this volume automatically.
+> **Note:** The `-v pemcp-data:/app/home/.pemcp` mount persists the analysis cache and API key configuration across container restarts. Without it, cached results and stored keys are lost when the container is removed. The `run.sh` helper configures this volume automatically.
 
 ### Option B: Local Installation
 
@@ -512,7 +516,7 @@ open_file("/path/to/binary", use_cache=False)  # Force fresh analysis
 
 **Docker persistence:**
 
-In Docker, the cache lives inside the container at `/home/pemcp/.pemcp/cache/`. The `run.sh` helper automatically mounts a named `pemcp-data` volume to persist the cache and configuration across container restarts:
+In Docker, the cache lives at `/app/home/.pemcp/cache/` inside the container. The `run.sh` helper automatically mounts a named `pemcp-data` volume to persist the cache and configuration across container restarts:
 
 ```bash
 # run.sh handles volume mounting automatically
@@ -520,8 +524,10 @@ In Docker, the cache lives inside the container at `/home/pemcp/.pemcp/cache/`. 
 
 # Equivalent manual docker command (if not using run.sh)
 docker run --rm -i \
-  -v pemcp-data:/home/pemcp/.pemcp \
-  -v "$(pwd)/samples:/app/samples" \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/app/home \
+  -v pemcp-data:/app/home/.pemcp \
+  -v "$(pwd)/samples:/samples:ro" \
   pemcp-toolkit --mcp-server
 ```
 
@@ -854,26 +860,28 @@ Use `--floss-format sc64` (64-bit) or `--floss-format sc32` (32-bit) to provide 
 When running PeMCP in HTTP mode (`--mcp-transport streamable-http`), any MCP client can call `open_file` to read files on the server. Use `--allowed-paths` to restrict access:
 
 ```bash
-# Only allow access to /app/samples and /tmp
+# Only allow access to /samples and /tmp
 python PeMCP.py --mcp-server --mcp-transport streamable-http \
-  --allowed-paths /app/samples /tmp
+  --allowed-paths /samples /tmp
 
 # Docker with sandboxing (via run.sh — extra flags are passed through)
-./run.sh --allowed-paths /app/samples
+./run.sh --allowed-paths /samples
 
 # Equivalent manual docker command
 docker run --rm -it -p 8082:8082 \
-  -v "$(pwd)/samples:/app/samples" \
+  --user "$(id -u):$(id -g)" \
+  -e HOME=/app/home \
+  -v "$(pwd)/samples:/samples:ro" \
   pemcp-toolkit \
   --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
-  --allowed-paths /app/samples
+  --allowed-paths /samples
 ```
 
 If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 
 ### Other Security Measures
 
-- **Non-root Docker**: The container runs as `pemcp` (uid 1000), not root.
+- **Non-root Docker**: The `run.sh` helper runs the container as your host UID/GID (`--user "$(id -u):$(id -g)"`), never as root.
 - **API key storage**: Keys are stored in `~/.pemcp/config.json` with 0o600 (owner-only) permissions.
 - **Zip-slip protection**: Archive extraction validates member paths against directory traversal.
 - **No hardcoded secrets**: API keys are sourced from environment variables or the config file.
@@ -891,11 +899,13 @@ pip install -r requirements-test.txt
 python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe
 
 # Or via Docker/Podman (note: --mcp-host 0.0.0.0 is required for container networking)
-./run.sh --input-file /app/samples/test.exe
+./run.sh --input-file /samples/test.exe
 # Or manually:
-podman run --rm -it -p 8082:8082 -v ./samples:/app/samples:ro pemcp-toolkit \
+podman run --rm -it -p 8082:8082 \
+  --user "$(id -u):$(id -g)" -e HOME=/app/home \
+  -v ./samples:/samples:ro pemcp-toolkit \
   --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
-  --input-file /app/samples/test.exe
+  --input-file /samples/test.exe
 
 # Run all tests (terminal 2)
 pytest mcp_test_client.py -v
