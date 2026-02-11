@@ -10,7 +10,7 @@ from pemcp.config import (
     state, logger, FastMCP, Context,
     ANGR_AVAILABLE, MAX_MCP_RESPONSE_SIZE_BYTES, MAX_MCP_RESPONSE_SIZE_KB,
 )
-from pemcp.state import get_session_key_from_context, activate_session_state
+from pemcp.state import get_session_key_from_context, activate_session_state, get_current_state
 
 # --- MCP Server Setup ---
 mcp_server = FastMCP("PEFileAnalyzerMCP")
@@ -32,6 +32,8 @@ def tool_decorator(func):
                 key = get_session_key_from_context(arg)
                 activate_session_state(key)
                 break
+        # Update last-active timestamp for session TTL tracking
+        get_current_state().touch()
         return await func(*args, **kwargs)
     return _raw_tool_decorator(_with_session)
 

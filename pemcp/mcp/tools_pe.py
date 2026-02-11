@@ -127,6 +127,16 @@ async def open_file(
     if not os.path.isfile(abs_path):
         raise RuntimeError(f"[open_file] File not found: {abs_path}")
 
+    # Reject files that are too large to analyze safely in memory
+    MAX_FILE_SIZE = int(os.environ.get("PEMCP_MAX_FILE_SIZE_MB", "256")) * 1024 * 1024
+    file_size = os.path.getsize(abs_path)
+    if file_size > MAX_FILE_SIZE:
+        raise RuntimeError(
+            f"[open_file] File is too large ({file_size / (1024*1024):.1f} MB). "
+            f"Maximum allowed size is {MAX_FILE_SIZE // (1024*1024)} MB. "
+            "Set PEMCP_MAX_FILE_SIZE_MB environment variable to change this limit."
+        )
+
     # Auto-detect format from magic bytes
     if mode == "auto":
         with open(abs_path, 'rb') as f:
@@ -147,20 +157,12 @@ async def open_file(
 
     skip_list = [s.lower() for s in (analyses_to_skip or [])]
 
-    # Close any previously loaded file
-    if state.pe_object:
-        try:
-            state.pe_object.close()
-        except Exception:
-            pass
-        state.pe_object = None
+    # Close any previously loaded file — use atomic reset methods
+    if state.pe_object or state.filepath:
+        state.close_pe()
+        state.reset_angr()
         state.pe_data = None
         state.filepath = None
-        state.angr_project = None
-        state.angr_cfg = None
-        state.angr_loop_cache = None
-        state.angr_loop_cache_config = None
-        state.angr_hooks = {}
 
     _loaded_from_cache = False
 
@@ -459,6 +461,9 @@ async def reanalyze_loaded_pe_file(
             def _build_cfg():
                 state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
                 state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+                # Clear stale loop cache from previous CFG
+                state.angr_loop_cache = None
+                state.angr_loop_cache_config = None
             try:
                 await asyncio.to_thread(_build_cfg)
                 await ctx.info("Angr CFG generation complete. Future Angr calls will be fast.")
