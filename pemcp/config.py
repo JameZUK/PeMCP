@@ -4,32 +4,10 @@ Central configuration, imports, availability flags, and constants.
 All optional library imports and their availability flags are managed here.
 Other modules import what they need from this module.
 """
-import datetime
 import os
 import sys
-import struct
-import re
-import concurrent.futures
-import hashlib
-import warnings
-import json
 import logging
-import io
-import asyncio
-import importlib.util
-import subprocess
-import mmap
-import zipfile
 import shutil
-import collections
-import copy
-import base64
-import codecs
-import urllib.parse
-import binascii
-import uuid
-import threading
-import time
 
 from pathlib import Path
 
@@ -319,3 +297,121 @@ if STRINGSIFTER_AVAILABLE: logger.info("StringSifter library found. String ranki
 else: logger.warning(f"StringSifter library not found. String ranking will be skipped. Import error: {STRINGSIFTER_IMPORT_ERROR}")
 if RAPIDFUZZ_AVAILABLE: logger.info("RapidFuzz library found. Fuzzy string search will be available.")
 else: logger.warning(f"RapidFuzz library not found. Fuzzy search will be skipped. Import error: {RAPIDFUZZ_IMPORT_ERROR}")
+
+# --- Extended Library Availability Flags ---
+# These flags are centralized here for a single source of truth.
+# The actual library objects are imported conditionally in the tool modules that use them.
+
+LIEF_AVAILABLE = False
+try:
+    import lief  # noqa: F401
+    LIEF_AVAILABLE = True
+except ImportError:
+    pass
+
+CAPSTONE_AVAILABLE = False
+try:
+    import capstone  # noqa: F401
+    CAPSTONE_AVAILABLE = True
+except ImportError:
+    pass
+
+KEYSTONE_AVAILABLE = False
+try:
+    import keystone  # noqa: F401
+    KEYSTONE_AVAILABLE = True
+except ImportError:
+    pass
+
+SPEAKEASY_AVAILABLE = False
+try:
+    import speakeasy  # noqa: F401
+    SPEAKEASY_AVAILABLE = True
+except ImportError:
+    pass
+
+UNIPACKER_AVAILABLE = False
+try:
+    from unipacker.core import UnpackerClient  # noqa: F401
+    UNIPACKER_AVAILABLE = True
+except ImportError:
+    pass
+
+DOTNETFILE_AVAILABLE = False
+try:
+    import dotnetfile  # noqa: F401
+    DOTNETFILE_AVAILABLE = True
+except ImportError:
+    pass
+
+PPDEEP_AVAILABLE = False
+try:
+    import ppdeep  # noqa: F401
+    PPDEEP_AVAILABLE = True
+except ImportError:
+    pass
+
+TLSH_AVAILABLE = False
+try:
+    import tlsh  # noqa: F401
+    TLSH_AVAILABLE = True
+except ImportError:
+    pass
+
+BINWALK_AVAILABLE = False
+BINWALK_CLI_ONLY = False
+try:
+    import binwalk  # noqa: F401
+    if hasattr(binwalk, 'scan'):
+        BINWALK_AVAILABLE = True
+    else:
+        BINWALK_CLI_ONLY = bool(shutil.which("binwalk"))
+        BINWALK_AVAILABLE = BINWALK_CLI_ONLY
+except Exception:
+    BINWALK_CLI_ONLY = bool(shutil.which("binwalk"))
+    BINWALK_AVAILABLE = BINWALK_CLI_ONLY
+
+PYGORE_AVAILABLE = False
+try:
+    import pygore  # noqa: F401
+    PYGORE_AVAILABLE = True
+except ImportError:
+    pass
+
+PYELFTOOLS_AVAILABLE = False
+try:
+    from elftools.elf.elffile import ELFFile  # noqa: F401
+    from elftools.elf.sections import SymbolTableSection  # noqa: F401
+    PYELFTOOLS_AVAILABLE = True
+except ImportError:
+    pass
+
+DNFILE_AVAILABLE = False
+try:
+    import dnfile  # noqa: F401
+    DNFILE_AVAILABLE = True
+except ImportError:
+    pass
+
+DNCIL_AVAILABLE = False
+try:
+    from dncil.cil.body import CilMethodBody  # noqa: F401
+    from dncil.cil.error import CilError  # noqa: F401
+    from dncil.clr.token import Token  # noqa: F401
+    DNCIL_AVAILABLE = True
+except ImportError:
+    pass
+
+RUSTBININFO_AVAILABLE = False
+try:
+    import rustbininfo  # noqa: F401
+    RUSTBININFO_AVAILABLE = True
+except ImportError:
+    pass
+
+RUST_DEMANGLER_AVAILABLE = False
+try:
+    import rust_demangler  # noqa: F401
+    RUST_DEMANGLER_AVAILABLE = True
+except ImportError:
+    pass

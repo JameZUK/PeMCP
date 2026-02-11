@@ -1,25 +1,16 @@
 """MCP tools for .NET binary analysis using dnfile and dncil."""
 import asyncio
 from typing import Dict, Any, Optional
-from pemcp.config import state, logger, Context
+from pemcp.config import state, logger, Context, DNFILE_AVAILABLE, DNCIL_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 from pemcp.mcp._format_helpers import _check_lib, _get_filepath
 
-DNFILE_AVAILABLE = False
-try:
+if DNFILE_AVAILABLE:
     import dnfile
-    DNFILE_AVAILABLE = True
-except ImportError:
-    pass
-
-DNCIL_AVAILABLE = False
-try:
+if DNCIL_AVAILABLE:
     from dncil.cil.body import CilMethodBody
     from dncil.cil.error import CilError
     from dncil.clr.token import Token
-    DNCIL_AVAILABLE = True
-except ImportError:
-    pass
 
 
 @tool_decorator
