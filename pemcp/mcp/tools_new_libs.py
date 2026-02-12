@@ -13,7 +13,8 @@ from typing import Dict, Any, Optional, List
 from pemcp.config import (
     state, logger, Context,
     LIEF_AVAILABLE, CAPSTONE_AVAILABLE, KEYSTONE_AVAILABLE,
-    SPEAKEASY_AVAILABLE, UNIPACKER_AVAILABLE, DOTNETFILE_AVAILABLE,
+    SPEAKEASY_AVAILABLE, _SPEAKEASY_VENV_PYTHON, _SPEAKEASY_RUNNER,
+    UNIPACKER_AVAILABLE, DOTNETFILE_AVAILABLE,
     PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_angr_ready, _check_mcp_response_size
@@ -26,8 +27,6 @@ if CAPSTONE_AVAILABLE:
     import capstone
 if KEYSTONE_AVAILABLE:
     import keystone
-if SPEAKEASY_AVAILABLE:
-    import speakeasy
 if UNIPACKER_AVAILABLE:
     from unipacker.core import UnpackerClient
 if DOTNETFILE_AVAILABLE:
@@ -540,8 +539,37 @@ async def compare_file_similarity(
 
 
 # ===================================================================
-#  SPEAKEASY — Windows API emulation
+#  SPEAKEASY — Windows API emulation (via isolated venv subprocess)
 # ===================================================================
+
+async def _run_speakeasy(cmd: dict, timeout_seconds: int) -> dict:
+    """Invoke the speakeasy runner subprocess in the isolated venv."""
+    proc = await asyncio.create_subprocess_exec(
+        str(_SPEAKEASY_VENV_PYTHON), str(_SPEAKEASY_RUNNER),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    input_data = json.dumps(cmd).encode()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=input_data),
+            timeout=timeout_seconds + 30,  # buffer beyond emulation timeout
+        )
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"error": f"Speakeasy emulation timed out after {timeout_seconds}s"}
+
+    if proc.returncode != 0:
+        err_msg = stderr.decode(errors="replace")[:500]
+        return {"error": f"Speakeasy runner failed (exit {proc.returncode}): {err_msg}"}
+
+    try:
+        return json.loads(stdout.decode())
+    except json.JSONDecodeError:
+        return {"error": f"Invalid JSON from speakeasy runner: {stdout.decode(errors='replace')[:500]}"}
+
 
 @tool_decorator
 async def emulate_pe_with_windows_apis(
@@ -561,49 +589,12 @@ async def emulate_pe_with_windows_apis(
     _check_lib("speakeasy", SPEAKEASY_AVAILABLE, "emulate_pe_with_windows_apis")
     _check_pe_loaded("emulate_pe_with_windows_apis")
 
-    def _emulate():
-        se = speakeasy.Speakeasy()
-        try:
-            module = se.load_module(state.filepath)
-        except Exception as e:
-            return {"error": f"Failed to load module: {e}"}
-
-        try:
-            se.run_module(module, timeout=timeout_seconds)
-        except Exception as e:
-            # Emulation may raise on exit or unhandled API
-            pass
-
-        # Collect API call log
-        api_calls = []
-        for event in se.get_report().get('api_calls', []):
-            args = event.get('args', [])
-            if isinstance(args, (list, tuple)):
-                args = args[:5]
-            else:
-                args = str(args)
-            api_calls.append({
-                "api": event.get('api_name', ''),
-                "args": args,
-                "ret_val": event.get('ret_val'),
-                "caller": hex(event['caller']) if event.get('caller') else None,
-            })
-            if len(api_calls) >= limit:
-                break
-
-        report = se.get_report()
-
-        return {
-            "status": "completed",
-            "total_api_calls": len(report.get('api_calls', [])),
-            "api_calls": api_calls,
-            "strings_found": _safe_slice(report.get('strings', []), 100),
-            "network_activity": _safe_slice(report.get('network', []), 50),
-            "file_activity": _safe_slice(report.get('file_access', []), 50),
-            "registry_activity": _safe_slice(report.get('registry', []), 50),
-        }
-
-    result = await asyncio.to_thread(_emulate)
+    result = await _run_speakeasy({
+        "action": "emulate_pe",
+        "filepath": state.filepath,
+        "timeout_seconds": timeout_seconds,
+        "limit": limit,
+    }, timeout_seconds)
     return await _check_mcp_response_size(ctx, result, "emulate_pe_with_windows_apis", "the 'limit' parameter")
 
 
@@ -628,56 +619,14 @@ async def emulate_shellcode_with_speakeasy(
     await ctx.info("Emulating shellcode with Speakeasy")
     _check_lib("speakeasy", SPEAKEASY_AVAILABLE, "emulate_shellcode_with_speakeasy")
 
-    def _emulate():
-        se = speakeasy.Speakeasy()
-
-        if shellcode_hex:
-            sc_data = bytes.fromhex(shellcode_hex)
-        elif state.filepath:
-            with open(state.filepath, 'rb') as f:
-                sc_data = f.read()
-        else:
-            return {"error": "No shellcode provided and no file loaded."}
-
-        try:
-            import speakeasy.winenv.arch as _arch
-            arch_val = _arch.ARCH_X86 if architecture == "x86" else _arch.ARCH_AMD64
-        except (ImportError, AttributeError):
-            # Fallback: pass architecture string directly
-            arch_val = architecture
-
-        try:
-            addr = se.load_shellcode(state.filepath if not shellcode_hex else None, arch_val, data=sc_data)
-            se.run_shellcode(addr, timeout=timeout_seconds)
-        except Exception as e:
-            logger.debug(f"Speakeasy emulation ended with exception (may be expected): {e}")
-
-        api_calls = []
-        report = se.get_report()
-        for event in report.get('api_calls', []):
-            args = event.get('args', [])
-            if isinstance(args, (list, tuple)):
-                args = args[:5]
-            else:
-                args = str(args)
-            api_calls.append({
-                "api": event.get('api_name', ''),
-                "args": args,
-                "ret_val": event.get('ret_val'),
-            })
-            if len(api_calls) >= limit:
-                break
-
-        return {
-            "status": "completed",
-            "architecture": architecture,
-            "total_api_calls": len(report.get('api_calls', [])),
-            "api_calls": api_calls,
-            "strings_found": _safe_slice(report.get('strings', []), 100),
-            "network_activity": _safe_slice(report.get('network', []), 50),
-        }
-
-    result = await asyncio.to_thread(_emulate)
+    result = await _run_speakeasy({
+        "action": "emulate_shellcode",
+        "filepath": state.filepath,
+        "shellcode_hex": shellcode_hex,
+        "architecture": architecture,
+        "timeout_seconds": timeout_seconds,
+        "limit": limit,
+    }, timeout_seconds)
     return await _check_mcp_response_size(ctx, result, "emulate_shellcode_with_speakeasy", "the 'limit' parameter")
 
 

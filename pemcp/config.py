@@ -253,11 +253,6 @@ except ImportError:
 # --- Angr Integration ---
 ANGR_AVAILABLE = False
 
-# Suppress noisy unicorn_engine messages that appear when the native
-# unicornlib.so cannot be loaded.  Angr already degrades gracefully;
-# these INFO/ERROR lines only confuse users.
-logging.getLogger("angr.state_plugins.unicorn_engine").setLevel(logging.CRITICAL)
-
 try:
     import angr
     import angr.analyses.decompiler
@@ -331,12 +326,16 @@ except ImportError:
 
 SPEAKEASY_AVAILABLE = False
 SPEAKEASY_IMPORT_ERROR = ""
-try:
-    import speakeasy  # noqa: F401
+_SPEAKEASY_VENV_PYTHON = Path("/app/speakeasy-venv/bin/python")
+_SPEAKEASY_RUNNER = DATA_DIR / "scripts" / "speakeasy_runner.py"
+if _SPEAKEASY_VENV_PYTHON.is_file() and _SPEAKEASY_RUNNER.is_file():
     SPEAKEASY_AVAILABLE = True
-except Exception as e:
-    SPEAKEASY_IMPORT_ERROR = str(e)
-    logger.warning(f"Speakeasy import failed: {type(e).__name__}: {e}")
+else:
+    SPEAKEASY_IMPORT_ERROR = (
+        f"Speakeasy venv not found (expected {_SPEAKEASY_VENV_PYTHON} "
+        f"and {_SPEAKEASY_RUNNER})"
+    )
+    logger.warning(f"Speakeasy unavailable: {SPEAKEASY_IMPORT_ERROR}")
 
 UNIPACKER_AVAILABLE = False
 try:

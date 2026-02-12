@@ -100,7 +100,11 @@ async def list_samples(
                 if glob_pattern and not Path(filename).match(glob_pattern):
                     continue
                 full_path = os.path.join(root, filename)
-                files.append(_build_file_entry(full_path, samples_dir))
+                try:
+                    files.append(_build_file_entry(full_path, samples_dir))
+                except (OSError, ValueError):
+                    # Skip broken symlinks, permission errors, etc.
+                    continue
     else:
         for entry in os.scandir(samples_dir):
             if not entry.is_file() or entry.name.startswith('.'):
