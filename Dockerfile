@@ -77,12 +77,13 @@ RUN pip install --no-cache-dir --force-reinstall \
     git+https://github.com/wbond/oscrypto.git@d5f3437ed24257895ae1edd9e503cfb352e635a8
 
 # --- Restore unicorn 2.x (MUST be the last pip install) ---
-# Packages like unipacker depend on unicorn<2 and silently downgrade
-# unicorn to 1.x.  archinfo (used by angr) references UC_ARCH_RISCV
-# which only exists in unicorn 2.x, so we force-upgrade unicorn last
-# to guarantee the 2.x series is installed at runtime.
-# (unipacker is best-effort/optional and may not work with unicorn 2.x.)
-RUN pip install --no-cache-dir --upgrade "unicorn>=2.0.0"
+# unicorn-unipacker (pulled in by unipacker) installs into the same
+# site-packages/unicorn/ namespace as the real unicorn package,
+# overwriting the 2.x module files with 1.x code.  pip's registry
+# still shows unicorn==2.1.x so --upgrade alone sees "already satisfied"
+# and does nothing.  --force-reinstall forces pip to re-extract the
+# real unicorn 2.x wheel, restoring UC_ARCH_RISCV and the angr bridge.
+RUN pip install --no-cache-dir --force-reinstall --no-deps "unicorn>=2.0.0"
 
 # Show the final unicorn versions for build-log diagnostics.
 # Main env: unicorn 2.x → angr native unicorn bridge works.
