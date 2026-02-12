@@ -256,7 +256,10 @@ try:
     import angr
     import angr.analyses.decompiler
     ANGR_AVAILABLE = True
-except ImportError:
+except (ImportError, AttributeError) as _angr_err:
+    # AttributeError: archinfo may reference unicorn constants (e.g.
+    # UC_ARCH_RISCV) that don't exist in older unicorn versions.
+    # Degrade gracefully rather than crashing the entire server.
     ANGR_AVAILABLE = False
 
 # --- Constants ---

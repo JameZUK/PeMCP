@@ -21,15 +21,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel
 
 # --- Install Heavy Dependencies (Cached Layer) ---
-# Pin unicorn>=2.1.0 explicitly: newer archinfo references UC_ARCH_RISCV
-# which was added in unicorn 2.1.0.  Without the pin, pip may resolve an
-# older 2.0.x unicorn that lacks RISC-V support.
 RUN pip install --no-cache-dir \
-    "unicorn>=2.1.0" \
     "angr[unicorn]" \
     flare-floss \
     flare-capa \
     vivisect
+
+# Upgrade unicorn AFTER angr: newer archinfo references UC_ARCH_RISCV
+# (added in unicorn 2.1.0) but angr's resolver may pull in an older 2.0.x.
+# A separate step forces the upgrade without pip backtracking to angr's pin.
+RUN pip install --no-cache-dir --upgrade "unicorn>=2.1.0"
 
 # --- Install Core Dependencies ---
 RUN pip install --no-cache-dir \
