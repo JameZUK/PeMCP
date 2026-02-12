@@ -21,7 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel
 
 # --- Install Heavy Dependencies (Cached Layer) ---
+# Pin unicorn>=2.1.0 explicitly: newer archinfo references UC_ARCH_RISCV
+# which was added in unicorn 2.1.0.  Without the pin, pip may resolve an
+# older 2.0.x unicorn that lacks RISC-V support.
 RUN pip install --no-cache-dir \
+    "unicorn>=2.1.0" \
     "angr[unicorn]" \
     flare-floss \
     flare-capa \
@@ -110,7 +114,9 @@ COPY FastPrompt.txt .
 # run.sh passes --user "$(id -u):$(id -g)" so the container runs as the
 # host user.  HOME is set to /app/home which is world-readable/executable
 # so any UID can create ~/.pemcp/cache and config.json inside it.
-RUN mkdir -p /app/home/.pemcp/cache && chmod -R 755 /app/home
+# 777 is intentional: the container runs as an arbitrary non-root UID
+# (via --user) so the directory must be world-writable.
+RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
 
 # --- Declare volume for persistent cache and configuration ---
 VOLUME ["/app/home/.pemcp"]
