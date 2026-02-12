@@ -33,6 +33,7 @@ class AnalyzerState:
         self.samples_path: Optional[str] = None
 
         # Angr State
+        self._angr_lock = threading.Lock()
         self.angr_project = None
         self.angr_cfg = None
         self.angr_loop_cache = None
@@ -102,18 +103,32 @@ class AnalyzerState:
         ]
         if len(finished) <= MAX_COMPLETED_TASKS:
             return
-        # Sort by created_at (oldest first) and remove excess
-        finished.sort(key=lambda item: item[1].get("created_at", ""))
+        # Sort by numeric epoch (oldest first) and remove excess
+        finished.sort(key=lambda item: item[1].get("created_at_epoch", 0))
         to_remove = len(finished) - MAX_COMPLETED_TASKS
         for tid, _ in finished[:to_remove]:
             del self.background_tasks[tid]
 
+    def set_angr_results(self, project, cfg, loop_cache, loop_cache_config):
+        """Atomically set all angr analysis results."""
+        with self._angr_lock:
+            self.angr_project = project
+            self.angr_cfg = cfg
+            self.angr_loop_cache = loop_cache
+            self.angr_loop_cache_config = loop_cache_config
+
+    def get_angr_snapshot(self):
+        """Return a consistent snapshot of (project, cfg)."""
+        with self._angr_lock:
+            return self.angr_project, self.angr_cfg
+
     def reset_angr(self):
-        self.angr_project = None
-        self.angr_cfg = None
-        self.angr_loop_cache = None
-        self.angr_loop_cache_config = None
-        self.angr_hooks = {}
+        with self._angr_lock:
+            self.angr_project = None
+            self.angr_cfg = None
+            self.angr_loop_cache = None
+            self.angr_loop_cache_config = None
+            self.angr_hooks = {}
 
     def close_pe(self):
         if self.pe_object:

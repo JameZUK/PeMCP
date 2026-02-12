@@ -110,7 +110,7 @@ COPY FastPrompt.txt .
 # run.sh passes --user "$(id -u):$(id -g)" so the container runs as the
 # host user.  HOME is set to /app/home which is world-readable/executable
 # so any UID can create ~/.pemcp/cache and config.json inside it.
-RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
+RUN mkdir -p /app/home/.pemcp/cache && chmod -R 755 /app/home
 
 # --- Declare volume for persistent cache and configuration ---
 VOLUME ["/app/home/.pemcp"]

@@ -117,12 +117,12 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         else:
             project = angr.Project(filepath, auto_load_libs=False)
 
-        state.angr_project = project
+        state.set_angr_results(project, None, None, None)
         _update_progress(task_id, 20, "Building Control Flow Graph...")
 
         # 2. Build CFG (the heaviest step)
         cfg = project.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
-        state.angr_cfg = cfg
+        state.set_angr_results(project, cfg, None, None)
         _update_progress(task_id, 80, "Identifying loops...")
 
         # 3. Pre-calculate Loops
@@ -143,8 +143,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
             except Exception:
                 continue
 
-        state.angr_loop_cache = raw_loops
-        state.angr_loop_cache_config = {"resolve_jumps": True, "data_refs": False}
+        state.set_angr_results(project, cfg, raw_loops, {"resolve_jumps": True, "data_refs": False})
 
         # 4. Mark Complete
         state.update_task(
@@ -179,6 +178,7 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
         "progress_percent": 0,
         "progress_message": "Starting background pre-analysis...",
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "created_at_epoch": time.time(),
         "tool": tool_label,
     })
 

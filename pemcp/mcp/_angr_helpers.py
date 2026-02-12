@@ -56,17 +56,22 @@ def _rebuild_project_with_hooks():
             except Exception:
                 logger.warning("Failed to re-apply hook for '%s' during CFG rebuild", key)
 
-    state.angr_project = proj
+    state.set_angr_results(proj, None, state.angr_loop_cache, state.angr_loop_cache_config)
 
 
 def _ensure_project_and_cfg():
     """Ensure angr project and CFG are initialized."""
-    if state.angr_project is None:
-        state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-    if state.angr_cfg is None:
+    project, cfg = state.get_angr_snapshot()
+    if project is None:
+        project = angr.Project(state.filepath, auto_load_libs=False)
+        state.set_angr_results(project, None, state.angr_loop_cache, state.angr_loop_cache_config)
+    if cfg is None:
         if state.angr_hooks:
             _rebuild_project_with_hooks()
-        state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
+            project, cfg = state.get_angr_snapshot()
+        if cfg is None:
+            cfg = project.analyses.CFGFast(normalize=True)
+            state.set_angr_results(project, cfg, state.angr_loop_cache, state.angr_loop_cache_config)
 
 
 def _parse_addr(hex_string: str, name: str = "address") -> int:
