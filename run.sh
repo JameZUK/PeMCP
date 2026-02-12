@@ -76,6 +76,7 @@ common_args() {
         --rm
         --user "$(id -u):$(id -g)"
         -e "HOME=/app/home"
+        -e "USER=${USER:-pemcp}"
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:$MOUNT_OPTS"
         -v "pemcp-data:/app/home/.pemcp"
     )
