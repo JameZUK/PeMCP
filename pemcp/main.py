@@ -400,21 +400,28 @@ def main():
 
                 print("\n[!] Note: For deep shellcode analysis (Angr/FLOSS), please use MCP Server mode or FLOSS directly.")
 
+            elif args.mode in ('elf', 'macho'):
+                print(f"[!] Error: CLI mode does not support '{args.mode}' format analysis.", file=sys.stderr)
+                print("[!] Please use MCP server mode (--mcp-server) for ELF and Mach-O analysis.", file=sys.stderr)
+                sys.exit(1)
             else:
                 # PE CLI Mode
                 pe_obj = pefile.PE(abs_input_file, fast_load=False)
-                _cli_analyze_and_print_pe(
-                    abs_input_file, abs_peid_db_path, abs_yara_rules_path,
-                    abs_capa_rules_dir_arg, abs_capa_sigs_dir_arg,
-                    args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                    floss_min_len_resolved, args.floss_verbose_level,
-                    floss_script_debug_level_enum_val_resolved, floss_fmt,
-                    floss_disabled_types_resolved, floss_only_types_resolved,
-                    floss_functions_to_analyze_resolved, floss_quiet_resolved,
-                    args.extract_strings, args.min_str_len, args.search_string,
-                    args.strings_limit, args.hexdump_offset, args.hexdump_length,
-                    args.hexdump_lines, analyses_to_skip_arg_list
-                )
+                try:
+                    _cli_analyze_and_print_pe(
+                        abs_input_file, abs_peid_db_path, abs_yara_rules_path,
+                        abs_capa_rules_dir_arg, abs_capa_sigs_dir_arg,
+                        args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
+                        floss_min_len_resolved, args.floss_verbose_level,
+                        floss_script_debug_level_enum_val_resolved, floss_fmt,
+                        floss_disabled_types_resolved, floss_only_types_resolved,
+                        floss_functions_to_analyze_resolved, floss_quiet_resolved,
+                        args.extract_strings, args.min_str_len, args.search_string,
+                        args.strings_limit, args.hexdump_offset, args.hexdump_length,
+                        args.hexdump_lines, analyses_to_skip_arg_list
+                    )
+                finally:
+                    pe_obj.close()
         except KeyboardInterrupt:
             print("\n[*] CLI Analysis interrupted by user. Exiting.")
             sys.exit(1)

@@ -26,8 +26,13 @@ async def get_current_datetime(ctx: Context) -> Dict[str,str]:
         - "local_timezone_name": (str) Name of the server's local timezone.
     """
     await ctx.info("Request for current datetime.")
-    now_utc=datetime.datetime.now(datetime.timezone.utc);now_local=datetime.datetime.now().astimezone()
-    return{"utc_datetime":now_utc.isoformat(),"local_datetime":now_local.isoformat(),"local_timezone_name":str(now_local.tzinfo)}
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    now_local = datetime.datetime.now().astimezone()
+    return {
+        "utc_datetime": now_utc.isoformat(),
+        "local_datetime": now_local.isoformat(),
+        "local_timezone_name": str(now_local.tzinfo),
+    }
 
 @tool_decorator
 async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:

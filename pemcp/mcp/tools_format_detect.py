@@ -55,7 +55,17 @@ async def detect_binary_format(
 
         # Mach-O Fat/Universal
         elif header[:4] in (b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
-            formats.append("Mach-O Fat/Universal")
+            # 0xCAFEBABE is shared between Mach-O Fat and Java class files
+            # Java class files have minor_version at offset 4 and major_version at offset 6
+            # with major_version typically 45-65 (Java 1.1 to Java 21)
+            if len(header) >= 8:
+                major_ver = struct.unpack_from('>H', header, 6)[0]
+                if 44 <= major_ver <= 68:
+                    formats.append("Java Class File (or Mach-O Fat)")
+                else:
+                    formats.append("Mach-O Fat/Universal")
+            else:
+                formats.append("Mach-O Fat/Universal")
             suggested_tools.extend(["macho_analyze"])
 
         # PE

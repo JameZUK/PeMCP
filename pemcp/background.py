@@ -34,7 +34,7 @@ def _console_heartbeat_loop():
 
         if running_entries:
             # Print a clean status block
-            print(f"\n--- [Status Heartbeat {current_time_str}] ---")
+            print(f"\n--- [Status Heartbeat {current_time_str}] ---", file=sys.stderr)
             for task_id, task in running_entries:
                 # Calculate elapsed time
                 try:
@@ -47,11 +47,11 @@ def _console_heartbeat_loop():
                 percent = task.get("progress_percent", 0)
                 msg = task.get("progress_message", "Processing...")
 
-                print(f" * Task {task_id[:8]}... [{elapsed_str} elapsed] | {percent}%: {msg}")
-            print("------------------------------------------\n")
+                print(f" * Task {task_id[:8]}... [{elapsed_str} elapsed] | {percent}%: {msg}", file=sys.stderr)
+            print("------------------------------------------\n", file=sys.stderr)
 
-            # Flush stdout to ensure it appears in logs/consoles immediately
-            sys.stdout.flush()
+            # Flush stderr to ensure it appears in logs/consoles immediately
+            sys.stderr.flush()
 
 
 def _update_progress(task_id: str, percent: int, message: str):
@@ -71,20 +71,28 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
             _monitor_started = True
             logger.info("Console heartbeat monitor started.")
 
+    # Capture the caller's session state so we can propagate it into the worker thread
+    _session_state = get_current_state()
+
+    def _thread_wrapper():
+        # Propagate session state into this worker thread
+        set_current_state(_session_state)
+        return func(*args, **kwargs)
+
     try:
         # Inject the task_id into the function if it accepts 'task_id_for_progress'
         kwargs['task_id_for_progress'] = task_id
 
-        result = await asyncio.to_thread(func, *args, **kwargs)
+        result = await asyncio.to_thread(_thread_wrapper)
 
         state.update_task(task_id, result=result, status="completed",
                           progress_percent=100, progress_message="Analysis complete.")
-        print(f"\n[*] Task {task_id[:8]} finished successfully.")
+        print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
 
     except Exception as e:
         logger.error(f"Background task {task_id} failed: {e}", exc_info=True)
         state.update_task(task_id, error=str(e), status="failed")
-        print(f"\n[!] Task {task_id[:8]} failed: {e}")
+        print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
 
 
 def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch_hint: str = "amd64",
@@ -153,7 +161,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
             progress_percent=100,
             progress_message="Background analysis complete.",
         )
-        print(f"\n[*] Background Angr Analysis finished.")
+        print(f"\n[*] Background Angr Analysis finished.", file=sys.stderr)
 
     except Exception as e:
         logger.error(f"Background Angr analysis failed: {e}", exc_info=True)

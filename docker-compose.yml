@@ -22,7 +22,7 @@ services:
     build: .
     image: pemcp-toolkit:latest
     ports:
-      - "${PEMCP_PORT:-8082}:8082"
+      - "127.0.0.1:${PEMCP_PORT:-8082}:8082"
     volumes:
       - ./samples:/samples:ro
       - pemcp-data:/app/home/.pemcp
@@ -37,6 +37,11 @@ services:
       - "--samples-path"
       - "/samples"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: "4.0"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/mcp')"]
       interval: 30s

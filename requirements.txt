@@ -1,75 +1,75 @@
 # --- Core PE Parsing ---
-pefile
+pefile>=2023.2.7
 
 # --- Advanced Binary Analysis & Emulation ---
 # Includes unicorn engine support for fast emulation
-angr[unicorn]
-vivisect
+angr[unicorn]>=9.2
+vivisect>=1.1.0
 
 # --- FLARE Tools (Capabilities & Advanced Strings) ---
-flare-floss
-flare-capa
+flare-floss>=3.0
+flare-capa>=7.0
 
 # --- String Analysis & Ranking ---
-flare-stringsifter
-joblib
-numpy
-rapidfuzz
+flare-stringsifter>=3.0
+joblib>=1.2
+numpy>=1.24
+rapidfuzz>=3.0
 
 # --- Signatures, Cryptography & Scanning ---
-yara-python
-signify
-cryptography
+yara-python>=4.3
+signify>=0.5
+cryptography>=41.0
 
 # --- Network & API (VirusTotal/Updates) ---
-requests
+requests>=2.28
 
 # --- Server Infrastructure ---
 # Model Context Protocol SDK
-mcp[cli]
+mcp[cli]>=1.0
 
 # --- Graph Analysis (used directly for angr CFG processing) ---
-networkx
+networkx>=3.0
 
 # --- Extended Binary Analysis (Optional - graceful degradation) ---
 # Multi-format binary parsing and modification (PE/ELF/Mach-O)
-lief
+lief>=0.14
 # Multi-architecture disassembler (standalone shellcode analysis)
-capstone
+capstone>=5.0
 # Multi-architecture assembler (patch generation from mnemonics)
-keystone-engine
+keystone-engine>=0.9
 # Windows API emulation for malware analysis
-speakeasy-emulator
+speakeasy-emulator>=1.0
 # Automatic PE unpacking (UPX, ASPack, FSG, etc.)
-unipacker
+unipacker>=1.0
 # .NET PE metadata extraction
-dotnetfile
+dotnetfile>=0.3
 # Fuzzy hashing for sample similarity
-ppdeep
+ppdeep>=20200401
 # Locality-sensitive hashing
-py-tlsh
+py-tlsh>=4.7
 # Embedded file/firmware detection
-binwalk
+binwalk>=2.3
 
 # --- .NET Binary Analysis (Optional) ---
 # .NET PE metadata parser (CLR headers, metadata tables, streams)
-dnfile
+dnfile>=0.15
 # .NET CIL bytecode disassembler (Mandiant FLARE)
-dncil
+dncil>=1.0
 
 # --- Go Binary Analysis (Optional) ---
 # Go binary reverse engineering (compiler version, packages, symbols)
-pygore
+pygore>=0.5
 
 # --- Rust Binary Analysis (Optional) ---
 # Rust binary metadata extraction (compiler, crates, toolchain)
-rustbininfo
+rustbininfo>=0.3
 # Rust symbol demangling
-rust-demangler
+rust-demangler>=0.1
 
 # --- ELF/Linux Binary Analysis (Optional) ---
 # ELF and DWARF parser (headers, symbols, debug info)
-pyelftools
+pyelftools>=0.29
 
 # --- Test Dependencies ---
 # Install with: pip install -r requirements.txt -r requirements-test.txt

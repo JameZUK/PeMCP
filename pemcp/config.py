@@ -30,9 +30,13 @@ from pemcp.cache import AnalysisCache  # noqa: E402
 
 _cache_enabled = get_config_value("cache_enabled")
 _cache_max_mb = get_config_value("cache_max_size_mb")
+try:
+    _cache_max_mb_int = int(_cache_max_mb) if _cache_max_mb else 500
+except (ValueError, TypeError):
+    _cache_max_mb_int = 500
 analysis_cache = AnalysisCache(
-    max_size_mb=int(_cache_max_mb) if _cache_max_mb else 500,
-    enabled=(_cache_enabled != "false"),
+    max_size_mb=_cache_max_mb_int,
+    enabled=(_cache_enabled.lower() not in ("false", "0", "no")) if _cache_enabled else True,
 )
 
 # --- Ensure pefile is available (Critical Dependency) ---
@@ -83,7 +87,7 @@ try:
     import yara
     YARA_AVAILABLE = True
 except ImportError as e:
-    YARA_IMPORT_ERROR = e
+    YARA_IMPORT_ERROR = str(e)
 
 # --- Logging Setup ---
 logger = logging.getLogger("PeMCP")
@@ -342,24 +346,33 @@ try:
 except ImportError:
     pass
 
-SPEAKEASY_AVAILABLE = False
+SPEAKEASY_AVAILABLE = None  # None = not yet checked; will be lazy-checked
 SPEAKEASY_IMPORT_ERROR = ""
 _SPEAKEASY_VENV_PYTHON = Path("/app/speakeasy-venv/bin/python")
 _SPEAKEASY_RUNNER = DATA_DIR / "scripts" / "speakeasy_runner.py"
-if _SPEAKEASY_VENV_PYTHON.is_file() and _SPEAKEASY_RUNNER.is_file():
-    try:
-        import subprocess as _sp
-        _speakeasy_result = _sp.run(
-            [str(_SPEAKEASY_VENV_PYTHON), "-c", "import speakeasy"],
-            capture_output=True, timeout=10,
-        )
-        SPEAKEASY_AVAILABLE = _speakeasy_result.returncode == 0
-        if not SPEAKEASY_AVAILABLE:
-            SPEAKEASY_IMPORT_ERROR = f"speakeasy import failed in venv: {_speakeasy_result.stderr.decode()[:200]}"
-    except Exception as _e:
-        SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv check failed: {_e}"
-else:
-    SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv not found (expected {_SPEAKEASY_VENV_PYTHON})"
+
+def _check_speakeasy_available():
+    """Lazy check for Speakeasy availability. Called on first use."""
+    global SPEAKEASY_AVAILABLE, SPEAKEASY_IMPORT_ERROR
+    if SPEAKEASY_AVAILABLE is not None:
+        return SPEAKEASY_AVAILABLE
+    if _SPEAKEASY_VENV_PYTHON.is_file() and _SPEAKEASY_RUNNER.is_file():
+        try:
+            import subprocess as _sp
+            _speakeasy_result = _sp.run(
+                [str(_SPEAKEASY_VENV_PYTHON), "-c", "import speakeasy"],
+                capture_output=True, timeout=10,
+            )
+            SPEAKEASY_AVAILABLE = _speakeasy_result.returncode == 0
+            if not SPEAKEASY_AVAILABLE:
+                SPEAKEASY_IMPORT_ERROR = f"speakeasy import failed in venv: {_speakeasy_result.stderr.decode()[:200]}"
+        except Exception as _e:
+            SPEAKEASY_AVAILABLE = False
+            SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv check failed: {_e}"
+    else:
+        SPEAKEASY_AVAILABLE = False
+        SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv not found (expected {_SPEAKEASY_VENV_PYTHON})"
+    return SPEAKEASY_AVAILABLE
 
 UNIPACKER_AVAILABLE = False
 try:

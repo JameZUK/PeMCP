@@ -1,5 +1,4 @@
 """MCP tools for binary purpose classification."""
-import os
 from typing import Dict, Any
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE, CAPA_AVAILABLE, FLOSS_AVAILABLE, YARA_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
@@ -49,6 +48,12 @@ async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
     characteristics = file_header.get('characteristics', file_header.get('Characteristics', 0))
     subsystem = optional_header.get('subsystem', optional_header.get('Subsystem', 0))
     dll_characteristics = optional_header.get('dll_characteristics', optional_header.get('DllCharacteristics', 0))
+
+    # Extract Value from nested dicts returned by dump_dict()
+    if isinstance(characteristics, dict):
+        characteristics = characteristics.get('Value', 0)
+    if isinstance(subsystem, dict):
+        subsystem = subsystem.get('Value', 0)
 
     # Gather all import function names
     all_import_names = set()
