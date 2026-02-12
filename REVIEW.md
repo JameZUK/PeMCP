@@ -217,11 +217,11 @@ Location: `state.py:106`
 
 Tasks are sorted by `created_at` which is an ISO 8601 string (e.g., `"2026-02-12T14:30:00+00:00"`). ISO 8601 is lexicographically sortable when using consistent formatting, but if any task has a non-standard or missing `created_at` value, the sort produces unpredictable results. Using a numeric epoch timestamp for sorting would be more robust.
 
-**L3. Docker `chmod 777 /app/home` is overly permissive**
+**L3. ~~Docker `chmod 777 /app/home` is overly permissive~~ (Retracted)**
 
 Location: `Dockerfile:113`
 
-The `chmod 777` grants read/write/execute to all users. Since the container runs as the host UID (via `--user`), `chmod 755` with proper ownership via `chown` would be more secure. In a shared container environment, `777` would allow other processes to modify the config and cache.
+**Retracted**: The `chmod 777` is intentional and necessary. The container runs as an arbitrary non-root UID via `--user "$(id -u):$(id -g)"` in `run.sh`, so the directory must be world-writable for the host user to create `~/.pemcp/cache` and `config.json`. Using `755` breaks container startup for non-root users.
 
 **L4. Speakeasy availability check is filesystem-based, not functional**
 
