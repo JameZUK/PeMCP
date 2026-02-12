@@ -54,14 +54,15 @@ RUN pip install --no-cache-dir \
     rustbininfo \
     rust-demangler
 
-# --- Install speakeasy (required for PE/shellcode emulation) ---
+# --- Install speakeasy in an isolated venv (requires unicorn 1.x) ---
 # speakeasy-emulator requires unicorn 1.x (uses internal _uc API removed
-# in 2.x).  This downgrades angr's unicorn 2.1.4 → 1.0.2, disabling
-# angr's native unicorn bridge — an acceptable trade-off since angr still
-# works (slower Python simulation) while speakeasy doesn't work at all
-# without unicorn 1.x.  The angr unicorn warnings are suppressed in
-# pemcp/config.py.
-RUN pip install --no-cache-dir speakeasy-emulator
+# in 2.x).  Instead of downgrading the main env's unicorn (which breaks
+# angr's native unicorn bridge), we install speakeasy into its own venv
+# and invoke it via subprocess at runtime.  This keeps angr fast (native
+# unicorn 2.x) while speakeasy still works (unicorn 1.x in its venv).
+RUN python -m venv /app/speakeasy-venv && \
+    /app/speakeasy-venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /app/speakeasy-venv/bin/pip install --no-cache-dir speakeasy-emulator
 
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
@@ -75,10 +76,11 @@ RUN pip install --no-cache-dir unipacker || true && \
 RUN pip install --no-cache-dir --force-reinstall \
     git+https://github.com/wbond/oscrypto.git@d5f3437ed24257895ae1edd9e503cfb352e635a8
 
-# Show the final unicorn version for build-log diagnostics.
-# unicorn 1.x = speakeasy works, angr unicorn bridge disabled (acceptable).
-# unicorn 2.x = angr unicorn bridge works, speakeasy disabled.
-RUN python -c "import unicorn; print('unicorn', unicorn.__version__)"
+# Show the final unicorn versions for build-log diagnostics.
+# Main env: unicorn 2.x → angr native unicorn bridge works.
+# Speakeasy venv: unicorn 1.x → speakeasy emulation works.
+RUN python -c "import unicorn; print('main env unicorn', unicorn.__version__)" && \
+    /app/speakeasy-venv/bin/python -c "import unicorn; print('speakeasy venv unicorn', unicorn.__version__)"
 
 # --- Pre-populate capa rules (avoids runtime download + write permission issues) ---
 # Downloaded at build time so the container never needs write access to /app.
@@ -100,6 +102,7 @@ PYEOF
 # --- Copy Application Files ---
 COPY PeMCP.py .
 COPY pemcp/ ./pemcp/
+COPY scripts/ ./scripts/
 COPY userdb.txt .
 COPY FastPrompt.txt .
 
@@ -107,7 +110,7 @@ COPY FastPrompt.txt .
 # run.sh passes --user "$(id -u):$(id -g)" so the container runs as the
 # host user.  HOME is set to /app/home which is world-readable/executable
 # so any UID can create ~/.pemcp/cache and config.json inside it.
-RUN mkdir -p /app/home && chmod 755 /app/home
+RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
 
 # --- Declare volume for persistent cache and configuration ---
 VOLUME ["/app/home/.pemcp"]
