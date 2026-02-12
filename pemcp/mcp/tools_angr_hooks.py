@@ -62,7 +62,7 @@ async def hook_function(
         # Determine if it's an address or symbol name
         is_hex = False
         try:
-            addr = int(address_or_name, 16)
+            addr = int(address_or_name, 0)
             is_hex = True
         except ValueError:
             addr = None

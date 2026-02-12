@@ -185,10 +185,9 @@ def _parse_floss_analysis(
 
     vw: Optional[VivWorkspace] = None
     selected_functions_fvas_set: Set[int] = set()
-    needs_vivisect = (analysis_conf.enable_stack_strings or \
-                      analysis_conf.enable_tight_strings or \
-                      analysis_conf.enable_decoded_strings or \
-                      analysis_conf.enable_static_strings)
+    needs_vivisect = (analysis_conf.enable_stack_strings or
+                      analysis_conf.enable_tight_strings or
+                      analysis_conf.enable_decoded_strings)
 
     if needs_vivisect:
         if log_progress: logger.info("FLOSS: Preparing Vivisect workspace for deeper analysis...")

@@ -17,6 +17,14 @@ if ANGR_AVAILABLE:
     import networkx as nx
 
 
+def _log_task_exception(task_id: str):
+    """Return a done-callback that logs unhandled exceptions from background tasks."""
+    def _callback(t):
+        if not t.cancelled() and t.exception() is not None:
+            logger.error(f"Background task '{task_id}' failed: {t.exception()}")
+    return _callback
+
+
 @tool_decorator
 async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, Any]:
     """
@@ -324,7 +332,8 @@ async def find_path_to_address(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "find_path_to_address"
         })
-        asyncio.create_task(_run_background_task_wrapper(task_id, _solve_path))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _solve_path))
+        task.add_done_callback(_log_task_exception(task_id))
         return {
             "status": "queued",
             "task_id": task_id,
@@ -428,7 +437,8 @@ async def emulate_function_execution(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "emulate_function_execution"
         })
-        asyncio.create_task(_run_background_task_wrapper(task_id, _core_emulation))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _core_emulation))
+        task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Emulation queued."}
 
     await ctx.info(f"Emulating {function_address} (Limit: {max_steps})")
@@ -552,7 +562,8 @@ async def analyze_binary_loops(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "analyze_binary_loops"
         })
-        asyncio.create_task(_run_background_task_wrapper(task_id, _core_logic))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _core_logic))
+        task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Loop analysis queued."}
 
     try:
@@ -925,9 +936,15 @@ async def get_global_data_refs(
 
     def _scan_refs():
 
-        if state.angr_project is None: state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        # NOTE: We cannot use _ensure_project_and_cfg() here because it builds
+        # the CFG with CFGFast(normalize=True) only, whereas this analysis
+        # requires collect_data_references=True in order to populate xrefs for
+        # global memory accesses.
+        if state.angr_project is None:
+            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
         # We need a CFG that tracks data references for this to work best
-        if state.angr_cfg is None: state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True, collect_data_references=True)
+        if state.angr_cfg is None:
+            state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True, collect_data_references=True)
 
         try:
             func = state.angr_cfg.functions[target_addr]

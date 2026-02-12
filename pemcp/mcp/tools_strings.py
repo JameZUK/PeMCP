@@ -26,6 +26,34 @@ if STRINGSIFTER_AVAILABLE:
     import joblib
 
 
+# --- ReDoS Protection ---
+_MAX_REGEX_PATTERN_LENGTH = 1000
+# Detects nested quantifiers that can cause catastrophic backtracking.
+# Matches patterns like (X+)+, (X*)+, (X+)*, (X{n,m})+ etc.
+_NESTED_QUANTIFIER_RE = re.compile(
+    r'\([^)]*[+*}\?][^)]*\)\s*[+*{]'
+)
+
+
+def _validate_regex_pattern(pattern: str) -> None:
+    """Validate a regex pattern for safety before compilation.
+
+    Raises ValueError if the pattern is too long or contains constructs
+    that are known to cause catastrophic backtracking (ReDoS).
+    """
+    if len(pattern) > _MAX_REGEX_PATTERN_LENGTH:
+        raise ValueError(
+            f"Regex pattern is too long ({len(pattern)} chars). "
+            f"Maximum allowed length is {_MAX_REGEX_PATTERN_LENGTH} characters."
+        )
+    if _NESTED_QUANTIFIER_RE.search(pattern):
+        raise ValueError(
+            f"Regex pattern contains nested quantifiers which can cause "
+            f"catastrophic backtracking (ReDoS). Please simplify the pattern: "
+            f"'{pattern[:80]}{'...' if len(pattern) > 80 else ''}'"
+        )
+
+
 @tool_decorator
 async def search_floss_strings(
     ctx: Context,
@@ -84,6 +112,7 @@ async def search_floss_strings(
     try:
         flags = 0 if case_sensitive else re.IGNORECASE
         for pattern_str in regex_patterns:
+            _validate_regex_pattern(pattern_str)
             compiled_patterns.append(re.compile(pattern_str, flags))
     except re.error as e:
         raise ValueError(f"Invalid regex pattern provided in the list: {e}")
@@ -737,6 +766,7 @@ async def get_top_sifted_strings(
     if sort_order.lower() not in ['ascending', 'descending']:
         raise ValueError("Parameter 'sort_order' must be either 'ascending' or 'descending'.")
     if filter_regex:
+        _validate_regex_pattern(filter_regex)
         try:
             re.compile(filter_regex)
         except re.error as e:

@@ -9,6 +9,15 @@ if REQUESTS_AVAILABLE:
     import requests
 
 
+def _safe_timestamp(ts):
+    if ts is None:
+        return None
+    try:
+        return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat()
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 @tool_decorator
 async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
     """
@@ -105,9 +114,9 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
                     "ssdeep_from_vt": vt_attributes.get("ssdeep"),
                 },
                 "detection_stats": vt_attributes.get("last_analysis_stats"),
-                "last_analysis_date_utc": datetime.datetime.fromtimestamp(vt_attributes.get("last_analysis_date"), datetime.timezone.utc).isoformat() if vt_attributes.get("last_analysis_date") else None,
-                "first_submission_date_utc": datetime.datetime.fromtimestamp(vt_attributes.get("first_submission_date"), datetime.timezone.utc).isoformat() if vt_attributes.get("first_submission_date") else None,
-                "last_submission_date_utc": datetime.datetime.fromtimestamp(vt_attributes.get("last_submission_date"), datetime.timezone.utc).isoformat() if vt_attributes.get("last_submission_date") else None,
+                "last_analysis_date_utc": _safe_timestamp(vt_attributes.get("last_analysis_date")),
+                "first_submission_date_utc": _safe_timestamp(vt_attributes.get("first_submission_date")),
+                "last_submission_date_utc": _safe_timestamp(vt_attributes.get("last_submission_date")),
                 "reputation": vt_attributes.get("reputation"),
                 "tags": vt_attributes.get("tags", []),
                 "suggested_threat_label": vt_attributes.get("popular_threat_classification", {}).get("suggested_threat_label"),

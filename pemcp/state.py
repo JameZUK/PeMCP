@@ -32,6 +32,9 @@ class AnalyzerState:
         # Samples directory path (configured via --samples-path or PEMCP_SAMPLES env var)
         self.samples_path: Optional[str] = None
 
+        # PE close guard
+        self._pe_lock = threading.Lock()
+
         # Angr State
         self._angr_lock = threading.Lock()
         self.angr_project = None
@@ -131,16 +134,17 @@ class AnalyzerState:
             self.angr_hooks = {}
 
     def close_pe(self):
-        if self.pe_object:
-            # Close the PE object if we own it.  Sessions that inherited
-            # the reference from _default_state must NOT close it (doing
-            # so would invalidate the object for all other sessions).
-            if self is _default_state or self.pe_object is not _default_state.pe_object:
-                try:
-                    self.pe_object.close()
-                except Exception:
-                    pass
-            self.pe_object = None
+        with self._pe_lock:
+            if self.pe_object:
+                # Close the PE object if we own it.  Sessions that inherited
+                # the reference from _default_state must NOT close it (doing
+                # so would invalidate the object for all other sessions).
+                if self is _default_state or self.pe_object is not _default_state.pe_object:
+                    try:
+                        self.pe_object.close()
+                    except Exception:
+                        pass
+                self.pe_object = None
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +192,16 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
     if session_key == "default":
         return _default_state
 
+    stale_to_cleanup = []
     with _registry_lock:
-        # Periodically clean up stale sessions
-        _cleanup_stale_sessions()
+        # Collect stale sessions
+        now = time.time()
+        stale_keys = [
+            key for key, st in _session_registry.items()
+            if (now - st.last_active) > SESSION_TTL_SECONDS
+        ]
+        for key in stale_keys:
+            stale_to_cleanup.append(_session_registry.pop(key))
 
         if session_key not in _session_registry:
             new_state = AnalyzerState()
@@ -210,29 +221,16 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
                 new_state.angr_project = _default_state.angr_project
                 new_state.angr_cfg = _default_state.angr_cfg
             _session_registry[session_key] = new_state
-        return _session_registry[session_key]
+        result = _session_registry[session_key]
 
-
-def _cleanup_stale_sessions():
-    """Remove sessions that have been idle longer than SESSION_TTL_SECONDS.
-
-    Must be called while ``_registry_lock`` is held.
-    Only releases resources that are owned by the session (not inherited
-    from ``_default_state``).
-    """
-    now = time.time()
-    stale_keys = [
-        key for key, st in _session_registry.items()
-        if (now - st.last_active) > SESSION_TTL_SECONDS
-    ]
-    for key in stale_keys:
-        stale = _session_registry.pop(key)
-        # Only close/reset resources that belong to this session, not
-        # shared references inherited from the default state.
+    # Clean up stale sessions outside the lock
+    for stale in stale_to_cleanup:
         if stale.pe_object is not None and stale.pe_object is not _default_state.pe_object:
             stale.close_pe()
         if stale.angr_project is not None and stale.angr_project is not _default_state.angr_project:
             stale.reset_angr()
+
+    return result
 
 
 def get_all_session_states() -> list:
