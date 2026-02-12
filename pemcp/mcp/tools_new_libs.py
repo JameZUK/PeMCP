@@ -65,7 +65,14 @@ def _safe_slice(value, n):
         return {k: value[k] for k in keys}
     if isinstance(value, str):
         return value[:n]
-    return value
+    if isinstance(value, (set, frozenset)):
+        return type(value)(list(value)[:n])
+    # For other iterables (generators, etc.), materialise and slice
+    try:
+        items = list(value)
+        return items[:n]
+    except TypeError:
+        return value
 
 
 # ===================================================================
@@ -88,6 +95,8 @@ async def parse_binary_with_lief(ctx: Context, file_path: Optional[str] = None) 
     target = file_path or state.filepath
     if not target or not os.path.isfile(target):
         raise RuntimeError("No file specified and no file is loaded.")
+    if file_path:
+        state.check_path_allowed(os.path.abspath(target))
 
     def _parse():
         binary = lief.parse(target)
@@ -445,6 +454,8 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
     target = file_path or state.filepath
     if not target or not os.path.isfile(target):
         raise RuntimeError("No file specified and no file is loaded.")
+    if file_path:
+        state.check_path_allowed(os.path.abspath(target))
 
     def _compute():
         with open(target, 'rb') as f:
@@ -499,6 +510,7 @@ async def compare_file_similarity(
         raise RuntimeError("No file is loaded.")
     if not os.path.isfile(file_path_b):
         raise RuntimeError(f"File not found: {file_path_b}")
+    state.check_path_allowed(os.path.abspath(file_path_b))
 
     def _compare():
         with open(state.filepath, 'rb') as f:
@@ -784,7 +796,8 @@ async def scan_for_embedded_files(
     """
     await ctx.info("Scanning for embedded files with Binwalk")
     _check_lib("binwalk", BINWALK_AVAILABLE, "scan_for_embedded_files")
-    _check_pe_loaded("scan_for_embedded_files")
+    if not state.filepath or not os.path.isfile(state.filepath):
+        raise RuntimeError("[scan_for_embedded_files] No file is loaded. Use open_file first.")
 
     def _scan_python_api():
         """Use the binwalk Python API (v2.x)."""
