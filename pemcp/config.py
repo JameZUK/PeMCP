@@ -86,7 +86,6 @@ except ImportError as e:
     YARA_IMPORT_ERROR = e
 
 # --- Logging Setup ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger("PeMCP")
 
 RAPIDFUZZ_AVAILABLE = False
@@ -257,10 +256,8 @@ try:
     import angr
     import angr.analyses.decompiler
     ANGR_AVAILABLE = True
-    logger.info("Angr library found. Advanced binary analysis (Decompilation, Symbolic Execution) enabled.")
 except ImportError:
     ANGR_AVAILABLE = False
-    logger.warning("Angr library not found. Advanced binary analysis tools will be unavailable.")
 
 # --- Constants ---
 PEID_USERDB_URL = "https://raw.githubusercontent.com/JameZUK/PeMCP/refs/heads/main/userdb.txt"
@@ -284,20 +281,38 @@ DEPENDENCIES = [
     ("angr", "angr", "Angr (for binary decompilation & solving)", False)
 ]
 
-# --- Availability Logging ---
-if MCP_SDK_AVAILABLE: logger.info("MCP SDK found.")
-else: logger.warning("MCP SDK not found. MCP server functionality will be mocked or unavailable if critical.")
-if CAPA_AVAILABLE: logger.info("Capa library found.")
-else: logger.warning(f"Capa library (flare-capa) not found. Capability analysis will be skipped. Import error: {CAPA_IMPORT_ERROR}")
-if SIGNIFY_AVAILABLE: logger.info("Signify library found.")
-else: logger.warning(f"Signify library not found. Authenticode validation will be skipped. Import error: {SIGNIFY_IMPORT_ERROR}")
-if FLOSS_AVAILABLE: logger.info("FLOSS library and analysis components found.")
-elif FLOSS_SETUP_OK: logger.warning(f"FLOSS basic setup OK, but analysis components (or vivisect) failed to import. FLOSS analysis will be limited/skipped. Analysis import error: {FLOSS_IMPORT_ERROR_ANALYSIS}")
-else: logger.warning(f"FLOSS library (flare-floss) not found or basic setup failed. FLOSS analysis will be skipped. Setup import error: {FLOSS_IMPORT_ERROR_SETUP}")
-if STRINGSIFTER_AVAILABLE: logger.info("StringSifter library found. String ranking will be available.")
-else: logger.warning(f"StringSifter library not found. String ranking will be skipped. Import error: {STRINGSIFTER_IMPORT_ERROR}")
-if RAPIDFUZZ_AVAILABLE: logger.info("RapidFuzz library found. Fuzzy string search will be available.")
-else: logger.warning(f"RapidFuzz library not found. Fuzzy search will be skipped. Import error: {RAPIDFUZZ_IMPORT_ERROR}")
+def log_library_availability():
+    """Log availability of optional libraries. Called once from main()."""
+    if MCP_SDK_AVAILABLE:
+        logger.info("MCP SDK found.")
+    else:
+        logger.warning("MCP SDK not found. MCP server functionality will be mocked or unavailable if critical.")
+    if CAPA_AVAILABLE:
+        logger.info("Capa library found.")
+    else:
+        logger.warning(f"Capa library (flare-capa) not found. Capability analysis will be skipped. Import error: {CAPA_IMPORT_ERROR}")
+    if SIGNIFY_AVAILABLE:
+        logger.info("Signify library found.")
+    else:
+        logger.warning(f"Signify library not found. Authenticode validation will be skipped. Import error: {SIGNIFY_IMPORT_ERROR}")
+    if FLOSS_AVAILABLE:
+        logger.info("FLOSS library and analysis components found.")
+    elif FLOSS_SETUP_OK:
+        logger.warning(f"FLOSS basic setup OK, but analysis components (or vivisect) failed to import. FLOSS analysis will be limited/skipped. Analysis import error: {FLOSS_IMPORT_ERROR_ANALYSIS}")
+    else:
+        logger.warning(f"FLOSS library (flare-floss) not found or basic setup failed. FLOSS analysis will be skipped. Setup import error: {FLOSS_IMPORT_ERROR_SETUP}")
+    if STRINGSIFTER_AVAILABLE:
+        logger.info("StringSifter library found. String ranking will be available.")
+    else:
+        logger.warning(f"StringSifter library not found. String ranking will be skipped. Import error: {STRINGSIFTER_IMPORT_ERROR}")
+    if RAPIDFUZZ_AVAILABLE:
+        logger.info("RapidFuzz library found. Fuzzy string search will be available.")
+    else:
+        logger.warning(f"RapidFuzz library not found. Fuzzy search will be skipped. Import error: {RAPIDFUZZ_IMPORT_ERROR}")
+    if ANGR_AVAILABLE:
+        logger.info("Angr library found. Advanced binary analysis (Decompilation, Symbolic Execution) enabled.")
+    else:
+        logger.warning("Angr library not found. Advanced binary analysis tools will be unavailable.")
 
 # --- Extended Library Availability Flags ---
 # These flags are centralized here for a single source of truth.
@@ -329,13 +344,19 @@ SPEAKEASY_IMPORT_ERROR = ""
 _SPEAKEASY_VENV_PYTHON = Path("/app/speakeasy-venv/bin/python")
 _SPEAKEASY_RUNNER = DATA_DIR / "scripts" / "speakeasy_runner.py"
 if _SPEAKEASY_VENV_PYTHON.is_file() and _SPEAKEASY_RUNNER.is_file():
-    SPEAKEASY_AVAILABLE = True
+    try:
+        import subprocess as _sp
+        _speakeasy_result = _sp.run(
+            [str(_SPEAKEASY_VENV_PYTHON), "-c", "import speakeasy"],
+            capture_output=True, timeout=10,
+        )
+        SPEAKEASY_AVAILABLE = _speakeasy_result.returncode == 0
+        if not SPEAKEASY_AVAILABLE:
+            SPEAKEASY_IMPORT_ERROR = f"speakeasy import failed in venv: {_speakeasy_result.stderr.decode()[:200]}"
+    except Exception as _e:
+        SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv check failed: {_e}"
 else:
-    SPEAKEASY_IMPORT_ERROR = (
-        f"Speakeasy venv not found (expected {_SPEAKEASY_VENV_PYTHON} "
-        f"and {_SPEAKEASY_RUNNER})"
-    )
-    logger.warning(f"Speakeasy unavailable: {SPEAKEASY_IMPORT_ERROR}")
+    SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv not found (expected {_SPEAKEASY_VENV_PYTHON})"
 
 UNIPACKER_AVAILABLE = False
 try:

@@ -15,6 +15,7 @@ from pemcp.config import (
     Actual_DebugLevel_Floss, Actual_StringType_Floss,
     DEFAULT_PEID_DB_PATH, DATA_DIR, CAPA_RULES_DEFAULT_DIR_NAME,
     CAPA_RULES_SUBDIR_NAME,
+    log_library_availability,
 )
 from pemcp.mock import MockPE
 from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background
@@ -123,9 +124,11 @@ def main():
     if args is None:
         print("[!] Args is None after parsing attempt, exiting.", file=sys.stderr)
         sys.exit(1)
-    # Configure logging level based on verbosity AFTER args are parsed
+    # Configure logging AFTER args are parsed (not at import time)
     log_level = logging.DEBUG if args.verbose else logging.INFO
+    logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
     logger.setLevel(log_level)
+    log_library_availability()
     logging.getLogger('mcp').setLevel(log_level)
     if args.mcp_transport in ('sse', 'streamable-http'):
         logging.getLogger('uvicorn').setLevel(log_level)
@@ -253,6 +256,10 @@ def main():
                         effective_mode = 'macho'
                     else:
                         effective_mode = 'pe'  # fallback
+                        logger.warning(
+                            f"Unrecognized file format (magic: {magic.hex()}). "
+                            "Falling back to PE mode. Use --mode to specify the format explicitly."
+                        )
                     logger.info(f"Auto-detected format: {effective_mode}")
 
                 # --- Loading Logic with Mode Support ---
