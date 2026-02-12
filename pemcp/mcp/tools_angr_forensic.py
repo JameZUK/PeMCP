@@ -123,7 +123,6 @@ async def diff_binaries(
 
     await ctx.info("Running BinDiff")
     result = await asyncio.to_thread(_diff)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "diff_binaries", "the 'limit' parameter")
 
 
@@ -206,7 +205,6 @@ async def detect_self_modifying_code(
         result = await asyncio.wait_for(asyncio.to_thread(_detect), timeout=300)
     except asyncio.TimeoutError:
         return {"error": "detect_self_modifying_code timed out after 300 seconds."}
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "detect_self_modifying_code", "the 'limit' parameter")
 
 
@@ -316,7 +314,6 @@ async def find_code_caves(
         result = await asyncio.wait_for(asyncio.to_thread(_find_caves), timeout=300)
     except asyncio.TimeoutError:
         return {"error": "find_code_caves timed out after 300 seconds."}
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "find_code_caves", "the 'limit' parameter")
 
 
@@ -440,7 +437,6 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
         result = await asyncio.wait_for(asyncio.to_thread(_detect), timeout=300)
     except asyncio.TimeoutError:
         return {"error": "detect_packing timed out after 300 seconds."}
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "detect_packing")
 
 
@@ -526,7 +522,6 @@ async def save_patched_binary(
             return {"error": f"Failed to save patched binary: {e}"}
 
     result = await asyncio.to_thread(_save)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "save_patched_binary")
 
 
@@ -678,7 +673,6 @@ async def find_path_with_custom_input(
 
     await ctx.info(f"Solving path to {target_address} with custom inputs")
     result = await asyncio.to_thread(_solve)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "find_path_with_custom_input")
 
 
@@ -847,7 +841,6 @@ async def emulate_with_watchpoints(
 
     await ctx.info(f"Emulating {function_address} with watchpoints")
     result = await asyncio.to_thread(_emulate)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "emulate_with_watchpoints")
 
 
@@ -980,7 +973,6 @@ async def identify_cpp_classes(
 
     await ctx.info("Identifying C++ classes")
     result = await asyncio.to_thread(_identify)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "identify_cpp_classes", "the 'limit' parameter")
 
 
@@ -1084,5 +1076,4 @@ async def get_call_graph(
         result = await asyncio.wait_for(asyncio.to_thread(_extract), timeout=300)
     except asyncio.TimeoutError:
         return {"error": "get_call_graph timed out after 300 seconds."}
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_call_graph", "the 'limit' parameter")

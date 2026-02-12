@@ -93,7 +93,6 @@ async def hook_function(
         }
 
     result = await asyncio.to_thread(_hook)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "hook_function")
 
 
@@ -159,5 +158,4 @@ async def unhook_function(ctx: Context, address_or_name: str) -> Dict[str, Any]:
         return {"status": "success", "message": f"Unhooked {address_or_name}. CFG cache cleared."}
 
     result = await asyncio.to_thread(_unhook)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "unhook_function")
