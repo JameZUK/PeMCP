@@ -4,6 +4,10 @@ FROM python:3.11-bookworm
 # --- Set Working Directory ---
 WORKDIR /app
 
+# Suppress "Running pip as root" warnings — we're in a container,
+# there is no system package manager to conflict with.
+ENV PIP_ROOT_USER_ACTION=ignore
+
 # --- Install System Dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -80,10 +84,10 @@ RUN pip install --no-cache-dir --force-reinstall \
 # unicorn-unipacker (pulled in by unipacker) installs into the same
 # site-packages/unicorn/ namespace as the real unicorn package,
 # overwriting the 2.x module files with 1.x code.  pip's registry
-# still shows unicorn==2.1.x so --upgrade alone sees "already satisfied"
-# and does nothing.  --force-reinstall forces pip to re-extract the
-# real unicorn 2.x wheel, restoring UC_ARCH_RISCV and the angr bridge.
-RUN pip install --no-cache-dir --force-reinstall --no-deps "unicorn>=2.0.0"
+# still shows unicorn==2.1.x so even --force-reinstall can be confused
+# by the stale metadata.  Nuke both packages first, then install fresh.
+RUN pip uninstall -y unicorn unicorn-unipacker 2>/dev/null; \
+    pip install --no-cache-dir "unicorn>=2.0.0"
 
 # Show the final unicorn versions for build-log diagnostics.
 # Main env: unicorn 2.x → angr native unicorn bridge works.
