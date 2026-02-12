@@ -1,5 +1,6 @@
 """MCP tool for comprehensive automated binary triage."""
 import math
+import mmap
 import os
 import re
 import datetime
@@ -12,8 +13,14 @@ from pemcp.config import (
     state, logger, Context, analysis_cache,
     ANGR_AVAILABLE, CAPA_AVAILABLE, FLOSS_AVAILABLE,
     STRINGSIFTER_AVAILABLE, YARA_AVAILABLE,
+    PYELFTOOLS_AVAILABLE,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+
+if PYELFTOOLS_AVAILABLE:
+    from elftools.elf.elffile import ELFFile
+    from elftools.elf.dynamic import DynamicSection
+    from elftools.elf.sections import SymbolTableSection
 
 if STRINGSIFTER_AVAILABLE:
     import stringsifter.lib.util as sifter_util
@@ -68,6 +75,16 @@ SUSPICIOUS_IMPORTS_DB = {
     "send": "MEDIUM", "recv": "MEDIUM", "socket": "MEDIUM",
     "bind": "MEDIUM", "listen": "MEDIUM", "accept": "MEDIUM",
 }
+
+# Pre-sorted by severity so that CRITICAL matches are found first during
+# iteration, and pre-compiled regex for fast O(1) substring matching.
+_SUSPICIOUS_IMPORTS_BY_SEVERITY = sorted(
+    SUSPICIOUS_IMPORTS_DB.items(),
+    key=lambda kv: {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2}.get(kv[1], 3),
+)
+_SUSPICIOUS_IMPORTS_PATTERN = re.compile(
+    '|'.join(re.escape(name) for name, _ in _SUSPICIOUS_IMPORTS_BY_SEVERITY)
+)
 
 
 # ===================================================================
@@ -354,21 +371,23 @@ def _triage_suspicious_imports(indicator_limit: int) -> Tuple[Dict[str, Any], in
                 func_name = sym.get('name', '')
                 if not func_name:
                     continue
-                # Check against database (partial match for A/W suffix variants)
-                for susp_name, severity in SUSPICIOUS_IMPORTS_DB.items():
-                    if susp_name in func_name:
-                        found_imports.append({
-                            "function": func_name,
-                            "dll": dll_name,
-                            "risk": severity,
-                        })
-                        if severity == "CRITICAL":
-                            risk_score += 3
-                        elif severity == "HIGH":
-                            risk_score += 2
-                        elif severity == "MEDIUM":
-                            risk_score += 1
-                        break  # Only match highest severity per function
+                # Use precompiled regex for O(1) substring matching against all
+                # suspicious names, instead of iterating the full DB per import.
+                m = _SUSPICIOUS_IMPORTS_PATTERN.search(func_name)
+                if m:
+                    matched_name = m.group()
+                    severity = SUSPICIOUS_IMPORTS_DB[matched_name]
+                    found_imports.append({
+                        "function": func_name,
+                        "dll": dll_name,
+                        "risk": severity,
+                    })
+                    if severity == "CRITICAL":
+                        risk_score += 3
+                    elif severity == "HIGH":
+                        risk_score += 2
+                    elif severity == "MEDIUM":
+                        risk_score += 1
 
     # Sort by severity
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2}
@@ -441,29 +460,28 @@ def _triage_network_iocs(indicator_limit: int, all_string_values: set) -> Tuple[
     domain_pattern = re.compile(r'\b(?:[a-zA-Z0-9-]+\.)+(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion)\b', re.IGNORECASE)
     registry_pattern = re.compile(r'(?:HKLM|HKCU|HKCR|HKU|HKCC|Software)\\[^\s\'"]+', re.IGNORECASE)
 
-    all_text = '\n'.join(all_string_values)
-
+    # Iterate over strings individually instead of joining into one large blob.
+    # This avoids a memory spike from the concatenated text and improves cache
+    # locality since each string is small.
     found_ips: set = set()
-    for m in ip_pattern.finditer(all_text):
-        ip = m.group()
-        # Filter private/loopback/broadcast
-        octets = ip.split('.')
-        if all(0 <= int(o) <= 255 for o in octets):
-            first = int(octets[0])
-            if first not in (0, 10, 127, 255) and not (first == 192 and int(octets[1]) == 168) and not (first == 172 and 16 <= int(octets[1]) <= 31):
-                found_ips.add(ip)
-
     found_urls: set = set()
-    for m in url_pattern.finditer(all_text):
-        found_urls.add(m.group())
-
     found_domains: set = set()
-    for m in domain_pattern.finditer(all_text):
-        found_domains.add(m.group().lower())
-
     found_registry: set = set()
-    for m in registry_pattern.finditer(all_text):
-        found_registry.add(m.group())
+
+    for s in all_string_values:
+        for m in ip_pattern.finditer(s):
+            ip = m.group()
+            octets = ip.split('.')
+            if all(0 <= int(o) <= 255 for o in octets):
+                first = int(octets[0])
+                if first not in (0, 10, 127, 255) and not (first == 192 and int(octets[1]) == 168) and not (first == 172 and 16 <= int(octets[1]) <= 31):
+                    found_ips.add(ip)
+        for m in url_pattern.finditer(s):
+            found_urls.add(m.group())
+        for m in domain_pattern.finditer(s):
+            found_domains.add(m.group().lower())
+        for m in registry_pattern.finditer(s):
+            found_registry.add(m.group())
 
     if found_ips or found_urls or found_domains:
         risk_score += 3
@@ -537,25 +555,28 @@ def _triage_overlay_analysis(indicator_limit: int, file_size: int = 0) -> Tuple[
                     overlay_info["note"] = "Overlay is >50% of file — likely contains appended data, resources, or embedded payload"
                     risk_score += 2
 
-            # Check for embedded PE signatures in the overlay sample hex
+            # Check for embedded file signatures in the first 20 bytes (40 hex
+            # chars) of the overlay.  This covers all common file magic sequences
+            # while tolerating small preambles before the embedded file header.
             sample_hex = overlay_data.get('sample_hex', '')
             embedded_sigs: List[str] = []
             if sample_hex:
+                overlay_prefix = sample_hex.lower()[:40]
                 # MZ header
-                if '4d5a' in sample_hex.lower()[:20]:
+                if '4d5a' in overlay_prefix:
                     embedded_sigs.append("PE/MZ header detected at overlay start")
                     risk_score += 3
                 # PK (ZIP) header
-                if '504b0304' in sample_hex.lower()[:20]:
+                if '504b0304' in overlay_prefix:
                     embedded_sigs.append("ZIP/PK archive detected at overlay start")
                 # 7z header
-                if '377abcaf271c' in sample_hex.lower()[:20]:
+                if '377abcaf271c' in overlay_prefix:
                     embedded_sigs.append("7-Zip archive detected at overlay start")
                 # RAR header
-                if '526172211a07' in sample_hex.lower()[:20]:
+                if '526172211a07' in overlay_prefix:
                     embedded_sigs.append("RAR archive detected at overlay start")
                 # PDF header
-                if '25504446' in sample_hex.lower()[:20]:
+                if '25504446' in overlay_prefix:
                     embedded_sigs.append("PDF document detected at overlay start")
             overlay_info["embedded_signatures"] = embedded_sigs
             return overlay_info, risk_score
@@ -1079,40 +1100,99 @@ def _triage_elf_security(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
     if analysis_mode == 'elf':
         elf_sec: Dict[str, Any] = {}
         try:
-            if state.filepath and os.path.isfile(state.filepath):
+            if not (state.filepath and os.path.isfile(state.filepath)):
+                return {"error": "No file available for ELF security check."}, 0
+
+            if PYELFTOOLS_AVAILABLE:
+                # Use pyelftools for accurate segment/section parsing
+                with open(state.filepath, 'rb') as f:
+                    elffile = ELFFile(f)
+                    elf_sec["class"] = "64-bit" if elffile.elfclass == 64 else "32-bit"
+                    elf_sec["endianness"] = "little-endian" if elffile.little_endian else "big-endian"
+
+                    TYPE_MAP = {'ET_NONE': 'ET_NONE', 'ET_REL': 'ET_REL',
+                                'ET_EXEC': 'ET_EXEC', 'ET_DYN': 'ET_DYN', 'ET_CORE': 'ET_CORE'}
+                    e_type = elffile.header.e_type
+                    elf_sec["type"] = TYPE_MAP.get(e_type, e_type)
+                    elf_sec["is_pie"] = (e_type == 'ET_DYN')
+                    if not elf_sec["is_pie"]:
+                        risk_score += 1
+
+                    # Check segments for RELRO, NX (stack executability)
+                    has_gnu_relro = False
+                    has_nx = False
+                    for segment in elffile.iter_segments():
+                        seg_type = segment.header.p_type
+                        if seg_type == 'PT_GNU_RELRO':
+                            has_gnu_relro = True
+                        elif seg_type == 'PT_GNU_STACK':
+                            # PF_X (0x1) flag means stack is executable (no NX)
+                            has_nx = not bool(segment.header.p_flags & 0x1)
+
+                    # Check for full vs partial RELRO by inspecting BIND_NOW
+                    has_bind_now = False
+                    if has_gnu_relro:
+                        for segment in elffile.iter_segments():
+                            if hasattr(segment, 'iter_tags'):
+                                for tag in segment.iter_tags():
+                                    if tag.entry.d_tag in ('DT_BIND_NOW', 'DT_FLAGS') and (
+                                        tag.entry.d_tag == 'DT_BIND_NOW' or
+                                        (tag.entry.d_tag == 'DT_FLAGS' and tag.entry.d_val & 0x8)
+                                    ):
+                                        has_bind_now = True
+                                        break
+
+                    elf_sec["has_gnu_relro"] = has_gnu_relro
+                    elf_sec["relro_type"] = "Full RELRO" if (has_gnu_relro and has_bind_now) else (
+                        "Partial RELRO" if has_gnu_relro else "No RELRO")
+                    elf_sec["has_nx"] = has_nx
+
+                    # Check for stack canary and fortify via dynamic symbols
+                    has_canary = False
+                    has_fortify = False
+                    for section in elffile.iter_sections():
+                        if isinstance(section, SymbolTableSection):
+                            for symbol in section.iter_symbols():
+                                name = symbol.name
+                                if name == '__stack_chk_fail':
+                                    has_canary = True
+                                elif name in ('__fortify_fail', '__chk_fail'):
+                                    has_fortify = True
+                    elf_sec["has_stack_canary"] = has_canary
+                    elf_sec["has_fortify"] = has_fortify
+
+                    # Check stripped status by looking for .symtab section
+                    elf_sec["stripped"] = elffile.get_section_by_name('.symtab') is None
+                    if elf_sec["stripped"]:
+                        elf_sec["note_stripped"] = "Symbol table stripped — harder to analyze"
+            else:
+                # Fallback: manual header parsing when pyelftools is unavailable
                 with open(state.filepath, 'rb') as f:
                     elf_header = f.read(64)
 
                 if len(elf_header) >= 20:
                     elf_sec["class"] = "64-bit" if elf_header[4] == 2 else "32-bit"
                     elf_sec["endianness"] = "little-endian" if elf_header[5] == 1 else "big-endian"
-                    # e_type at offset 16 (2 bytes)
                     byte_order = '<' if elf_header[5] == 1 else '>'
                     e_type = struct.unpack_from(byte_order + 'H', elf_header, 16)[0]
                     TYPE_MAP = {0: 'ET_NONE', 1: 'ET_REL', 2: 'ET_EXEC', 3: 'ET_DYN', 4: 'ET_CORE'}
                     elf_sec["type"] = TYPE_MAP.get(e_type, f'unknown({e_type})')
-                    # ET_DYN with entry point suggests PIE
                     elf_sec["is_pie"] = (e_type == 3)
                     if not elf_sec["is_pie"]:
-                        risk_score += 1  # Non-PIE binaries lack ASLR
+                        risk_score += 1
 
-                # Read full binary to check for security features in section names / segments
+                # Use mmap for byte-search fallback (avoids loading full file into memory)
                 with open(state.filepath, 'rb') as f:
-                    full_data = f.read()
-
-                # Check for common security indicators in the binary
-                elf_sec["has_stack_canary"] = b'__stack_chk_fail' in full_data
-                elf_sec["has_fortify"] = b'__fortify_fail' in full_data or b'__chk_fail' in full_data
-                elf_sec["stripped"] = b'.symtab' not in full_data
-                if elf_sec["stripped"]:
-                    elf_sec["note_stripped"] = "Symbol table stripped — harder to analyze"
-
-                # Check for RELRO by looking for GNU_RELRO segment marker
-                elf_sec["has_gnu_relro"] = b'GNU_RELRO' in full_data or b'.got.plt' in full_data
-
-                # Check for NX / executable stack
-                # The PT_GNU_STACK segment flags determine if stack is executable
-                elf_sec["has_nx_indicator"] = b'GNU_STACK' in full_data
+                    with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                        elf_sec["has_stack_canary"] = mm.find(b'__stack_chk_fail') != -1
+                        elf_sec["has_fortify"] = (mm.find(b'__fortify_fail') != -1 or
+                                                  mm.find(b'__chk_fail') != -1)
+                        elf_sec["stripped"] = mm.find(b'.symtab') == -1
+                        if elf_sec["stripped"]:
+                            elf_sec["note_stripped"] = "Symbol table stripped — harder to analyze"
+                        elf_sec["has_gnu_relro"] = mm.find(b'GNU_RELRO') != -1
+                        elf_sec["has_nx"] = mm.find(b'GNU_STACK') != -1
+                        elf_sec["note"] = "pyelftools not available — results are heuristic-based"
 
         except Exception as e:
             elf_sec["error"] = f"ELF security check failed: {e}"
@@ -1133,38 +1213,42 @@ def _triage_macho_security(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
     if analysis_mode == 'macho':
         macho_sec: Dict[str, Any] = {}
         try:
-            if state.filepath and os.path.isfile(state.filepath):
-                with open(state.filepath, 'rb') as f:
-                    macho_header = f.read(32)
-                    full_data = f.seek(0) or f.read()
+            if not (state.filepath and os.path.isfile(state.filepath)):
+                return {"error": "No file available for Mach-O security check."}, 0
 
-                if len(macho_header) >= 16:
-                    magic = struct.unpack_from('<I', macho_header, 0)[0]
-                    is_64 = magic in (0xFEEDFACF, 0xCFFAEDFE)
-                    is_le = magic in (0xFEEDFACE, 0xFEEDFACF)
-                    macho_sec["bits"] = "64-bit" if is_64 else "32-bit"
-                    byte_order = '<' if is_le else '>'
+            with open(state.filepath, 'rb') as f:
+                macho_header = f.read(32)
 
-                    # Read filetype at offset 12
-                    filetype = struct.unpack_from(byte_order + 'I', macho_header, 12)[0]
-                    FILETYPE_MAP = {1: 'MH_OBJECT', 2: 'MH_EXECUTE', 6: 'MH_DYLIB',
-                                    8: 'MH_BUNDLE', 9: 'MH_DYLIB_STUB', 11: 'MH_DSYM'}
-                    macho_sec["filetype"] = FILETYPE_MAP.get(filetype, f'unknown({filetype})')
+            if len(macho_header) >= 16:
+                magic = struct.unpack_from('<I', macho_header, 0)[0]
+                is_64 = magic in (0xFEEDFACF, 0xCFFAEDFE)
+                is_le = magic in (0xFEEDFACE, 0xFEEDFACF)
+                macho_sec["bits"] = "64-bit" if is_64 else "32-bit"
+                byte_order = '<' if is_le else '>'
 
-                    # Check flags at offset 24 (32-bit) or same for 64-bit
-                    flags_offset = 24
-                    flags = struct.unpack_from(byte_order + 'I', macho_header, flags_offset)[0]
-                    macho_sec["is_pie"] = bool(flags & 0x200000)  # MH_PIE
-                    macho_sec["no_heap_execution"] = bool(flags & 0x1000000)  # MH_NO_HEAP_EXECUTION
-                    macho_sec["has_restrict"] = bool(flags & 0x00000080)  # MH_RESTRICT segment
+                filetype = struct.unpack_from(byte_order + 'I', macho_header, 12)[0]
+                FILETYPE_MAP = {1: 'MH_OBJECT', 2: 'MH_EXECUTE', 6: 'MH_DYLIB',
+                                8: 'MH_BUNDLE', 9: 'MH_DYLIB_STUB', 11: 'MH_DSYM'}
+                macho_sec["filetype"] = FILETYPE_MAP.get(filetype, f'unknown({filetype})')
 
-                # Check for code signature
-                macho_sec["has_code_signature"] = b'__LINKEDIT' in full_data and b'\xfa\xde\x0c\xc0' in full_data
-                # Check for entitlements
-                macho_sec["has_entitlements"] = b'</plist>' in full_data and b'<key>' in full_data
+                flags_offset = 24
+                flags = struct.unpack_from(byte_order + 'I', macho_header, flags_offset)[0]
+                macho_sec["is_pie"] = bool(flags & 0x200000)  # MH_PIE
+                macho_sec["no_heap_execution"] = bool(flags & 0x1000000)  # MH_NO_HEAP_EXECUTION
+                macho_sec["has_restrict"] = bool(flags & 0x00000080)  # MH_RESTRICT segment
 
-                if not macho_sec.get("is_pie", True):
-                    risk_score += 1
+            # Use mmap for byte-search checks (avoids loading full file into memory)
+            with open(state.filepath, 'rb') as f:
+                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+                    macho_sec["has_code_signature"] = (
+                        mm.find(b'__LINKEDIT') != -1 and mm.find(b'\xfa\xde\x0c\xc0') != -1
+                    )
+                    macho_sec["has_entitlements"] = (
+                        mm.find(b'</plist>') != -1 and mm.find(b'<key>') != -1
+                    )
+
+            if not macho_sec.get("is_pie", True):
+                risk_score += 1
 
         except Exception as e:
             macho_sec["error"] = f"Mach-O security check failed: {e}"

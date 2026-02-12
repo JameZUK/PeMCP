@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper
-from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address
+from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
 
 if ANGR_AVAILABLE:
     import angr
@@ -127,6 +127,7 @@ async def get_reaching_definitions(
 
     await ctx.info(f"Running reaching definitions for {function_address}")
     result = await asyncio.to_thread(_rda)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_reaching_definitions", "the 'limit' parameter")
 
 
@@ -243,6 +244,7 @@ async def get_data_dependencies(
 
     await ctx.info(f"Building DDG for {function_address}")
     result = await asyncio.to_thread(_ddg)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_data_dependencies", "the 'limit' parameter")
 
 
@@ -323,6 +325,7 @@ async def get_control_dependencies(
         }
 
     result = await asyncio.to_thread(_cdg)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_control_dependencies", "the 'limit' parameter")
 
 
@@ -391,6 +394,7 @@ async def propagate_constants(
         }
 
     result = await asyncio.to_thread(_propagate)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "propagate_constants", "the 'limit' parameter")
 
 
@@ -473,4 +477,5 @@ async def get_value_set_analysis(
 
     await ctx.info(f"Running VFG for {function_address}")
     result = await asyncio.to_thread(_vsa)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_value_set_analysis", "the 'limit' parameter")
