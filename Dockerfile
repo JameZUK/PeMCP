@@ -27,11 +27,6 @@ RUN pip install --no-cache-dir \
     flare-capa \
     vivisect
 
-# Upgrade unicorn AFTER angr: newer archinfo references UC_ARCH_RISCV
-# (added in unicorn 2.1.0) but angr's resolver may pull in an older 2.0.x.
-# A separate step forces the upgrade without pip backtracking to angr's pin.
-RUN pip install --no-cache-dir --upgrade "unicorn>=2.1.0"
-
 # --- Install Core Dependencies ---
 RUN pip install --no-cache-dir \
     pefile \
@@ -81,10 +76,18 @@ RUN pip install --no-cache-dir unipacker || true && \
 RUN pip install --no-cache-dir --force-reinstall \
     git+https://github.com/wbond/oscrypto.git@d5f3437ed24257895ae1edd9e503cfb352e635a8
 
+# --- Restore unicorn 2.x (MUST be the last pip install) ---
+# Packages like unipacker depend on unicorn<2 and silently downgrade
+# unicorn to 1.x.  archinfo (used by angr) references UC_ARCH_RISCV
+# which only exists in unicorn 2.x, so we force-upgrade unicorn last
+# to guarantee the 2.x series is installed at runtime.
+# (unipacker is best-effort/optional and may not work with unicorn 2.x.)
+RUN pip install --no-cache-dir --upgrade "unicorn>=2.0.0"
+
 # Show the final unicorn versions for build-log diagnostics.
 # Main env: unicorn 2.x → angr native unicorn bridge works.
 # Speakeasy venv: unicorn 1.x → speakeasy emulation works.
-RUN python -c "import unicorn; print('main env unicorn', unicorn.__version__)" && \
+RUN python -c "import unicorn; print('main env unicorn', unicorn.__version__); assert hasattr(unicorn, 'UC_ARCH_RISCV'), 'UC_ARCH_RISCV missing!'" && \
     /app/speakeasy-venv/bin/python -c "import unicorn; print('speakeasy venv unicorn', unicorn.__version__)"
 
 # --- Pre-populate capa rules (avoids runtime download + write permission issues) ---
