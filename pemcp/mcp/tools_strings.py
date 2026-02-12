@@ -274,14 +274,16 @@ async def get_capa_analysis_info(ctx: Context,
 
     if 'analysis' in processed_report_meta and isinstance(processed_report_meta['analysis'], dict):
         analysis_section = processed_report_meta['analysis']
-        if 'layout' in analysis_section: del analysis_section['layout']
-        if 'feature_counts' in analysis_section: del analysis_section['feature_counts']
+        if 'layout' in analysis_section:
+            del analysis_section['layout']
+        if 'feature_counts' in analysis_section:
+            del analysis_section['feature_counts']
 
     if capa_status == "Skipped by user request":
         data_to_send = {"error": "Capa analysis was skipped.", "rules": {}, "pagination": base_pagination_info, "report_metadata": processed_report_meta}
         return await _check_mcp_response_size(ctx, data_to_send, "get_capa_analysis_info", "parameters like 'limit' or filters")
 
-    if capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete" or not capa_full_results:
+    if (capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete") or not capa_full_results:
         data_to_send = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}",
                         "rules": {}, "pagination": base_pagination_info, "report_metadata": processed_report_meta}
         return await _check_mcp_response_size(ctx, data_to_send, "get_capa_analysis_info", "parameters like 'limit' or filters")
@@ -436,7 +438,7 @@ async def get_capa_rule_match_details(ctx: Context,
         'current_items_count': 0, 'total_addresses_for_rule': 0
     }
 
-    if capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete" or not capa_full_results:
+    if (capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete") or not capa_full_results:
         data_to_send = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}",
                         "rule_id": rule_id, "matches_data": {}, "address_pagination": empty_address_pagination}
         return await _check_mcp_response_size(ctx, data_to_send, "get_capa_rule_match_details", "parameters like 'address_limit'")

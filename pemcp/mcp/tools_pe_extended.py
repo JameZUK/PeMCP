@@ -1,4 +1,6 @@
 """Extended PE analysis, deobfuscation, and forensic tools — gaps in existing library coverage."""
+import binascii
+import datetime
 import re
 import struct
 import math
@@ -10,6 +12,7 @@ from typing import Dict, Any, Optional, List
 
 from pemcp.config import state, logger, Context, pefile
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from pemcp.utils import shannon_entropy
 
 
 # ===================================================================
@@ -122,7 +125,6 @@ async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
             break
 
     # Timestamp analysis
-    import datetime
     timestamp = fh.TimeDateStamp
     try:
         compile_time = datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc).isoformat()
@@ -209,16 +211,7 @@ async def extract_resources(ctx: Context, limit: int = 50) -> Dict[str, Any]:
                 try:
                     data = pe.get_data(data_rva, min(data_size, 1024))
                     preview = data[:64].hex()
-                    # Compute entropy
-                    entropy = 0.0
-                    if len(data) > 0:
-                        byte_counts = [0] * 256
-                        for b in data:
-                            byte_counts[b] += 1
-                        for count in byte_counts:
-                            if count > 0:
-                                p = count / len(data)
-                                entropy -= p * math.log2(p)
+                    entropy = shannon_entropy(data)
                 except Exception:
                     preview = ""
                     entropy = 0.0
@@ -269,8 +262,7 @@ async def extract_manifest(ctx: Context) -> Dict[str, Any]:
                         # Parse for interesting fields
                         result = {"manifest_xml": manifest_text}
                         if "requestedExecutionLevel" in manifest_text:
-                            import re as re_mod
-                            level_match = re_mod.search(r'level="([^"]+)"', manifest_text)
+                            level_match = re.search(r'level="([^"]+)"', manifest_text)
                             if level_match:
                                 result["requested_execution_level"] = level_match.group(1)
                         return result
@@ -756,14 +748,7 @@ async def analyze_entropy_by_offset(
         points = []
         for offset in range(0, len(file_data) - window_size, step):
             window = file_data[offset:offset + window_size]
-            byte_counts = [0] * 256
-            for b in window:
-                byte_counts[b] += 1
-            entropy = 0.0
-            for count in byte_counts:
-                if count > 0:
-                    p = count / window_size
-                    entropy -= p * math.log2(p)
+            entropy = shannon_entropy(window)
             points.append({
                 "offset": hex(offset),
                 "entropy": round(entropy, 4),
@@ -834,7 +819,6 @@ async def scan_for_api_hashes(
         return h
 
     def _crc32_hash(name):
-        import binascii
         return binascii.crc32(name.encode('ascii')) & 0xFFFFFFFF
 
     hash_funcs = {
