@@ -4,6 +4,10 @@ FROM python:3.11-bookworm
 # --- Set Working Directory ---
 WORKDIR /app
 
+# Suppress "Running pip as root" warnings — we're in a container,
+# there is no system package manager to conflict with.
+ENV PIP_ROOT_USER_ACTION=ignore
+
 # --- Install System Dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -77,12 +81,13 @@ RUN pip install --no-cache-dir --force-reinstall \
     git+https://github.com/wbond/oscrypto.git@d5f3437ed24257895ae1edd9e503cfb352e635a8
 
 # --- Restore unicorn 2.x (MUST be the last pip install) ---
-# Packages like unipacker depend on unicorn<2 and silently downgrade
-# unicorn to 1.x.  archinfo (used by angr) references UC_ARCH_RISCV
-# which only exists in unicorn 2.x, so we force-upgrade unicorn last
-# to guarantee the 2.x series is installed at runtime.
-# (unipacker is best-effort/optional and may not work with unicorn 2.x.)
-RUN pip install --no-cache-dir --upgrade "unicorn>=2.0.0"
+# unicorn-unipacker (pulled in by unipacker) installs into the same
+# site-packages/unicorn/ namespace as the real unicorn package,
+# overwriting the 2.x module files with 1.x code.  pip's registry
+# still shows unicorn==2.1.x so even --force-reinstall can be confused
+# by the stale metadata.  Nuke both packages first, then install fresh.
+RUN pip uninstall -y unicorn unicorn-unipacker 2>/dev/null; \
+    pip install --no-cache-dir "unicorn>=2.0.0"
 
 # Show the final unicorn versions for build-log diagnostics.
 # Main env: unicorn 2.x → angr native unicorn bridge works.
