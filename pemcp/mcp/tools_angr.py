@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper
-from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address
+from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
 
 if ANGR_AVAILABLE:
     import angr
@@ -185,7 +185,8 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_decompile), timeout=300)
     except asyncio.TimeoutError:
-        return {"error": "Decompilation timed out after 300 seconds."}
+        raise RuntimeError("Decompilation timed out after 300 seconds.")
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "decompile_function_with_angr")
 
 @tool_decorator
@@ -215,7 +216,8 @@ async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_extract_graph), timeout=300)
     except asyncio.TimeoutError:
-        return {"error": "CFG extraction timed out after 300 seconds."}
+        raise RuntimeError("CFG extraction timed out after 300 seconds.")
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_function_cfg")
 
 @tool_decorator
@@ -342,6 +344,7 @@ async def find_path_to_address(
 
     await ctx.info(f"Solving path to {target_address}")
     result = await asyncio.to_thread(_solve_path)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "find_path_to_address")
 
 @tool_decorator
@@ -443,6 +446,7 @@ async def emulate_function_execution(
 
     await ctx.info(f"Emulating {function_address} (Limit: {max_steps})")
     result = await asyncio.to_thread(_core_emulation)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "emulate_function_execution")
 
 @tool_decorator
@@ -566,12 +570,10 @@ async def analyze_binary_loops(
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Loop analysis queued."}
 
-    try:
-        result = await asyncio.to_thread(_core_logic)
-        limit_info = "the 'limit' parameter or increasing 'min_loop_size'"
-        return await _check_mcp_response_size(ctx, result, "analyze_binary_loops", limit_info)
-    except Exception as e:
-        return {"error": f"Analysis failed: {str(e)}"}
+    result = await asyncio.to_thread(_core_logic)
+    _raise_on_error_dict(result)
+    limit_info = "the 'limit' parameter or increasing 'min_loop_size'"
+    return await _check_mcp_response_size(ctx, result, "analyze_binary_loops", limit_info)
 
 @tool_decorator
 async def get_function_xrefs(
@@ -617,6 +619,7 @@ async def get_function_xrefs(
         }
 
     result = await asyncio.to_thread(_get_xrefs)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_function_xrefs", "the 'limit' parameter")
 
 @tool_decorator
@@ -667,6 +670,7 @@ async def get_backward_slice(
         except Exception as e: return {"error": f"Backward reachability failed: {e}"}
 
     result = await asyncio.to_thread(_slice)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_backward_slice", "the 'limit' parameter")
 
 @tool_decorator
@@ -715,6 +719,7 @@ async def get_forward_slice(
         except Exception as e: return {"error": f"Forward reachability failed: {e}"}
 
     result = await asyncio.to_thread(_slice)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_forward_slice", "the 'limit' parameter")
 
 @tool_decorator
@@ -782,6 +787,7 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
         except Exception as e: return {"error": f"Dominator analysis failed: {e}"}
 
     result = await asyncio.to_thread(_find_dominators)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_dominators")
 
 @tool_decorator
@@ -976,6 +982,7 @@ async def get_global_data_refs(
         }
 
     result = await asyncio.to_thread(_scan_refs)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_global_data_refs", "the 'limit' parameter")
 
 @tool_decorator
@@ -1031,6 +1038,7 @@ async def scan_for_indirect_jumps(
         }
 
     result = await asyncio.to_thread(_scan_jumps)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "scan_for_indirect_jumps", "the 'limit' parameter")
 
 @tool_decorator
@@ -1056,4 +1064,5 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
         except Exception as e: return {"error": f"Patching failed: {e}"}
 
     result = await asyncio.to_thread(_patch)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "patch_binary_memory")

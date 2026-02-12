@@ -1,3 +1,11 @@
+# PeMCP Dependencies
+#
+# These are minimum version constraints (>=) for development flexibility.
+# For reproducible production/CI builds, generate a lockfile:
+#   pip install -r requirements.txt
+#   pip freeze > requirements.lock
+# Then install from the lockfile: pip install -r requirements.lock
+
 # --- Core PE Parsing ---
 pefile>=2023.2.7
 
