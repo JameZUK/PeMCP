@@ -134,7 +134,7 @@ class AnalysisCache:
                         f"(cached={cmeta.get('pemcp_version')}, "
                         f"current={_get_pemcp_version()}). Invalidating."
                     )
-                    self._remove_entry(sha256)
+                    self._remove_entry_and_meta(sha256)
                     return None
 
                 pe_data = wrapper.get("pe_data")
@@ -158,7 +158,7 @@ class AnalysisCache:
 
             except (gzip.BadGzipFile, json.JSONDecodeError, OSError, KeyError) as e:
                 logger.warning(f"Cache read error for {sha256[:12]}...: {e}")
-                self._remove_entry(sha256)
+                self._remove_entry_and_meta(sha256)
                 return None
 
     def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str) -> bool:
@@ -265,6 +265,13 @@ class AnalysisCache:
                 parent.rmdir()
         except OSError as e:
             logger.warning(f"Cache removal error for {sha256[:12]}...: {e}")
+
+    def _remove_entry_and_meta(self, sha256: str) -> None:
+        """Remove both the on-disk entry and its metadata index record."""
+        self._remove_entry(sha256)
+        meta = self._load_meta()
+        meta.pop(sha256, None)
+        self._save_meta(meta)
 
     # ------------------------------------------------------------------
     #  Management helpers (exposed via MCP tools)

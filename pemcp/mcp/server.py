@@ -107,6 +107,7 @@ async def _check_mcp_response_size(
     If it does, it INTELLIGENTLY TRUNCATES the largest list or string in the response
     to fit within the limit, rather than raising an error.
     """
+    data_size_bytes = 0  # Safe default for error fallback
     try:
         # 1. Check initial size
         serialized_data = json.dumps(data_to_return, ensure_ascii=False)
