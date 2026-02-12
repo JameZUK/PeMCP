@@ -3,6 +3,7 @@ import math
 import os
 import re
 import datetime
+import struct
 import asyncio
 
 from typing import Dict, Any, Optional, List, Tuple
@@ -150,9 +151,9 @@ def _triage_timestamp_analysis(analysis_mode: str, indicator_limit: int) -> Tupl
         ts_info: Dict[str, Any] = {"raw_timestamp": raw_ts}
         if raw_ts is not None and isinstance(raw_ts, (int, float)):
             try:
-                compile_dt = datetime.datetime.utcfromtimestamp(int(raw_ts))
-                ts_info["compile_date"] = compile_dt.isoformat() + "Z"
-                now = datetime.datetime.utcnow()
+                compile_dt = datetime.datetime.fromtimestamp(int(raw_ts), tz=datetime.timezone.utc)
+                ts_info["compile_date"] = compile_dt.isoformat()
+                now = datetime.datetime.now(datetime.timezone.utc)
                 # Future timestamp
                 if compile_dt > now:
                     ts_anomalies.append("Compilation timestamp is in the future")
@@ -1086,9 +1087,8 @@ def _triage_elf_security(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
                     elf_sec["class"] = "64-bit" if elf_header[4] == 2 else "32-bit"
                     elf_sec["endianness"] = "little-endian" if elf_header[5] == 1 else "big-endian"
                     # e_type at offset 16 (2 bytes)
-                    import struct as _struct
                     byte_order = '<' if elf_header[5] == 1 else '>'
-                    e_type = _struct.unpack_from(byte_order + 'H', elf_header, 16)[0]
+                    e_type = struct.unpack_from(byte_order + 'H', elf_header, 16)[0]
                     TYPE_MAP = {0: 'ET_NONE', 1: 'ET_REL', 2: 'ET_EXEC', 3: 'ET_DYN', 4: 'ET_CORE'}
                     elf_sec["type"] = TYPE_MAP.get(e_type, f'unknown({e_type})')
                     # ET_DYN with entry point suggests PIE
@@ -1139,22 +1139,21 @@ def _triage_macho_security(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
                     full_data = f.seek(0) or f.read()
 
                 if len(macho_header) >= 16:
-                    import struct as _struct
-                    magic = _struct.unpack_from('<I', macho_header, 0)[0]
+                    magic = struct.unpack_from('<I', macho_header, 0)[0]
                     is_64 = magic in (0xFEEDFACF, 0xCFFAEDFE)
                     is_le = magic in (0xFEEDFACE, 0xFEEDFACF)
                     macho_sec["bits"] = "64-bit" if is_64 else "32-bit"
                     byte_order = '<' if is_le else '>'
 
                     # Read filetype at offset 12
-                    filetype = _struct.unpack_from(byte_order + 'I', macho_header, 12)[0]
+                    filetype = struct.unpack_from(byte_order + 'I', macho_header, 12)[0]
                     FILETYPE_MAP = {1: 'MH_OBJECT', 2: 'MH_EXECUTE', 6: 'MH_DYLIB',
                                     8: 'MH_BUNDLE', 9: 'MH_DYLIB_STUB', 11: 'MH_DSYM'}
                     macho_sec["filetype"] = FILETYPE_MAP.get(filetype, f'unknown({filetype})')
 
                     # Check flags at offset 24 (32-bit) or same for 64-bit
                     flags_offset = 24
-                    flags = _struct.unpack_from(byte_order + 'I', macho_header, flags_offset)[0]
+                    flags = struct.unpack_from(byte_order + 'I', macho_header, flags_offset)[0]
                     macho_sec["is_pie"] = bool(flags & 0x200000)  # MH_PIE
                     macho_sec["no_heap_execution"] = bool(flags & 0x1000000)  # MH_NO_HEAP_EXECUTION
                     macho_sec["has_restrict"] = bool(flags & 0x00000080)  # MH_RESTRICT segment
@@ -1182,15 +1181,6 @@ def _triage_high_value_strings(sifter_score_threshold: float, indicator_limit: i
     """Extract ML-ranked high-value strings from analysis data."""
     risk_score = 0
     high_value_strings: list = []
-
-    for s_text in all_string_values:
-        if not s_text:
-            continue
-        # Check for high-value patterns in strings
-        for s in (state.pe_data.get('basic_ascii_strings', []) +
-                  list(all_string_values)):
-            pass  # Already collected above
-        break
 
     # Use sifter scores if available
     for source in [state.pe_data.get('basic_ascii_strings', [])]:
@@ -1339,8 +1329,6 @@ async def get_triage_report(
         - risk_score / risk_level: cumulative risk assessment
         - suggested_next_tools: format-aware recommended next analysis steps
     """
-    import math
-
     await ctx.info("Generating comprehensive triage report...")
 
     _check_pe_loaded("get_triage_report")
