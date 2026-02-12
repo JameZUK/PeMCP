@@ -22,6 +22,8 @@ from pemcp.parsers.floss import _parse_floss_analysis
 from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
 from pemcp.mock import MockPE
 
+_analysis_semaphore = asyncio.Semaphore(int(os.environ.get("PEMCP_MAX_CONCURRENT_ANALYSES", "3")))
+
 if ANGR_AVAILABLE:
     import angr
 
@@ -151,6 +153,10 @@ async def open_file(
             mode = "macho"
         else:
             mode = "pe"  # fallback to PE, pefile will report errors if invalid
+            await ctx.warning(
+                f"Unrecognized file format (magic: {magic.hex()}). Falling back to PE mode. "
+                "Use mode='shellcode', 'elf', or 'macho' to specify explicitly."
+            )
         await ctx.info(f"Auto-detected format: {mode}")
 
     await ctx.info(f"Opening file: {abs_path} (mode: {mode})")
@@ -166,6 +172,7 @@ async def open_file(
 
     _loaded_from_cache = False
 
+    await _analysis_semaphore.acquire()
     try:
         # --- Early hash for cache lookup ---
         await ctx.report_progress(2, 100)
@@ -192,7 +199,7 @@ async def open_file(
                         state.pe_object = MockPE(_raw_file_data)
                     else:
                         state.pe_object = await asyncio.to_thread(
-                            lambda: pefile.PE(abs_path, fast_load=False)
+                            lambda: pefile.PE(data=_raw_file_data, fast_load=False)
                         )
                     _loaded_from_cache = True
                     await ctx.info(f"Analysis loaded from cache (SHA256: {_file_sha256[:16]}...)")
@@ -287,7 +294,7 @@ async def open_file(
                 await ctx.info("Loading PE file...")
 
                 def _load_pe():
-                    return pefile.PE(abs_path, fast_load=False)
+                    return pefile.PE(data=_raw_file_data, fast_load=False)
 
                 pe_obj = await asyncio.to_thread(_load_pe)
                 state.filepath = abs_path
@@ -370,6 +377,8 @@ async def open_file(
         state.pe_object = None
         logger.error(f"open_file failed for '{abs_path}': {e}", exc_info=True)
         raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e
+    finally:
+        _analysis_semaphore.release()
 
 
 @tool_decorator
@@ -450,11 +459,9 @@ async def reanalyze_loaded_pe_file(
         if ANGR_AVAILABLE:
             await ctx.info("Angr pre-analysis requested. Building CFG (this may take time)...")
             def _build_cfg():
-                state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-                state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True)
-                # Clear stale loop cache from previous CFG
-                state.angr_loop_cache = None
-                state.angr_loop_cache_config = None
+                proj = angr.Project(state.filepath, auto_load_libs=False)
+                cfg = proj.analyses.CFGFast(normalize=True)
+                state.set_angr_results(proj, cfg, None, None)
             try:
                 await asyncio.to_thread(_build_cfg)
                 await ctx.info("Angr CFG generation complete. Future Angr calls will be fast.")
@@ -623,26 +630,48 @@ async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
     floss_analysis_summary = state.pe_data.get('floss_analysis', {})
     floss_strings_summary = floss_analysis_summary.get('strings', {})
 
+    dos = state.pe_data.get('dos_header')
+    nt = state.pe_data.get('nt_headers')
+    peid = state.pe_data.get('peid_matches', {})
+    yara_matches = state.pe_data.get('yara_matches', [])
+    capa = state.pe_data.get('capa_analysis', {})
+
+    # Determine YARA status safely
+    yara_status = "Not run/Skipped"
+    if yara_matches and isinstance(yara_matches, list) and yara_matches[0]:
+        yara_status = yara_matches[0].get('status', "Run/No Matches or Not Run/Skipped")
+
+    # Determine capa capability count
+    capa_count = 0
+    if capa.get('status') == "Analysis complete (adapted workflow)":
+        capa_count = len(capa.get('results', {}).get('rules', {}))
+
     full_summary = {
-        "filepath":state.filepath,"pefile_version_used":state.pefile_version,
-        "has_dos_header":'dos_header'in state.pe_data and state.pe_data['dos_header']is not None and"error"not in state.pe_data['dos_header'],
-        "has_nt_headers":'nt_headers'in state.pe_data and state.pe_data['nt_headers']is not None and"error"not in state.pe_data['nt_headers'],
-        "section_count":len(state.pe_data.get('sections',[])),
-        "import_dll_count":len(state.pe_data.get('imports',[])),
-        "export_symbol_count":len(state.pe_data.get('exports',{}).get('symbols',[])),
-        "peid_ep_match_count":len(state.pe_data.get('peid_matches',{}).get('ep_matches',[])),
-        "peid_heuristic_match_count":len(state.pe_data.get('peid_matches',{}).get('heuristic_matches',[])),
-        "peid_status": state.pe_data.get('peid_matches',{}).get('status',"Not run/Skipped"),
-        "yara_match_count":len([m for m in state.pe_data.get('yara_matches',[])if isinstance(m, dict) and "error" not in m and "status" not in m]),
-        "yara_status": state.pe_data.get('yara_matches',[{}])[0].get('status', "Run/No Matches or Not Run/Skipped") if state.pe_data.get('yara_matches') and isinstance(state.pe_data.get('yara_matches'), list) and state.pe_data.get('yara_matches')[0] else "Not run/Skipped",
-        "capa_status": state.pe_data.get('capa_analysis',{}).get('status',"Not run/Skipped"),
-        "capa_capability_count": len(state.pe_data.get('capa_analysis',{}).get('results',{}).get('rules',{})) if state.pe_data.get('capa_analysis',{}).get('status')=="Analysis complete (adapted workflow)" else 0,
+        "filepath": state.filepath,
+        "pefile_version_used": state.pefile_version,
+        "has_dos_header": dos is not None and "error" not in (dos or {}),
+        "has_nt_headers": nt is not None and "error" not in (nt or {}),
+        "section_count": len(state.pe_data.get('sections', [])),
+        "import_dll_count": len(state.pe_data.get('imports', [])),
+        "export_symbol_count": len(state.pe_data.get('exports', {}).get('symbols', [])),
+        "peid_ep_match_count": len(peid.get('ep_matches', [])),
+        "peid_heuristic_match_count": len(peid.get('heuristic_matches', [])),
+        "peid_status": peid.get('status', "Not run/Skipped"),
+        "yara_match_count": len([
+            m for m in yara_matches
+            if isinstance(m, dict) and "error" not in m and "status" not in m
+        ]),
+        "yara_status": yara_status,
+        "capa_status": capa.get('status', "Not run/Skipped"),
+        "capa_capability_count": capa_count,
         "floss_status": floss_analysis_summary.get('status', "Not run/Skipped"),
         "floss_static_string_count": len(floss_strings_summary.get('static_strings', [])),
         "floss_stack_string_count": len(floss_strings_summary.get('stack_strings', [])),
         "floss_tight_string_count": len(floss_strings_summary.get('tight_strings', [])),
         "floss_decoded_string_count": len(floss_strings_summary.get('decoded_strings', [])),
-        "has_embedded_signature":state.pe_data.get('digital_signature',{}).get('embedded_signature_present',False)
+        "has_embedded_signature": state.pe_data.get('digital_signature', {}).get(
+            'embedded_signature_present', False
+        ),
     }
     await ctx.info(f"Summary for {state.filepath} generated.")
     return dict(list(full_summary.items())[:limit])
