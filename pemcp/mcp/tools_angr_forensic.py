@@ -5,10 +5,13 @@ import asyncio
 import os
 from typing import Dict, Any, Optional, List
 
+from collections import deque
+
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper
 from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address
+from pemcp.utils import shannon_entropy
 
 if ANGR_AVAILABLE:
     import angr
@@ -198,7 +201,10 @@ async def detect_self_modifying_code(
             "executable_ranges": [{"start": hex(lo), "end": hex(hi)} for lo, hi in exec_ranges],
         }
 
-    result = await asyncio.to_thread(_detect)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_detect), timeout=300)
+    except asyncio.TimeoutError:
+        return {"error": "detect_self_modifying_code timed out after 300 seconds."}
     return await _check_mcp_response_size(ctx, result, "detect_self_modifying_code", "the 'limit' parameter")
 
 
@@ -304,7 +310,10 @@ async def find_code_caves(
             "caves": caves[:limit],
         }
 
-    result = await asyncio.to_thread(_find_caves)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_find_caves), timeout=300)
+    except asyncio.TimeoutError:
+        return {"error": "find_code_caves timed out after 300 seconds."}
     return await _check_mcp_response_size(ctx, result, "find_code_caves", "the 'limit' parameter")
 
 
@@ -331,15 +340,7 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
             try:
                 data = loader.memory.load(section.min_addr, section.memsize)
                 if len(data) > 0:
-                    import math
-                    byte_counts = [0] * 256
-                    for b in data:
-                        byte_counts[b] += 1
-                    entropy = 0.0
-                    for count in byte_counts:
-                        if count > 0:
-                            p = count / len(data)
-                            entropy -= p * math.log2(p)
+                    entropy = shannon_entropy(data)
 
                     section_name = getattr(section, 'name', 'unknown')
                     is_exec = getattr(section, 'is_executable', False)
@@ -432,7 +433,10 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
             "indicators": indicators,
         }
 
-    result = await asyncio.to_thread(_detect)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_detect), timeout=300)
+    except asyncio.TimeoutError:
+        return {"error": "detect_packing timed out after 300 seconds."}
     return await _check_mcp_response_size(ctx, result, "detect_packing")
 
 
@@ -801,8 +805,10 @@ async def emulate_with_watchpoints(
         while steps_taken < max_steps:
             if not simgr.active:
                 break
+            active_before = len(simgr.active)
             simgr.run(n=chunk_size)
-            steps_taken += chunk_size
+            # Count actual steps: if all states died early, we took fewer than chunk_size
+            steps_taken += chunk_size if simgr.active else min(chunk_size, max_steps - steps_taken)
             if task_id_for_progress:
                 percent = min(95, int((steps_taken / max_steps) * 100))
                 _update_progress(task_id_for_progress, percent, f"Step {steps_taken}, events: {len(events)}")
@@ -1002,10 +1008,10 @@ async def get_call_graph(
             if max_depth > 0:
                 # BFS with depth limit
                 visited = set()
-                queue = [(root, 0)]
+                queue = deque([(root, 0)])
                 edges = []
                 while queue:
-                    node, depth = queue.pop(0)
+                    node, depth = queue.popleft()
                     if node in visited or depth > max_depth:
                         continue
                     visited.add(node)
@@ -1066,5 +1072,8 @@ async def get_call_graph(
             "edges": edges,
         }
 
-    result = await asyncio.to_thread(_extract)
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_extract), timeout=300)
+    except asyncio.TimeoutError:
+        return {"error": "get_call_graph timed out after 300 seconds."}
     return await _check_mcp_response_size(ctx, result, "get_call_graph", "the 'limit' parameter")
