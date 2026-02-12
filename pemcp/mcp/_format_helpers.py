@@ -19,4 +19,6 @@ def _get_filepath(file_path: Optional[str] = None) -> str:
     target = file_path or state.filepath
     if not target or not os.path.isfile(target):
         raise RuntimeError("No file specified and no file is loaded. Use open_file() first.")
+    if file_path is not None:
+        state.check_path_allowed(os.path.realpath(target))
     return target

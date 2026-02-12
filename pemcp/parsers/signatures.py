@@ -29,24 +29,44 @@ def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, 
                     current_signature = {'name': name_match.group(1).strip(), 'ep_only': False, 'regex_pattern': None, 'pattern_bytes': []}
                     continue
                 if current_signature:
-                    sig_match = re.match(r'^signature\s*=\s*(.*)',line,re.IGNORECASE)
+                    sig_match = re.match(r'^signature\s*=\s*(.*)', line, re.IGNORECASE)
                     if sig_match:
-                        pat_str=sig_match.group(1).strip().upper();byte_pat_list:List[Optional[int]]=[];regex_b_list:List[bytes]=[];hex_b=pat_str.split();valid=True
+                        pat_str = sig_match.group(1).strip().upper()
+                        byte_pat_list: List[Optional[int]] = []
+                        regex_b_list: List[bytes] = []
+                        hex_b = pat_str.split()
+                        valid = True
                         for b_str in hex_b:
-                            if b_str=='??':byte_pat_list.append(None);regex_b_list.append(b'.')
-                            elif len(b_str)==2 and all(c in'0123456789ABCDEF'for c in b_str):
-                                try:b_val=int(b_str,16);byte_pat_list.append(b_val);regex_b_list.append(re.escape(bytes([b_val])))
-                                except ValueError:valid=False;break
-                            elif len(b_str)==2 and(b_str[0]=='?'or b_str[1]=='?'):byte_pat_list.append(None);regex_c=b_str.replace('?','.');regex_b_list.append(regex_c.encode('ascii'))
-                            else:valid=False;break
+                            if b_str == '??':
+                                byte_pat_list.append(None)
+                                regex_b_list.append(b'.')
+                            elif len(b_str) == 2 and all(c in '0123456789ABCDEF' for c in b_str):
+                                try:
+                                    b_val = int(b_str, 16)
+                                    byte_pat_list.append(b_val)
+                                    regex_b_list.append(re.escape(bytes([b_val])))
+                                except ValueError:
+                                    valid = False
+                                    break
+                            elif len(b_str) == 2 and (b_str[0] == '?' or b_str[1] == '?'):
+                                byte_pat_list.append(None)
+                                regex_c = b_str.replace('?', '.')
+                                regex_b_list.append(regex_c.encode('ascii'))
+                            else:
+                                valid = False
+                                break
                         if valid and regex_b_list:
-                            current_signature['pattern_bytes']=byte_pat_list
-                            try:current_signature['regex_pattern']=re.compile(b''.join(regex_b_list))
-                            except re.error:current_signature=None # Invalid regex pattern
-                        else:current_signature=None # Invalid hex byte pattern
-                        continue # Processed signature line
-                    ep_match=re.match(r'^ep_only\s*=\s*(true|false)',line,re.IGNORECASE)
-                    if ep_match:current_signature['ep_only']=ep_match.group(1).lower()=='true'
+                            current_signature['pattern_bytes'] = byte_pat_list
+                            try:
+                                current_signature['regex_pattern'] = re.compile(b''.join(regex_b_list))
+                            except re.error:
+                                current_signature = None  # Invalid regex pattern
+                        else:
+                            current_signature = None  # Invalid hex byte pattern
+                        continue  # Processed signature line
+                    ep_match = re.match(r'^ep_only\s*=\s*(true|false)', line, re.IGNORECASE)
+                    if ep_match:
+                        current_signature['ep_only'] = ep_match.group(1).lower() == 'true'
         if current_signature and 'name' in current_signature and ('pattern_bytes' in current_signature or 'regex_pattern' in current_signature):
             signatures.append(current_signature)
     except FileNotFoundError: safe_print(f"[!] PEiD DB not found: {db_path}"); return []
@@ -92,17 +112,44 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
             for match in matches:
                 match_detail:Dict[str,Any]={"rule":match.rule,"namespace":match.namespace if match.namespace!='default'else None,"tags":list(match.tags)if match.tags else None,"meta":dict(match.meta)if match.meta else None,"strings":[]}
                 if match.strings:
-                    for s_match_offset, s_match_id, s_match_data_bytes in match.strings: # Unpack tuple
-                        try:
-                            # Attempt to decode as UTF-8 first, then latin-1, then fall back to hex
-                            try: str_data_repr = s_match_data_bytes.decode('utf-8')
-                            except UnicodeDecodeError:
-                                try: str_data_repr = s_match_data_bytes.decode('latin-1')
-                                except UnicodeDecodeError: str_data_repr = s_match_data_bytes.hex()
-                        except Exception: str_data_repr = s_match_data_bytes.hex() # Final fallback
+                    for string_match in match.strings:
+                        # Support both yara-python 3.x (tuples) and 4.x (objects)
+                        if isinstance(string_match, tuple):
+                            s_match_offset, s_match_id, s_match_data_bytes = string_match
+                            try:
+                                try:
+                                    str_data_repr = s_match_data_bytes.decode('utf-8')
+                                except UnicodeDecodeError:
+                                    try:
+                                        str_data_repr = s_match_data_bytes.decode('latin-1')
+                                    except UnicodeDecodeError:
+                                        str_data_repr = s_match_data_bytes.hex()
+                            except Exception:
+                                str_data_repr = s_match_data_bytes.hex()
 
-                        if len(str_data_repr)>80:str_data_repr=str_data_repr[:77]+"..."
-                        match_detail["strings"].append({"offset":hex(s_match_offset),"identifier":s_match_id,"data":str_data_repr})
+                            if len(str_data_repr) > 80:
+                                str_data_repr = str_data_repr[:77] + "..."
+                            match_detail["strings"].append({"offset": hex(s_match_offset), "identifier": s_match_id, "data": str_data_repr})
+                        else:
+                            # yara-python 4.x: StringMatch object
+                            s_match_id = string_match.identifier
+                            for instance in string_match.instances:
+                                s_match_offset = instance.offset
+                                s_match_data_bytes = instance.matched_data
+                                try:
+                                    try:
+                                        str_data_repr = s_match_data_bytes.decode('utf-8')
+                                    except UnicodeDecodeError:
+                                        try:
+                                            str_data_repr = s_match_data_bytes.decode('latin-1')
+                                        except UnicodeDecodeError:
+                                            str_data_repr = s_match_data_bytes.hex()
+                                except Exception:
+                                    str_data_repr = s_match_data_bytes.hex()
+
+                                if len(str_data_repr) > 80:
+                                    str_data_repr = str_data_repr[:77] + "..."
+                                match_detail["strings"].append({"offset": hex(s_match_offset), "identifier": s_match_id, "data": str_data_repr})
                 scan_results.append(match_detail)
         else: logger.info("   No YARA matches found.")
     except yara.Error as e: logger.error(f"   YARA Error: {e}"); scan_results.append({"error":f"YARA Error: {str(e)}"})

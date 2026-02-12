@@ -14,6 +14,7 @@ from pemcp.config import (
     state, logger, Context,
     LIEF_AVAILABLE, CAPSTONE_AVAILABLE, KEYSTONE_AVAILABLE,
     SPEAKEASY_AVAILABLE, _SPEAKEASY_VENV_PYTHON, _SPEAKEASY_RUNNER,
+    _check_speakeasy_available,
     UNIPACKER_AVAILABLE, DOTNETFILE_AVAILABLE,
     PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
 )
@@ -598,7 +599,7 @@ async def emulate_pe_with_windows_apis(
         limit: Max API calls to return.
     """
     await ctx.info("Emulating PE with Speakeasy Windows API emulation")
-    _check_lib("speakeasy", SPEAKEASY_AVAILABLE, "emulate_pe_with_windows_apis")
+    _check_lib("speakeasy", _check_speakeasy_available(), "emulate_pe_with_windows_apis")
     _check_pe_loaded("emulate_pe_with_windows_apis")
 
     result = await _run_speakeasy({
@@ -629,7 +630,7 @@ async def emulate_shellcode_with_speakeasy(
         limit: Max API calls to return.
     """
     await ctx.info("Emulating shellcode with Speakeasy")
-    _check_lib("speakeasy", SPEAKEASY_AVAILABLE, "emulate_shellcode_with_speakeasy")
+    _check_lib("speakeasy", _check_speakeasy_available(), "emulate_shellcode_with_speakeasy")
 
     result = await _run_speakeasy({
         "action": "emulate_shellcode",
@@ -867,7 +868,7 @@ async def get_extended_capabilities(ctx: Context) -> Dict[str, Any]:
         "lief": {"available": LIEF_AVAILABLE, "purpose": "Binary modification, multi-format parsing (PE/ELF/Mach-O)"},
         "capstone": {"available": CAPSTONE_AVAILABLE, "purpose": "Multi-architecture disassembly"},
         "keystone": {"available": KEYSTONE_AVAILABLE, "purpose": "Multi-architecture assembly"},
-        "speakeasy": {"available": SPEAKEASY_AVAILABLE, "purpose": "Windows API emulation for malware analysis"},
+        "speakeasy": {"available": _check_speakeasy_available(), "purpose": "Windows API emulation for malware analysis"},
         "unipacker": {"available": UNIPACKER_AVAILABLE, "purpose": "Automatic PE unpacking"},
         "dotnetfile": {"available": DOTNETFILE_AVAILABLE, "purpose": ".NET PE metadata parsing"},
         "ppdeep": {"available": PPDEEP_AVAILABLE, "purpose": "ssdeep fuzzy hashing"},
