@@ -1,10 +1,10 @@
-# PeMCP Project Review (Third Iteration)
+# PeMCP Project Review (Fourth Iteration)
 
 ## Overview
 
-PeMCP is a comprehensive binary analysis toolkit and MCP (Model Context Protocol) server that bridges AI assistants with low-level binary instrumentation. It exposes 105+ specialized MCP tools for analyzing PE, ELF, Mach-O, .NET, Go, Rust, and shellcode binaries. The codebase is approximately 17,000 lines of Python across 48 files (plus a 2,300-line integration test suite).
+PeMCP is a comprehensive binary analysis toolkit and MCP (Model Context Protocol) server that bridges AI assistants with low-level binary instrumentation. It exposes 105+ specialized MCP tools for analyzing PE, ELF, Mach-O, .NET, Go, Rust, and shellcode binaries. The codebase is approximately 15,800 lines of Python across 48 source files, with an additional 2,365-line integration test suite.
 
-This review covers the full codebase as of February 2026 and builds on two prior review iterations, verifying that previously identified issues have been addressed and identifying new findings.
+This fourth-iteration review covers the full codebase as of February 2026, building on three prior iterations. It verifies the status of previously reported issues and identifies new findings across security, correctness, performance, and maintainability dimensions.
 
 ---
 
@@ -24,73 +24,66 @@ The codebase follows a well-organized separation of concerns:
 Each MCP tool module registers its tools via a shared `tool_decorator` in `server.py`, making the system easy to extend. Adding a new tool category requires only a new file and an import in `main.py`.
 
 **2. Per-Session State Isolation (HTTP Mode)**
-The `StateProxy` + `contextvars` pattern in `state.py:255-272` is well-designed. The `tool_decorator` in `server.py:20-38` activates per-session state before every tool invocation, meaning concurrent HTTP clients each get isolated analysis state without any changes to the 105 tool implementations. Session TTL cleanup (`state.py:201-220`) prevents memory leaks from abandoned sessions.
+The `StateProxy` + `contextvars` pattern in `state.py` is well-designed. The `tool_decorator` in `server.py` activates per-session state before every tool invocation, meaning concurrent HTTP clients each get isolated analysis state without any changes to the 105 tool implementations. Session TTL cleanup prevents memory leaks from abandoned sessions.
 
 **3. Graceful Degradation**
 The optional dependency pattern in `config.py` is well-executed. Each of 20+ optional libraries is guarded by try/except with `*_AVAILABLE` flags, and tools return clear, actionable error messages when a library is absent. This is the correct approach for a toolkit with heavy, platform-sensitive dependencies like angr, FLOSS, vivisect, and speakeasy.
 
 **4. Intelligent MCP Response Management**
-The auto-truncation system in `server.py:99-201` uses `copy.deepcopy` to avoid mutating shared state, then iteratively identifies and shrinks the largest element (list, string, or dict) to fit within the 64KB MCP response limit. The 5-iteration approach with aggressive reduction factor is pragmatic.
+The auto-truncation system in `server.py` uses `copy.deepcopy` to avoid mutating shared state, then iteratively identifies and shrinks the largest element (list, string, or dict) to fit within the 64KB MCP response limit. The 5-iteration approach with aggressive reduction factor is pragmatic.
 
 **5. Production-Quality Caching**
-`cache.py` implements a robust disk cache:
-- Git-style two-character prefix directories to avoid flat-dir performance issues
-- Gzip compression (5-15x reduction on JSON)
-- LRU eviction with configurable size limits (default 500MB)
-- Version-based invalidation (PeMCP version and cache format version)
-- Thread-safe operations with atomic file replacement via `tmp.replace()`
-- Partial results survive across sessions -- re-opening a previously analyzed file loads in milliseconds
+`cache.py` implements a robust disk cache with git-style two-character prefix directories, gzip compression (5-15x reduction on JSON), LRU eviction, version-based invalidation, and thread-safe atomic file writes.
 
 **6. Background Task Management**
-Long-running operations (angr CFG generation, symbolic execution, loop analysis) are properly offloaded to background threads with:
-- Progress tracking with percentage and message updates
-- Heartbeat monitoring thread for console feedback across all sessions (`background.py:28-30`)
-- Task registry with thread-safe access via `_task_lock` and eviction of old tasks (`state.py:94-109`)
-- Session state propagation to background threads via `set_current_state()` (`background.py:101-102`)
+Long-running operations are properly offloaded to background threads with progress tracking, heartbeat monitoring, task registry with eviction, and session state propagation.
 
 **7. Security-Conscious Design**
-- Path sandboxing via `AnalyzerState.check_path_allowed()` using `os.path.realpath()` to resolve symlinks (`state.py:73-88`)
-- `diff_binaries` and `save_patched_binary` validate paths against the sandbox
-- API key storage with `0o600` permissions (`user_config.py:58`)
-- Warning when running in network mode without `--allowed-paths` (`main.py:216-219`)
-- Environment variable priority over config file for sensitive values (`user_config.py:64-83`)
-- File size limit on `open_file` (default 256MB, configurable via `PEMCP_MAX_FILE_SIZE_MB`)
-- Zip-slip protection and non-root Docker container execution
+- Path sandboxing via `AnalyzerState.check_path_allowed()` with symlink resolution
+- API key storage with `0o600` permissions
+- Warning when running in network mode without `--allowed-paths`
+- Environment variable priority over config file for sensitive values
+- File size limit on `open_file` (default 256MB)
 
-**8. Timeouts on Expensive Operations**
-Decompilation and CFG extraction tools use `asyncio.wait_for(..., timeout=300)` (`tools_angr.py:178, 208`), preventing pathological binaries from blocking indefinitely. Symbolic execution uses step limits (2000 steps) and active state pruning (max 30 active states).
+**8. Comprehensive Triage Engine**
+The `tools_triage.py` module (1,553 lines) implements a 25+-dimension triage report with well-factored helper functions. Each triage section is a separate function returning `(data, risk_delta)`, making the system easy to extend and test independently. The risk scoring model with CRITICAL/HIGH/MEDIUM/LOW severity levels and format-aware tool suggestions is well-designed for the AI-analyst use case.
 
 **9. Docker and Deployment**
-The Docker setup is well-engineered:
-- Heavy dependencies (angr, FLOSS, capa, vivisect) in early layers for optimal caching
-- Speakeasy isolated in a separate venv to handle unicorn 1.x vs 2.x conflict
-- Best-effort installation (`|| true`) for libraries with complex dependencies
-- Capa rules pre-downloaded at build time to avoid runtime network access
-- oscrypto patched for OpenSSL 3.x compatibility
-- `run.sh` helper script (200+ lines) auto-detects Docker/Podman, handles SELinux mount options, and supports HTTP, stdio, and CLI modes
+The Docker setup handles the notoriously difficult unicorn 1.x/2.x namespace collision (angr vs speakeasy) through venv isolation, with a build assertion to verify the correct unicorn version is active.
 
 ---
 
-## Previous Review Issues -- Verification
+## Previous Review Issues -- Status Check
 
-The prior two review iterations identified 25 issues total. All high-priority items were confirmed fixed during this review:
+### Third-Iteration Issues
 
-| # | Issue | Status |
-|---|-------|--------|
-| 1 | Global singleton state concurrency risk | **Fixed** -- `StateProxy` + `contextvars` |
-| 2 | `close_file` does not reset `angr_hooks` | **Fixed** -- `reset_angr()` clears hooks |
-| 3 | Deprecated `datetime.utcfromtimestamp` | **Fixed** -- Uses timezone-aware `datetime.fromtimestamp` |
-| 4 | `diff_binaries` path traversal risk | **Fixed** -- `check_path_allowed()` validation |
-| 5 | Shallow copy in truncation logic | **Fixed** -- `copy.deepcopy()` |
-| 6 | `_parse_addr` accepts only hex strings | **Fixed** -- `int(hex_string, 0)` |
-| 7 | Hardcoded `eax` register in emulation | **Fixed** -- Architecture-aware register lookup |
-| 8 | No timeout on sync angr operations | **Fixed** -- `asyncio.wait_for()` with 300s timeout |
-| 9 | `monitor_thread_started` race condition | **Fixed** -- `_monitor_lock` + `_monitor_started` |
-| 10 | `save_patched_binary` missing sandbox check | **Fixed** -- `check_path_allowed()` before write |
-| 11 | Session registry grows indefinitely | **Fixed** -- TTL-based cleanup (1 hour) |
-| 12 | Background tasks accumulate without bound | **Fixed** -- `_evict_old_tasks()` with limit of 50 |
-| 13 | No file size limit on `open_file` | **Fixed** -- `PEMCP_MAX_FILE_SIZE_MB` env var (default 256MB) |
-| 14 | Heartbeat only sees default session tasks | **Fixed** -- `get_all_session_states()` |
+| # | Issue | Status | Notes |
+|---|-------|--------|-------|
+| H1 | Unguarded sub-parsers in `_parse_pe_to_dict` | **Open** | Still no per-sub-parser try/except guards in `parsers/pe.py` |
+| H2 | Race condition in background angr state writes | **Open** | No synchronization between `set_angr_results` and `_ensure_project_and_cfg` |
+| H3 | `open_file` double-reads file data for PE mode | **Open** | Still reads file twice (once for hash, once for pefile) |
+| M1 | Truncation fallback references unbound variable | **Open** | `data_size_bytes` still potentially unbound in exception handler |
+| M2 | Cache meta inconsistency after `_remove_entry` | **Open** | Meta index not updated after disk deletion |
+| M3 | Format auto-detection falls back silently to PE | **Open** | No warning emitted for unknown formats |
+| M4 | `config.py` import-time side effects | **Open** | `logging.basicConfig()` still called at import time |
+| M5 | No rate limiting in HTTP mode | **Open** | No concurrent analysis limits |
+| L1 | Dense code formatting in `parsers/pe.py` | **Open** | Still uses semicolons and compressed formatting |
+| L2 | `_evict_old_tasks` sorts by ISO string | **Open** | ISO string sort instead of numeric timestamp |
+| L4 | Speakeasy availability check is filesystem-based | **Open** | Still checks file existence, not import health |
+| L5 | Dense summary dict in `get_analyzed_file_summary` | **Open** | Still uses compressed formatting |
+
+### First/Second-Iteration Issues (Previously Verified Fixed)
+
+All 14 issues from iterations 1 and 2 remain fixed and are not regressed:
+- StateProxy + contextvars (was: global singleton)
+- `reset_angr()` clears hooks on `close_file`
+- `int(hex_string, 0)` for address parsing
+- Architecture-aware register lookup
+- `asyncio.wait_for()` timeouts on angr decompile/CFG
+- `_monitor_lock` for heartbeat thread
+- `check_path_allowed()` on `save_patched_binary` and `diff_binaries`
+- Session TTL cleanup and task eviction
+- File size limit on `open_file`
 
 ---
 
@@ -98,169 +91,187 @@ The prior two review iterations identified 25 issues total. All high-priority it
 
 ### High Priority
 
-**H1. Unguarded sub-parsers in `_parse_pe_to_dict` -- partial analysis loss on any parser failure**
+**H4. Deprecated `datetime.utcfromtimestamp` / `utcnow` still used in triage**
 
-Location: `parsers/pe.py:542-673`
-
-The main PE parsing function calls ~18 sub-parsers (`_parse_dos_header`, `_parse_nt_headers`, `_parse_sections`, `_parse_imports`, etc.) sequentially without individual try/except guards. If any single sub-parser raises an unexpected exception (e.g., a corrupted section table causes `_parse_sections` to fail), the entire `_parse_pe_to_dict` call fails and no analysis data is produced.
-
-For a tool designed to analyze potentially malformed or malicious binaries, this is a significant risk. Each sub-parser should be individually guarded so that partial results are available even when some structures are corrupted:
+Location: `tools_triage.py:153-155`
 
 ```python
-# Current (fragile):
-pe_info_dict['sections'] = _parse_sections(pe)
-pe_info_dict['imports'] = _parse_imports(pe)
-
-# Recommended:
-try:
-    pe_info_dict['sections'] = _parse_sections(pe)
-except Exception as e:
-    pe_info_dict['sections'] = {"error": f"Section parsing failed: {e}"}
-    logger.warning(f"Section parsing failed: {e}")
+compile_dt = datetime.datetime.utcfromtimestamp(int(raw_ts))
+...
+now = datetime.datetime.utcnow()
 ```
 
-**H2. Race condition in background angr state writes**
+The third-iteration review marked issue #3 (deprecated `datetime.utcfromtimestamp`) as fixed, and indeed `tools_pe_extended.py:128` correctly uses `datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc)`. However, the triage module at `tools_triage.py:153` and `tools_triage.py:155` still uses the deprecated `utcfromtimestamp()` and `utcnow()` calls. These were deprecated in Python 3.12 and will be removed in a future version.
 
-Location: `background.py:120-147`
+**H5. Missing path sandbox checks on file-reading tools**
 
-The `angr_background_worker` writes to `state.angr_project`, `state.angr_cfg`, and `state.angr_loop_cache` from a background thread without any synchronization. The `_ensure_project_and_cfg` helper in `_angr_helpers.py:62-69` reads these fields from MCP tool coroutines. There is a window where:
-1. Background thread sets `state.angr_project = project` (line 120)
-2. MCP tool calls `_ensure_project_and_cfg()`, sees `angr_project` is not None
-3. MCP tool tries to use `state.angr_cfg` which is still None (background thread hasn't reached line 125 yet)
+Multiple tools accept a `file_path` parameter but do not call `state.check_path_allowed()` before reading:
 
-The `_check_angr_ready` guard checks for a running startup task, but there is no guard for the moment between individual field assignments within the worker. A threading lock or an atomic "analysis complete" flag would close this window.
+| Tool | Location | Issue |
+|------|----------|-------|
+| `parse_binary_with_lief` | `tools_new_libs.py:88-89` | Reads `file_path` without sandbox check |
+| `compute_similarity_hashes` | `tools_new_libs.py:445-446` | Reads `file_path` without sandbox check |
+| `compare_file_similarity` | `tools_new_libs.py:498-501` | Reads `file_path_b` without sandbox check |
 
-**H3. `open_file` double-reads file data for PE mode**
+In HTTP mode with `--allowed-paths`, a client could use these tools to read arbitrary files outside the sandbox. For comparison, `diff_binaries` correctly validates `file_path_b` via `check_path_allowed()` at `tools_angr_forensic.py:38`.
 
-Location: `tools_pe.py:173-292`
+**H6. Operator precedence bug in capa status check**
 
-At line 178, the entire file is read into `_raw_file_data` for SHA256 hashing and cache lookup. If the cache misses and the file is a PE, `pefile.PE(abs_path)` at line 290 reads the file from disk again. For large files (up to 256MB), this means 512MB of memory usage during the loading phase. The `_raw_file_data` could be passed to `pefile.PE(data=_raw_file_data)` instead to avoid the second read.
+Location: `tools_strings.py:284`, `tools_strings.py:439`
+
+```python
+if capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete" or not capa_full_results:
+```
+
+Due to Python operator precedence (`and` binds tighter than `or`), this evaluates as:
+
+```python
+if (capa_status != "..." and capa_status != "...") or (not capa_full_results):
+```
+
+This means if `capa_full_results` is falsy (e.g., an empty dict `{}`), the condition is true regardless of the status string, causing valid "Analysis complete" results with an empty rules dict to be treated as errors. The condition should use explicit parentheses:
+
+```python
+if (capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete") or not capa_full_results:
+```
+
+While the current behavior happens to be correct for `None` (the initial value), it would fail if the capa analysis returns `{"rules": {}}` (no capabilities detected) because `{}` is falsy.
 
 ### Medium Priority
 
-**M1. Truncation fallback references potentially unbound variable**
+**M6. `_triage_high_value_strings` contains dead code**
 
-Location: `server.py:192-201`
-
-In the exception handler at line 192, the fallback error message references `data_size_bytes` (line 200). However, if the exception occurred before line 113 (where `data_size_bytes` is assigned), this variable is unbound and will raise `UnboundLocalError`, masking the original error. The fallback should use a safe default:
+Location: `tools_triage.py:1186-1193`
 
 ```python
-except Exception as e:
-    await ctx.error(f"Auto-truncation failed: {e}")
-    size_info = f"{data_size_bytes} bytes" if 'data_size_bytes' in dir() else "unknown size"
+for s_text in all_string_values:
+    if not s_text:
+        continue
+    # Check for high-value patterns in strings
+    for s in (state.pe_data.get('basic_ascii_strings', []) +
+              list(all_string_values)):
+        pass  # Already collected above
+    break
 ```
 
-**M2. Cache meta inconsistency after `_remove_entry` in `get()`**
+This loop iterates once (due to the unconditional `break`), contains a nested loop that does nothing (`pass`), and never produces any output. The function relies entirely on the sifter score checks below it (lines 1196-1214). The dead code should be removed to avoid confusion.
 
-Location: `cache.py:137, 161`
+**M7. Entropy calculation duplicated across four locations**
 
-When `get()` detects a version mismatch or corrupt entry, it calls `_remove_entry(sha256)` at lines 137 and 161 to delete the file from disk. However, it does not update the meta index to remove the entry. The meta file still references the deleted entry, causing:
-- Inflated `entry_count` in `get_stats()`
-- Future `get()` calls attempt to read the deleted file (harmless but generates warnings)
-- Incorrect `total_size` calculation affecting eviction decisions
+The same Shannon entropy calculation (byte frequency counting + `p * log2(p)` summation) appears verbatim in:
+- `tools_pe_extended.py:214-221` (resource entropy)
+- `tools_pe_extended.py:758-766` (sliding window entropy)
+- `tools_angr_forensic.py:335-341` (section entropy for packing detection)
+- `tools_triage.py` (indirectly, via section data)
 
-The `get()` method should also update the meta after removing an entry, or `_remove_entry` should be extended to accept an optional meta dict parameter.
+This should be extracted to a utility function in `utils.py` for DRY and to avoid subtle divergence bugs (e.g., if one copy is updated to handle edge cases but others are not).
 
-**M3. Format auto-detection fallback silently treats unknown files as PE**
+**M8. BFS in `get_call_graph` uses list as queue (O(n^2))**
 
-Location: `main.py:254-255`, `tools_pe.py:152-153`
+Location: `tools_angr_forensic.py:1007-1008`
 
-When auto-detection cannot identify the file format from magic bytes, both `main.py` and `tools_pe.py` fall back to PE mode without warning. This means a random data file, a PDF, or any non-PE/ELF/Mach-O binary will be passed to `pefile.PE()`, which will either produce confusing errors about malformed PE structures or (for files that happen to start with `MZ`) produce misleading partial analysis.
+```python
+queue = [(root, 0)]
+while queue:
+    node, depth = queue.pop(0)
+```
 
-A better approach would be to check for the `MZ` signature before committing to PE mode and return a clear "unrecognized binary format" error for truly unknown files.
+`list.pop(0)` is O(n) because it shifts all remaining elements. For large call graphs (thousands of functions), this creates O(n^2) behavior. Using `collections.deque` with `popleft()` provides O(1) dequeue operations.
 
-**M4. `config.py` import-time side effects interfere with testing**
+**M9. `scan_for_embedded_files` restricted to PE files unnecessarily**
 
-Location: `config.py:89`
+Location: `tools_new_libs.py:787`
 
-The module calls `logging.basicConfig()` at module import time and immediately emits info/warning log messages for every optional library check. This means:
-- Importing `pemcp.config` (even for unit testing) produces console output
-- The root logger is configured, which can interfere with test frameworks like pytest
-- Test output is polluted with 15+ "library found/not found" messages
+The `_check_pe_loaded("scan_for_embedded_files")` guard prevents binwalk from scanning ELF, Mach-O, or raw binary files. Binwalk is format-agnostic by design and its primary use case (firmware analysis) often involves non-PE files. The guard should check for `state.filepath` being loaded rather than requiring a PE object specifically.
 
-Standard practice is to defer `basicConfig()` to the application entry point (`main()`) and have library modules create loggers without configuring the root handler.
+**M10. `emulate_with_watchpoints` step counting is inaccurate**
 
-**M5. No rate limiting or concurrent analysis limit in HTTP mode**
+Location: `tools_angr_forensic.py:804`
 
-The `open_file` tool in HTTP mode allows any connected client to trigger full PE analysis (including FLOSS and capa, which are CPU-intensive). There is no:
-- Rate limiting per session or IP
-- Concurrent analysis limit (multiple clients could trigger simultaneous full analyses)
-- Queue or backpressure mechanism
+```python
+simgr.run(n=chunk_size)
+steps_taken += chunk_size
+```
 
-A malicious or misbehaving client could exhaust server resources by calling `open_file` repeatedly with different files. This is primarily a concern for network-exposed deployments.
+`simgr.run(n=chunk_size)` may execute fewer than `chunk_size` steps if all active states deadend, error, or reach the target. However, `steps_taken` always increments by the full `chunk_size`, causing the reported `steps_taken` in the output to exceed the actual number of steps executed.
+
+**M11. Inconsistent timeout coverage on angr tools**
+
+The previous review noted that decompilation and CFG extraction tools use `asyncio.wait_for(..., timeout=300)`. However, several other computationally expensive angr tools use only `asyncio.to_thread()` without a timeout wrapper:
+
+- `detect_self_modifying_code` (`tools_angr_forensic.py:201`)
+- `find_code_caves` (`tools_angr_forensic.py:307`)
+- `detect_packing` (`tools_angr_forensic.py:435`)
+- `get_call_graph` (`tools_angr_forensic.py:1069`)
+
+While these tools are typically faster than decompilation, pathological binaries could cause them to hang indefinitely (especially CFG-dependent tools that call `_ensure_project_and_cfg()`).
 
 ### Low Priority
 
-**L1. Dense code formatting in `parsers/pe.py`**
+**L6. Inconsistent `import` placement**
 
-Multiple functions in `parsers/pe.py` compress complex logic into single lines with multiple semicolons, e.g.:
+Several modules import standard library modules inside function bodies rather than at the top of the file:
+- `tools_pe_extended.py:125`: `import datetime` inside `get_pe_metadata`
+- `tools_pe_extended.py:272`: `import re as re_mod` inside `extract_manifest`
+- `tools_pe_extended.py:837`: `import binascii` inside `_crc32_hash`
+- `tools_angr_forensic.py:334`: `import math` inside `detect_packing._detect`
+- `tools_triage.py:1089,1142`: `import struct as _struct` inside triage helpers
 
-```python
-# Line 142-148 (imports parser):
-dll_info:Dict[str,Any]={'dll_name':"Unknown"};
-try:dll_info['dll_name']=entry.dll.decode('utf-8','ignore')if entry.dll else"N/A"
-except Exception:pass
-dll_info['struct']=entry.struct.dump_dict();dll_info['symbols']=[]
-```
+While not functionally incorrect, this pattern is contrary to PEP 8 and makes it harder to see a module's dependencies at a glance. The standard library imports should be at the top of each file.
 
-This pattern appears throughout `_parse_imports`, `_parse_exports`, `_parse_resources_summary`, `_parse_version_info`, `_parse_rich_header`, `_parse_delay_load_imports`, and others (~200 lines). While functionally correct, this formatting:
-- Makes code review for security issues significantly harder
-- Complicates debugging (breakpoints can only be set per-line)
-- Reduces diff readability in version control
-- Violates PEP 8 conventions (multiple statements per line)
+**L7. `compare_file_similarity` reads both files entirely into memory**
 
-For a security-focused binary analysis tool, code readability is more important than compactness.
+Location: `tools_new_libs.py:504-506`
 
-**L2. `_evict_old_tasks` sorts by ISO string instead of numeric timestamp**
+Both `data_a` and `data_b` are read entirely into memory. With the 256MB file size limit, this could use up to 512MB for a single comparison. The ssdeep and TLSH libraries both support file-based hashing, which would be more memory-efficient.
 
-Location: `state.py:106`
+**L8. `_safe_slice` helper doesn't handle all edge cases**
 
-Tasks are sorted by `created_at` which is an ISO 8601 string (e.g., `"2026-02-12T14:30:00+00:00"`). ISO 8601 is lexicographically sortable when using consistent formatting, but if any task has a non-standard or missing `created_at` value, the sort produces unpredictable results. Using a numeric epoch timestamp for sorting would be more robust.
+Location: `tools_new_libs.py:54-68`
 
-**L3. ~~Docker `chmod 777 /app/home` is overly permissive~~ (Retracted)**
+The helper handles `list`, `tuple`, `dict`, and `str`, but doesn't handle `set`, `frozenset`, or generator objects, which could appear in speakeasy report fields. Adding a catch-all `try: return list(value)[:n]` would make it more robust.
 
-Location: `Dockerfile:113`
+**L9. Dense formatting persists in tool modules beyond parsers**
 
-**Retracted**: The `chmod 777` is intentional and necessary. The container runs as an arbitrary non-root UID via `--user "$(id -u):$(id -g)"` in `run.sh`, so the directory must be world-writable for the host user to create `~/.pemcp/cache` and `config.json`. Using `755` breaks container startup for non-root users.
+The previous review flagged dense formatting in `parsers/pe.py`. This pattern also appears in several MCP tool modules:
 
-**L4. Speakeasy availability check is filesystem-based, not functional**
+- `tools_strings.py:681`: `file_data=state.pe_object.__data__; found_offsets_dict=_search_specific_strings_in_data(file_data,search_terms)`
+- `tools_strings.py:689`: `except Exception as e: await ctx.error(...); raise RuntimeError(...)from e`
+- `tools_strings.py:174`: `if floss_data_block.get("error"): response_data["error_details"] = floss_data_block.get("error")`
 
-Location: `config.py:329-338`
-
-Speakeasy availability is determined by checking if `/app/speakeasy-venv/bin/python` and the runner script exist, but not whether speakeasy actually works (the venv could be corrupt, missing packages, etc.). A quick import check via subprocess would provide a more reliable availability signal at startup.
-
-**L5. `get_analyzed_file_summary` has very dense, fragile dictionary construction**
-
-Location: `tools_pe.py:626-648`
-
-The summary dict construction uses extremely dense inline expressions with no whitespace around operators, chained `.get()` calls, and complex ternary expressions. For example:
-
-```python
-"has_dos_header":'dos_header'in state.pe_data and state.pe_data['dos_header']is not None and"error"not in state.pe_data['dos_header'],
-```
-
-This is difficult to read and error-prone. Breaking these into multiple lines would improve maintainability.
+While these are individually minor, the cumulative effect reduces readability across security-critical code paths.
 
 ---
 
 ## Test Suite Assessment
 
-The test suite (`mcp_test_client.py`, 2,300+ lines) is comprehensive for integration testing:
+The test suite (`mcp_test_client.py`, 2,365 lines) remains comprehensive for integration testing:
 - 19 test classes covering all 105+ tools
 - Supports both streamable-http and SSE transports with auto-detection
-- Configurable via environment variables (`PEMCP_TEST_URL`, `PEMCP_TEST_TRANSPORT`, `PEMCP_TEST_SAMPLE`)
-- Proper pytest markers for categorization (`no_file`, `pe_file`, `angr`, `optional_lib`)
-- Robust session management with retry logic and graceful error extraction
+- Configurable via environment variables
+- Proper pytest markers for categorization
 
-However, the test suite remains **integration-only** -- it requires a running MCP server and a loaded sample binary. There are no unit tests for:
-- Parser logic (`parsers/pe.py`, `parsers/floss.py`, `parsers/strings.py`) -- the most likely source of bugs given the dense formatting
-- Cache operations (`cache.py` -- put/get/evict/clear/version-invalidation)
-- State management (`state.py` -- session creation/cleanup, proxy delegation, TTL eviction)
-- Helper functions (`_angr_helpers.py` -- address parsing, function resolution, RVA-to-VA correction)
-- Truncation logic (`server.py` -- `_check_mcp_response_size` with various data shapes)
-- Path sandboxing (`state.py` -- `check_path_allowed` with symlinks, edge cases)
+**Continued gap: no unit tests.** The integration-only testing approach means:
+- Every test requires a running MCP server and sample binary
+- Parser logic handling adversarial input is untestable in isolation
+- Cache operations, state management, and truncation logic have no automated coverage
+- Refactoring any internal module requires full stack integration testing
 
-Unit tests for these components would provide faster feedback during development, catch regressions without requiring a full MCP server stack, and improve confidence in the parser code that handles adversarial input.
+The triage module (`tools_triage.py`) is a particularly good candidate for unit testing, as each `_triage_*` helper is a pure function of `state.pe_data` and could be tested with fixture data without an MCP server.
+
+---
+
+## Security Assessment Summary
+
+| Area | Status | Notes |
+|------|--------|-------|
+| Path sandboxing | **Partial** | `diff_binaries` and `save_patched_binary` check paths; `parse_binary_with_lief`, `compute_similarity_hashes`, `compare_file_similarity` do not (H5) |
+| API key storage | **Good** | 0o600 permissions, env var priority |
+| File size limits | **Good** | Configurable via `PEMCP_MAX_FILE_SIZE_MB` |
+| Input validation | **Good** | Address parsing, hex validation, parameter bounds checking |
+| Rate limiting | **Missing** | No concurrent analysis limit in HTTP mode (M5, carried from prior review) |
+| Subprocess safety | **Good** | Speakeasy runner uses stdin/stdout JSON protocol, not shell commands |
+| Docker security | **Good** | Non-root execution, world-writable home intentional for UID mapping |
 
 ---
 
@@ -269,20 +280,41 @@ Unit tests for these components would provide faster feedback during development
 | Category | Rating | Notes |
 |----------|--------|-------|
 | Architecture | **Strong** | Clean separation, modular design, extensible, per-session isolation |
-| Code Quality | **Good** | Well-organized; dense formatting in parsers is a maintainability concern |
-| Security | **Good** | Path sandboxing, secure key storage, file size limits; no rate limiting in HTTP mode |
-| Error Handling | **Strong** | Graceful degradation, descriptive errors, auto-truncation, timeouts on angr ops |
-| Performance | **Good** | Caching, background tasks, lazy loading; double-read in PE open_file |
-| Testing | **Adequate** | Comprehensive integration tests (19 classes, 100+ methods); no unit tests |
-| Documentation | **Strong** | Thorough README (1,000+ lines), inline docstrings, tool help text, REVIEW.md |
-| Docker/Deployment | **Strong** | Layered builds, speakeasy isolation, volume persistence, multi-transport support |
+| Code Quality | **Good** | Well-organized; dense formatting and dead code in triage are concerns |
+| Security | **Good** | Path sandboxing has gaps in 3 tools (H5); otherwise solid |
+| Correctness | **Good** | Operator precedence bug in capa check (H6); deprecated datetime calls (H4) |
+| Error Handling | **Strong** | Graceful degradation, descriptive errors, auto-truncation |
+| Performance | **Good** | Caching, background tasks, lazy loading; O(n^2) BFS and double-read |
+| Testing | **Adequate** | Comprehensive integration tests; no unit tests |
+| Documentation | **Strong** | Thorough README, inline docstrings, DEPENDENCIES.md |
+| Docker/Deployment | **Strong** | Layered builds, speakeasy isolation, multi-transport support |
+
+---
+
+## Recommended Priority Order
+
+1. **H5** -- Add `check_path_allowed()` to `parse_binary_with_lief`, `compute_similarity_hashes`, and `compare_file_similarity`. This is a security fix with minimal code change (3 lines).
+
+2. **H4** -- Replace deprecated `datetime.utcfromtimestamp` / `utcnow` in `tools_triage.py` with timezone-aware equivalents. Simple find-and-replace.
+
+3. **H6** -- Add explicit parentheses to the capa status check in `tools_strings.py`. One-line fix that prevents a subtle logic bug.
+
+4. **H1** (carried) -- Wrap sub-parsers in `_parse_pe_to_dict` with individual try/except. Most impactful for the tool's core value proposition.
+
+5. **M6** -- Remove dead code in `_triage_high_value_strings`.
+
+6. **M7** -- Extract entropy calculation to a shared utility.
+
+7. **M9** -- Relax `_check_pe_loaded` guard on `scan_for_embedded_files` to support non-PE formats.
+
+8. Unit tests for triage helpers, cache operations, and path sandboxing.
 
 ---
 
 ## Conclusion
 
-PeMCP is a well-engineered, production-grade binary analysis toolkit. The architecture decisions -- modular tools, graceful degradation for 20+ optional libraries, disk-based caching, per-session state isolation via `contextvars`, and background task management with progress tracking -- are sound and reflect real-world deployment considerations.
+PeMCP is a well-engineered, production-grade binary analysis toolkit. The architecture decisions -- modular tools, graceful degradation for 20+ optional libraries, disk-based caching, per-session state isolation, and background task management -- are sound and reflect real-world deployment considerations.
 
-The two prior review iterations identified 25 issues, and all high-priority items have been verified as fixed. This third review identified 3 high-priority issues (unguarded sub-parsers, angr state race condition, double file read), 5 medium-priority items (truncation fallback, cache meta inconsistency, silent PE fallback, import-time side effects, no rate limiting), and 5 low-priority items (code formatting, task eviction sort, Docker permissions, speakeasy check, dense summary construction).
+This fourth review found 3 new high-priority issues (missing path sandbox checks on 3 tools, deprecated datetime still in triage, operator precedence bug in capa check), 6 medium-priority items (dead code in triage, duplicated entropy calculation, O(n^2) BFS, binwalk restricted to PE, inaccurate step counting, inconsistent timeouts), and 4 low-priority items (import placement, memory usage, edge case handling, dense formatting).
 
-The most impactful improvement would be wrapping individual sub-parsers in `_parse_pe_to_dict` with try/except guards (H1), as this directly affects the tool's core value proposition of analyzing potentially malformed/malicious binaries. The second priority should be adding unit tests for the parser and cache layers, which would catch regressions in the most critical code paths.
+All 12 issues from the third-iteration review remain open, though none have regressed. The most impactful fix remains H5 (path sandbox gaps) as it is a security issue requiring only 3 added lines. The most impactful architectural improvement remains H1 (unguarded sub-parsers) from the prior review, as it directly affects resilience when analyzing malformed binaries.
