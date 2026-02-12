@@ -188,6 +188,16 @@ async def _check_mcp_response_size(
                  new_len = int(len(modified_data) * reduction_ratio)
                  modified_data = modified_data[:new_len] + "...[TRUNCATED]"
 
+        # Final safety check: if still oversized, convert to string and truncate
+        final_json = json.dumps(modified_data, ensure_ascii=False)
+        final_size = len(final_json.encode('utf-8'))
+        if final_size > MAX_MCP_RESPONSE_SIZE_BYTES:
+            truncated_str = final_json[:TARGET_SIZE - 200]
+            modified_data = {
+                "data_preview": truncated_str,
+                "_truncation_warning": f"Response could not be structurally reduced. Converted to truncated string preview ({final_size} bytes -> {len(truncated_str)} bytes)."
+            }
+
         return modified_data
 
     except Exception as e:

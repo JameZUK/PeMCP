@@ -144,12 +144,15 @@ class AnalysisCache:
                 # Patch session-specific field
                 pe_data["filepath"] = current_filepath
 
-                # Touch LRU timestamp (best-effort, non-critical)
+                # Touch LRU timestamp (throttled to reduce I/O)
                 try:
                     meta = self._load_meta()
                     if sha256 in meta:
-                        meta[sha256]["last_accessed"] = time.time()
-                        self._save_meta(meta)
+                        last = meta[sha256].get("last_accessed", 0)
+                        now = time.time()
+                        if now - last > 60:  # Only write if >60s since last update
+                            meta[sha256]["last_accessed"] = now
+                            self._save_meta(meta)
                 except OSError:
                     pass  # Stale LRU timestamp is acceptable
 

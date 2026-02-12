@@ -79,6 +79,17 @@ def _perform_unified_string_sifting(pe_info_dict: Dict[str, Any]):
             [pe_info_dict.get('basic_ascii_strings', [])]
         ]
 
+        for source in all_string_sources:
+            for string_list in source:
+                if not isinstance(string_list, list):
+                    continue
+                for string_dict in string_list:
+                    if not isinstance(string_dict, dict):
+                        continue
+                    str_val = string_dict.get('string')
+                    if str_val:
+                        all_strings_for_sifter.append(str_val)
+                        string_object_map[str_val].append(string_dict)
 
         if not all_strings_for_sifter:
             logger.info("No strings found from any source to rank.")

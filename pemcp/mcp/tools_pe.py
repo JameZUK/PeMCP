@@ -4,7 +4,7 @@ import json
 import asyncio
 import datetime
 import hashlib
-import threading
+
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
@@ -172,8 +172,10 @@ async def open_file(
 
     _loaded_from_cache = False
 
-    await _analysis_semaphore.acquire()
+    acquired = False
     try:
+        await _analysis_semaphore.acquire()
+        acquired = True
         # --- Early hash for cache lookup ---
         await ctx.report_progress(2, 100)
 
@@ -378,7 +380,8 @@ async def open_file(
         logger.error(f"open_file failed for '{abs_path}': {e}", exc_info=True)
         raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e
     finally:
-        _analysis_semaphore.release()
+        if acquired:
+            _analysis_semaphore.release()
 
 
 @tool_decorator
@@ -492,12 +495,17 @@ async def reanalyze_loaded_pe_file(
         await ctx.info(f"Final list of analyses to skip during re-analysis: {', '.join(normalized_analyses_to_skip) if normalized_analyses_to_skip else 'None'}")
 
     current_peid_db_path = str(Path(peid_db_path).resolve()) if peid_db_path and Path(peid_db_path).exists() else str(DEFAULT_PEID_DB_PATH)
+    if peid_db_path:
+        state.check_path_allowed(current_peid_db_path)
     current_yara_rules_path = str(Path(yara_rules_path).resolve()) if yara_rules_path and Path(yara_rules_path).exists() else None
+    if yara_rules_path and current_yara_rules_path:
+        state.check_path_allowed(current_yara_rules_path)
 
     current_capa_rules_dir_to_use = None
     if "capa" not in normalized_analyses_to_skip and CAPA_AVAILABLE:
         if capa_rules_dir and Path(capa_rules_dir).is_dir() and os.listdir(Path(capa_rules_dir)):
             current_capa_rules_dir_to_use = str(Path(capa_rules_dir).resolve())
+            state.check_path_allowed(current_capa_rules_dir_to_use)
         else:
             if capa_rules_dir: await ctx.warning(f"Provided capa_rules_dir '{capa_rules_dir}' is invalid/empty. Capa will use its default logic.")
             current_capa_rules_dir_to_use = capa_rules_dir
@@ -506,6 +514,7 @@ async def reanalyze_loaded_pe_file(
     if "capa" not in normalized_analyses_to_skip and CAPA_AVAILABLE:
         if capa_sigs_dir and Path(capa_sigs_dir).is_dir():
             current_capa_sigs_dir_to_use = str(Path(capa_sigs_dir).resolve())
+            state.check_path_allowed(current_capa_sigs_dir_to_use)
         else:
             current_capa_sigs_dir_to_use = capa_sigs_dir
 

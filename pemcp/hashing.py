@@ -23,8 +23,8 @@ class SSDeep:
             self.n = int()
 
         def roll_hash(self, b):
-            self.h2 = self.h2 - self.h1 + (self.ROLL_WINDOW * b)
-            self.h1 = self.h1 + b - self.win[self.n % self.ROLL_WINDOW]
+            self.h2 = (self.h2 - self.h1 + (self.ROLL_WINDOW * b)) & 0xFFFFFFFF
+            self.h1 = (self.h1 + b - self.win[self.n % self.ROLL_WINDOW]) & 0xFFFFFFFF
             self.win[self.n % self.ROLL_WINDOW] = b
             self.n += 1
             self.h3 = (self.h3 << 5) & 0xFFFFFFFF
@@ -65,8 +65,8 @@ class SSDeep:
                     block_hash1 = ((block_hash1 * self.HASH_PRIME) & 0xFFFFFFFF) ^ b_val
                     block_hash2 = ((block_hash2 * self.HASH_PRIME) & 0xFFFFFFFF) ^ b_val
 
-                    roll_h2 = roll_h2 - roll_h1 + (self.ROLL_WINDOW * b_val)
-                    roll_h1 = roll_h1 + b_val - roll_win[roll_n % self.ROLL_WINDOW]
+                    roll_h2 = (roll_h2 - roll_h1 + (self.ROLL_WINDOW * b_val)) & 0xFFFFFFFF
+                    roll_h1 = (roll_h1 + b_val - roll_win[roll_n % self.ROLL_WINDOW]) & 0xFFFFFFFF
                     roll_win[roll_n % self.ROLL_WINDOW] = b_val
                     roll_n += 1
                     roll_h3_val = (roll_h3_val << 5) & 0xFFFFFFFF
