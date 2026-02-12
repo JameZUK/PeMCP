@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
-from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr
+from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _raise_on_error_dict
 
 if ANGR_AVAILABLE:
     import angr
@@ -93,6 +93,7 @@ async def hook_function(
         }
 
     result = await asyncio.to_thread(_hook)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "hook_function")
 
 
@@ -158,4 +159,5 @@ async def unhook_function(ctx: Context, address_or_name: str) -> Dict[str, Any]:
         return {"status": "success", "message": f"Unhooked {address_or_name}. CFG cache cleared."}
 
     result = await asyncio.to_thread(_unhook)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "unhook_function")

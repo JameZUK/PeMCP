@@ -400,9 +400,20 @@ async def call_tool_expect_error(
     logger.info("[PASS] %s returned expected error", tool_name)
 
 
+_shared_loop = None
+
+
 def run(coro):
-    """Run an async coroutine from a sync test method."""
-    asyncio.run(coro)
+    """Run an async coroutine using a shared event loop.
+
+    Reuses a single event loop across all tests in the session to avoid the
+    overhead of creating/destroying a loop (and re-establishing TCP connections)
+    for each of the 100+ test methods.
+    """
+    global _shared_loop
+    if _shared_loop is None or _shared_loop.is_closed():
+        _shared_loop = asyncio.new_event_loop()
+    return _shared_loop.run_until_complete(coro)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

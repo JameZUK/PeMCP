@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional, List
 
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
-from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _format_cc_info
+from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _format_cc_info, _raise_on_error_dict
 
 if ANGR_AVAILABLE:
     import angr
@@ -71,6 +71,7 @@ async def disassemble_at_address(
         }
 
     result = await asyncio.to_thread(_disasm)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "disassemble_at_address")
 
 
@@ -135,6 +136,7 @@ async def get_calling_conventions(
         }
 
     result = await asyncio.to_thread(_recover)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_calling_conventions", "the 'limit' parameter")
 
 
@@ -203,6 +205,7 @@ async def get_function_variables(
         }
 
     result = await asyncio.to_thread(_recover)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_function_variables", "the 'limit' parameter")
 
 
@@ -259,6 +262,7 @@ async def identify_library_functions(
         }
 
     result = await asyncio.to_thread(_flirt)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "identify_library_functions", "the 'limit' parameter")
 
 
@@ -361,4 +365,5 @@ async def get_annotated_disassembly(
         }
 
     result = await asyncio.to_thread(_annotate)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_annotated_disassembly", "the 'limit' parameter")

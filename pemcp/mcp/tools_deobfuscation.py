@@ -9,8 +9,7 @@ from pemcp.config import state, logger, Context, STRINGSIFTER_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 from pemcp.parsers.strings import _decode_single_byte_xor, _format_hex_dump_lines
 if STRINGSIFTER_AVAILABLE:
-    import stringsifter.lib.util as sifter_util
-    import joblib
+    from pemcp.mcp.tools_strings import _get_sifter_models
 
 
 @tool_decorator
@@ -42,36 +41,42 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
             "The server must be started with --input-file to pre-load a file. "
             "If a file was provided, check the server logs for load errors."
         )
-    if not isinstance(start_offset,int)or start_offset<0:raise ValueError("start_offset must be a non-negative integer.")
-    if not isinstance(length,int)or length<=0:raise ValueError("length must be a positive integer.")
+    if not isinstance(start_offset, int) or start_offset < 0:
+        raise ValueError("start_offset must be a non-negative integer.")
+    if not isinstance(length, int) or length <= 0:
+        raise ValueError("length must be a positive integer.")
 
     bpl = 16
     if bytes_per_line is not None:
-        if isinstance(bytes_per_line, int) and bytes_per_line > 0: bpl = bytes_per_line
-        else: raise ValueError("bytes_per_line must be a positive integer.")
+        if isinstance(bytes_per_line, int) and bytes_per_line > 0:
+            bpl = bytes_per_line
+        else:
+            raise ValueError("bytes_per_line must be a positive integer.")
 
     ll = 256
     if limit_lines is not None:
-        if isinstance(limit_lines, int) and limit_lines > 0: ll = limit_lines
-        else: raise ValueError("limit_lines must be a positive integer.")
+        if isinstance(limit_lines, int) and limit_lines > 0:
+            ll = limit_lines
+        else:
+            raise ValueError("limit_lines must be a positive integer.")
 
     try:
-        file_data=state.pe_object.__data__
-        if start_offset>=len(file_data):
-            # This case results in an empty list or error message, which is small.
+        file_data = state.pe_object.__data__
+        if start_offset >= len(file_data):
             return ["Error: Start offset is beyond the file size."]
-        actual_len=min(length,len(file_data)-start_offset)
-        if actual_len<=0:
-            # This case results in an empty list or error message, which is small.
-            return["Error: Calculated length for hex dump is zero or negative (start_offset might be at or past EOF)."]
+        actual_len = min(length, len(file_data) - start_offset)
+        if actual_len <= 0:
+            return ["Error: Calculated length for hex dump is zero or negative (start_offset might be at or past EOF)."]
 
-        data_chunk=file_data[start_offset:start_offset+actual_len]
-        hex_lines=await asyncio.to_thread(_format_hex_dump_lines,data_chunk,start_offset,bpl)
+        data_chunk = file_data[start_offset:start_offset + actual_len]
+        hex_lines = await asyncio.to_thread(_format_hex_dump_lines, data_chunk, start_offset, bpl)
 
         data_to_send = hex_lines[:ll]
         limit_info_str = "parameters like 'length' or 'limit_lines'"
         return await _check_mcp_response_size(ctx, data_to_send, "get_hex_dump", limit_info_str)
-    except Exception as e:await ctx.error(f"Hex dump error: {e}");raise RuntimeError(f"Failed during hex dump generation: {e}")from e
+    except Exception as e:
+        await ctx.error(f"Hex dump error: {e}")
+        raise RuntimeError(f"Failed during hex dump generation: {e}") from e
 
 @tool_decorator
 async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
@@ -215,12 +220,10 @@ def _is_mostly_printable_ascii_sync(text_input: str, threshold: float = 0.8) -> 
     Printable includes standard ASCII (space to '~') and common whitespace (newline, tab, carriage return).
     """
     if not text_input:
-        return False # Empty string is not considered printable for this purpose
+        return False
 
     printable_char_in_string_count = sum(1 for char_in_s in text_input
                                          if (' ' <= char_in_s <= '~') or char_in_s in '\n\r\t')
-
-    if not text_input: return False # Should be caught by the first check, but defensive.
 
     ratio = printable_char_in_string_count / len(text_input)
     return ratio >= threshold
@@ -391,9 +394,7 @@ async def find_and_decode_encoded_strings(
     if rank_with_sifter and final_results:
         string_values = [res["decoded_string"] for res in final_results]
         if string_values:
-            modeldir = os.path.join(sifter_util.package_base(), "model")
-            featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
-            ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
+            featurizer, ranker = _get_sifter_models()
             X_test = await asyncio.to_thread(featurizer.transform, string_values)
             y_scores = await asyncio.to_thread(ranker.predict, X_test)
 
