@@ -25,6 +25,20 @@ if STRINGSIFTER_AVAILABLE:
     import stringsifter.lib.util as sifter_util
     import joblib
 
+# Lazy-loaded StringSifter model cache (avoids re-reading from disk on every call)
+_sifter_featurizer = None
+_sifter_ranker = None
+
+
+def _get_sifter_models():
+    """Return cached (featurizer, ranker) tuple, loading from disk on first call."""
+    global _sifter_featurizer, _sifter_ranker
+    if _sifter_featurizer is None or _sifter_ranker is None:
+        modeldir = os.path.join(sifter_util.package_base(), "model")
+        _sifter_featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
+        _sifter_ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
+    return _sifter_featurizer, _sifter_ranker
+
 
 # --- ReDoS Protection ---
 _MAX_REGEX_PATTERN_LENGTH = 1000
@@ -641,10 +655,8 @@ async def extract_strings_from_binary(
             if not string_values:
                 return [] # No strings to rank
 
-            # Load model and rank
-            modeldir = os.path.join(sifter_util.package_base(), "model")
-            featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
-            ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
+            # Use cached model (loaded once, reused across calls)
+            featurizer, ranker = _get_sifter_models()
             X_test = await asyncio.to_thread(featurizer.transform, string_values)
             y_scores = await asyncio.to_thread(ranker.predict, X_test)
 
@@ -700,7 +712,8 @@ async def search_for_specific_strings(ctx: Context, search_terms: List[str], lim
             "The server must be started with --input-file to pre-load a file. "
             "If a file was provided, check the server logs for load errors."
         )
-    if not search_terms or not isinstance(search_terms,list): raise ValueError("search_terms must be a non-empty list of strings.")
+    if not search_terms or not isinstance(search_terms, list):
+        raise ValueError("search_terms must be a non-empty list of strings.")
 
     effective_limit_pt = 100
     if limit_per_term is not None and isinstance(limit_per_term, int) and limit_per_term > 0:
@@ -709,15 +722,18 @@ async def search_for_specific_strings(ctx: Context, search_terms: List[str], lim
         await ctx.warning(f"Invalid limit_per_term value '{limit_per_term}'. Using default of {effective_limit_pt}.")
 
     try:
-        file_data=state.pe_object.__data__; found_offsets_dict=_search_specific_strings_in_data(file_data,search_terms)
+        file_data = state.pe_object.__data__
+        found_offsets_dict = _search_specific_strings_in_data(file_data, search_terms)
 
-        limited_results:Dict[str,List[str]]={}
+        limited_results: Dict[str, List[str]] = {}
         for term, offsets_list_int in found_offsets_dict.items():
             limited_results[term] = [hex(off) for off in offsets_list_int[:effective_limit_pt]]
 
         limit_info_str = "the 'limit_per_term' parameter or by providing fewer/more specific 'search_terms'"
         return await _check_mcp_response_size(ctx, limited_results, "search_for_specific_strings", limit_info_str)
-    except Exception as e: await ctx.error(f"String search error: {e}"); raise RuntimeError(f"Failed during specific string search: {e}")from e
+    except Exception as e:
+        await ctx.error(f"String search error: {e}")
+        raise RuntimeError(f"Failed during specific string search: {e}") from e
 
 
 @tool_decorator

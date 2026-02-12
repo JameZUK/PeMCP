@@ -102,6 +102,23 @@ def _resolve_function_address(target_addr: int):
     return func, addr_to_use
 
 
+def _raise_on_error_dict(result):
+    """Convert an ``{"error": "..."}`` dict return into a RuntimeError.
+
+    Many inner synchronous helpers return error dicts instead of raising.
+    Calling this after ``asyncio.to_thread`` standardises the pattern so
+    every tool failure surfaces as an exception that the MCP framework
+    converts to an ``isError=True`` response.
+    """
+    if isinstance(result, dict) and "error" in result and len(result) <= 3:
+        hint = result.get("hint", "")
+        msg = result["error"]
+        if hint:
+            msg = f"{msg} ({hint})"
+        raise RuntimeError(msg)
+    return result
+
+
 def _format_cc_info(func) -> Dict[str, Any]:
     """Format calling convention info for a single angr Function object."""
     info: Dict[str, Any] = {

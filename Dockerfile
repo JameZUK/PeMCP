@@ -1,4 +1,8 @@
 # --- Base Image ---
+# For reproducible production builds, pin by digest:
+#   docker pull python:3.11-bookworm
+#   docker inspect python:3.11-bookworm --format='{{index .RepoDigests 0}}'
+# Then replace the FROM line with: FROM python:3.11-bookworm@sha256:<digest>
 FROM python:3.11-bookworm
 
 # --- Set Working Directory ---
