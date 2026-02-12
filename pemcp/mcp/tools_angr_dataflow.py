@@ -127,7 +127,6 @@ async def get_reaching_definitions(
 
     await ctx.info(f"Running reaching definitions for {function_address}")
     result = await asyncio.to_thread(_rda)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_reaching_definitions", "the 'limit' parameter")
 
 
@@ -244,7 +243,6 @@ async def get_data_dependencies(
 
     await ctx.info(f"Building DDG for {function_address}")
     result = await asyncio.to_thread(_ddg)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_data_dependencies", "the 'limit' parameter")
 
 
@@ -325,7 +323,6 @@ async def get_control_dependencies(
         }
 
     result = await asyncio.to_thread(_cdg)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_control_dependencies", "the 'limit' parameter")
 
 
@@ -394,7 +391,6 @@ async def propagate_constants(
         }
 
     result = await asyncio.to_thread(_propagate)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "propagate_constants", "the 'limit' parameter")
 
 
@@ -477,5 +473,4 @@ async def get_value_set_analysis(
 
     await ctx.info(f"Running VFG for {function_address}")
     result = await asyncio.to_thread(_vsa)
-    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_value_set_analysis", "the 'limit' parameter")
