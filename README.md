@@ -18,6 +18,7 @@ PeMCP bridges the gap between high-level AI reasoning and low-level binary instr
 - [MCP Tools Reference](#mcp-tools-reference)
 - [Architecture & Design](#architecture--design)
 - [Multi-Format Analysis](#multi-format-analysis)
+- [Testing](#testing)
 - [Contributing](#contributing)
 - [Licence](#licence)
 - [Disclaimer](#disclaimer)
@@ -898,93 +899,20 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 
 ### Testing
 
-PeMCP includes a comprehensive integration test suite (`mcp_test_client.py`) that covers all **105 MCP tools** across 19 test categories. The tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool. Tests gracefully skip when a tool is unavailable (older server build) or a required library is not installed.
+PeMCP has two layers of testing:
 
-#### Quick Start
+- **Unit tests** (`tests/`) — 174 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers). No server or binary samples required. Run in ~3 seconds.
+- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 105 MCP tools against a running server, organised into 19 test categories with pytest markers.
 
 ```bash
-pip install -r requirements-test.txt
+# Run unit tests (no server needed)
+pytest tests/ -v
 
-# Start the server with a sample file loaded (terminal 1)
-python PeMCP.py --mcp-server --mcp-transport streamable-http --samples-path ./samples --input-file samples/test.exe
-
-# Or via Docker/Podman (note: --mcp-host 0.0.0.0 is required for container networking)
-./run.sh --input-file /samples/test.exe
-# Or manually:
-podman run --rm -it -p 8082:8082 \
-  --user "$(id -u):$(id -g)" -e HOME=/app/home \
-  -v ./samples:/samples:ro pemcp-toolkit \
-  --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
-  --samples-path /samples --input-file /samples/test.exe
-
-# Run all tests (terminal 2)
+# Run integration tests (requires running server)
 pytest mcp_test_client.py -v
 ```
 
-#### Running Specific Test Categories
-
-```bash
-# Tests that don't require a loaded file (config, cache, deobfuscation, assembly)
-pytest mcp_test_client.py -v -m no_file
-
-# Tests that require a loaded PE file
-pytest mcp_test_client.py -v -m pe_file
-
-# Angr-powered analysis tests (may be slow)
-pytest mcp_test_client.py -v -m angr
-
-# Tests for optional library tools (LIEF, Capstone, Speakeasy, etc.)
-pytest mcp_test_client.py -v -m optional_lib
-
-# Run a specific test class
-pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
-pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
-pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
-pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 105 tools exist
-```
-
-#### Environment Variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `PEMCP_TEST_URL` | `http://127.0.0.1:8082` | Server URL to test against |
-| `PEMCP_TEST_TRANSPORT` | `auto` | Transport: `auto` (try streamable-http then SSE), `streamable-http`, or `sse` |
-| `PEMCP_TEST_SAMPLE` | *(not set)* | Path to a sample file for `open_file` tests |
-
-```bash
-# Test against a different server
-PEMCP_TEST_URL=http://192.168.1.10:9000 pytest mcp_test_client.py -v
-
-# Test using SSE transport (legacy)
-PEMCP_TEST_TRANSPORT=sse pytest mcp_test_client.py -v
-```
-
-#### Test Categories
-
-The test suite is organised into 19 classes:
-
-| Class | Tools Tested | Marker |
-|---|---|---|
-| `TestConfigAndUtility` | `get_current_datetime`, `get_config`, `get_extended_capabilities`, `check_task_status` | `no_file` |
-| `TestCacheManagement` | `get_cache_stats`, `remove_cached_analysis` | `no_file` |
-| `TestFileManagement` | `get_analyzed_file_summary`, `get_full_analysis_results`, `detect_binary_format` | `pe_file` |
-| `TestPEData` | `get_pe_data` (all 25 keys + `list` discovery) | `pe_file` |
-| `TestPEExtended` | 14 PE extended tools (entropy, crypto, XOR, API hashes, etc.) | `pe_file` |
-| `TestStringAnalysis` | 10 string tools (FLOSS, fuzzy search, sifter, context) | `pe_file` |
-| `TestDeobfuscation` | `deobfuscate_base64`, `deobfuscate_xor_single_byte`, `is_mostly_printable_ascii`, `get_hex_dump` | mixed |
-| `TestCapaAnalysis` | `get_capa_analysis_info`, `get_capa_rule_match_details` | `pe_file`, `optional_lib` |
-| `TestTriageAndClassification` | `get_triage_report`, `classify_binary_purpose` | `pe_file` |
-| `TestVirusTotal` | `get_virustotal_report_for_loaded_file` | `pe_file` |
-| `TestAngrCore` | 13 core Angr tools (decompile, CFG, slicing, loops, etc.) | `pe_file`, `angr` |
-| `TestAngrDisasm` | 5 disassembly tools (disassemble, calling conventions, etc.) | `pe_file`, `angr` |
-| `TestAngrDataflow` | 5 data flow tools (reaching defs, dependencies, VSA) | `pe_file`, `angr` |
-| `TestAngrHooks` | `hook_function`, `list_hooks`, `unhook_function` | `pe_file`, `angr` |
-| `TestAngrForensic` | 5 forensic tools (packing, code caves, call graph, etc.) | `pe_file`, `angr` |
-| `TestExtendedLibraries` | 9 extended library tools (LIEF, Capstone, Keystone, Speakeasy, etc.) | `optional_lib` |
-| `TestMultiFormat` | 8 multi-format tools (ELF, Mach-O, .NET, Go, Rust) | `optional_lib` |
-| `TestErrorHandling` | Invalid inputs, nonexistent files, bad addresses | mixed |
-| `TestToolDiscovery` | Lists server tools and reports coverage (warns on missing) | `no_file` |
+For detailed instructions on running tests, writing new tests, environment variables, test categories, markers, and troubleshooting, see **[TESTING.md](TESTING.md)**.
 
 ---
 
