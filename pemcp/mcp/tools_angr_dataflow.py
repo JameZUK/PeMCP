@@ -52,8 +52,11 @@ async def get_reaching_definitions(
             _update_progress(task_id_for_progress, 15, "Running ReachingDefinitionsAnalysis...")
 
         try:
+            # RDA expects the CFGModel (cfg.model), not the full CFGFast
+            # analysis object.  Passing the wrong type causes internal
+            # attribute errors in angr >=9.2.
             rd = state.angr_project.analyses.ReachingDefinitionsAnalysis(
-                func, cfg=state.angr_cfg, observe_all=True,
+                func, cfg=state.angr_cfg.model, observe_all=True,
             )
         except Exception as e:
             return {"error": f"ReachingDefinitionsAnalysis failed: {e}"}
@@ -170,7 +173,22 @@ async def get_data_dependencies(
             _update_progress(task_id_for_progress, 15, "Building Data Dependency Graph...")
 
         try:
+            # DDG is deprecated in angr >=9.2 and accesses removed
+            # internal attributes (e.g. Function._keep_state).
+            # Verify that the analysis is still available before calling.
+            if not hasattr(state.angr_project.analyses, 'DDG'):
+                return {
+                    "error": "DDG analysis is not available in this angr version. "
+                             "Use get_reaching_definitions for data-flow analysis instead.",
+                }
             ddg = state.angr_project.analyses.DDG(func)
+        except AttributeError as e:
+            # Catch _keep_state and similar removed-attribute errors
+            return {
+                "error": f"DDG analysis is incompatible with this angr version: {e}",
+                "hint": "The DDG analysis is deprecated in angr >=9.2. "
+                        "Use get_reaching_definitions for data-flow tracking instead.",
+            }
         except Exception as e:
             return {"error": f"DDG analysis failed: {e}"}
 
@@ -277,7 +295,11 @@ async def get_control_dependencies(
             return {"error": f"No function found at {hex(func_addr)}."}
 
         try:
-            cdg = state.angr_project.analyses.CDG(func)
+            # CDG expects (cfg, start=func_addr) — not a Function object.
+            cdg = state.angr_project.analyses.CDG(
+                cfg=state.angr_cfg,
+                start=addr_used,
+            )
         except Exception as e:
             return {"error": f"CDG analysis failed: {e}"}
 
@@ -357,8 +379,13 @@ async def propagate_constants(
             prop = state.angr_project.analyses.PropagatorAnalysis(
                 func, cfg=state.angr_cfg.model,
             )
-        except Exception as e:
-            return {"error": f"PropagatorAnalysis failed: {e}"}
+        except Exception:
+            # Some angr versions reject the cfg kwarg or have internal
+            # issues with certain function types — retry without cfg.
+            try:
+                prop = state.angr_project.analyses.PropagatorAnalysis(func)
+            except Exception as e:
+                return {"error": f"PropagatorAnalysis failed: {e}"}
 
         # Extract replacements — these map (addr, register/tmp) -> constant value
         replacements = []
@@ -432,13 +459,30 @@ async def get_value_set_analysis(
             _update_progress(task_id_for_progress, 15, "Running VFG analysis...")
 
         try:
-            vfg = state.angr_project.analyses.VFG(
-                cfg=state.angr_cfg,
-                function_start=addr_used,
-                context_sensitivity_level=2,
-            )
+            # VFG in angr >=9.2 may need the project passed explicitly to
+            # its internal SuccessorsEngine.  Try the standard call first,
+            # then a fallback with additional kwargs.
+            try:
+                vfg = state.angr_project.analyses.VFG(
+                    cfg=state.angr_cfg,
+                    function_start=addr_used,
+                    context_sensitivity_level=2,
+                )
+            except TypeError:
+                # Fallback: some angr builds propagate 'project' through
+                # additional keyword arguments.
+                vfg = state.angr_project.analyses.VFG(
+                    cfg=state.angr_cfg,
+                    function_start=addr_used,
+                    context_sensitivity_level=2,
+                    project=state.angr_project,
+                )
         except Exception as e:
-            return {"error": f"VFG analysis failed: {e}"}
+            return {
+                "error": f"VFG analysis failed: {e}",
+                "hint": "Value-set analysis (VFG) has known compatibility issues "
+                        "with some angr versions. This is an upstream angr limitation.",
+            }
 
         if task_id_for_progress:
             _update_progress(task_id_for_progress, 80, "Extracting value sets...")

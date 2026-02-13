@@ -49,10 +49,17 @@ def _check_pe_loaded(tool_name: str) -> None:
             "If a file was provided at startup, it may have failed — check the server logs."
         )
 
-def _check_angr_ready(tool_name: str) -> None:
+def _check_angr_ready(tool_name: str, *, require_cfg: bool = True) -> None:
     """
     Raise a descriptive RuntimeError if angr is unavailable or still initializing.
     Provides actionable guidance to the MCP client.
+
+    Args:
+        tool_name: Name of the calling tool (used in error messages).
+        require_cfg: If True (default), block while background CFG build is
+                     in progress.  Set to False for tools that only need the
+                     angr Project (e.g. save_patched_binary) and can work
+                     before the CFG is ready.
     """
     if not ANGR_AVAILABLE:
         raise RuntimeError(
@@ -65,14 +72,15 @@ def _check_angr_ready(tool_name: str) -> None:
             f"[{tool_name}] No file is loaded. Cannot perform binary analysis."
         )
     # Check if background angr startup is still running
-    startup_task = state.get_task("startup-angr")
-    if startup_task and startup_task["status"] == "running":
-        progress = startup_task.get("progress_percent", 0)
-        msg = startup_task.get("progress_message", "Initializing...")
-        raise RuntimeError(
-            f"[{tool_name}] Angr background analysis is still in progress ({progress}%: {msg}). "
-            "Please wait and retry shortly. Use check_task_status('startup-angr') to monitor progress."
-        )
+    if require_cfg:
+        startup_task = state.get_task("startup-angr")
+        if startup_task and startup_task["status"] == "running":
+            progress = startup_task.get("progress_percent", 0)
+            msg = startup_task.get("progress_message", "Initializing...")
+            raise RuntimeError(
+                f"[{tool_name}] Angr background analysis is still in progress ({progress}%: {msg}). "
+                "Please wait and retry shortly. Use check_task_status('startup-angr') to monitor progress."
+            )
 
 def _check_data_key_available(key_name: str, tool_name: str) -> None:
     """

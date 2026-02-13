@@ -280,7 +280,17 @@ async def find_path_to_address(
             techniques_applied.append("DFS")
 
         simgr.use_technique(angr.exploration_techniques.LengthLimiter(max_length=5000))
-        simgr.use_technique(angr.exploration_techniques.Explorer(find=target, avoid=avoid))
+
+        # Build avoid set: always include 0x0 (null-pointer jumps from
+        # unresolved imports when auto_load_libs=False) to prevent
+        # "No bytes in memory for block starting at 0x0" errors.
+        avoid_set = set()
+        if avoid is not None:
+            avoid_set.add(avoid)
+        avoid_set.add(0x0)
+        simgr.use_technique(angr.exploration_techniques.Explorer(
+            find=target, avoid=list(avoid_set),
+        ))
 
         try:
             max_steps = 2000
