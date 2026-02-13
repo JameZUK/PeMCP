@@ -455,7 +455,8 @@ async def save_patched_binary(
         output_path: File path to write the patched binary to.
     """
     await ctx.info(f"Saving patched binary to {output_path}")
-    _check_angr_ready("save_patched_binary")
+    # save_patched_binary only needs the angr project loader, not the CFG.
+    _check_angr_ready("save_patched_binary", require_cfg=False)
 
     # Validate output path against sandbox
     state.check_path_allowed(os.path.abspath(output_path))
@@ -806,27 +807,43 @@ async def emulate_with_watchpoints(
             if not simgr.active:
                 break
             active_before = len(simgr.active)
-            simgr.run(n=chunk_size)
-            # Count actual steps: if all states died early, we took fewer than chunk_size
-            steps_taken += chunk_size if simgr.active else min(chunk_size, max_steps - steps_taken)
-            if task_id_for_progress:
+            try:
+                simgr.step()
+            except Exception as e:
+                return {
+                    "status": "errored",
+                    "steps_taken": steps_taken,
+                    "error": str(e),
+                    "total_events": len(events),
+                    "events": events[:500],
+                }
+            steps_taken += 1
+            if task_id_for_progress and steps_taken % 20 == 0:
                 percent = min(95, int((steps_taken / max_steps) * 100))
                 _update_progress(task_id_for_progress, percent, f"Step {steps_taken}, events: {len(events)}")
 
         status = "completed"
+        error_details = None
         if simgr.deadended:
             status = "function_returned"
-        elif simgr.active:
-            status = "max_steps_reached"
         elif simgr.errored:
             status = "errored"
+            try:
+                error_details = str(simgr.errored[0].error)
+            except Exception:
+                error_details = f"{len(simgr.errored)} errored state(s)"
+        elif simgr.active:
+            status = "max_steps_reached"
 
-        return {
+        result = {
             "status": status,
             "steps_taken": steps_taken,
             "total_events": len(events),
             "events": events[:500],  # cap to prevent huge responses
         }
+        if error_details:
+            result["error"] = error_details
+        return result
 
     if run_in_background:
         task_id = str(uuid.uuid4())

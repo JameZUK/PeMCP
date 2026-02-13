@@ -111,13 +111,20 @@ async def get_calling_conventions(
 
             return _format_cc_info(func)
 
-        # Recover all
+        # Recover all — try with variable recovery first, fall back to
+        # a lightweight pass if the full analysis fails (variable recovery
+        # depends on APIs that may be absent in some angr versions).
         try:
             state.angr_project.analyses.CompleteCallingConventionsAnalysis(
                 recover_variables=True, cfg=state.angr_cfg.model,
             )
-        except Exception as e:
-            return {"error": f"CompleteCallingConventionsAnalysis failed: {e}"}
+        except Exception:
+            try:
+                state.angr_project.analyses.CompleteCallingConventionsAnalysis(
+                    recover_variables=False, cfg=state.angr_cfg.model,
+                )
+            except Exception as e:
+                return {"error": f"CompleteCallingConventionsAnalysis failed: {e}"}
 
         results = []
         for addr, func in state.angr_cfg.functions.items():
@@ -170,7 +177,21 @@ async def get_function_variables(
         except Exception as e:
             return {"error": f"Variable recovery failed: {e}"}
 
-        vm = func.variable_manager
+        # In angr >=9.2 the variable manager lives in the KB, not on
+        # the Function object.  Try the KB first, then fall back.
+        vm = None
+        try:
+            vm = state.angr_project.kb.variables[func.addr]
+        except (KeyError, TypeError, AttributeError):
+            pass
+        if vm is None:
+            vm = getattr(func, 'variable_manager', None)
+        if vm is None:
+            return {
+                "error": "Variable manager unavailable for this function. "
+                         "This is typically caused by an angr version mismatch — "
+                         "ensure angr >=9.2.90 is installed.",
+            }
         variables = []
 
         for var in vm.local_variables:
@@ -237,7 +258,11 @@ async def identify_library_functions(
             else:
                 state.angr_project.analyses.FlirtAnalysis()
         except AttributeError:
-            return {"error": "FlirtAnalysis is not available in this angr version."}
+            return {
+                "error": "FlirtAnalysis is not available in this angr version.",
+                "hint": "FLIRT signature matching requires the 'angr-flirt' package. "
+                        "Install it with: pip install angr-flirt",
+            }
         except Exception as e:
             return {"error": f"FLIRT analysis failed: {e}"}
 
