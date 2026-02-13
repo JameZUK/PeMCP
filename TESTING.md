@@ -1,0 +1,356 @@
+# Testing Guide
+
+PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 105 MCP tools against a running server.
+
+---
+
+## Table of Contents
+
+- [Quick Reference](#quick-reference)
+- [Unit Tests](#unit-tests)
+  - [Running Unit Tests](#running-unit-tests)
+  - [Test Modules](#test-modules)
+  - [Writing New Unit Tests](#writing-new-unit-tests)
+- [Integration Tests](#integration-tests)
+  - [Prerequisites](#prerequisites)
+  - [Starting the Server](#starting-the-server)
+  - [Running Integration Tests](#running-integration-tests)
+  - [Running Specific Test Categories](#running-specific-test-categories)
+  - [Environment Variables](#environment-variables)
+  - [Test Categories](#test-categories)
+- [Pytest Configuration](#pytest-configuration)
+- [Markers Reference](#markers-reference)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Quick Reference
+
+```bash
+# Run all unit tests (no server needed, ~3 seconds)
+pytest tests/ -v
+
+# Run integration tests (requires running server)
+pytest mcp_test_client.py -v
+
+# Run everything
+pytest -v
+```
+
+---
+
+## Unit Tests
+
+Unit tests live in the `tests/` directory and test individual functions and classes in isolation. They do **not** require a running MCP server, binary samples, or heavy optional dependencies like Angr, Capa, or FLOSS.
+
+### Running Unit Tests
+
+#### Install test dependencies
+
+```bash
+pip install -r requirements-test.txt
+```
+
+The core project dependencies are also required:
+
+```bash
+pip install pefile networkx "mcp[cli]"
+```
+
+#### Run all unit tests
+
+```bash
+pytest tests/ -v
+```
+
+#### Run a specific test file
+
+```bash
+pytest tests/test_cache.py -v
+pytest tests/test_hashing.py -v
+```
+
+#### Run a specific test class
+
+```bash
+pytest tests/test_state.py::TestBackgroundTasks -v
+pytest tests/test_parsers_strings.py::TestExtractStrings -v
+```
+
+#### Run a specific test
+
+```bash
+pytest tests/test_utils.py::TestShannonEntropy::test_all_256_bytes -v
+```
+
+#### Run with short output (dots only)
+
+```bash
+pytest tests/
+```
+
+### Test Modules
+
+| File | Module Under Test | Tests | What It Covers |
+|---|---|---|---|
+| `test_utils.py` | `pemcp/utils.py` | 13 | `shannon_entropy` (empty, uniform, max entropy, ASCII text), `format_timestamp` (zero, negative, valid, overflow, future dates), `get_symbol_type_str`, `get_symbol_storage_class_str` (COFF symbol constants) |
+| `test_hashing.py` | `pemcp/hashing.py` | 17 | `SSDeep.hash` (empty, bytes, string, deterministic, invalid types), `SSDeep.compare` (identical, different, invalid format), `_levenshtein` (edit distance), `_strip_sequences` (run-length reduction) |
+| `test_mock.py` | `pemcp/mock.py` | 13 | `MockPE` class (init, headers, sections, directories, `get_data` with offset/length, `close`, `generate_checksum`, `get_warnings`, empty data) |
+| `test_state.py` | `pemcp/state.py` | 21 | `AnalyzerState` (init, `touch`), background tasks (set/get/update, eviction of completed tasks, running tasks preserved), path sandboxing (`allowed_paths`, `check_path_allowed`), angr state (set/get/reset), session management (default/new/activate, `StateProxy` delegation) |
+| `test_cache.py` | `pemcp/cache.py` | 15 | `AnalysisCache` put/get, cache miss, case-insensitive SHA, filepath not persisted, format version invalidation, PeMCP version invalidation, LRU eviction, clear, stats, remove by hash, corrupt gzip handling, disabled cache |
+| `test_user_config.py` | `pemcp/user_config.py` | 14 | `load_user_config` (missing file, valid/invalid JSON, non-dict), `save_user_config` (save/reload, 0o600 permissions), `get_config_value` (from file, env override, missing key), `set_config_value`, `delete_config_value`, `get_masked_config` (sensitive key masking, env override notes) |
+| `test_parsers_strings.py` | `pemcp/parsers/strings.py` | 23 | `_extract_strings_from_data` (basic, min_length, offsets, empty, trailing, memoryview), `_search_specific_strings_in_data` (present/missing terms, offsets), `_format_hex_dump_lines` (format, address, ASCII, dots, multi-line), `_get_string_category` (IPv4, URL, domain, filepath, registry, email, none), `_decode_single_byte_xor` (known key, empty, random data) |
+| `test_mcp_helpers.py` | `pemcp/mcp/` helpers | 17 | `_parse_addr` (hex, decimal, invalid, empty, negative, zero), `_raise_on_error_dict` (passthrough, error dict, hint, non-dict, many-key dict), `_check_lib` (available, unavailable, custom pip name), `_check_pe_loaded` (no file, partial load, loaded), `_check_data_key_available` (present, missing, skipped analysis hint) |
+
+### Writing New Unit Tests
+
+When adding new unit tests, follow these conventions:
+
+1. **File naming**: `tests/test_<module_name>.py` — mirrors the source module path.
+
+2. **Class organisation**: Group related tests into classes named `Test<FeatureName>`:
+
+   ```python
+   class TestMyFeature:
+       def test_basic_case(self):
+           ...
+       def test_edge_case(self):
+           ...
+   ```
+
+3. **Use fixtures** for shared setup (especially `tmp_path` for filesystem tests and `monkeypatch` for mocking globals):
+
+   ```python
+   @pytest.fixture
+   def my_state():
+       s = AnalyzerState()
+       s.filepath = "/test.exe"
+       s.pe_data = {"file_hashes": {"md5": "abc"}}
+       return s
+   ```
+
+4. **Skip when dependencies are unavailable**:
+
+   ```python
+   @pytest.mark.skipif(not HAS_FEATURE, reason="Feature X not available")
+   class TestFeatureX:
+       ...
+   ```
+
+5. **Test isolation**: Each test should be independent. Use `setup_method` or fixtures to reset state — never rely on test execution order.
+
+6. **Monkeypatch module globals** when testing code that depends on `pemcp.config` constants or paths:
+
+   ```python
+   def test_something(monkeypatch):
+       monkeypatch.setattr("pemcp.cache.CACHE_DIR", tmp_path / "cache")
+   ```
+
+---
+
+## Integration Tests
+
+The integration test suite (`mcp_test_client.py`) covers all **105 MCP tools** across 19 test categories. Tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
+
+### Prerequisites
+
+```bash
+pip install -r requirements-test.txt
+```
+
+### Starting the Server
+
+The integration tests require a running PeMCP server. Start it in a separate terminal:
+
+#### Option A: Local Python
+
+```bash
+# Start with a sample file loaded
+python PeMCP.py --mcp-server --mcp-transport streamable-http \
+  --samples-path ./samples --input-file samples/test.exe
+```
+
+#### Option B: Docker / Podman
+
+```bash
+# Using run.sh helper
+./run.sh --input-file /samples/test.exe
+
+# Or manually
+podman run --rm -it -p 8082:8082 \
+  --user "$(id -u):$(id -g)" -e HOME=/app/home \
+  -v ./samples:/samples:ro pemcp-toolkit \
+  --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
+  --samples-path /samples --input-file /samples/test.exe
+```
+
+> **Note**: When running in a container, `--mcp-host 0.0.0.0` is required for the test client to connect from the host.
+
+### Running Integration Tests
+
+```bash
+# Run all integration tests
+pytest mcp_test_client.py -v
+
+# Run against a different server
+PEMCP_TEST_URL=http://192.168.1.10:9000 pytest mcp_test_client.py -v
+```
+
+### Running Specific Test Categories
+
+```bash
+# Tests that don't require a loaded file (config, cache, deobfuscation, assembly)
+pytest mcp_test_client.py -v -m no_file
+
+# Tests that require a loaded PE file
+pytest mcp_test_client.py -v -m pe_file
+
+# Angr-powered analysis tests (may be slow)
+pytest mcp_test_client.py -v -m angr
+
+# Tests for optional library tools (LIEF, Capstone, Speakeasy, etc.)
+pytest mcp_test_client.py -v -m optional_lib
+
+# Run a specific test class
+pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
+pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
+pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
+pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 105 tools exist
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PEMCP_TEST_URL` | `http://127.0.0.1:8082` | Server URL to test against |
+| `PEMCP_TEST_TRANSPORT` | `auto` | Transport: `auto` (try streamable-http then SSE), `streamable-http`, or `sse` |
+| `PEMCP_TEST_SAMPLE` | *(not set)* | Path to a sample file for `open_file` tests |
+
+```bash
+# Test against a remote server
+PEMCP_TEST_URL=http://192.168.1.10:9000 pytest mcp_test_client.py -v
+
+# Test using SSE transport (legacy)
+PEMCP_TEST_TRANSPORT=sse pytest mcp_test_client.py -v
+```
+
+### Test Categories
+
+The integration test suite is organised into 19 classes:
+
+| Class | Tools Tested | Marker |
+|---|---|---|
+| `TestConfigAndUtility` | `get_current_datetime`, `get_config`, `get_extended_capabilities`, `check_task_status` | `no_file` |
+| `TestCacheManagement` | `get_cache_stats`, `remove_cached_analysis` | `no_file` |
+| `TestFileManagement` | `get_analyzed_file_summary`, `get_full_analysis_results`, `detect_binary_format` | `pe_file` |
+| `TestPEData` | `get_pe_data` (all 25 keys + `list` discovery) | `pe_file` |
+| `TestPEExtended` | 14 PE extended tools (entropy, crypto, XOR, API hashes, etc.) | `pe_file` |
+| `TestStringAnalysis` | 10 string tools (FLOSS, fuzzy search, sifter, context) | `pe_file` |
+| `TestDeobfuscation` | `deobfuscate_base64`, `deobfuscate_xor_single_byte`, `is_mostly_printable_ascii`, `get_hex_dump` | mixed |
+| `TestCapaAnalysis` | `get_capa_analysis_info`, `get_capa_rule_match_details` | `pe_file`, `optional_lib` |
+| `TestTriageAndClassification` | `get_triage_report`, `classify_binary_purpose` | `pe_file` |
+| `TestVirusTotal` | `get_virustotal_report_for_loaded_file` | `pe_file` |
+| `TestAngrCore` | 13 core Angr tools (decompile, CFG, slicing, loops, etc.) | `pe_file`, `angr` |
+| `TestAngrDisasm` | 5 disassembly tools (disassemble, calling conventions, etc.) | `pe_file`, `angr` |
+| `TestAngrDataflow` | 5 data flow tools (reaching defs, dependencies, VSA) | `pe_file`, `angr` |
+| `TestAngrHooks` | `hook_function`, `list_hooks`, `unhook_function` | `pe_file`, `angr` |
+| `TestAngrForensic` | 5 forensic tools (packing, code caves, call graph, etc.) | `pe_file`, `angr` |
+| `TestExtendedLibraries` | 9 extended library tools (LIEF, Capstone, Keystone, Speakeasy, etc.) | `optional_lib` |
+| `TestMultiFormat` | 8 multi-format tools (ELF, Mach-O, .NET, Go, Rust) | `optional_lib` |
+| `TestErrorHandling` | Invalid inputs, nonexistent files, bad addresses | mixed |
+| `TestToolDiscovery` | Lists server tools and reports coverage (warns on missing) | `no_file` |
+
+---
+
+## Pytest Configuration
+
+The `pytest.ini` file configures test discovery and markers:
+
+```ini
+[pytest]
+testpaths = tests
+markers =
+    no_file: test does not require a loaded file
+    pe_file: test requires a loaded PE file
+    angr: test uses Angr (may be slow)
+    optional_lib: test requires an optional library
+    unit: fast unit tests with no external dependencies
+```
+
+The `testpaths = tests` directive means `pytest` (with no arguments) runs unit tests by default. To run integration tests, specify the file explicitly:
+
+```bash
+# Unit tests only (default)
+pytest -v
+
+# Integration tests only
+pytest mcp_test_client.py -v
+
+# Both
+pytest tests/ mcp_test_client.py -v
+```
+
+---
+
+## Markers Reference
+
+| Marker | Description | Used In |
+|---|---|---|
+| `no_file` | Test does not require a loaded file | Integration tests |
+| `pe_file` | Test requires a loaded PE file | Integration tests |
+| `angr` | Test uses Angr (may be slow, 30s+ per test) | Integration tests |
+| `optional_lib` | Test requires an optional library (LIEF, Capstone, etc.) | Integration tests |
+| `unit` | Fast unit test with no external dependencies | Unit tests |
+
+Filter by marker with `-m`:
+
+```bash
+pytest -m "not angr" -v        # Skip slow Angr tests
+pytest -m "no_file" -v         # Only tests that need no file
+pytest -m unit -v              # Only unit tests
+```
+
+---
+
+## Troubleshooting
+
+### Unit tests fail with `ModuleNotFoundError: No module named 'networkx'`
+
+Install the core dependencies:
+
+```bash
+pip install pefile networkx "mcp[cli]"
+```
+
+### Unit tests fail with `pyo3_runtime.PanicException` (cryptography)
+
+The system `cryptography` package may be broken. Install it via pip:
+
+```bash
+pip install cffi cryptography
+```
+
+### Unit tests show `SKIPPED` for `TestGetSymbolTypeStr`
+
+This is expected when the installed `pefile` version lacks `IMAGE_SYM_DTYPE_*` constants. These tests are automatically skipped and do not indicate a problem.
+
+### Integration tests fail to connect
+
+Ensure the MCP server is running and accessible:
+
+```bash
+# Check the server is listening
+curl -s http://127.0.0.1:8082/mcp | head
+
+# Start the server if not running
+python PeMCP.py --mcp-server --mcp-transport streamable-http
+```
+
+### Integration tests skip most tests
+
+If tests are skipping with messages about missing tools or libraries, the server may be running without all optional dependencies. This is expected behaviour — install additional libraries on the server to enable more tests.
+
+### Tests fail with `AnalysisCache` errors
+
+Unit tests for the cache use `tmp_path` and `monkeypatch` to redirect cache operations to a temporary directory. If you see unexpected cache errors, ensure no other process is modifying `~/.pemcp/cache/` concurrently.
