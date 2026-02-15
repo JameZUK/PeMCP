@@ -292,6 +292,13 @@ async def identify_library_functions(
     def _flirt():
         _ensure_project_and_cfg()
 
+        # angr-flirt registers the FlirtAnalysis plugin when imported.
+        # Ensure it's imported before we try to use it.
+        try:
+            import angr_flirt  # noqa: F401
+        except ImportError:
+            pass
+
         # Snapshot names before FLIRT
         names_before = {addr: f.name for addr, f in state.angr_cfg.functions.items()}
 
@@ -302,9 +309,8 @@ async def identify_library_functions(
                 state.angr_project.analyses.FlirtAnalysis()
         except AttributeError:
             return {
-                "error": "FlirtAnalysis is not available in this angr version.",
-                "hint": "FLIRT signature matching requires the 'angr-flirt' package. "
-                        "Install it with: pip install angr-flirt",
+                "error": "FlirtAnalysis is not available. The 'angr-flirt' package is not installed.",
+                "hint": "Install it with: pip install angr-flirt",
             }
         except Exception as e:
             return {"error": f"FLIRT analysis failed: {e}"}
