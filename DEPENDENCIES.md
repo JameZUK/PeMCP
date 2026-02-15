@@ -131,6 +131,42 @@ corresponding tools.
 pip's resolver.  If a future package requires newer numpy/scikit-learn,
 stringsifter will need to be updated or isolated.
 
+**Important:** The PyPI package name is **`stringsifter`**, not
+`flare-stringsifter` (which does not exist on PyPI).
+
+---
+
+## 6. capa-rules version alignment
+
+The bundled capa-rules must match the capa major version.  If you bump
+`flare-capa` to a new major version, update the rules download URL in
+**both** places:
+
+- `pemcp/config.py` → `CAPA_RULES_ZIP_URL`
+- `Dockerfile` → the `urllib.request.urlretrieve(...)` URL
+
+Current alignment: **flare-capa >=9.0** with **capa-rules v9.3.0**.
+
+---
+
+## 7. PyPI version ceilings for optional packages
+
+Several optional packages have low version ceilings on PyPI — the latest
+available version is *below* the minimum you might naively expect:
+
+| Package | Latest on PyPI | Notes |
+|---------|---------------|-------|
+| **nampa** | 0.1.1 | Last release 2017 — unmaintained but functional |
+| **dotnetfile** | 0.2.10 | Active; still pre-1.0 |
+| **binwalk** | 2.1.0 | PyPI release is from 2015; 2.3.x+ only via GitHub |
+| **pygore** | 0.5.0 | Last release Oct 2021 |
+| **keystone-engine** | 0.9.2 | Last release 2020 |
+
+The `requirements.txt` minimum constraints are set to values that can
+actually be satisfied from PyPI.  If a package needs a newer version
+only available from GitHub, install it in the Dockerfile via
+`pip install git+https://...`.
+
 ---
 
 ## Debugging a broken build
