@@ -9,7 +9,7 @@ from collections import deque
 
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
-from pemcp.background import _update_progress, _run_background_task_wrapper
+from pemcp.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
 from pemcp.utils import shannon_entropy
 
@@ -131,7 +131,8 @@ async def diff_binaries(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "diff_binaries",
         })
-        asyncio.create_task(_run_background_task_wrapper(task_id, _diff))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _diff))
+        task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "BinDiff queued."}
 
     await ctx.info("Running BinDiff")
@@ -686,7 +687,8 @@ async def find_path_with_custom_input(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "find_path_with_custom_input",
         })
-        asyncio.create_task(_run_background_task_wrapper(task_id, _solve))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _solve))
+        task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Custom symbolic execution queued."}
 
     await ctx.info(f"Solving path to {target_address} with custom inputs")
@@ -869,7 +871,8 @@ async def emulate_with_watchpoints(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "emulate_with_watchpoints",
         })
-        asyncio.create_task(_run_background_task_wrapper(task_id, _emulate))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _emulate))
+        task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Watchpoint emulation queued."}
 
     await ctx.info(f"Emulating {function_address} with watchpoints")
@@ -1041,7 +1044,8 @@ async def identify_cpp_classes(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "identify_cpp_classes",
         })
-        asyncio.create_task(_run_background_task_wrapper(task_id, _identify))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _identify))
+        task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Class identification queued."}
 
     await ctx.info("Identifying C++ classes")
