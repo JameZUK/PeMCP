@@ -53,14 +53,17 @@ async def get_reaching_definitions(
             _update_progress(task_id_for_progress, 15, "Running ReachingDefinitionsAnalysis...")
 
         try:
-            # RDA does NOT accept a cfg= parameter — it reads the CFG
-            # from the project knowledge base (populated by
-            # _ensure_project_and_cfg above).  Passing cfg= causes a
-            # TypeError that angr's resilience layer swallows, producing
-            # an opaque "<ClassName>" error.
-            rd = state.angr_project.analyses.ReachingDefinitionsAnalysis(
-                func, observe_all=True,
+            # The plugin name was shortened in newer angr versions:
+            #   ReachingDefinitionsAnalysis → ReachingDefinitions
+            # Try the new name first, fall back to the old one.
+            _rda_cls = getattr(
+                state.angr_project.analyses,
+                'ReachingDefinitions',
+                getattr(state.angr_project.analyses, 'ReachingDefinitionsAnalysis', None),
             )
+            if _rda_cls is None:
+                return {"error": "ReachingDefinitionsAnalysis is not registered in this angr version."}
+            rd = _rda_cls(func, observe_all=True)
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("RDA failed: %s", tb)
@@ -400,9 +403,16 @@ async def propagate_constants(
             return {"error": f"No function found at {hex(func_addr)}."}
 
         try:
-            # PropagatorAnalysis does NOT accept a cfg= parameter —
-            # it reads the CFG from the project knowledge base.
-            prop = state.angr_project.analyses.PropagatorAnalysis(func)
+            # The plugin name was shortened in newer angr versions:
+            #   PropagatorAnalysis → Propagator
+            _prop_cls = getattr(
+                state.angr_project.analyses,
+                'Propagator',
+                getattr(state.angr_project.analyses, 'PropagatorAnalysis', None),
+            )
+            if _prop_cls is None:
+                return {"error": "PropagatorAnalysis is not registered in this angr version."}
+            prop = _prop_cls(func)
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("PropagatorAnalysis failed: %s", tb)
