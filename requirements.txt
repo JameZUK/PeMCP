@@ -13,8 +13,8 @@ pefile>=2023.2.7
 # Includes unicorn engine support for fast emulation
 angr[unicorn]>=9.2
 vivisect>=1.1.0
-# FLIRT signature matching (registers FlirtAnalysis plugin into angr)
-angr-flirt>=1.0
+# FLIRT signature parsing (used by angr's built-in FlirtAnalysis)
+nampa>=1.0
 
 # --- FLARE Tools (Capabilities & Advanced Strings) ---
 flare-floss>=3.0
