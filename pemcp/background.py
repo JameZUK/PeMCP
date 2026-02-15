@@ -59,6 +59,14 @@ def _update_progress(task_id: str, percent: int, message: str):
     state.update_task(task_id, progress_percent=percent, progress_message=message)
 
 
+def _log_task_exception(task_id: str):
+    """Return a done-callback that logs unhandled exceptions from background tasks."""
+    def _callback(t):
+        if not t.cancelled() and t.exception() is not None:
+            logger.error(f"Background task '{task_id}' failed: {t.exception()}")
+    return _callback
+
+
 async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
     """Helper to run a blocking function in a thread and update the registry."""
 
