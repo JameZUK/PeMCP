@@ -292,13 +292,6 @@ async def identify_library_functions(
     def _flirt():
         _ensure_project_and_cfg()
 
-        # angr-flirt registers the FlirtAnalysis plugin when imported.
-        # Ensure it's imported before we try to use it.
-        try:
-            import angr_flirt  # noqa: F401
-        except ImportError:
-            pass
-
         # Snapshot names before FLIRT
         names_before = {addr: f.name for addr, f in state.angr_cfg.functions.items()}
 
@@ -307,10 +300,22 @@ async def identify_library_functions(
                 state.angr_project.analyses.FlirtAnalysis(signature_path)
             else:
                 state.angr_project.analyses.FlirtAnalysis()
-        except AttributeError:
+        except AttributeError as e:
+            # FlirtAnalysis is built into angr but depends on `nampa`
+            # for parsing .sig files and on signature files being present.
+            if "nampa" in str(e).lower() or "flirt" in str(e).lower():
+                return {
+                    "error": f"FLIRT analysis failed: {e}",
+                    "hint": "FlirtAnalysis requires the 'nampa' package and FLIRT signature "
+                            "files. Install nampa with: pip install nampa. "
+                            "For signature files, clone https://github.com/angr/flirt_signatures "
+                            "and pass the path via the signature_path parameter.",
+                }
             return {
-                "error": "FlirtAnalysis is not available. The 'angr-flirt' package is not installed.",
-                "hint": "Install it with: pip install angr-flirt",
+                "error": f"FlirtAnalysis failed: {e}",
+                "hint": "FlirtAnalysis is built into angr but may require FLIRT signature "
+                        "files. Provide a path to .sig/.pat files via signature_path, or "
+                        "clone https://github.com/angr/flirt_signatures.",
             }
         except Exception as e:
             return {"error": f"FLIRT analysis failed: {e}"}
