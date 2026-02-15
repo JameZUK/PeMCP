@@ -14,6 +14,62 @@ if ANGR_AVAILABLE:
     import angr
     import networkx as nx
 
+    # ---- Monkey-patch angr VFG for angr >=9.2.199 ----
+    # The VFG._get_simsuccessors() method calls ProcedureEngine() without
+    # the required 'project' argument in 3 error-handling fallback paths.
+    # This is an upstream bug. We patch it here so get_value_set_analysis
+    # works correctly.  See DEPENDENCIES.md section 7 for details.
+    try:
+        from angr.analyses.vfg import VFG as _VFG
+        from angr.engines.procedure import ProcedureEngine as _ProcedureEngine
+        from angr.errors import SimIRSBError as _SimIRSBError, SimError as _SimError, AngrError as _AngrError
+        from angr.procedures import SIM_PROCEDURES as _SIM_PROCEDURES
+        import claripy as _claripy
+        import logging as _logging
+
+        _vfg_logger = _logging.getLogger("angr.analyses.vfg")
+
+        def _patched_get_simsuccessors(self, state, addr):
+            """Patched VFG._get_simsuccessors: passes self.project to ProcedureEngine()."""
+            error_occurred = False
+            restart_analysis = False
+            jumpkind = "Ijk_Boring"
+            if state.history.jumpkind:
+                jumpkind = state.history.jumpkind
+            try:
+                node = self._cfg.model.get_any_node(addr)
+                num_inst = None if node is None else len(node.instruction_addrs)
+                sim_successors = self.project.factory.successors(
+                    state, jumpkind=jumpkind, num_inst=num_inst
+                )
+            except _SimIRSBError as ex:
+                _vfg_logger.error("SimIRSBError occurred(%s). Creating a PathTerminator.", ex)
+                error_occurred = True
+                inst = _SIM_PROCEDURES["stubs"]["PathTerminator"]()
+                sim_successors = _ProcedureEngine(self.project).process(state, procedure=inst)
+            except _claripy.ClaripyError:
+                _vfg_logger.error("ClaripyError: ", exc_info=True)
+                error_occurred = True
+                inst = _SIM_PROCEDURES["stubs"]["PathTerminator"]()
+                sim_successors = _ProcedureEngine(self.project).process(state, procedure=inst)
+            except _SimError:
+                _vfg_logger.error("SimError: ", exc_info=True)
+                error_occurred = True
+                inst = _SIM_PROCEDURES["stubs"]["PathTerminator"]()
+                sim_successors = _ProcedureEngine(self.project).process(state, procedure=inst)
+            except _AngrError as ex:
+                _vfg_logger.error(
+                    "AngrError %s when generating SimSuccessors at %#x", ex, addr, exc_info=True
+                )
+                error_occurred = True
+                sim_successors = None
+            return sim_successors, error_occurred, restart_analysis
+
+        _VFG._get_simsuccessors = _patched_get_simsuccessors
+        logger.debug("VFG._get_simsuccessors monkey-patched for angr >=9.2.199 compatibility")
+    except (ImportError, AttributeError):
+        pass  # angr version doesn't have VFG or has different structure; skip patch
+
 
 # ---- Reaching Definitions Analysis -----------------------------
 
@@ -495,9 +551,8 @@ async def get_value_set_analysis(
     aliasing and buffer bounds.
 
     WARNING: Computationally expensive. Best used on individual functions.
-    NOTE: The VFG API has known incompatibilities with angr >=9.2.199 due to
-    internal constructor changes. If this fails, use get_reaching_definitions
-    or propagate_constants as alternatives.
+    If VFG fails, get_reaching_definitions or propagate_constants are
+    lighter-weight alternatives for data-flow analysis.
 
     Args:
         function_address: Hex address of the function.

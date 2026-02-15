@@ -62,9 +62,8 @@ async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, A
             {"tool": "propagate_constants", "params": "function_address",
              "description": "Constant propagation analysis."},
             {"tool": "get_value_set_analysis", "params": "function_address",
-             "description": "Value-set analysis for pointer tracking. DEPRECATED: has known "
-                            "incompatibilities with angr >=9.2.199. Prefer get_reaching_definitions "
-                            "or propagate_constants."},
+             "description": "Value-set analysis for pointer tracking. Computationally expensive; "
+                            "consider get_reaching_definitions or propagate_constants for lighter analysis."},
         ],
         "symbolic": [
             {"tool": "find_path_to_address", "params": "target_address, avoid_addresses, timeout",

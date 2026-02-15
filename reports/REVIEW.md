@@ -332,7 +332,7 @@ The following library API renames were discovered during integration testing aga
 | **dncil** >=1.0.2 | `CilError` renamed to `MethodBodyFormatError` | `import MethodBodyFormatError as CilError` | `config.py`, `tools_dotnet.py` |
 | **angr** >=9.2.199 | `FlirtAnalysis` renamed to `Flirt`; requires pre-loaded sigs | Renamed API + auto-discover FLIRT sigs from FLOSS | `tools_angr_disasm.py` |
 | **unipacker** >=1.0.8 | `UnpackerEngine` expects `Sample` object, not string | Wrap filepath in `Sample()` | `tools_new_libs.py` |
-| **angr** >=9.2.199 | VFG `SuccessorsEngine` constructor change | Graceful error + deprecation note; alternatives suggested | `tools_angr_dataflow.py` |
+| **angr** >=9.2.199 | VFG `ProcedureEngine()` missing `project` arg in error paths | Monkey-patch `VFG._get_simsuccessors` at import time | `tools_angr_dataflow.py` |
 
 ---
 
@@ -343,8 +343,6 @@ The following library API renames were discovered during integration testing aga
 1. **L7** (Iteration 4) -- Both files read into memory for similarity hashing. Accepted trade-off: ssdeep/TLSH APIs require full data in memory.
 
 2. **L18/L22** (Iterations 5/6) -- No upper-bound version pins or lockfile. Floor pins (`>=`) are in place. A generated lockfile for production builds is recommended but not yet implemented.
-
-3. **VFG deprecation** -- `get_value_set_analysis` is broken with angr >=9.2.199 due to an upstream API change. Marked as deprecated; `get_reaching_definitions` and `propagate_constants` are the recommended alternatives.
 
 ### Recommended Next Steps
 
@@ -366,6 +364,6 @@ The progression across iterations demonstrates mature engineering practices:
 - **Iteration 5:** Deep dive into security boundaries, concurrency edge cases, and correctness of auxiliary features
 - **Iteration 6:** Performance optimization and polish (mmap, model caching, proper ELF parsing, code quality)
 - **Iteration 7:** Testing infrastructure (CI/CD, coverage, concurrency tests, parametrized tests) and minor correctness fixes
-- **Post-iteration:** Library API compatibility fixes (dncil, angr FLIRT, unipacker) for newer dependency versions
+- **Post-iteration:** Library API compatibility fixes (dncil, angr FLIRT, unipacker, angr VFG) for newer dependency versions
 
-The test suite now comprises **276 unit tests** (including concurrency and parametrized tests) and **129 integration tests**, with automated CI via GitHub Actions. The remaining gaps are in error pattern standardization (M25), dependency management (no lockfile), and the deprecated VFG tool. The core analysis capabilities, security posture, caching system, graceful degradation pattern, testing infrastructure, and MCP integration are all strong.
+The test suite now comprises **276 unit tests** (including concurrency and parametrized tests) and **129 integration tests**, with automated CI via GitHub Actions. The remaining gaps are in error pattern standardization (M25) and dependency management (no lockfile). The core analysis capabilities, security posture, caching system, graceful degradation pattern, testing infrastructure, and MCP integration are all strong. All 105 MCP tools now function correctly with current library versions.
