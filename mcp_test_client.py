@@ -503,7 +503,10 @@ class TestCacheManagement:
     def test_get_cache_stats(self):
         async def _test():
             async with managed_mcp_session() as s:
-                await call_tool(s, "get_cache_stats", expected_type=dict)
+                r = await call_tool(s, "get_cache_stats", expected_type=dict)
+                assert "enabled" in r, "get_cache_stats should include 'enabled' key"
+                assert "entry_count" in r, "get_cache_stats should include 'entry_count' key"
+                assert isinstance(r["entry_count"], int), "entry_count should be an integer"
         run(_test())
 
     @pytest.mark.no_file
@@ -521,7 +524,9 @@ class TestCacheManagement:
         async def _test():
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "clear_analysis_cache", expected_type=dict)
-                assert r is not None
+                assert "entries_removed" in r, "clear_analysis_cache should report entries_removed"
+                assert isinstance(r["entries_removed"], int)
+                assert r["entries_removed"] >= 0
         run(_test())
 
 
@@ -643,8 +648,13 @@ class TestPEData:
         async def _test():
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "get_pe_data", {"key": "list"}, expected_type=dict)
-                # Should contain a listing of available keys
-                assert r is not None
+                # Should contain all 25 standard PE data keys
+                assert len(r) >= 20, (
+                    f"get_pe_data(key='list') should return at least 20 keys, got {len(r)}"
+                )
+                # Check a few well-known keys are present
+                for expected_key in ("file_hashes", "sections", "imports"):
+                    assert expected_key in r, f"Expected key '{expected_key}' in PE data list"
         run(_test())
 
     @pytest.mark.pe_file
@@ -672,15 +682,23 @@ class TestPEExtended:
     def test_get_section_permissions(self):
         async def _test():
             async with managed_mcp_session() as s:
-                await call_tool(s, "get_section_permissions", {"limit": 50},
-                                expected_type=dict)
+                r = await call_tool(s, "get_section_permissions", {"limit": 50},
+                                    expected_type=dict)
+                assert "sections" in r, "get_section_permissions should return 'sections' key"
+                if r["sections"]:
+                    first_section = r["sections"][0]
+                    assert "name" in first_section, "Section should have 'name'"
+                    for perm in ("readable", "writable", "executable"):
+                        assert perm in first_section, f"Section should have '{perm}' flag"
         run(_test())
 
     @pytest.mark.pe_file
     def test_get_pe_metadata(self):
         async def _test():
             async with managed_mcp_session() as s:
-                await call_tool(s, "get_pe_metadata", expected_type=dict)
+                r = await call_tool(s, "get_pe_metadata", expected_type=dict)
+                # Metadata should contain at least some basic PE info
+                assert len(r) >= 1, "get_pe_metadata should return at least one field"
         run(_test())
 
     @pytest.mark.pe_file
@@ -762,7 +780,12 @@ class TestPEExtended:
     def test_get_import_hash_analysis(self):
         async def _test():
             async with managed_mcp_session() as s:
-                await call_tool(s, "get_import_hash_analysis", expected_type=dict)
+                r = await call_tool(s, "get_import_hash_analysis", expected_type=dict)
+                # Should contain at least imphash or some hash key
+                hash_keys = {"imphash", "imphash_value", "import_hash", "md5"}
+                assert any(k in r for k in hash_keys) or len(r) >= 1, (
+                    f"get_import_hash_analysis should return hash data, got keys: {set(r.keys())}"
+                )
         run(_test())
 
     @pytest.mark.pe_file
@@ -1110,14 +1133,24 @@ class TestTriageAndClassification:
     def test_get_triage_report(self):
         async def _test():
             async with managed_mcp_session() as s:
-                await call_tool(s, "get_triage_report", expected_type=dict)
+                r = await call_tool(s, "get_triage_report", expected_type=dict)
+                assert "risk_score" in r, "Triage report should include risk_score"
+                assert "risk_level" in r, "Triage report should include risk_level"
+                assert isinstance(r["risk_score"], int), "risk_score should be an integer"
+                assert r["risk_level"] in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "MINIMAL"), (
+                    f"Unexpected risk_level: {r['risk_level']}"
+                )
+                assert "suggested_next_tools" in r, "Triage report should suggest next tools"
         run(_test())
 
     @pytest.mark.pe_file
     def test_classify_binary_purpose(self):
         async def _test():
             async with managed_mcp_session() as s:
-                await call_tool(s, "classify_binary_purpose", expected_type=dict)
+                r = await call_tool(s, "classify_binary_purpose", expected_type=dict)
+                assert "classification" in r or "purpose" in r or "binary_type" in r, (
+                    f"classify_binary_purpose should return classification data, got keys: {set(r.keys())}"
+                )
         run(_test())
 
 
