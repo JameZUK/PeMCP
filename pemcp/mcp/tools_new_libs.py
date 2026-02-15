@@ -30,6 +30,11 @@ if KEYSTONE_AVAILABLE:
     import keystone
 if UNIPACKER_AVAILABLE:
     from unipacker.core import UnpackerClient
+    try:
+        from unipacker.core import UnpackerEngine, SimpleClient
+    except ImportError:
+        UnpackerEngine = None
+        SimpleClient = None
 if DOTNETFILE_AVAILABLE:
     import dotnetfile
 if PPDEEP_AVAILABLE:
@@ -671,25 +676,37 @@ async def auto_unpack_pe(
     state.check_path_allowed(os.path.abspath(output_path))
 
     def _unpack():
+        import threading
+
         try:
-            # The UnpackerClient API changed across unipacker versions:
-            #   - Older: UnpackerClient(filepath) then .unpack(output)
-            #   - Newer: UnpackerClient() then .unpack(filepath, output)
-            # Try the newer API first, then fall back to the older one.
-            try:
-                client = UnpackerClient()
-                client.unpack(state.filepath, output_path)
-            except TypeError:
-                # Older API: constructor takes the filepath
-                client = UnpackerClient(state.filepath)
-                if hasattr(client, 'unpack'):
-                    client.unpack(output_path)
-                else:
-                    # Some versions use .run() instead
-                    client.run()
-                    # Manually copy the unpacked result if not auto-saved
-                    if hasattr(client, 'unpacked_pe') and not os.path.exists(output_path):
-                        client.unpacked_pe.write(output_path)
+            # The correct unipacker API uses UnpackerEngine + SimpleClient:
+            #   engine = UnpackerEngine(sample_path, output_path)
+            #   client = SimpleClient(event)
+            #   engine.register_client(client)
+            #   engine.emu()
+            # UnpackerClient is just a callback interface, not the entry
+            # point for unpacking.
+            if UnpackerEngine is not None and SimpleClient is not None:
+                done_event = threading.Event()
+                client = SimpleClient(done_event)
+                engine = UnpackerEngine(state.filepath, output_path)
+                engine.register_client(client)
+                engine.emu()
+                # Wait for completion (with timeout to avoid hanging)
+                done_event.wait(timeout=300)
+            else:
+                # Fallback: try calling UnpackerClient directly in case
+                # an older unipacker version has a simpler API.
+                try:
+                    client = UnpackerClient(state.filepath)
+                    if hasattr(client, 'unpack'):
+                        client.unpack(output_path)
+                    elif hasattr(client, 'run'):
+                        client.run()
+                except TypeError:
+                    client = UnpackerClient()
+                    if hasattr(client, 'unpack'):
+                        client.unpack(state.filepath, output_path)
 
             return {
                 "status": "success",
