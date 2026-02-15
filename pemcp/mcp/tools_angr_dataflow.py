@@ -495,6 +495,9 @@ async def get_value_set_analysis(
     aliasing and buffer bounds.
 
     WARNING: Computationally expensive. Best used on individual functions.
+    NOTE: The VFG API has known incompatibilities with angr >=9.2.199 due to
+    internal constructor changes. If this fails, use get_reaching_definitions
+    or propagate_constants as alternatives.
 
     Args:
         function_address: Hex address of the function.
