@@ -283,8 +283,13 @@ async def identify_library_functions(
     Matches functions against FLIRT signatures to identify known library code
     (statically linked CRT, OpenSSL, zlib, etc.). Reduces analysis noise.
 
+    Automatically loads FLIRT signatures from FLOSS's bundled sigs directory
+    if available. Custom signature files (.sig/.pat) can be provided via
+    the signature_path parameter.
+
     Args:
-        signature_path: Path to .sig/.pat file or directory. If None, uses angr defaults.
+        signature_path: Path to .sig/.pat file or directory. If None, auto-discovers
+            signatures from FLOSS sigs and standard locations.
         limit: Max identified functions to return.
     """
     await ctx.info("Running FLIRT signature matching")
