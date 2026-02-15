@@ -159,7 +159,7 @@ PeMCP's imports.  These are handled with compatibility shims:
 | **dncil** >=1.0.2 | `dncil.cil.error.CilError` | `dncil.cil.error.MethodBodyFormatError` | `config.py`, `tools_dotnet.py` | `import MethodBodyFormatError as CilError` |
 | **angr** >=9.2.199 | `analyses.FlirtAnalysis()` | `analyses.Flirt()` | `tools_angr_disasm.py` | Direct rename + auto-load FLIRT sigs |
 | **unipacker** >=1.0.8 | `UnpackerEngine(filepath, ...)` | `UnpackerEngine(Sample(filepath), ...)` | `tools_new_libs.py` | Wrap path in `Sample()` object |
-| **angr** >=9.2.199 | `analyses.VFG(...)` | Broken (`SuccessorsEngine` API change) | `tools_angr_dataflow.py` | Graceful error with alternatives hint |
+| **angr** >=9.2.199 | `ProcedureEngine()` (no args) | `ProcedureEngine(project)` | `tools_angr_dataflow.py` | Monkey-patch `VFG._get_simsuccessors` |
 
 ### dncil: CilError → MethodBodyFormatError
 
@@ -183,12 +183,19 @@ unipacker v1.0.8 changed `UnpackerEngine.__init__()` to expect a
 string.  `Sample()` wraps the path and performs YARA-based packer
 detection.
 
-### angr: VFG (Value Flow Graph) broken
+### angr: VFG ProcedureEngine missing project argument
 
-angr v9.2.199 changed the `SuccessorsEngine.__init__()` signature,
-breaking the VFG analysis.  This is an upstream bug.  The
-`get_value_set_analysis` tool catches the error and suggests
-`get_reaching_definitions` or `propagate_constants` as alternatives.
+angr v9.2.199 refactored `SimEngine.__init__()` to require a `project`
+argument, but `VFG._get_simsuccessors()` still calls
+`ProcedureEngine()` without it in 3 error-handling fallback paths
+(SimIRSBError, ClaripyError, SimError).  The main execution path works
+fine — the bug only triggers when VFG encounters unsupported
+instructions or solver errors.
+
+**Fix:** PeMCP monkey-patches `VFG._get_simsuccessors` at import time
+(in `tools_angr_dataflow.py`) to pass `self.project` to all
+`ProcedureEngine()` calls.  The patch is wrapped in try/except so it
+silently skips if angr's internal structure changes in a future version.
 
 ---
 

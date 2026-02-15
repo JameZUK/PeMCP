@@ -697,7 +697,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `find_path_with_custom_input` | Symbolic execution with custom constraints. |
 | `emulate_with_watchpoints` | Emulate with memory/register watchpoints. |
 | `get_annotated_disassembly` | Rich disassembly with resolved names and comments. |
-| `get_value_set_analysis` | Determine possible values at program points. **Deprecated:** known incompatibility with angr >=9.2.199. Use `get_reaching_definitions` or `propagate_constants` instead. |
+| `get_value_set_analysis` | Determine possible values at program points. Computationally expensive; consider `get_reaching_definitions` or `propagate_constants` for lighter analysis. |
 | `detect_packing` | Heuristic packing/encryption detection. |
 | `save_patched_binary` | Save a patched binary to disk. |
 | `identify_cpp_classes` | Recover C++ vtables and class hierarchies. |
