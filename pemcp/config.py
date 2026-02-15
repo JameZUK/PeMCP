@@ -270,7 +270,7 @@ except (ImportError, AttributeError) as _angr_err:
 PEID_USERDB_URL = "https://raw.githubusercontent.com/JameZUK/PeMCP/refs/heads/main/userdb.txt"
 DEFAULT_PEID_DB_PATH = DATA_DIR / "userdb.txt"
 
-CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.1.0.zip"
+CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.3.0.zip"
 CAPA_RULES_DEFAULT_DIR_NAME = "capa_rules_store"
 CAPA_RULES_SUBDIR_NAME = "rules"
 
@@ -281,7 +281,7 @@ DEPENDENCIES = [
     ("yara", "yara-python", "Yara (for YARA scanning)", False),
     ("capa.main", "flare-capa", "Capa (for capability detection)", False),
     ("floss.main", "flare-floss", "FLOSS (for advanced string extraction)", False),
-    ("stringsifter", "flare-stringsifter", "StringSifter (for ranking string relevance)", False),
+    ("stringsifter", "stringsifter", "StringSifter (for ranking string relevance)", False),
     ("rapidfuzz", "rapidfuzz", "RapidFuzz (for fuzzy string matching)", False),
     ("viv_utils", "vivisect", "Vivisect & Viv-Utils (for FLOSS analysis backend)", False),
     ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True),
