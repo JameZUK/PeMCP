@@ -33,19 +33,23 @@ async def go_analyze(
         except Exception as e:
             return {"error": f"Not a Go binary or pygore parsing failed: {e}"}
 
-        result: Dict[str, Any] = {"file": target, "is_go_binary": True}
+        result: Dict[str, Any] = {"file": target}
 
         # Compiler version
+        compiler_version = None
         try:
-            result["compiler_version"] = f.get_compiler_version()
+            compiler_version = f.get_compiler_version()
         except Exception:
-            result["compiler_version"] = None
+            pass
+        result["compiler_version"] = compiler_version
 
         # Build ID
+        build_id = None
         try:
-            result["build_id"] = f.get_build_id() if hasattr(f, 'get_build_id') else None
+            build_id = f.get_build_id() if hasattr(f, 'get_build_id') else None
         except Exception:
-            result["build_id"] = None
+            pass
+        result["build_id"] = build_id
 
         # Packages
         packages = []
@@ -122,6 +126,25 @@ async def go_analyze(
         }
 
         f.close() if hasattr(f, 'close') else None
+
+        # Validate: a real Go binary should have at least one of: compiler
+        # version, packages, or types.  If pygore returned nothing
+        # meaningful, this is not actually a Go binary.
+        has_go_artifacts = bool(
+            compiler_version
+            or packages
+            or vendor_pkgs
+            or types
+        )
+        result["is_go_binary"] = has_go_artifacts
+
+        if not has_go_artifacts:
+            return {
+                "error": "Not a Go binary or pygore could not find Go metadata.",
+                "is_go_binary": False,
+                "file": target,
+            }
+
         return result
 
     result = await asyncio.to_thread(_parse)
