@@ -329,10 +329,10 @@ The following library API renames were discovered during integration testing aga
 
 | Library | Issue | Fix | Files |
 |---|---|---|---|
-| **dncil** >=1.0.2 | `CilError` renamed to `MethodBodyFormatError` | `import MethodBodyFormatError as CilError` | `config.py`, `tools_dotnet.py` |
-| **angr** >=9.2.199 | `FlirtAnalysis` renamed to `Flirt`; requires pre-loaded sigs | Renamed API + auto-discover FLIRT sigs from FLOSS | `tools_angr_disasm.py` |
-| **unipacker** >=1.0.8 | `UnpackerEngine` expects `Sample` object, not string | Wrap filepath in `Sample()` | `tools_new_libs.py` |
-| **angr** >=9.2.199 | VFG `ProcedureEngine()` missing `project` arg in error paths | Monkey-patch `VFG._get_simsuccessors` at import time | `tools_angr_dataflow.py` |
+| **dncil** >=1.0.2 | `CilError` renamed to `MethodBodyFormatError` — caused `DNCIL_AVAILABLE=False`, silently disabling all .NET CIL tools | Import alias: `import MethodBodyFormatError as CilError` | `config.py`, `tools_dotnet.py` |
+| **angr** >=9.2.199 | `FlirtAnalysis` renamed to `Flirt`; new API also requires signatures to be pre-loaded | Renamed API call + auto-discover FLIRT sigs from FLOSS bundled directory | `tools_angr_disasm.py` |
+| **unipacker** >=1.0.8 | `UnpackerEngine` expects `Sample` object, not a raw filepath string | Wrap filepath in `Sample()` before passing to engine | `tools_new_libs.py` |
+| **angr** >=9.2.199 | `VFG._get_simsuccessors()` calls `ProcedureEngine()` without required `project` arg in 3 error-handling fallback paths (upstream bug) | Monkey-patch `VFG._get_simsuccessors` at import time to pass `self.project` to all `ProcedureEngine()` calls. Patch wrapped in try/except to auto-skip if angr internals change. See DEPENDENCIES.md section 7 for full inheritance chain and removal instructions. | `tools_angr_dataflow.py` |
 
 ---
 
