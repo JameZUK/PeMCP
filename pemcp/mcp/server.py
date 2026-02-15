@@ -181,7 +181,7 @@ async def _check_mcp_response_size(
                         modified_data["_truncation_warning"] = f"Dictionary '{largest_key}' truncated keys to fit limit."
                     else:
                         # Fallback: if we can't shrink the biggest value, we fail gracefully to avoid infinite loop
-                         break
+                        break
 
             elif isinstance(modified_data, list):
                 # If the root object is a list, slice the list itself
@@ -190,11 +190,11 @@ async def _check_mcp_response_size(
                 modified_data = modified_data[:new_len]
                 # We can't add a key to a list, so we append a warning item if possible, or rely on ctx.warning
                 if len(modified_data) > 0 and isinstance(modified_data[0], dict):
-                     modified_data.append({"_warning": f"List truncated from {old_len} to {new_len} items."})
+                    modified_data.append({"_warning": f"List truncated from {old_len} to {new_len} items."})
 
             elif isinstance(modified_data, str):
-                 new_len = int(len(modified_data) * reduction_ratio)
-                 modified_data = modified_data[:new_len] + "...[TRUNCATED]"
+                new_len = int(len(modified_data) * reduction_ratio)
+                modified_data = modified_data[:new_len] + "...[TRUNCATED]"
 
         # Final safety check: if still oversized, convert to string and truncate
         final_json = json.dumps(modified_data, ensure_ascii=False)

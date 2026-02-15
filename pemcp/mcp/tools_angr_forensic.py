@@ -823,7 +823,6 @@ async def emulate_with_watchpoints(
         while steps_taken < max_steps:
             if not simgr.active:
                 break
-            active_before = len(simgr.active)
             try:
                 simgr.step()
             except Exception as e:

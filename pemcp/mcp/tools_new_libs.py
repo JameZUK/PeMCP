@@ -853,6 +853,8 @@ async def scan_for_embedded_files(
             ["binwalk", "--quiet", state.filepath],
             capture_output=True, text=True, timeout=60,
         )
+        if proc.returncode != 0:
+            logger.warning("binwalk CLI exited with code %d: %s", proc.returncode, proc.stderr[:200])
         results = []
         # binwalk output: "DECIMAL       HEXADECIMAL     DESCRIPTION"
         # then lines like "12345         0x3039          Zip archive data, ..."
