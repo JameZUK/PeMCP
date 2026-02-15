@@ -377,9 +377,15 @@ def _check_speakeasy_available():
 UNIPACKER_AVAILABLE = False
 try:
     from unipacker.core import UnpackerClient  # noqa: F401
+    from unipacker.core import UnpackerEngine  # noqa: F401
     UNIPACKER_AVAILABLE = True
 except ImportError:
-    pass
+    try:
+        # Some versions only export UnpackerClient
+        from unipacker.core import UnpackerClient  # noqa: F401
+        UNIPACKER_AVAILABLE = True
+    except ImportError:
+        pass
 
 DOTNETFILE_AVAILABLE = False
 try:

@@ -329,10 +329,13 @@ async def get_capa_analysis_info(ctx: Context,
     if (capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete") or not capa_full_results:
         error_data: Dict[str, Any] = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}",
                         "rules": {}, "pagination": base_pagination_info, "report_metadata": processed_report_meta}
-        # Forward hint from the capa parser (e.g. ShouldExitError guidance)
+        # Forward hint and raw error detail from the capa parser
         capa_hint = capa_data_block.get("hint")
         if capa_hint:
             error_data["hint"] = capa_hint
+        capa_error_detail = capa_data_block.get("error")
+        if capa_error_detail:
+            error_data["error_detail"] = capa_error_detail
         return await _check_mcp_response_size(ctx, error_data, "get_capa_analysis_info", "parameters like 'limit' or filters")
 
 
@@ -491,6 +494,9 @@ async def get_capa_rule_match_details(ctx: Context,
         capa_hint = capa_data_block.get("hint")
         if capa_hint:
             error_data_details["hint"] = capa_hint
+        capa_error_detail = capa_data_block.get("error")
+        if capa_error_detail:
+            error_data_details["error_detail"] = capa_error_detail
         return await _check_mcp_response_size(ctx, error_data_details, "get_capa_rule_match_details", "parameters like 'address_limit'")
 
 

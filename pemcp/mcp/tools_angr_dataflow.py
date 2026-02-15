@@ -515,20 +515,19 @@ async def get_value_set_analysis(
 
         try:
             # VFG constructor signature has changed across angr versions.
-            # Try progressively simpler argument sets until one works.
+            # The cfg parameter may need to be the CFGFast analysis object
+            # (not cfg.model) because VFG internally accesses .model on it.
+            # Passing cfg.model causes "'CFGModel' object has no attribute 'model'".
             vfg = None
             last_err = None
-            # Attempt 1: standard call with cfg and function_start
             for vfg_kwargs in [
                 {"cfg": state.angr_cfg, "function_start": addr_used, "context_sensitivity_level": 2},
-                {"cfg": state.angr_cfg.model, "function_start": addr_used, "context_sensitivity_level": 2},
                 {"cfg": state.angr_cfg, "function_start": addr_used},
-                {"cfg": state.angr_cfg.model, "function_start": addr_used},
             ]:
                 try:
                     vfg = state.angr_project.analyses.VFG(**vfg_kwargs)
                     break
-                except TypeError as te:
+                except (TypeError, AttributeError) as te:
                     last_err = te
                     continue
             if vfg is None:
