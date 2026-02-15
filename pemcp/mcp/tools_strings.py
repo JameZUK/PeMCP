@@ -327,9 +327,13 @@ async def get_capa_analysis_info(ctx: Context,
         return await _check_mcp_response_size(ctx, data_to_send, "get_capa_analysis_info", "parameters like 'limit' or filters")
 
     if (capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete") or not capa_full_results:
-        data_to_send = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}",
+        error_data: Dict[str, Any] = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}",
                         "rules": {}, "pagination": base_pagination_info, "report_metadata": processed_report_meta}
-        return await _check_mcp_response_size(ctx, data_to_send, "get_capa_analysis_info", "parameters like 'limit' or filters")
+        # Forward hint from the capa parser (e.g. ShouldExitError guidance)
+        capa_hint = capa_data_block.get("hint")
+        if capa_hint:
+            error_data["hint"] = capa_hint
+        return await _check_mcp_response_size(ctx, error_data, "get_capa_analysis_info", "parameters like 'limit' or filters")
 
 
     if get_report_metadata_only:
@@ -482,9 +486,12 @@ async def get_capa_rule_match_details(ctx: Context,
     }
 
     if (capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete") or not capa_full_results:
-        data_to_send = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}",
+        error_data_details: Dict[str, Any] = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}",
                         "rule_id": rule_id, "matches_data": {}, "address_pagination": empty_address_pagination}
-        return await _check_mcp_response_size(ctx, data_to_send, "get_capa_rule_match_details", "parameters like 'address_limit'")
+        capa_hint = capa_data_block.get("hint")
+        if capa_hint:
+            error_data_details["hint"] = capa_hint
+        return await _check_mcp_response_size(ctx, error_data_details, "get_capa_rule_match_details", "parameters like 'address_limit'")
 
 
     all_rules_dict = capa_full_results.get('rules', {})

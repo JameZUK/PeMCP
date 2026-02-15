@@ -672,8 +672,25 @@ async def auto_unpack_pe(
 
     def _unpack():
         try:
-            client = UnpackerClient(state.filepath)
-            client.unpack(output_path)
+            # The UnpackerClient API changed across unipacker versions:
+            #   - Older: UnpackerClient(filepath) then .unpack(output)
+            #   - Newer: UnpackerClient() then .unpack(filepath, output)
+            # Try the newer API first, then fall back to the older one.
+            try:
+                client = UnpackerClient()
+                client.unpack(state.filepath, output_path)
+            except TypeError:
+                # Older API: constructor takes the filepath
+                client = UnpackerClient(state.filepath)
+                if hasattr(client, 'unpack'):
+                    client.unpack(output_path)
+                else:
+                    # Some versions use .run() instead
+                    client.run()
+                    # Manually copy the unpacked result if not auto-saved
+                    if hasattr(client, 'unpacked_pe') and not os.path.exists(output_path):
+                        client.unpacked_pe.write(output_path)
+
             return {
                 "status": "success",
                 "input_file": state.filepath,

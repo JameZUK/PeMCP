@@ -178,81 +178,105 @@ async def get_data_dependencies(
             return {"error": f"No function found at {hex(func_addr)}."}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 15, "Building Data Dependency Graph...")
+            _update_progress(task_id_for_progress, 15, "Running ReachingDefinitions for data dependencies...")
 
+        # The DDG analysis is deprecated in angr >=9.2.  We use
+        # ReachingDefinitionsAnalysis instead, which provides
+        # definition-use chains that serve the same purpose.
         try:
-            # DDG is deprecated in angr >=9.2 and accesses removed
-            # internal attributes (e.g. Function._keep_state).
-            # Verify that the analysis is still available before calling.
-            if not hasattr(state.angr_project.analyses, 'DDG'):
+            _rda_cls = getattr(
+                state.angr_project.analyses,
+                'ReachingDefinitions',
+                getattr(state.angr_project.analyses, 'ReachingDefinitionsAnalysis', None),
+            )
+            if _rda_cls is None:
                 return {
-                    "error": "DDG analysis is not available in this angr version. "
-                             "Use get_reaching_definitions for data-flow analysis instead.",
+                    "error": "Neither ReachingDefinitions nor DDG analysis is available.",
+                    "hint": "Ensure angr >=9.2 is installed.",
                 }
-            ddg = state.angr_project.analyses.DDG(func)
-        except AttributeError as e:
-            # Catch _keep_state and similar removed-attribute errors
-            return {
-                "error": f"DDG analysis is incompatible with this angr version: {e}",
-                "hint": "The DDG analysis is deprecated in angr >=9.2. "
-                        "Use get_reaching_definitions for data-flow tracking instead.",
-            }
+            rd = _rda_cls(func, observe_all=True)
         except Exception as e:
-            return {"error": f"DDG analysis failed: {e}"}
+            tb = traceback.format_exc()
+            logger.error("RDA (data-dep) failed: %s", tb)
+            return {"error": f"Data dependency analysis failed: {type(e).__name__}: {e}"}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 75, "Extracting dependencies...")
+            _update_progress(task_id_for_progress, 70, "Building dependency graph from RDA...")
 
-        graph = ddg.graph
-        if graph is None or len(graph) == 0:
-            return {
-                "function_name": func.name,
-                "address": hex(addr_used),
-                "total_nodes": 0,
-                "dependencies": [],
-                "note": "DDG produced an empty graph — function may be too simple or analysis unsupported.",
-            }
+        # Build a dependency graph from the RDA def-use chains.
+        dep_graph = None
+        try:
+            dep_graph = getattr(rd, 'dep_graph', None)
+            if dep_graph is not None:
+                dep_graph = dep_graph.graph if hasattr(dep_graph, 'graph') else dep_graph
+        except Exception:
+            dep_graph = None
 
-        # If a specific instruction is requested, get its neighborhood
-        if insn_addr is not None:
-            target_nodes = [n for n in graph.nodes() if hasattr(n, 'insn_addr') and n.insn_addr == insn_addr]
-            if not target_nodes:
-                target_nodes = [n for n in graph.nodes()
-                                if hasattr(n, 'code_loc') and hasattr(n.code_loc, 'ins_addr')
-                                and n.code_loc.ins_addr == insn_addr]
-
-            deps = []
-            for tn in target_nodes:
-                if direction == "backward":
-                    related = nx.ancestors(graph, tn)
-                else:
-                    related = nx.descendants(graph, tn)
-                for node in related:
-                    deps.append({"node": str(node)})
-                    if len(deps) >= limit:
-                        break
-                if len(deps) >= limit:
+        # Collect all definitions as a flat list
+        definitions = []
+        try:
+            for defn in rd.all_definitions:
+                entry = {
+                    "atom": str(defn.atom),
+                    "codeloc": str(defn.codeloc) if hasattr(defn, 'codeloc') else None,
+                }
+                definitions.append(entry)
+                if len(definitions) >= limit:
                     break
+        except Exception:
+            pass
+
+        # If an instruction is targeted, filter definitions relevant to it
+        if insn_addr is not None:
+            filtered = []
+            for defn_entry in definitions:
+                codeloc_str = defn_entry.get("codeloc", "")
+                if codeloc_str and hex(insn_addr) in codeloc_str:
+                    filtered.append(defn_entry)
+            if not filtered:
+                # Try observed results at the target point
+                try:
+                    for key, rd_state in rd.observed_results.items():
+                        addr_val = None
+                        if hasattr(key, 'ins_addr'):
+                            addr_val = key.ins_addr
+                        elif isinstance(key, tuple) and len(key) >= 2:
+                            addr_val = key[1] if isinstance(key[1], int) else None
+                        if addr_val == insn_addr:
+                            for live_def in rd_state.register_definitions.get_all_variables():
+                                filtered.append({"atom": str(live_def), "codeloc": str(key)})
+                                if len(filtered) >= limit:
+                                    break
+                            break
+                except Exception:
+                    pass
 
             return {
                 "function_name": func.name,
                 "address": hex(addr_used),
                 "target": hex(insn_addr),
                 "direction": direction,
-                "total_related": len(deps),
-                "dependencies": deps[:limit],
+                "method": "ReachingDefinitions",
+                "total_related": len(filtered),
+                "dependencies": filtered[:limit],
             }
 
-        # Full graph summary
+        # Dependency graph edges if available
         edges = []
-        for src, dst in list(graph.edges())[:limit]:
-            edges.append({"src": str(src), "dst": str(dst)})
+        if dep_graph is not None and hasattr(dep_graph, 'edges'):
+            try:
+                for src, dst in list(dep_graph.edges())[:limit]:
+                    edges.append({"src": str(src), "dst": str(dst)})
+            except Exception:
+                pass
 
         return {
             "function_name": func.name,
             "address": hex(addr_used),
-            "total_nodes": len(graph.nodes()),
-            "total_edges": len(graph.edges()),
+            "method": "ReachingDefinitions",
+            "total_definitions": len(definitions),
+            "total_edges": len(edges),
+            "definitions": definitions[:limit],
             "edges": edges,
         }
 
@@ -490,29 +514,32 @@ async def get_value_set_analysis(
             _update_progress(task_id_for_progress, 15, "Running VFG analysis...")
 
         try:
-            # VFG in angr >=9.2 may need the project passed explicitly to
-            # its internal SuccessorsEngine.  Try the standard call first,
-            # then a fallback with additional kwargs.
-            try:
-                vfg = state.angr_project.analyses.VFG(
-                    cfg=state.angr_cfg,
-                    function_start=addr_used,
-                    context_sensitivity_level=2,
-                )
-            except TypeError:
-                # Fallback: some angr builds propagate 'project' through
-                # additional keyword arguments.
-                vfg = state.angr_project.analyses.VFG(
-                    cfg=state.angr_cfg,
-                    function_start=addr_used,
-                    context_sensitivity_level=2,
-                    project=state.angr_project,
-                )
+            # VFG constructor signature has changed across angr versions.
+            # Try progressively simpler argument sets until one works.
+            vfg = None
+            last_err = None
+            # Attempt 1: standard call with cfg and function_start
+            for vfg_kwargs in [
+                {"cfg": state.angr_cfg, "function_start": addr_used, "context_sensitivity_level": 2},
+                {"cfg": state.angr_cfg.model, "function_start": addr_used, "context_sensitivity_level": 2},
+                {"cfg": state.angr_cfg, "function_start": addr_used},
+                {"cfg": state.angr_cfg.model, "function_start": addr_used},
+            ]:
+                try:
+                    vfg = state.angr_project.analyses.VFG(**vfg_kwargs)
+                    break
+                except TypeError as te:
+                    last_err = te
+                    continue
+            if vfg is None:
+                raise last_err or RuntimeError("VFG could not be instantiated")
         except Exception as e:
             return {
                 "error": f"VFG analysis failed: {e}",
                 "hint": "Value-set analysis (VFG) has known compatibility issues "
-                        "with some angr versions. This is an upstream angr limitation.",
+                        "with some angr versions. This is an upstream angr limitation. "
+                        "Consider using get_reaching_definitions or propagate_constants "
+                        "as alternatives for data-flow analysis.",
             }
 
         if task_id_for_progress:

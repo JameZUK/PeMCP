@@ -82,28 +82,31 @@ async def diff_binaries(
 
         try:
             for fa, fb in list(getattr(diff, 'identical_functions', []))[:limit]:
-                identical.append({"a": hex(fa.addr), "b": hex(fb.addr), "name": fa.name})
+                identical.append({"a": hex(fa.addr), "b": hex(fb.addr), "name": str(fa.name)})
         except Exception:
             pass
         try:
             for fa, fb in list(getattr(diff, 'differing_functions', []))[:limit]:
-                differing.append({"a": hex(fa.addr), "b": hex(fb.addr), "name_a": fa.name, "name_b": fb.name})
+                differing.append({"a": hex(fa.addr), "b": hex(fb.addr), "name_a": str(fa.name), "name_b": str(fb.name)})
         except Exception:
             pass
         try:
             for f in list(getattr(diff, 'unmatched_from_a', getattr(diff, 'unmatched_a', [])))[:limit]:
-                unmatched_a.append({"address": hex(f.addr), "name": f.name})
+                unmatched_a.append({"address": hex(f.addr), "name": str(f.name)})
         except Exception:
             pass
         try:
             for f in list(getattr(diff, 'unmatched_from_b', getattr(diff, 'unmatched_b', [])))[:limit]:
-                unmatched_b.append({"address": hex(f.addr), "name": f.name})
+                unmatched_b.append({"address": hex(f.addr), "name": str(f.name)})
         except Exception:
             pass
 
-        return {
-            "file_a": state.filepath,
-            "file_b": file_path_b,
+        # Force all values to plain Python types — avoids CFFI
+        # _CDataBase pickle errors when the result is stored in the
+        # task registry and later serialised for the MCP response.
+        result = {
+            "file_a": str(state.filepath),
+            "file_b": str(file_path_b),
             "identical_count": len(identical),
             "differing_count": len(differing),
             "unmatched_a_count": len(unmatched_a),
@@ -113,6 +116,12 @@ async def diff_binaries(
             "unmatched_in_a": unmatched_a,
             "unmatched_in_b": unmatched_b,
         }
+
+        # Explicitly delete angr objects to release CFFI references
+        # before this dict crosses the thread boundary.
+        del diff, cfg_b, proj_b
+
+        return result
 
     if run_in_background:
         task_id = str(uuid.uuid4())
@@ -921,11 +930,37 @@ async def identify_cpp_classes(
         loader = state.angr_project.loader
         vtables = []
 
+        # Build a set of addresses that belong to external/import stubs
+        # (PLT entries, IAT thunks, SimProcedures).  Any pointer table
+        # consisting solely of these is an IAT, not a vtable.
+        extern_addrs = set()
+        for addr, func in state.angr_cfg.functions.items():
+            if func.is_simprocedure or func.is_plt or getattr(func, 'is_extern', False):
+                extern_addrs.add(addr)
+
+        # Identify IAT / import-related address ranges to skip entirely.
+        # On PE binaries the IAT lives in .idata or .rdata at known offsets.
+        iat_ranges = set()
+        try:
+            main_obj = loader.main_object
+            # CLE's PE backend exposes the import directory
+            if hasattr(main_obj, 'imports'):
+                for sym_name, sym in main_obj.imports.items():
+                    if hasattr(sym, 'rebased_addr'):
+                        iat_ranges.add(sym.rebased_addr)
+        except Exception:
+            pass
+
         # Look for arrays of function pointers in data sections
         func_addrs = set(state.angr_cfg.functions.keys())
         for section in getattr(loader.main_object, 'sections', []):
             if getattr(section, 'is_executable', False):
                 continue  # Skip code sections, vtables are in data
+
+            # Skip sections that are commonly import-related
+            sec_name = getattr(section, 'name', '').lower().strip('\x00')
+            if sec_name in ('.idata', '.didat'):
+                continue
 
             try:
                 data = loader.memory.load(section.min_addr, min(section.memsize, 65536))
@@ -937,6 +972,7 @@ async def identify_cpp_classes(
             while i < len(data) - ptr_size * 2:
                 # Read consecutive pointers
                 consecutive_funcs = 0
+                extern_count = 0
                 start_offset = i
                 while i < len(data) - ptr_size:
                     if ptr_size == 4:
@@ -946,12 +982,25 @@ async def identify_cpp_classes(
 
                     if ptr_val in func_addrs:
                         consecutive_funcs += 1
+                        if ptr_val in extern_addrs:
+                            extern_count += 1
                         i += ptr_size
                     else:
                         break
 
-                if consecutive_funcs >= 2:  # At least 2 consecutive function pointers
+                if consecutive_funcs >= 2:
+                    # Skip tables where ALL entries point to external/import
+                    # stubs — these are IAT entries, not C++ vtables.
+                    if extern_count == consecutive_funcs:
+                        i += ptr_size  # advance past this IAT block
+                        continue
+
+                    # Also skip if the starting address is a known IAT slot
                     vtable_addr = section.min_addr + start_offset
+                    if vtable_addr in iat_ranges:
+                        i += ptr_size
+                        continue
+
                     methods = []
                     for j in range(consecutive_funcs):
                         off = start_offset + j * ptr_size
