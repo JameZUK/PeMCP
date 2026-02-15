@@ -1,5 +1,6 @@
 """MCP tools for angr-based disassembly and function recovery."""
 import asyncio
+import os
 import traceback
 from typing import Dict, Any, Optional, List
 
@@ -296,24 +297,39 @@ async def identify_library_functions(
         names_before = {addr: f.name for addr, f in state.angr_cfg.functions.items()}
 
         try:
+            # angr >=9.2.199 renamed FlirtAnalysis to Flirt and requires
+            # signatures to be pre-loaded via angr.flirt.load_signatures().
+            import angr.flirt
+            if not angr.flirt.FLIRT_SIGNATURES_BY_ARCH:
+                sig_dirs = [
+                    "/usr/local/lib/python3.11/site-packages/floss/sigs/",
+                    "/usr/local/share/flirt_signatures/",
+                ]
+                for sd in sig_dirs:
+                    if os.path.isdir(sd):
+                        try:
+                            angr.flirt.load_signatures(sd)
+                        except Exception:
+                            pass
+
             if signature_path:
-                state.angr_project.analyses.FlirtAnalysis(signature_path)
+                state.angr_project.analyses.Flirt(signature_path)
             else:
-                state.angr_project.analyses.FlirtAnalysis()
+                state.angr_project.analyses.Flirt()
         except AttributeError as e:
-            # FlirtAnalysis is built into angr but depends on `nampa`
+            # Flirt is built into angr but depends on `nampa`
             # for parsing .sig files and on signature files being present.
             if "nampa" in str(e).lower() or "flirt" in str(e).lower():
                 return {
                     "error": f"FLIRT analysis failed: {e}",
-                    "hint": "FlirtAnalysis requires the 'nampa' package and FLIRT signature "
+                    "hint": "Flirt analysis requires the 'nampa' package and FLIRT signature "
                             "files. Install nampa with: pip install nampa. "
                             "For signature files, clone https://github.com/angr/flirt_signatures "
                             "and pass the path via the signature_path parameter.",
                 }
             return {
-                "error": f"FlirtAnalysis failed: {e}",
-                "hint": "FlirtAnalysis is built into angr but may require FLIRT signature "
+                "error": f"Flirt analysis failed: {e}",
+                "hint": "Flirt analysis is built into angr but may require FLIRT signature "
                         "files. Provide a path to .sig/.pat files via signature_path, or "
                         "clone https://github.com/angr/flirt_signatures.",
             }

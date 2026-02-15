@@ -446,7 +446,7 @@ except ImportError:
 DNCIL_AVAILABLE = False
 try:
     from dncil.cil.body import CilMethodBody  # noqa: F401
-    from dncil.cil.error import CilError  # noqa: F401
+    from dncil.cil.error import MethodBodyFormatError as CilError  # noqa: F401
     from dncil.clr.token import Token  # noqa: F401
     DNCIL_AVAILABLE = True
 except ImportError:
