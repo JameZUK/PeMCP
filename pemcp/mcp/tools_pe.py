@@ -18,6 +18,9 @@ from pemcp.config import (
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from pemcp.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from pemcp.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
+
+# Upper bound on the 'limit' parameter to prevent excessive memory allocation
+_MAX_LIMIT = 100_000
 from pemcp.parsers.floss import _parse_floss_analysis
 from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
 from pemcp.mock import MockPE
@@ -633,6 +636,7 @@ async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
     await ctx.info(f"Request for analyzed file summary. Limit: {limit}")
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
+    limit = min(limit, _MAX_LIMIT)
 
     _check_pe_loaded("get_analyzed_file_summary")
 
@@ -647,7 +651,7 @@ async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
 
     # Determine YARA status safely
     yara_status = "Not run/Skipped"
-    if yara_matches and isinstance(yara_matches, list) and yara_matches[0]:
+    if yara_matches and isinstance(yara_matches, list) and isinstance(yara_matches[0], dict):
         yara_status = yara_matches[0].get('status', "Run/No Matches or Not Run/Skipped")
 
     # Determine capa capability count
@@ -707,6 +711,7 @@ async def get_full_analysis_results(ctx: Context, limit: int) -> Dict[str, Any]:
     await ctx.info(f"Request for full PE analysis. Limit: {limit}")
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
+    limit = min(limit, _MAX_LIMIT)
 
     _check_pe_loaded("get_full_analysis_results")
 
@@ -789,6 +794,7 @@ async def get_pe_data(
 
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
+    limit = min(limit, _MAX_LIMIT)
 
     _check_pe_loaded("get_pe_data")
 

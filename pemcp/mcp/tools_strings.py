@@ -18,6 +18,9 @@ from pemcp.mcp.server import (
 )
 from pemcp.parsers.strings import _extract_strings_from_data, _search_specific_strings_in_data
 
+# Upper bound on the 'limit' parameter to prevent excessive memory allocation
+_MAX_LIMIT = 100_000
+
 if RAPIDFUZZ_AVAILABLE:
     from rapidfuzz import fuzz
 
@@ -197,6 +200,7 @@ async def get_floss_analysis_info(ctx: Context,
 
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
+    limit = min(limit, _MAX_LIMIT)
     if offset is not None and not (isinstance(offset, int) and offset >= 0):
         raise ValueError("Parameter 'offset' must be a non-negative integer if provided.")
 
@@ -292,6 +296,7 @@ async def get_capa_analysis_info(ctx: Context,
 
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' for Capa analysis must be a positive integer.")
+    limit = min(limit, _MAX_LIMIT)
     if source_string_limit is not None and not (isinstance(source_string_limit, int) and source_string_limit >= 0):
         raise ValueError("Parameter 'source_string_limit' must be a non-negative integer if provided.")
 

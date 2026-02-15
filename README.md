@@ -897,22 +897,26 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 - **Zip-slip protection**: Archive extraction validates member paths against directory traversal.
 - **No hardcoded secrets**: API keys are sourced from environment variables or the config file.
 
-### Testing
+### Testing & CI/CD
 
-PeMCP has two layers of testing:
+PeMCP has two layers of testing, with automated CI via **GitHub Actions**:
 
-- **Unit tests** (`tests/`) — 174 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers). No server or binary samples required. Run in ~3 seconds.
+- **Unit tests** (`tests/`) — 276 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrized edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
 - **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 105 MCP tools against a running server, organised into 19 test categories with pytest markers.
+- **CI/CD** (`.github/workflows/ci.yml`) — Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (60% floor), and syntax checking on every push and PR.
 
 ```bash
 # Run unit tests (no server needed)
 pytest tests/ -v
 
+# Run unit tests with coverage
+pytest tests/ -v --cov=pemcp --cov-report=term-missing
+
 # Run integration tests (requires running server)
 pytest mcp_test_client.py -v
 ```
 
-For detailed instructions on running tests, writing new tests, environment variables, test categories, markers, and troubleshooting, see **[TESTING.md](TESTING.md)**.
+For detailed instructions on running tests, writing new tests, coverage, CI/CD, environment variables, test categories, markers, and troubleshooting, see **[TESTING.md](TESTING.md)**.
 
 ---
 

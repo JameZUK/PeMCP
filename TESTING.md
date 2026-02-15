@@ -1,14 +1,16 @@
 # Testing Guide
 
-PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 105 MCP tools against a running server.
+PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 105 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
 
 ---
 
 ## Table of Contents
 
 - [Quick Reference](#quick-reference)
+- [CI/CD Pipeline](#cicd-pipeline)
 - [Unit Tests](#unit-tests)
   - [Running Unit Tests](#running-unit-tests)
+  - [Running with Coverage](#running-with-coverage)
   - [Test Modules](#test-modules)
   - [Writing New Unit Tests](#writing-new-unit-tests)
 - [Integration Tests](#integration-tests)
@@ -27,14 +29,37 @@ PeMCP has two layers of testing: **unit tests** for fast, isolated verification 
 ## Quick Reference
 
 ```bash
-# Run all unit tests (no server needed, ~3 seconds)
+# Run all unit tests (no server needed, ~2 seconds)
 pytest tests/ -v
+
+# Run unit tests with coverage report
+pytest tests/ -v --cov=pemcp --cov-report=term-missing
 
 # Run integration tests (requires running server)
 pytest mcp_test_client.py -v
 
 # Run everything
 pytest -v
+```
+
+---
+
+## CI/CD Pipeline
+
+PeMCP uses **GitHub Actions** to run unit tests automatically on every push and pull request to the `main`/`master` branches. The workflow is defined in `.github/workflows/ci.yml`.
+
+### What CI runs
+
+1. **Unit tests** — Runs `pytest tests/` with coverage on Python 3.10, 3.11, and 3.12.
+2. **Coverage enforcement** — Fails the build if code coverage drops below **60%**.
+3. **Syntax checking** — Verifies core modules compile without errors.
+
+### Running locally (same as CI)
+
+```bash
+# Replicate the CI pipeline locally
+pip install -r requirements.txt -r requirements-test.txt
+pytest tests/ -v --cov=pemcp --cov-report=term-missing --cov-fail-under=60
 ```
 
 ---
@@ -89,6 +114,40 @@ pytest tests/test_utils.py::TestShannonEntropy::test_all_256_bytes -v
 pytest tests/
 ```
 
+### Running with Coverage
+
+PeMCP uses `pytest-cov` for code coverage measurement. A **60% minimum** coverage floor is enforced in CI.
+
+```bash
+# Terminal report with missing lines highlighted
+pytest tests/ -v --cov=pemcp --cov-report=term-missing
+
+# Generate HTML coverage report
+pytest tests/ -v --cov=pemcp --cov-report=html
+# Open htmlcov/index.html in a browser
+
+# Generate XML report (for CI upload)
+pytest tests/ -v --cov=pemcp --cov-report=xml
+
+# Fail if coverage drops below threshold
+pytest tests/ --cov=pemcp --cov-fail-under=60
+```
+
+Coverage configuration is in `pytest.ini`:
+
+```ini
+[coverage:run]
+source = pemcp
+
+[coverage:report]
+fail_under = 60
+show_missing = true
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__
+    raise NotImplementedError
+```
+
 ### Test Modules
 
 | File | Module Under Test | Tests | What It Covers |
@@ -101,6 +160,8 @@ pytest tests/
 | `test_user_config.py` | `pemcp/user_config.py` | 14 | `load_user_config` (missing file, valid/invalid JSON, non-dict), `save_user_config` (save/reload, 0o600 permissions), `get_config_value` (from file, env override, missing key), `set_config_value`, `delete_config_value`, `get_masked_config` (sensitive key masking, env override notes) |
 | `test_parsers_strings.py` | `pemcp/parsers/strings.py` | 23 | `_extract_strings_from_data` (basic, min_length, offsets, empty, trailing, memoryview), `_search_specific_strings_in_data` (present/missing terms, offsets), `_format_hex_dump_lines` (format, address, ASCII, dots, multi-line), `_get_string_category` (IPv4, URL, domain, filepath, registry, email, none), `_decode_single_byte_xor` (known key, empty, random data) |
 | `test_mcp_helpers.py` | `pemcp/mcp/` helpers | 17 | `_parse_addr` (hex, decimal, invalid, empty, negative, zero), `_raise_on_error_dict` (passthrough, error dict, hint, non-dict, many-key dict), `_check_lib` (available, unavailable, custom pip name), `_check_pe_loaded` (no file, partial load, loaded), `_check_data_key_available` (present, missing, skipped analysis hint) |
+| `test_parametrized.py` | Multiple modules | 95+ | Parametrized tests for broader coverage: `shannon_entropy` (6 known values, 5 bounds checks), `format_timestamp` (4 valid, 7 invalid), `get_symbol_storage_class_str` (11 known + 4 unknown), `_get_string_category` (20 categorisation + 3 invalid IPs), `SSDeep` (5 format, 3 determinism), Levenshtein (8 known distances), string extraction (6 min_length variations), hex dump (6 line counts), path sandboxing (7 allow/deny combinations) |
+| `test_concurrency.py` | `pemcp/state.py` | 6 | Thread isolation (4 threads, barrier sync), concurrent task updates (200 tasks across 4 threads), concurrent angr state set/get consistency, path sandboxing under concurrent load (20 threads), `StateProxy` per-thread delegation (8 threads) |
 
 ### Writing New Unit Tests
 
@@ -265,7 +326,7 @@ The integration test suite is organised into 19 classes:
 
 ## Pytest Configuration
 
-The `pytest.ini` file configures test discovery and markers:
+The `pytest.ini` file configures test discovery, markers, and coverage settings:
 
 ```ini
 [pytest]
@@ -276,6 +337,17 @@ markers =
     angr: test uses Angr (may be slow)
     optional_lib: test requires an optional library
     unit: fast unit tests with no external dependencies
+
+[coverage:run]
+source = pemcp
+
+[coverage:report]
+fail_under = 60
+show_missing = true
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__
+    raise NotImplementedError
 ```
 
 The `testpaths = tests` directive means `pytest` (with no arguments) runs unit tests by default. To run integration tests, specify the file explicitly:
@@ -283,6 +355,9 @@ The `testpaths = tests` directive means `pytest` (with no arguments) runs unit t
 ```bash
 # Unit tests only (default)
 pytest -v
+
+# Unit tests with coverage
+pytest -v --cov=pemcp --cov-report=term-missing
 
 # Integration tests only
 pytest mcp_test_client.py -v
