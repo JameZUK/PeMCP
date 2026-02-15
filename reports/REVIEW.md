@@ -4,7 +4,7 @@
 
 PeMCP is a comprehensive binary analysis toolkit and MCP (Model Context Protocol) server that bridges AI assistants with low-level binary instrumentation. It exposes 105+ specialized MCP tools for analyzing PE, ELF, Mach-O, .NET, Go, Rust, and shellcode binaries. The codebase is approximately 13,500+ lines of Python across 48 source files, with an additional 2,365-line integration test suite.
 
-This document consolidates all six review iterations into a single reference. Each iteration built on the previous, verifying fixes and identifying new findings. The project has undergone systematic improvement from iteration to iteration.
+This document consolidates all seven review iterations into a single reference. Each iteration built on the previous, verifying fixes and identifying new findings. The project has undergone systematic improvement from iteration to iteration.
 
 ---
 
@@ -298,6 +298,29 @@ The integration test suite (`mcp_test_client.py`, 19 classes, 100+ tests) provid
 
 **Totals:** 73 findings across 6 iterations. **71 fixed, 1 accepted trade-off (L7), 1 partially fixed (L18).**
 
+| -- | -- | -- | -- | **Iteration 7 (5 issues)** | **All Fixed** |
+| N1 | Low | Correctness | `tools_triage.py` | `_triage_high_value_strings` never contributes to risk score (always 0) | Fixed (density-based scoring: +1/+2/+3) |
+| N2 | Low | Robustness | `tools_pe.py` | YARA match type assumed dict without `isinstance` guard | Fixed |
+| N3 | Low | Clarity | `tools_triage.py` | Timestamp extraction doesn't validate numeric type after dict extraction | Fixed (immediate `isinstance` check) |
+| N4 | Low | Security | `tools_pe.py`, `tools_strings.py` | No upper-bound on `limit` parameters (potential memory exhaustion) | Fixed (`_MAX_LIMIT = 100,000`) |
+| N5 | Low | Determinism | `tools_triage.py` | Non-deterministic sort for equal-severity items | Fixed (secondary sort keys added) |
+
+**Updated totals:** 78 findings across 7 iterations. **76 fixed, 1 accepted trade-off (L7), 1 partially fixed (L18).**
+
+---
+
+## Iteration 7 Recommendations — Implemented
+
+The following recommendations from the iteration 7 review have been implemented:
+
+| Recommendation | Status | Implementation |
+|---|---|---|
+| CI/CD pipeline | **Done** | `.github/workflows/ci.yml` — GitHub Actions with Python 3.10/3.11/3.12 matrix, coverage, syntax checking |
+| pytest-cov integration | **Done** | `requirements-test.txt` updated, `pytest.ini` configured with 60% coverage floor |
+| Concurrency tests | **Done** | `tests/test_concurrency.py` — 6 tests covering thread isolation, concurrent tasks, angr state, path sandbox, StateProxy |
+| Parametrized tests | **Done** | `tests/test_parametrized.py` — 95+ parametrized test cases across all core modules |
+| Stronger integration assertions | **Done** | 8 integration tests strengthened with specific key/value/type checks |
+
 ---
 
 ## Open Items and Recommendations
@@ -310,27 +333,23 @@ The integration test suite (`mcp_test_client.py`, 19 classes, 100+ tests) provid
 
 ### Recommended Next Steps
 
-1. **Unit tests** -- The primary remaining gap. Add isolated tests for:
-   - Triage helpers (`_triage_*` functions with fixture data)
-   - Cache operations (`cache.py` -- get/set/eviction/corruption)
-   - State management (`state.py` -- session lifecycle, concurrent access)
-   - Truncation logic (`server.py` -- oversized response handling)
-   - Parser correctness (`pe.py`, `strings.py`, `signatures.py`, `hashing.py`)
+1. **M25 completion** -- Standardize error return patterns project-wide. Requires careful categorization of hard errors (should raise) vs. soft errors (should return data dicts). The angr tools' soft-error pattern is intentional and should be preserved; PE tools and string tools may benefit from exception standardization.
 
-2. **M25 completion** -- Standardize error return patterns project-wide. Requires careful categorization of hard errors (should raise) vs. soft errors (should return data dicts). The angr tools' soft-error pattern is intentional and should be preserved; PE tools and string tools may benefit from exception standardization.
+2. **Increase coverage floor** -- The current 60% floor is a starting point. As more tests are added, raise to 70-80%.
 
-3. **Concurrency testing** -- Validate per-session isolation under concurrent HTTP load. The architecture is sound, but implementation has repeatedly had subtle bugs (H2, H11, H12, M12, M13).
+3. **Stress testing** -- Add tests with large files (100MB+), large string counts (10K+), and deep recursion (Angr CFG) to validate performance under load.
 
 ---
 
 ## Conclusion
 
-PeMCP is a well-engineered, production-grade binary analysis platform. Over six review iterations, 73 findings have been identified and systematically resolved, spanning security (path sandbox gaps, ReDoS, port binding), correctness (broken StringSifter, incorrect SSDeep hashes, YARA 4.x incompatibility), concurrency (race conditions, lock scope, session state propagation), performance (mmap-based triage, model caching, optimized IOC extraction), and code quality (formatting, dead code, error patterns).
+PeMCP is a well-engineered, production-grade binary analysis platform. Over seven review iterations, 78 findings have been identified and systematically resolved, spanning security (path sandbox gaps, ReDoS, port binding, limit bounds), correctness (broken StringSifter, incorrect SSDeep hashes, YARA 4.x incompatibility, triage risk scoring), concurrency (race conditions, lock scope, session state propagation), performance (mmap-based triage, model caching, optimized IOC extraction), and code quality (formatting, dead code, error patterns, deterministic sorting).
 
 The progression across iterations demonstrates mature engineering practices:
 - **Iterations 1-3:** Foundation fixes (state isolation, input validation, timeouts, security boundaries)
 - **Iteration 4:** Correctness and performance refinements (deprecated APIs, algorithmic improvements, timeout coverage)
 - **Iteration 5:** Deep dive into security boundaries, concurrency edge cases, and correctness of auxiliary features
 - **Iteration 6:** Performance optimization and polish (mmap, model caching, proper ELF parsing, code quality)
+- **Iteration 7:** Testing infrastructure (CI/CD, coverage, concurrency tests, parametrized tests) and minor correctness fixes
 
-The remaining gaps are primarily in testing (no unit tests, no concurrency tests) and dependency management (no lockfile). The core analysis capabilities, security posture, caching system, graceful degradation pattern, and MCP integration are all strong.
+The test suite now comprises **276 unit tests** (including concurrency and parametrized tests) and **129 integration tests**, with automated CI via GitHub Actions. The remaining gaps are in error pattern standardization (M25) and dependency management (no lockfile). The core analysis capabilities, security posture, caching system, graceful degradation pattern, testing infrastructure, and MCP integration are all strong.
