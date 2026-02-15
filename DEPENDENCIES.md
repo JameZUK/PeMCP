@@ -154,10 +154,10 @@ stringsifter will need to be updated or isolated.
 ## Dockerfile install order (and why it matters)
 
 ```
-1. angr[unicorn]         → installs unicorn 2.x + archinfo, pyvex, cle, etc.
+1. angr[unicorn], nampa  → installs unicorn 2.x + archinfo, pyvex, cle, FLIRT parser
 2. flare-floss, capa, vivisect
 3. Core deps (pefile, requests, mcp, etc.)
-4. Extended libs (lief, capstone, etc.)
+4. Extended libs (lief, capstone, dnfile, dncil, etc.)
 5. speakeasy-emulator    → isolated in /app/speakeasy-venv (unicorn 1.x)
 6. unipacker             → installs unicorn-unipacker (clobbers unicorn 2.x!)
 7. dotnetfile, binwalk, pygore
