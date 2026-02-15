@@ -105,7 +105,7 @@ RUN python -c "import unicorn; print('main env unicorn', unicorn.__version__); a
 RUN python <<'PYEOF' && rm -f /tmp/capa-rules.zip
 import urllib.request, zipfile, shutil, os, pathlib
 urllib.request.urlretrieve(
-    "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.1.0.zip",
+    "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.3.0.zip",
     "/tmp/capa-rules.zip")
 zipfile.ZipFile("/tmp/capa-rules.zip").extractall("/tmp")
 top = next(p for p in pathlib.Path("/tmp").iterdir() if p.name.startswith("capa-rules") and p.is_dir())
