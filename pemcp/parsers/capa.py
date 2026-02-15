@@ -214,6 +214,14 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         if should_exit_error_type and isinstance(e, should_exit_error_type):
             error_msg = f"Capa analysis aborted ({type(e).__name__}): {e} (status_code: {getattr(e, 'status_code', 'N/A')})"
             capa_results["status"] = f"Error during analysis ({type(e).__name__})"
+            capa_results["hint"] = (
+                "Capa's ShouldExitError typically means the sample is "
+                "incompatible with the current capa version or its feature "
+                "extractor could not process this binary.  Common causes: "
+                "tiny/stripped PE, unusual architecture, or corrupted headers.  "
+                "Try updating capa (pip install -U flare-capa) or use a "
+                "different analysis tool for this sample."
+            )
         else:
             error_msg = f"Unexpected error during adapted capa analysis: {type(e).__name__} - {e}"
             capa_results["status"] = "Unexpected error"

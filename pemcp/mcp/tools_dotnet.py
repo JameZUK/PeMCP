@@ -38,11 +38,29 @@ async def dotnet_analyze(
             return {"error": f"Not a valid .NET binary or parsing failed: {e}"}
 
         try:
+            # Verify this is actually a .NET binary by checking for a valid
+            # CLR header.  dnfile.dnPE() silently opens non-.NET PEs without
+            # raising, leaving .net as None or with an empty metadata table.
+            clr = getattr(dn, 'net', None)
+            has_clr_header = (
+                clr is not None
+                and hasattr(clr, 'struct')
+                and clr.struct is not None
+            )
+            has_metadata_tables = (
+                has_clr_header
+                and hasattr(clr, 'mdtables')
+                and clr.mdtables is not None
+            )
+
+            if not has_clr_header:
+                dn.close()
+                return {"error": "Not a valid .NET binary or parsing failed: 'File is not a .NET assembly.'"}
+
             result: Dict[str, Any] = {"file": target, "is_dotnet": True}
 
             # CLR header
             try:
-                clr = dn.net
                 if clr:
                     result["clr_header"] = {
                         "runtime_version": f"{clr.struct.MajorRuntimeVersion}.{clr.struct.MinorRuntimeVersion}",
