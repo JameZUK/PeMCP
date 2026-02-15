@@ -141,7 +141,7 @@ async def get_reaching_definitions(
     return await _check_mcp_response_size(ctx, result, "get_reaching_definitions", "the 'limit' parameter")
 
 
-# ---- Data Dependency Graph -------------------------------------
+# ---- Data Dependency Analysis ------------------------------------
 
 @tool_decorator
 async def get_data_dependencies(
@@ -153,8 +153,10 @@ async def get_data_dependencies(
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Builds a Data Dependency Graph (DDG) showing how data flows between instructions.
-    Unlike control-flow slicing, this traces actual value producers and consumers.
+    Analyses data dependencies showing how values flow between instructions.
+    Uses ReachingDefinitionsAnalysis to build definition-use chains and a
+    dependency graph. Unlike control-flow slicing, this traces actual value
+    producers and consumers.
 
     Args:
         function_address: Hex address of the function to analyse.
@@ -284,14 +286,14 @@ async def get_data_dependencies(
         task_id = str(uuid.uuid4())
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
-            "progress_message": "Initializing DDG...",
+            "progress_message": "Initializing data dependency analysis...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "get_data_dependencies",
         })
         asyncio.create_task(_run_background_task_wrapper(task_id, _ddg))
-        return {"status": "queued", "task_id": task_id, "message": "DDG analysis queued."}
+        return {"status": "queued", "task_id": task_id, "message": "Data dependency analysis queued."}
 
-    await ctx.info(f"Building DDG for {function_address}")
+    await ctx.info(f"Analysing data dependencies for {function_address}")
     result = await asyncio.to_thread(_ddg)
     return await _check_mcp_response_size(ctx, result, "get_data_dependencies", "the 'limit' parameter")
 

@@ -680,7 +680,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | Tool | Description |
 |---|---|
 | `get_reaching_definitions` | Track how values propagate through registers and memory. |
-| `get_data_dependencies` | Data dependency graph for a function. |
+| `get_data_dependencies` | Data dependency analysis (def-use chains) for a function. |
 | `hook_function` | Replace a function with a custom SimProcedure. |
 | `list_hooks` | List all active function hooks. |
 | `unhook_function` | Remove a previously set hook. |
