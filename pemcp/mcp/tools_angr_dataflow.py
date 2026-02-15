@@ -53,11 +53,13 @@ async def get_reaching_definitions(
             _update_progress(task_id_for_progress, 15, "Running ReachingDefinitionsAnalysis...")
 
         try:
-            # RDA expects the CFGModel (cfg.model), not the full CFGFast
-            # analysis object.  Passing the wrong type causes internal
-            # attribute errors in angr >=9.2.
+            # RDA does NOT accept a cfg= parameter — it reads the CFG
+            # from the project knowledge base (populated by
+            # _ensure_project_and_cfg above).  Passing cfg= causes a
+            # TypeError that angr's resilience layer swallows, producing
+            # an opaque "<ClassName>" error.
             rd = state.angr_project.analyses.ReachingDefinitionsAnalysis(
-                func, cfg=state.angr_cfg.model, observe_all=True,
+                func, observe_all=True,
             )
         except Exception as e:
             tb = traceback.format_exc()
@@ -398,18 +400,13 @@ async def propagate_constants(
             return {"error": f"No function found at {hex(func_addr)}."}
 
         try:
-            prop = state.angr_project.analyses.PropagatorAnalysis(
-                func, cfg=state.angr_cfg.model,
-            )
-        except Exception:
-            # Some angr versions reject the cfg kwarg or have internal
-            # issues with certain function types — retry without cfg.
-            try:
-                prop = state.angr_project.analyses.PropagatorAnalysis(func)
-            except Exception as e:
-                tb = traceback.format_exc()
-                logger.error("PropagatorAnalysis failed: %s", tb)
-                return {"error": f"PropagatorAnalysis failed: {type(e).__name__}: {e}", "traceback_tail": tb[-500:]}
+            # PropagatorAnalysis does NOT accept a cfg= parameter —
+            # it reads the CFG from the project knowledge base.
+            prop = state.angr_project.analyses.PropagatorAnalysis(func)
+        except Exception as e:
+            tb = traceback.format_exc()
+            logger.error("PropagatorAnalysis failed: %s", tb)
+            return {"error": f"PropagatorAnalysis failed: {type(e).__name__}: {e}", "traceback_tail": tb[-500:]}
 
         # Extract replacements — these map (addr, register/tmp) -> constant value
         replacements = []
