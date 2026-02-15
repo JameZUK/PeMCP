@@ -662,6 +662,7 @@ async def auto_unpack_pe(
     """
     Automatically unpacks a packed PE using Un{i}packer (Unicorn-based).
     Supports UPX, ASPack, PEtite, FSG, and generic packing via section-hopping heuristics.
+    The packer type is auto-detected via YARA signatures.
 
     Args:
         output_path: Where to save the unpacked binary. Default: <original>_unpacked.exe.

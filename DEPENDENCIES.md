@@ -149,7 +149,50 @@ Current alignment: **flare-capa >=9.0** with **capa-rules v9.3.0**.
 
 ---
 
-## 7. PyPI version ceilings for optional packages
+## 7. Library API renames (runtime compatibility)
+
+Several libraries renamed classes or APIs in newer versions, breaking
+PeMCP's imports.  These are handled with compatibility shims:
+
+| Library | Old API | New API (current) | Affected PeMCP files | Shim |
+|---------|---------|-------------------|---------------------|------|
+| **dncil** >=1.0.2 | `dncil.cil.error.CilError` | `dncil.cil.error.MethodBodyFormatError` | `config.py`, `tools_dotnet.py` | `import MethodBodyFormatError as CilError` |
+| **angr** >=9.2.199 | `analyses.FlirtAnalysis()` | `analyses.Flirt()` | `tools_angr_disasm.py` | Direct rename + auto-load FLIRT sigs |
+| **unipacker** >=1.0.8 | `UnpackerEngine(filepath, ...)` | `UnpackerEngine(Sample(filepath), ...)` | `tools_new_libs.py` | Wrap path in `Sample()` object |
+| **angr** >=9.2.199 | `analyses.VFG(...)` | Broken (`SuccessorsEngine` API change) | `tools_angr_dataflow.py` | Graceful error with alternatives hint |
+
+### dncil: CilError → MethodBodyFormatError
+
+dncil v1.0.2 renamed the exception class.  PeMCP imports the new name
+with an alias (`as CilError`) so all downstream `except CilError`
+handlers continue to work.  Without this, `DNCIL_AVAILABLE` is set to
+`False` at startup, silently disabling all .NET CIL tools.
+
+### angr: FlirtAnalysis → Flirt
+
+angr v9.2.199 renamed the FLIRT analysis plugin.  Additionally, the new
+`Flirt()` API requires signatures to be pre-loaded via
+`angr.flirt.load_signatures(path)`, unlike the old `FlirtAnalysis()`
+which handled this internally.  PeMCP auto-discovers FLIRT signature
+files from FLOSS's bundled sigs directory.
+
+### unipacker: Sample object required
+
+unipacker v1.0.8 changed `UnpackerEngine.__init__()` to expect a
+`Sample` instance (from `unipacker.core`) instead of a raw file path
+string.  `Sample()` wraps the path and performs YARA-based packer
+detection.
+
+### angr: VFG (Value Flow Graph) broken
+
+angr v9.2.199 changed the `SuccessorsEngine.__init__()` signature,
+breaking the VFG analysis.  This is an upstream bug.  The
+`get_value_set_analysis` tool catches the error and suggests
+`get_reaching_definitions` or `propagate_constants` as alternatives.
+
+---
+
+## 8. PyPI version ceilings for optional packages
 
 Several optional packages have low version ceilings on PyPI — the latest
 available version is *below* the minimum you might naively expect:
