@@ -31,6 +31,7 @@ RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel
 # --- Install Heavy Dependencies (Cached Layer) ---
 RUN pip install --no-cache-dir \
     "angr[unicorn]" \
+    angr-flirt \
     flare-floss \
     flare-capa \
     vivisect
