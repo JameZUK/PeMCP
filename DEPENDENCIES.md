@@ -185,17 +185,68 @@ detection.
 
 ### angr: VFG ProcedureEngine missing project argument
 
-angr v9.2.199 refactored `SimEngine.__init__()` to require a `project`
-argument, but `VFG._get_simsuccessors()` still calls
-`ProcedureEngine()` without it in 3 error-handling fallback paths
-(SimIRSBError, ClaripyError, SimError).  The main execution path works
-fine — the bug only triggers when VFG encounters unsupported
-instructions or solver errors.
+angr v9.2.199 refactored the engine class hierarchy so that
+`SimEngine.__init__()` requires a `project` argument (it uses
+`self.project.arch` internally).  The inheritance chain is:
+
+```
+SimEngine.__init__(self, project)        ← requires project
+  └── SuccessorsEngine.__init__(self, project)
+        └── ProcedureEngine (ProcedureMixin + SuccessorsEngine)
+```
+
+The bug is in `VFG._get_simsuccessors()` (in
+`angr/analyses/vfg.py`), which has 3 error-handling fallback paths
+that still call `ProcedureEngine()` **without** passing `project`:
+
+```python
+# angr/analyses/vfg.py, lines ~1432/1438/1445 (the buggy code)
+except SimIRSBError as ex:
+    inst = SIM_PROCEDURES["stubs"]["PathTerminator"]()
+    sim_successors = ProcedureEngine().process(state, procedure=inst)
+    #                              ^^^ missing self.project
+```
+
+The **main** execution path (`self.project.factory.successors()`) works
+fine.  The crash only triggers when VFG encounters unsupported VEX
+instructions (`SimIRSBError`), Claripy solver errors (`ClaripyError`),
+or generic simulation errors (`SimError`) — all of which fall through
+to the broken `ProcedureEngine()` calls.
 
 **Fix:** PeMCP monkey-patches `VFG._get_simsuccessors` at import time
-(in `tools_angr_dataflow.py`) to pass `self.project` to all
-`ProcedureEngine()` calls.  The patch is wrapped in try/except so it
-silently skips if angr's internal structure changes in a future version.
+(in `pemcp/mcp/tools_angr_dataflow.py`).  The patched version is a
+faithful copy of the original method with one change on each of the 3
+error paths: `ProcedureEngine()` → `ProcedureEngine(self.project)`.
+The `self.project` attribute is always available because `VFG` inherits
+from `Analysis`, and the `AnalysisFactory` sets `self.project` before
+`__init__` is called (see `angr/analyses/analysis.py` line ~246).
+
+```python
+# The patch (applied at module load time)
+from angr.analyses.vfg import VFG
+
+def _patched_get_simsuccessors(self, state, addr):
+    # ... same as original, except:
+    sim_successors = ProcedureEngine(self.project).process(state, procedure=inst)
+    #                                ^^^^^^^^^^^^^ fix
+
+VFG._get_simsuccessors = _patched_get_simsuccessors
+```
+
+The entire patch is wrapped in `try/except (ImportError, AttributeError)`
+so it silently skips if a future angr version removes `VFG`, renames
+`_get_simsuccessors`, or restructures the class hierarchy.
+
+**Upstream status:** Bug present in angr 9.2.199 (latest on PyPI).
+Not fixed upstream.  These are the only 3 call sites in the angr
+codebase that call `ProcedureEngine()` without arguments.
+
+**To remove this patch:** If a future angr release fixes the bug,
+delete the monkey-patch block in `tools_angr_dataflow.py` (the
+`try` block between the `import networkx` and the
+`# ---- Reaching Definitions Analysis` comment).  No other code
+changes are needed — the tool will use angr's native `VFG` method
+automatically.
 
 ---
 
