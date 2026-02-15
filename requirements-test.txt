@@ -1,5 +1,6 @@
 # Test dependencies for PeMCP
 # Install with: pip install -r requirements-test.txt
 pytest>=7.0
+pytest-cov>=4.0
 httpx>=0.24
 mcp[cli]

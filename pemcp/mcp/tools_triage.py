@@ -154,19 +154,21 @@ def _triage_timestamp_analysis(analysis_mode: str, indicator_limit: int) -> Tupl
         ts_anomalies: List[str] = []
         nt_headers = state.pe_data.get('nt_headers', {})
         file_header = nt_headers.get('file_header', {})
-        # Extract raw TimeDateStamp value
+        # Extract raw TimeDateStamp value (must be numeric)
         raw_ts = None
         for key in ('TimeDateStamp', 'timedatestamp'):
             candidate = file_header.get(key)
             if isinstance(candidate, dict):
-                raw_ts = candidate.get('Value', candidate.get('value'))
+                extracted = candidate.get('Value', candidate.get('value'))
+                if isinstance(extracted, (int, float)):
+                    raw_ts = extracted
             elif isinstance(candidate, (int, float)):
                 raw_ts = candidate
             if raw_ts is not None:
                 break
 
         ts_info: Dict[str, Any] = {"raw_timestamp": raw_ts}
-        if raw_ts is not None and isinstance(raw_ts, (int, float)):
+        if raw_ts is not None:
             try:
                 compile_dt = datetime.datetime.fromtimestamp(int(raw_ts), tz=datetime.timezone.utc)
                 ts_info["compile_date"] = compile_dt.isoformat()
@@ -389,9 +391,9 @@ def _triage_suspicious_imports(indicator_limit: int) -> Tuple[Dict[str, Any], in
                     elif severity == "MEDIUM":
                         risk_score += 1
 
-    # Sort by severity
+    # Sort by severity, then by function name for deterministic output
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2}
-    found_imports.sort(key=lambda x: severity_order.get(x['risk'], 3))
+    found_imports.sort(key=lambda x: (severity_order.get(x['risk'], 3), x.get('dll', ''), x.get('function', '')))
 
     return {
         "suspicious_imports": found_imports[:indicator_limit],
@@ -441,7 +443,7 @@ def _triage_capa_capabilities(indicator_limit: int) -> Tuple[List[Dict[str, Any]
                     else:
                         risk_score += 1
 
-            capabilities.sort(key=lambda x: x['severity'])
+            capabilities.sort(key=lambda x: (x['severity'], x.get('capability', '')))
             capabilities = capabilities[:indicator_limit]
 
     return capabilities, risk_score
@@ -1285,7 +1287,20 @@ def _triage_high_value_strings(sifter_score_threshold: float, indicator_limit: i
                                 high_value_strings.append(s)
 
     unique_indicators = {s.get('string', str(s)): s for s in high_value_strings if isinstance(s, dict)}
-    sorted_indicators = sorted(unique_indicators.values(), key=lambda x: x.get('sifter_score', 0.0), reverse=True)
+    sorted_indicators = sorted(
+        unique_indicators.values(),
+        key=lambda x: (-x.get('sifter_score', 0.0), x.get('string', '')),
+    )
+
+    # Contribute to risk score based on density of high-value indicators
+    indicator_count = len(sorted_indicators)
+    if indicator_count >= 10:
+        risk_score += 3
+    elif indicator_count >= 5:
+        risk_score += 2
+    elif indicator_count >= 1:
+        risk_score += 1
+
     return sorted_indicators[:indicator_limit], risk_score
 
 
