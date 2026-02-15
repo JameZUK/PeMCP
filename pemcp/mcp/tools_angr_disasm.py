@@ -1,5 +1,6 @@
 """MCP tools for angr-based disassembly and function recovery."""
 import asyncio
+import traceback
 from typing import Dict, Any, Optional, List
 
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
@@ -123,8 +124,23 @@ async def get_calling_conventions(
                 state.angr_project.analyses.CompleteCallingConventionsAnalysis(
                     recover_variables=False, cfg=state.angr_cfg.model,
                 )
-            except Exception as e:
-                return {"error": f"CompleteCallingConventionsAnalysis failed: {e}"}
+            except Exception:
+                # Final fallback: run per-function CallingConventionAnalysis
+                # in a loop, which is slower but more compatible.
+                try:
+                    for _addr, _func in list(state.angr_cfg.functions.items())[:500]:
+                        if _func.is_simprocedure or _func.is_syscall:
+                            continue
+                        try:
+                            state.angr_project.analyses.CallingConventionAnalysis(
+                                _func, cfg=state.angr_cfg.model, analyze_callsites=True,
+                            )
+                        except Exception:
+                            pass
+                except Exception as e:
+                    tb = traceback.format_exc()
+                    logger.error("CC recovery failed: %s", tb)
+                    return {"error": f"CompleteCallingConventionsAnalysis failed: {type(e).__name__}: {e}"}
 
         results = []
         for addr, func in state.angr_cfg.functions.items():
@@ -192,27 +208,54 @@ async def get_function_variables(
                          "This is typically caused by an angr version mismatch — "
                          "ensure angr >=9.2.90 is installed.",
             }
+
+        # The VariableManager API changed across angr versions:
+        #   - Older: vm.local_variables / vm.input_variables (properties)
+        #   - Newer: vm.get_variables() returns all, with .category field
         variables = []
-
-        for var in vm.local_variables:
-            entry = {
-                "name": var.name if hasattr(var, 'name') else str(var),
-                "size": getattr(var, 'size', None),
-                "category": getattr(var, 'category', None),
-                "ident": str(var),
-            }
-            variables.append(entry)
-
         params = []
-        try:
-            for var in vm.input_variables:
-                params.append({
-                    "name": var.name if hasattr(var, 'name') else str(var),
-                    "size": getattr(var, 'size', None),
-                    "ident": str(var),
-                })
-        except Exception:
-            pass
+
+        if hasattr(vm, 'get_variables'):
+            # Newer angr API — single method returns everything
+            try:
+                for var in vm.get_variables():
+                    entry = {
+                        "name": var.name if hasattr(var, 'name') else str(var),
+                        "size": getattr(var, 'size', None),
+                        "category": getattr(var, 'category', None),
+                        "ident": str(var),
+                    }
+                    cat = getattr(var, 'category', None)
+                    if cat == 'parameter' or (hasattr(var, 'is_parameter') and var.is_parameter):
+                        params.append(entry)
+                    else:
+                        variables.append(entry)
+            except Exception:
+                # Some builds have get_variables with different signatures
+                pass
+
+        if not variables and not params:
+            # Fallback: try the older property-based API
+            try:
+                for var in vm.local_variables:
+                    variables.append({
+                        "name": var.name if hasattr(var, 'name') else str(var),
+                        "size": getattr(var, 'size', None),
+                        "category": getattr(var, 'category', None),
+                        "ident": str(var),
+                    })
+            except (AttributeError, TypeError):
+                pass
+
+            try:
+                for var in vm.input_variables:
+                    params.append({
+                        "name": var.name if hasattr(var, 'name') else str(var),
+                        "size": getattr(var, 'size', None),
+                        "ident": str(var),
+                    })
+            except (AttributeError, TypeError):
+                pass
 
         return {
             "function_name": func.name,

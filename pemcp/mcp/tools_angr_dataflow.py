@@ -1,5 +1,6 @@
 """MCP tools for angr-based data flow analysis."""
 import datetime
+import traceback
 import uuid
 import asyncio
 from typing import Dict, Any, Optional, List
@@ -59,7 +60,9 @@ async def get_reaching_definitions(
                 func, cfg=state.angr_cfg.model, observe_all=True,
             )
         except Exception as e:
-            return {"error": f"ReachingDefinitionsAnalysis failed: {e}"}
+            tb = traceback.format_exc()
+            logger.error("RDA failed: %s", tb)
+            return {"error": f"ReachingDefinitionsAnalysis failed: {type(e).__name__}: {e}", "traceback_tail": tb[-500:]}
 
         if task_id_for_progress:
             _update_progress(task_id_for_progress, 80, "Formatting results...")
@@ -295,13 +298,32 @@ async def get_control_dependencies(
             return {"error": f"No function found at {hex(func_addr)}."}
 
         try:
-            # CDG expects (cfg, start=func_addr) — not a Function object.
+            # CDG requires a CFGEmulated; CFGFast is not supported.
+            # Attempt to build a CFGEmulated scoped to this function,
+            # which is much cheaper than a full-binary CFGEmulated.
+            try:
+                cfg_emu = state.angr_project.analyses.CFGEmulated(
+                    starts=[addr_used],
+                    context_sensitivity_level=1,
+                    call_depth=0,
+                    normalize=True,
+                )
+            except Exception as e_emu:
+                return {
+                    "error": f"CDG requires CFGEmulated which failed to build: "
+                             f"{type(e_emu).__name__}: {e_emu}",
+                    "hint": "CDG analysis is not compatible with CFGFast. "
+                            "A function-scoped CFGEmulated was attempted but failed. "
+                            "Use get_dominators for a lighter control-flow analysis.",
+                }
             cdg = state.angr_project.analyses.CDG(
-                cfg=state.angr_cfg,
+                cfg=cfg_emu,
                 start=addr_used,
             )
         except Exception as e:
-            return {"error": f"CDG analysis failed: {e}"}
+            tb = traceback.format_exc()
+            logger.error("CDG analysis failed: %s", tb)
+            return {"error": f"CDG analysis failed: {type(e).__name__}: {e}"}
 
         graph = cdg.graph
         if graph is None:
@@ -385,7 +407,9 @@ async def propagate_constants(
             try:
                 prop = state.angr_project.analyses.PropagatorAnalysis(func)
             except Exception as e:
-                return {"error": f"PropagatorAnalysis failed: {e}"}
+                tb = traceback.format_exc()
+                logger.error("PropagatorAnalysis failed: %s", tb)
+                return {"error": f"PropagatorAnalysis failed: {type(e).__name__}: {e}", "traceback_tail": tb[-500:]}
 
         # Extract replacements — these map (addr, register/tmp) -> constant value
         replacements = []

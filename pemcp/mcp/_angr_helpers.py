@@ -136,6 +136,13 @@ def _format_cc_info(func) -> Dict[str, Any]:
             info["return_location"] = str(cc.RETURN_VAL) if hasattr(cc, "RETURN_VAL") else None
         except Exception:
             info["return_location"] = None
+        # Try to extract argument objects from cc.args
+        try:
+            if hasattr(cc, 'args') and cc.args:
+                info["num_args"] = len(cc.args)
+                info["arg_details"] = [str(a) for a in cc.args[:8]]
+        except Exception:
+            pass
     proto = func.prototype
     if proto:
         try:
@@ -146,4 +153,14 @@ def _format_cc_info(func) -> Dict[str, Any]:
             info["num_args"] = len(proto.args) if hasattr(proto, "args") else None
         except Exception:
             info["num_args"] = None
+
+    # Even without a formal CC, provide useful heuristic data
+    if not cc and not proto:
+        try:
+            info["block_count"] = len(list(func.blocks))
+            info["has_return"] = func.has_return
+            info["is_plt"] = getattr(func, 'is_plt', False)
+        except Exception:
+            pass
+
     return info

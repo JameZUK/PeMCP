@@ -64,9 +64,13 @@ async def diff_binaries(
             _update_progress(task_id_for_progress, 50, "Running BinDiff analysis...")
 
         try:
-            diff = state.angr_project.analyses.BinDiff(proj_b, cfg_a=state.angr_cfg, cfg_b=cfg_b)
+            # BinDiff internally calls get_any_node() which lives on
+            # the CFGModel, not on the raw CFGFast analysis object.
+            diff = state.angr_project.analyses.BinDiff(
+                proj_b, cfg_a=state.angr_cfg.model, cfg_b=cfg_b.model,
+            )
         except Exception as e:
-            return {"error": f"BinDiff failed: {e}"}
+            return {"error": f"BinDiff failed: {type(e).__name__}: {e}"}
 
         if task_id_for_progress:
             _update_progress(task_id_for_progress, 90, "Formatting results...")
@@ -479,7 +483,6 @@ async def save_patched_binary(
             patches_applied = 0
 
             for section in getattr(main_obj, 'sections', []):
-                sec_offset = section.addr  # file offset or VA depending on loader
                 sec_vaddr = section.min_addr
                 sec_size = section.memsize
 
@@ -488,14 +491,19 @@ async def save_patched_binary(
                 except Exception:
                     continue
 
-                # Map VA to file offset
+                # Map VA to file offset — CLE section attribute names vary
+                # by backend (PE vs ELF vs Mach-O).
                 file_offset = getattr(section, 'offset', None)
                 if file_offset is None:
-                    # Try to compute from section properties
+                    file_offset = getattr(section, 'addr', None)
+                if file_offset is None:
+                    # Compute from VA and mapped base as last resort
                     try:
-                        file_offset = sec_vaddr - main_obj.mapped_base + getattr(section, 'addr', 0)
+                        file_offset = sec_vaddr - main_obj.mapped_base
                     except Exception:
                         continue
+                if file_offset is None or file_offset < 0:
+                    continue
 
                 for i in range(min(len(mem_data), len(original_data) - file_offset)):
                     if file_offset + i < len(original_data) and mem_data[i] != original_data[file_offset + i]:
