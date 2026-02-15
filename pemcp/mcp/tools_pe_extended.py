@@ -203,7 +203,7 @@ async def extract_resources(ctx: Context, limit: int = 50) -> Dict[str, Any]:
             elif entry.name:
                 name = f"{type_name}/{entry.name}" if type_name else str(entry.name)
 
-            if hasattr(entry, 'directory'):
+            if hasattr(entry, 'directory') and depth < 10:
                 _walk_resources(entry.directory.entries, name, depth + 1)
             elif hasattr(entry, 'data'):
                 data_rva = entry.data.struct.OffsetToData

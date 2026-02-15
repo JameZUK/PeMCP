@@ -6,9 +6,12 @@ In HTTP mode each MCP session gets its own ``AnalyzerState`` instance so
 concurrent clients cannot interfere with each other.
 """
 import contextvars
+import logging
 import time
 import threading
 from typing import Dict, Any, Optional, List
+
+logger = logging.getLogger("PeMCP")
 
 # Maximum number of completed/failed background tasks to retain per session.
 MAX_COMPLETED_TASKS = 50
@@ -143,7 +146,7 @@ class AnalyzerState:
                     try:
                         self.pe_object.close()
                     except Exception:
-                        pass
+                        logger.debug("Failed to close PE object", exc_info=True)
                 self.pe_object = None
 
 
