@@ -66,7 +66,7 @@ async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, A
             {"tool": "get_reaching_definitions", "params": "function_address",
              "description": "Reaching definition analysis for a function."},
             {"tool": "get_data_dependencies", "params": "function_address",
-             "description": "Data dependency analysis for a function."},
+             "description": "Data dependency analysis (def-use chains) for a function."},
             {"tool": "propagate_constants", "params": "function_address",
              "description": "Constant propagation analysis."},
             {"tool": "get_value_set_analysis", "params": "function_address",
