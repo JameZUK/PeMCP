@@ -264,7 +264,7 @@ def get_session_key_from_context(ctx) -> str:
         if hasattr(ctx, 'session'):
             return str(id(ctx.session))
     except Exception:
-        pass
+        logger.debug("Could not extract session key from context, using default", exc_info=True)
     return "default"
 
 

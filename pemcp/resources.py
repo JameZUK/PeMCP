@@ -131,7 +131,7 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
                 logger.error(f"Failed to remove existing target rules directory '{final_rules_target_path}': {e_rm}")
                 if os.path.isdir(extracted_top_level_dir_path): # Clean up the originally extracted folder
                     try: shutil.rmtree(extracted_top_level_dir_path)
-                    except Exception: pass
+                    except Exception: logger.debug("Cleanup of extracted dir failed", exc_info=True)
                 if os.path.exists(zip_path):
                     try: os.remove(zip_path)
                     except OSError: pass
@@ -148,11 +148,11 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
             # Clean up potentially partially copied target
             if os.path.isdir(final_rules_target_path):
                 try: shutil.rmtree(final_rules_target_path)
-                except Exception: pass
+                except Exception: logger.debug("Cleanup of target dir failed", exc_info=True)
             # Clean up the originally extracted folder in any case
             if os.path.isdir(extracted_top_level_dir_path):
-                 try: shutil.rmtree(extracted_top_level_dir_path)
-                 except Exception: pass
+                try: shutil.rmtree(extracted_top_level_dir_path)
+                except Exception: logger.debug("Cleanup of extracted dir failed", exc_info=True)
             if os.path.exists(zip_path):
                 try: os.remove(zip_path)
                 except OSError: pass
@@ -185,7 +185,7 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
         logger.error(f"An unexpected error occurred during capa rules download/extraction/organization: {e}", exc_info=verbose)
         if extracted_top_level_dir_path and os.path.isdir(extracted_top_level_dir_path): # If top level was created
             try: shutil.rmtree(extracted_top_level_dir_path) # Clean it up
-            except Exception: pass
+            except Exception: logger.debug("Cleanup of extracted dir failed", exc_info=True)
     finally:
         if os.path.exists(zip_path):
             try: os.remove(zip_path)

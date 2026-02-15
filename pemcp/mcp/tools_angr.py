@@ -8,21 +8,13 @@ from typing import Dict, Any, Optional, List
 
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
-from pemcp.background import _update_progress, _run_background_task_wrapper
+from pemcp.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
 
 if ANGR_AVAILABLE:
     import angr
     import angr.analyses.decompiler
     import networkx as nx
-
-
-def _log_task_exception(task_id: str):
-    """Return a done-callback that logs unhandled exceptions from background tasks."""
-    def _callback(t):
-        if not t.cancelled() and t.exception() is not None:
-            logger.error(f"Background task '{task_id}' failed: {t.exception()}")
-    return _callback
 
 
 @tool_decorator
@@ -273,7 +265,8 @@ async def find_path_to_address(
             try:
                 simgr.use_technique(angr.exploration_techniques.Veritesting())
                 techniques_applied.append("Veritesting")
-            except Exception: pass
+            except Exception:
+                logger.warning("Failed to enable Veritesting technique", exc_info=True)
 
         if use_dfs:
             simgr.use_technique(angr.exploration_techniques.DFS())
