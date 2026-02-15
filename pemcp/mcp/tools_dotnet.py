@@ -9,7 +9,7 @@ if DNFILE_AVAILABLE:
     import dnfile
 if DNCIL_AVAILABLE:
     from dncil.cil.body import CilMethodBody
-    from dncil.cil.error import CilError
+    from dncil.cil.error import MethodBodyFormatError as CilError
     from dncil.clr.token import Token
 
 

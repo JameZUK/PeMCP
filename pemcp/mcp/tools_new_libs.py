@@ -32,9 +32,11 @@ if UNIPACKER_AVAILABLE:
     from unipacker.core import UnpackerClient
     try:
         from unipacker.core import UnpackerEngine, SimpleClient
+        from unipacker.core import Sample as _UnipackerSample
     except ImportError:
         UnpackerEngine = None
         SimpleClient = None
+        _UnipackerSample = None
 if DOTNETFILE_AVAILABLE:
     import dotnetfile
 if PPDEEP_AVAILABLE:
@@ -689,7 +691,9 @@ async def auto_unpack_pe(
             if UnpackerEngine is not None and SimpleClient is not None:
                 done_event = threading.Event()
                 client = SimpleClient(done_event)
-                engine = UnpackerEngine(state.filepath, output_path)
+                # unipacker >=1.0.8 expects a Sample object, not a raw path
+                _sample = _UnipackerSample(state.filepath) if _UnipackerSample is not None else state.filepath
+                engine = UnpackerEngine(_sample, output_path)
                 engine.register_client(client)
                 engine.emu()
                 # Wait for completion (with timeout to avoid hanging)
