@@ -35,6 +35,9 @@ class AnalyzerState:
         # Samples directory path (configured via --samples-path or PEMCP_SAMPLES env var)
         self.samples_path: Optional[str] = None
 
+        # API key for HTTP bearer token authentication (None = no auth required)
+        self.api_key: Optional[str] = None
+
         # PE close guard
         self._pe_lock = threading.Lock()
 

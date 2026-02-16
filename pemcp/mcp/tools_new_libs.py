@@ -1,7 +1,6 @@
 """MCP tools powered by new library integrations — LIEF, Capstone, Keystone, Speakeasy, etc."""
 import asyncio
 import os
-import struct
 import math
 import json
 import shutil
@@ -50,6 +49,43 @@ if BINWALK_AVAILABLE and not BINWALK_CLI_ONLY:
 # ---------------------------------------------------------------------------
 #  Helpers
 # ---------------------------------------------------------------------------
+
+# Shared architecture mappings — single source of truth for arch constants.
+_CAPSTONE_ARCH_MAP = {}
+_KEYSTONE_ARCH_MAP = {}
+
+if CAPSTONE_AVAILABLE:
+    _CAPSTONE_ARCH_MAP = {
+        "x86": (capstone.CS_ARCH_X86, capstone.CS_MODE_32),
+        "x86_64": (capstone.CS_ARCH_X86, capstone.CS_MODE_64),
+        "arm": (capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM),
+        "arm64": (capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM),
+        "mips": (capstone.CS_ARCH_MIPS, capstone.CS_MODE_MIPS32),
+    }
+
+if KEYSTONE_AVAILABLE:
+    _KEYSTONE_ARCH_MAP = {
+        "x86": (keystone.KS_ARCH_X86, keystone.KS_MODE_32),
+        "x86_64": (keystone.KS_ARCH_X86, keystone.KS_MODE_64),
+        "arm": (keystone.KS_ARCH_ARM, keystone.KS_MODE_ARM),
+        "arm64": (keystone.KS_ARCH_ARM64, keystone.KS_MODE_LITTLE_ENDIAN),
+        "mips": (keystone.KS_ARCH_MIPS, keystone.KS_MODE_MIPS32),
+    }
+
+
+def _get_capstone_arch(architecture: str):
+    """Look up Capstone arch/mode tuple, raising ValueError on unknown arch."""
+    if architecture not in _CAPSTONE_ARCH_MAP:
+        raise ValueError(f"Unsupported architecture. Supported: {', '.join(_CAPSTONE_ARCH_MAP.keys())}")
+    return _CAPSTONE_ARCH_MAP[architecture]
+
+
+def _get_keystone_arch(architecture: str):
+    """Look up Keystone arch/mode tuple, raising ValueError on unknown arch."""
+    if architecture not in _KEYSTONE_ARCH_MAP:
+        raise ValueError(f"Unsupported architecture. Supported: {', '.join(_KEYSTONE_ARCH_MAP.keys())}")
+    return _KEYSTONE_ARCH_MAP[architecture]
+
 
 def _check_lib(lib_name: str, available: bool, tool_name: str):
     if not available:
@@ -269,20 +305,9 @@ async def disassemble_raw_bytes(
     except ValueError:
         raise ValueError("Invalid hex bytes.")
 
-    base_addr = int(base_address, 16)
+    base_addr = int(base_address, 0)
 
-    ARCH_MAP = {
-        "x86": (capstone.CS_ARCH_X86, capstone.CS_MODE_32),
-        "x86_64": (capstone.CS_ARCH_X86, capstone.CS_MODE_64),
-        "arm": (capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM),
-        "arm64": (capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM),
-        "mips": (capstone.CS_ARCH_MIPS, capstone.CS_MODE_MIPS32),
-    }
-
-    if architecture not in ARCH_MAP:
-        raise ValueError(f"Unsupported architecture. Supported: {', '.join(ARCH_MAP.keys())}")
-
-    arch, mode = ARCH_MAP[architecture]
+    arch, mode = _get_capstone_arch(architecture)
 
     def _disasm():
         md = capstone.Cs(arch, mode)
@@ -343,20 +368,9 @@ async def assemble_instruction(
     await ctx.info(f"Assembling: {assembly[:60]}")
     _check_lib("keystone", KEYSTONE_AVAILABLE, "assemble_instruction")
 
-    base_addr = int(base_address, 16)
+    base_addr = int(base_address, 0)
 
-    ARCH_MAP = {
-        "x86": (keystone.KS_ARCH_X86, keystone.KS_MODE_32),
-        "x86_64": (keystone.KS_ARCH_X86, keystone.KS_MODE_64),
-        "arm": (keystone.KS_ARCH_ARM, keystone.KS_MODE_ARM),
-        "arm64": (keystone.KS_ARCH_ARM64, keystone.KS_MODE_LITTLE_ENDIAN),
-        "mips": (keystone.KS_ARCH_MIPS, keystone.KS_MODE_MIPS32),
-    }
-
-    if architecture not in ARCH_MAP:
-        raise ValueError(f"Unsupported architecture. Supported: {', '.join(ARCH_MAP.keys())}")
-
-    arch, mode = ARCH_MAP[architecture]
+    arch, mode = _get_keystone_arch(architecture)
 
     def _assemble():
         ks = keystone.Ks(arch, mode)
@@ -399,19 +413,16 @@ async def patch_with_assembly(
     _check_angr_ready("patch_with_assembly")
 
     from pemcp.config import ANGR_AVAILABLE
+    if not ANGR_AVAILABLE:
+        raise RuntimeError(
+            "[patch_with_assembly] The angr library is not installed. "
+            "Install with: pip install 'angr[unicorn]'"
+        )
     import angr
 
-    addr = int(address, 16)
+    addr = int(address, 0)
 
-    ARCH_MAP = {
-        "x86": (keystone.KS_ARCH_X86, keystone.KS_MODE_32),
-        "x86_64": (keystone.KS_ARCH_X86, keystone.KS_MODE_64),
-    }
-
-    if architecture not in ARCH_MAP:
-        raise ValueError(f"Unsupported architecture for patching: {', '.join(ARCH_MAP.keys())}")
-
-    arch, mode = ARCH_MAP[architecture]
+    arch, mode = _get_keystone_arch(architecture)
 
     def _patch():
         ks = keystone.Ks(arch, mode)
@@ -425,12 +436,13 @@ async def patch_with_assembly(
 
         patch_data = bytes(encoding)
 
-        if state.angr_project is None:
-            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        project, _ = state.get_angr_snapshot()
+        if project is None:
+            project = angr.Project(state.filepath, auto_load_libs=False)
 
-        state.angr_project.loader.memory.store(addr, patch_data)
-        state.angr_cfg = None  # Invalidate CFG
-        state.angr_loop_cache = None
+        project.loader.memory.store(addr, patch_data)
+        # Invalidate CFG and loop cache via atomic setter
+        state.set_angr_results(project, None, None, None)
 
         return {
             "status": "success",

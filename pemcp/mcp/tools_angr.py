@@ -468,49 +468,48 @@ async def analyze_binary_loops(
         # Configuration requested by the user
         req_config = {"resolve_jumps": resolve_indirect_jumps, "data_refs": scan_data_refs}
 
+        # Use atomic snapshot to avoid race conditions with concurrent callers
+        project, cfg = state.get_angr_snapshot()
+
         # Determine if we need to rebuild the CFG
         need_rebuild = False
 
-        if state.angr_project is None:
-            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+        if project is None:
+            project = angr.Project(state.filepath, auto_load_libs=False)
+            state.set_angr_results(project, None, state.angr_loop_cache, state.angr_loop_cache_config)
             need_rebuild = True
-        elif state.angr_cfg is None:
+        elif cfg is None:
             need_rebuild = True
         else:
             # If we have a CFG, check if it satisfies the request.
-            # If user wants data_refs but current CFG doesn't have them, we must rebuild.
-            current_has_data = getattr(state, 'angr_loop_cache_config', {}).get('data_refs', False)
+            current_has_data = (state.angr_loop_cache_config or {}).get('data_refs', False)
             if scan_data_refs and not current_has_data:
                 need_rebuild = True
-
-            # If user wants indirect jumps but current CFG was built without them (unlikely in this script's flow, but possible)
-            # We assume startup analysis enables jump resolution, so we usually don't need to rebuild.
 
         if need_rebuild:
             if task_id_for_progress: _update_progress(task_id_for_progress, 10, "Building/Upgrading Control Flow Graph...")
 
             # CFG Generation (Blocking)
-            new_cfg = state.angr_project.analyses.CFGFast(
+            new_cfg = project.analyses.CFGFast(
                 normalize=True,
                 resolve_indirect_jumps=resolve_indirect_jumps,
                 data_references=scan_data_refs,
                 force_complete_scan=scan_data_refs
             )
-            state.angr_cfg = new_cfg
-
-            # Invalidate loop cache if we rebuilt CFG
-            state.angr_loop_cache = None
+            # Use atomic setter to store results
+            state.set_angr_results(project, new_cfg, None, state.angr_loop_cache_config)
+            cfg = new_cfg
 
         # Ensure loop cache exists
         if state.angr_loop_cache is None:
             if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...")
 
-            loop_finder = state.angr_project.analyses.LoopFinder(kb=state.angr_project.kb)
+            loop_finder = project.analyses.LoopFinder(kb=project.kb)
             raw_loops = {}
 
             for loop in loop_finder.loops:
                 try:
-                    node = state.angr_cfg.model.get_any_node(loop.entry.addr)
+                    node = cfg.model.get_any_node(loop.entry.addr)
                     if node and node.function_address:
                         func_addr = node.function_address
                         if func_addr not in raw_loops: raw_loops[func_addr] = []
@@ -523,15 +522,14 @@ async def analyze_binary_loops(
                         })
                 except Exception: continue
 
-            state.angr_loop_cache = raw_loops
-            state.angr_loop_cache_config = req_config
+            state.set_angr_results(project, cfg, raw_loops, req_config)
         else:
             if task_id_for_progress: _update_progress(task_id_for_progress, 90, "Using cached analysis data...")
 
         # Filtering Results
         if task_id_for_progress: _update_progress(task_id_for_progress, 95, "Formatting results...")
         results = []
-        current_cfg_ref = state.angr_cfg
+        current_cfg_ref = cfg
 
         for func_addr, loops in state.angr_loop_cache.items():
             valid_loops = [l for l in loops if l['blocks'] >= min_loop_size]

@@ -109,7 +109,8 @@ def main():
     mcp_group.add_argument("--mcp-host", type=str, default="127.0.0.1", help="MCP server host (default: 127.0.0.1).")
     mcp_group.add_argument("--mcp-port", type=int, default=8082, help="MCP server port (default: 8082).")
     mcp_group.add_argument("--mcp-transport", type=str, default="stdio", choices=["stdio", "sse", "streamable-http"], help="MCP transport protocol: 'stdio' (default), 'streamable-http' (recommended for network), or 'sse' (deprecated).")
-    mcp_group.add_argument("--allowed-paths", nargs="+", default=None, help="Restrict open_file to these directories (security sandbox for HTTP mode). Accepts multiple paths.")
+    mcp_group.add_argument("--allowed-paths", nargs="+", default=None, help="Restrict open_file to these directories (security sandbox for HTTP mode). Required for HTTP/SSE transports. Accepts multiple paths.")
+    mcp_group.add_argument("--api-key", type=str, default=None, help="Bearer token for HTTP mode authentication. Clients must send 'Authorization: Bearer <key>' header. Can also be set via PEMCP_API_KEY env var.")
     mcp_group.add_argument("--samples-path", type=str, default=None, help="Path to the directory containing sample files for analysis. Exposed via the list_samples tool. Falls back to PEMCP_SAMPLES env var if not set.")
 
     args = None
@@ -211,15 +212,30 @@ def main():
             logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.");
             sys.exit(1)
 
-        # Configure path sandboxing
+        # Configure path sandboxing — mandatory for HTTP transports
         if args.allowed_paths:
             state.allowed_paths = [str(Path(p).resolve()) for p in args.allowed_paths]
             logger.info(f"Path sandboxing enabled. Allowed paths: {state.allowed_paths}")
         elif args.mcp_transport in ("sse", "streamable-http"):
-            logger.warning(
-                "Running in network mode without --allowed-paths. "
-                "MCP clients can open arbitrary files. Consider using --allowed-paths for security."
+            logger.critical(
+                "Running in network mode (HTTP) requires --allowed-paths for security. "
+                "Specify directories that MCP clients are allowed to access, e.g.: "
+                "--allowed-paths /path/to/samples /tmp/analysis"
             )
+            sys.exit(1)
+
+        # Configure API key authentication for HTTP transports
+        api_key = args.api_key or os.environ.get("PEMCP_API_KEY")
+        if args.mcp_transport in ("sse", "streamable-http"):
+            if api_key:
+                state.api_key = api_key
+                logger.info("API key authentication enabled for HTTP transport.")
+            else:
+                logger.warning(
+                    "Running HTTP transport without --api-key. Any client that can reach the "
+                    "endpoint can use all tools. Set --api-key or PEMCP_API_KEY env var for "
+                    "bearer token authentication. Use a TLS-terminating reverse proxy in production."
+                )
 
         # Configure samples directory
         samples_path = args.samples_path or os.environ.get("PEMCP_SAMPLES")
@@ -362,7 +378,28 @@ def main():
 
         server_exc=None
         try:
-            mcp_server.run(transport=args.mcp_transport)
+            # If API key is configured for HTTP transport, wrap with auth middleware
+            if api_key and args.mcp_transport in ("sse", "streamable-http"):
+                try:
+                    import uvicorn
+                    from pemcp.auth import BearerAuthMiddleware
+
+                    if args.mcp_transport == "streamable-http":
+                        app = mcp_server.streamable_http_app()
+                    else:
+                        app = mcp_server.sse_app()
+                    secured_app = BearerAuthMiddleware(app, api_key)
+                    uvicorn.run(
+                        secured_app,
+                        host=args.mcp_host,
+                        port=args.mcp_port,
+                        log_level=logging.getLevelName(log_level).lower(),
+                    )
+                except (ImportError, AttributeError) as e:
+                    logger.warning(f"Could not apply auth middleware ({e}), falling back to unauthenticated mode")
+                    mcp_server.run(transport=args.mcp_transport)
+            else:
+                mcp_server.run(transport=args.mcp_transport)
         except KeyboardInterrupt:
             logger.info("MCP Server stopped by user (KeyboardInterrupt).")
         except Exception as e:
