@@ -106,6 +106,10 @@ def emulate_shellcode(cmd):
             arch_val,
             data=sc_data,
         )
+    except Exception as e:
+        return {"error": f"Failed to load shellcode: {e}"}
+
+    try:
         se.run_shellcode(addr, timeout=timeout_seconds)
     except Exception:
         # Emulation may raise on exit or unhandled API -- expected

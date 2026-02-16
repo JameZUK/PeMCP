@@ -124,7 +124,7 @@ async def search_floss_strings(
 
         if min_ok and max_ok:
             # Length and Regex filtering
-            string_to_search = item["string"]
+            string_to_search = item.get("string", "")
             if any(p.search(string_to_search) for p in compiled_patterns):
                 if len(string_to_search) >= min_length:
                     matches.append(item)
@@ -774,10 +774,6 @@ async def get_top_sifted_strings(
         raise ValueError("Parameter 'sort_order' must be either 'ascending' or 'descending'.")
     if filter_regex:
         _validate_regex_pattern(filter_regex)
-        try:
-            re.compile(filter_regex)
-        except re.error as e:
-            raise ValueError(f"Invalid 'filter_regex': {e}")
 
     # --- Data Retrieval and Aggregation ---
     _check_pe_loaded("get_top_sifted_strings")
@@ -809,8 +805,10 @@ async def get_top_sifted_strings(
     # --- Granular Filtering Logic ---
     filtered_strings = []
     for item in all_strings:
-        score = item['sifter_score']
-        str_val = item['string']
+        score = item.get('sifter_score', 0.0)
+        str_val = item.get('string', '')
+        if not str_val:
+            continue
         category = item.get('category')
 
         if min_sifter_score is not None and score < min_sifter_score: continue

@@ -589,8 +589,11 @@ async def _run_speakeasy(cmd: dict, timeout_seconds: int) -> dict:
             timeout=timeout_seconds + 30,  # buffer beyond emulation timeout
         )
     except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass  # Best-effort cleanup; process may already be dead
         return {"error": f"Speakeasy emulation timed out after {timeout_seconds}s"}
 
     if proc.returncode != 0:
@@ -710,7 +713,16 @@ async def auto_unpack_pe(
                 engine.register_client(client)
                 engine.emu()
                 # Wait for completion (with timeout to avoid hanging)
-                done_event.wait(timeout=300)
+                if not done_event.wait(timeout=300):
+                    logger.warning("Unipacker timed out after 300s")
+                    return {
+                        "status": "timeout",
+                        "input_file": state.filepath,
+                        "output_file": output_path,
+                        "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
+                        "warning": "Unpacking timed out after 300s. Output may be incomplete.",
+                        "hint": "Use open_file() to load the output and check if it is valid.",
+                    }
             else:
                 # Fallback: try calling UnpackerClient directly in case
                 # an older unipacker version has a simpler API.
@@ -870,8 +882,10 @@ async def scan_for_embedded_files(
             ["binwalk", "--quiet", state.filepath],
             capture_output=True, text=True, timeout=60,
         )
+        _cli_warning = None
         if proc.returncode != 0:
-            logger.warning("binwalk CLI exited with code %d: %s", proc.returncode, proc.stderr[:200])
+            _cli_warning = f"binwalk CLI exited with code {proc.returncode}: {proc.stderr[:200]}"
+            logger.warning(_cli_warning)
         results = []
         # binwalk output: "DECIMAL       HEXADECIMAL     DESCRIPTION"
         # then lines like "12345         0x3039          Zip archive data, ..."
@@ -887,18 +901,22 @@ async def scan_for_embedded_files(
                 })
                 if len(results) >= limit:
                     break
-        return results
+        return results, _cli_warning
 
     def _scan():
         try:
+            warning = None
             if BINWALK_CLI_ONLY:
-                results = _scan_cli()
+                results, warning = _scan_cli()
             else:
                 results = _scan_python_api()
-            return {
+            response = {
                 "total_found": len(results),
                 "embedded_files": results[:limit],
             }
+            if warning:
+                response["warning"] = warning
+            return response
         except Exception as e:
             return {"error": f"Binwalk scan failed: {e}"}
 
