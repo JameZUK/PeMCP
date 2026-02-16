@@ -1,11 +1,45 @@
 """Utility functions for PE analysis output and formatting."""
 import datetime
 import math
+import re
 import sys
 
 from typing import Dict, Any, Optional, List
 
 from pemcp.config import pefile
+
+# --- ReDoS Protection ---
+_MAX_REGEX_PATTERN_LENGTH = 1000
+# Detects nested quantifiers that can cause catastrophic backtracking.
+# Matches patterns like (X+)+, (X*)+, (X+)*, (X{n,m})+ etc.
+_NESTED_QUANTIFIER_RE = re.compile(
+    r'\([^)]*[+*}\?][^)]*\)\s*[+*{]'
+)
+
+
+def validate_regex_pattern(pattern: str) -> None:
+    """Validate a regex pattern for safety before compilation.
+
+    Raises ValueError if the pattern is too long, contains constructs
+    that are known to cause catastrophic backtracking (ReDoS), or is
+    not a valid regular expression.
+    """
+    if len(pattern) > _MAX_REGEX_PATTERN_LENGTH:
+        raise ValueError(
+            f"Regex pattern is too long ({len(pattern)} chars). "
+            f"Maximum allowed length is {_MAX_REGEX_PATTERN_LENGTH} characters."
+        )
+    if _NESTED_QUANTIFIER_RE.search(pattern):
+        raise ValueError(
+            f"Regex pattern contains nested quantifiers which can cause "
+            f"catastrophic backtracking (ReDoS). Please simplify the pattern: "
+            f"'{pattern[:80]}{'...' if len(pattern) > 80 else ''}'"
+        )
+    # Verify the pattern actually compiles
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"Invalid regex pattern: {e}") from e
 
 
 def shannon_entropy(data: bytes) -> float:

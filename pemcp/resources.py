@@ -1,4 +1,5 @@
 """Resource management: PEiD database and Capa rules download/extraction."""
+import hashlib
 import os
 import zipfile
 import shutil
@@ -14,6 +15,37 @@ from pemcp.utils import safe_print
 if REQUESTS_AVAILABLE:
     import requests
 
+# Expected SHA256 checksums for pinned resource downloads.
+# Update these when bumping the URLs in config.py.
+_EXPECTED_CHECKSUMS: dict = {
+    # Add sha256 hex digests here when known, keyed by download URL.
+    # e.g. "https://...capa-rules-v9.3.0.zip": "abcdef...",
+}
+
+
+def _verify_download_checksum(filepath: str, url: str) -> bool:
+    """Verify a downloaded file against a pinned SHA256 checksum, if available.
+
+    Returns True if the checksum matches or no checksum is pinned for this URL.
+    Returns False if the checksum is pinned but does not match.
+    """
+    expected = _EXPECTED_CHECKSUMS.get(url)
+    if expected is None:
+        return True  # No pinned checksum — accept the download
+    sha256 = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    actual = sha256.hexdigest()
+    if actual != expected:
+        logger.error(
+            f"Checksum mismatch for {url}: expected {expected[:16]}..., "
+            f"got {actual[:16]}... — the download may be corrupt or tampered."
+        )
+        return False
+    logger.info(f"Checksum verified for download: {os.path.basename(filepath)}")
+    return True
+
 
 def ensure_peid_db_exists(url: str, local_path: str, verbose: bool = False) -> bool:
     if os.path.exists(local_path):
@@ -27,6 +59,9 @@ def ensure_peid_db_exists(url: str, local_path: str, verbose: bool = False) -> b
         response = requests.get(url, timeout=15); response.raise_for_status()
         Path(local_path).parent.mkdir(parents=True, exist_ok=True)
         with open(local_path, 'wb') as f: f.write(response.content)
+        if not _verify_download_checksum(local_path, url):
+            os.remove(local_path)
+            return False
         safe_print(f"[*] PEiD database successfully downloaded to: {local_path}", verbose_prefix=" ")
         return True
     except requests.exceptions.RequestException as e:
@@ -66,6 +101,11 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         logger.info("Capa rules zip downloaded successfully.")
+
+        if not _verify_download_checksum(zip_path, rules_zip_url):
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            return None
 
         logger.info(f"Extracting capa rules from {zip_path} into {rules_base_dir}...")
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:

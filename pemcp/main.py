@@ -18,6 +18,7 @@ from pemcp.config import (
     log_library_availability,
 )
 from pemcp.mock import MockPE
+from pemcp.utils import validate_regex_pattern
 from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background
 from pemcp.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from pemcp.parsers.strings import _extract_strings_from_data, _format_hex_dump_lines, _perform_unified_string_sifting
@@ -164,6 +165,14 @@ def main():
     if args.skip_yara: analyses_to_skip_arg_list.append("yara")
     if analyses_to_skip_arg_list:
         logger.info(f"Skipping analyses: {', '.join(analyses_to_skip_arg_list)}")
+
+    # Validate user-supplied regex pattern early to catch ReDoS / invalid patterns
+    if args.regex_pattern:
+        try:
+            validate_regex_pattern(args.regex_pattern)
+        except ValueError as e:
+            print(f"[!] Error: Invalid --regex pattern: {e}", file=sys.stderr)
+            sys.exit(1)
 
     # FLOSS Config
     floss_min_len_resolved = args.floss_min_length if args.floss_min_length is not None else FLOSS_MIN_LENGTH_DEFAULT
@@ -352,14 +361,22 @@ def main():
                         tool_label="startup_auto_analysis",
                     )
 
-            except Exception as e:
-                logger.critical(f"MCP: Failed to pre-load file: {str(e)}", exc_info=True)
+            except (OSError, pefile.PEFormatError, ValueError, RuntimeError) as e:
+                logger.critical(f"MCP: Failed to pre-load file: {type(e).__name__}: {e}", exc_info=True)
                 if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
                     temp_pe_obj_for_preload.close()
                 state.filepath = None
                 state.pe_data = None
                 state.pe_object = None
                 logger.error("MCP server startup aborted due to pre-load failure.")
+                sys.exit(1)
+            except Exception as e:
+                logger.critical(f"MCP: Unexpected error during pre-load: {type(e).__name__}: {e}", exc_info=True)
+                if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
+                    temp_pe_obj_for_preload.close()
+                state.filepath = None
+                state.pe_data = None
+                state.pe_object = None
                 sys.exit(1)
         else:
             logger.info("MCP Server: No --input-file provided. Server starting without a pre-loaded file.")
