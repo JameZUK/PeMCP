@@ -391,9 +391,13 @@ async def open_file(
         return result
 
     except Exception as e:
-        # Clean up on failure
+        # Clean up on failure, but preserve an error record so clients can
+        # distinguish "no file ever loaded" from "last open attempt failed".
         state.filepath = None
-        state.pe_data = None
+        state.pe_data = {
+            "error": f"open_file failed: {type(e).__name__}: {e}",
+            "failed_path": abs_path,
+        }
         state.pe_object = None
         logger.error(f"open_file failed for '{abs_path}': {e}", exc_info=True)
         raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e

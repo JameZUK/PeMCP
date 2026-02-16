@@ -155,8 +155,20 @@ except Exception as e_generic:
 
 # --- START FLOSS IMPORT SECTION ---
 MIN_STR_LEN_FALLBACK_FLOSS = 4
-class DebugLevelFallbackFloss: NONE, DEFAULT, TRACE, SUPERTRACE = 0, 1, 2, 3
-class StringTypeFallbackFloss: STATIC, STACK, TIGHT, DECODED = "static", "stack", "tight", "decoded"
+
+from enum import IntEnum, Enum
+
+class DebugLevelFallbackFloss(IntEnum):
+    NONE = 0
+    DEFAULT = 1
+    TRACE = 2
+    SUPERTRACE = 3
+
+class StringTypeFallbackFloss(str, Enum):
+    STATIC = "static"
+    STACK = "stack"
+    TIGHT = "tight"
+    DECODED = "decoded"
 
 FLOSS_MIN_LENGTH_DEFAULT = MIN_STR_LEN_FALLBACK_FLOSS
 Actual_DebugLevel_Floss: Type = DebugLevelFallbackFloss

@@ -149,6 +149,85 @@ class TestPathSandboxing:
         # Exact path should be allowed
         s.check_path_allowed(str(test_file))
 
+    def test_relative_traversal_blocked(self, tmp_path):
+        """Relative path traversal (../../) should be resolved and blocked."""
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        s = AnalyzerState()
+        s.allowed_paths = [str(allowed)]
+        # Construct a path that traverses out of the allowed directory
+        traversal_path = str(allowed / ".." / ".." / "etc" / "passwd")
+        with pytest.raises(RuntimeError, match="Access denied"):
+            s.check_path_allowed(traversal_path)
+
+    def test_symlink_resolved_and_blocked(self, tmp_path):
+        """Symlinks pointing outside allowed dirs should be blocked."""
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "secret.txt"
+        secret.write_text("sensitive")
+        # Create a symlink inside allowed that points outside
+        link = allowed / "sneaky_link"
+        link.symlink_to(secret)
+        s = AnalyzerState()
+        s.allowed_paths = [str(allowed)]
+        with pytest.raises(RuntimeError, match="Access denied"):
+            s.check_path_allowed(str(link))
+
+    def test_symlink_within_allowed_ok(self, tmp_path):
+        """Symlinks that resolve within allowed dirs should pass."""
+        allowed = tmp_path / "allowed"
+        allowed.mkdir()
+        real_file = allowed / "real.bin"
+        real_file.write_bytes(b"\x00")
+        link = allowed / "link.bin"
+        link.symlink_to(real_file)
+        s = AnalyzerState()
+        s.allowed_paths = [str(allowed)]
+        # Should not raise — symlink target is inside allowed
+        s.check_path_allowed(str(link))
+
+    def test_similar_prefix_dir_blocked(self, tmp_path):
+        """A dir whose name starts with the allowed dir name should be blocked."""
+        allowed = tmp_path / "data"
+        allowed.mkdir()
+        evil = tmp_path / "data_evil"
+        evil.mkdir()
+        evil_file = evil / "payload.bin"
+        evil_file.write_bytes(b"\x00")
+        s = AnalyzerState()
+        s.allowed_paths = [str(allowed)]
+        with pytest.raises(RuntimeError, match="Access denied"):
+            s.check_path_allowed(str(evil_file))
+
+    def test_nested_allowed_path(self, tmp_path):
+        """Files in subdirectories of allowed paths should pass."""
+        allowed = tmp_path / "samples"
+        allowed.mkdir()
+        nested = allowed / "subdir" / "deep"
+        nested.mkdir(parents=True)
+        test_file = nested / "file.bin"
+        test_file.write_bytes(b"\x00")
+        s = AnalyzerState()
+        s.allowed_paths = [str(allowed)]
+        # Should not raise
+        s.check_path_allowed(str(test_file))
+
+    def test_multiple_allowed_paths(self, tmp_path):
+        """Check that any of the allowed paths is accepted."""
+        dir_a = tmp_path / "dir_a"
+        dir_b = tmp_path / "dir_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        file_b = dir_b / "file.bin"
+        file_b.write_bytes(b"\x00")
+        s = AnalyzerState()
+        s.allowed_paths = [str(dir_a), str(dir_b)]
+        # File is in dir_b which is allowed
+        s.check_path_allowed(str(file_b))
+
 
 # ---------------------------------------------------------------------------
 # Angr state management
