@@ -892,10 +892,10 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
     # --- DETECT RAW MODE ---
     is_raw_mode = isinstance(pe, MockPE)
     if is_raw_mode:
-        pe_info_dict["mode"] = "shellcode_raw"
+        pe_info_dict["mode"] = "shellcode"
         pe_info_dict["note"] = "Standard PE headers/imports/exports skipped in raw mode."
     else:
-        pe_info_dict["mode"] = "pe_executable"
+        pe_info_dict["mode"] = "pe"
 
     # Basic hashes (Works for both)
     _report(5, 100, "Computing file hashes...")

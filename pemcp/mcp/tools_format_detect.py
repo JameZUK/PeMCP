@@ -32,6 +32,12 @@ async def detect_binary_format(
             header = f.read(4096)
             file_size = f.seek(0, 2)
             f.seek(0)
+            # Read a larger chunk for language-specific marker scanning.
+            # Rust and Go markers are often deep in the binary (string tables,
+            # section data) rather than in the first few KB.
+            scan_size = min(file_size, 2 * 1024 * 1024)  # up to 2MB
+            f.seek(0)
+            scan_data = f.read(scan_size)
 
         result: Dict[str, Any] = {"file": target, "size": file_size}
         formats = []
@@ -99,13 +105,20 @@ async def detect_binary_format(
         else:
             formats.append("Unknown")
 
-        # Check for Go signatures (in any format)
-        if b'Go build' in header or b'go.buildid' in header or b'runtime.main' in header:
+        # Check for Go signatures (scan full scan_data, not just header)
+        _go_markers = (b'Go build', b'go.buildid', b'runtime.main',
+                       b'runtime.goexit', b'go.string.')
+        if any(marker in scan_data for marker in _go_markers):
             formats.append("Go")
             suggested_tools.extend(["go_analyze"])
 
-        # Check for Rust signatures
-        if b'rustc/' in header or b'.rustc' in header or b'rust_begin_unwind' in header:
+        # Check for Rust signatures (scan full scan_data for deeper markers)
+        _rust_markers = (b'rustc/', b'.rustc', b'rust_begin_unwind',
+                         b'rust_panic', b'core::panicking',
+                         b'core::result::Result', b'alloc::string::String',
+                         b'std::rt::lang_start', b'rust_eh_personality',
+                         b'__rust_alloc', b'__rust_dealloc')
+        if any(marker in scan_data for marker in _rust_markers):
             formats.append("Rust")
             suggested_tools.extend(["rust_analyze", "rust_demangle_symbols"])
 
