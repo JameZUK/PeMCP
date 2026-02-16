@@ -17,6 +17,7 @@ from pemcp.mcp.server import (
     _check_mcp_response_size,
 )
 from pemcp.parsers.strings import _extract_strings_from_data, _search_specific_strings_in_data
+from pemcp.utils import validate_regex_pattern as _validate_regex_pattern
 
 # Upper bound on the 'limit' parameter to prevent excessive memory allocation
 _MAX_LIMIT = 100_000
@@ -41,34 +42,6 @@ def _get_sifter_models():
         _sifter_featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
         _sifter_ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
     return _sifter_featurizer, _sifter_ranker
-
-
-# --- ReDoS Protection ---
-_MAX_REGEX_PATTERN_LENGTH = 1000
-# Detects nested quantifiers that can cause catastrophic backtracking.
-# Matches patterns like (X+)+, (X*)+, (X+)*, (X{n,m})+ etc.
-_NESTED_QUANTIFIER_RE = re.compile(
-    r'\([^)]*[+*}\?][^)]*\)\s*[+*{]'
-)
-
-
-def _validate_regex_pattern(pattern: str) -> None:
-    """Validate a regex pattern for safety before compilation.
-
-    Raises ValueError if the pattern is too long or contains constructs
-    that are known to cause catastrophic backtracking (ReDoS).
-    """
-    if len(pattern) > _MAX_REGEX_PATTERN_LENGTH:
-        raise ValueError(
-            f"Regex pattern is too long ({len(pattern)} chars). "
-            f"Maximum allowed length is {_MAX_REGEX_PATTERN_LENGTH} characters."
-        )
-    if _NESTED_QUANTIFIER_RE.search(pattern):
-        raise ValueError(
-            f"Regex pattern contains nested quantifiers which can cause "
-            f"catastrophic backtracking (ReDoS). Please simplify the pattern: "
-            f"'{pattern[:80]}{'...' if len(pattern) > 80 else ''}'"
-        )
 
 
 @tool_decorator
