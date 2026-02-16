@@ -326,22 +326,22 @@ def _triage_rich_header(analysis_mode: str, indicator_limit: int) -> Tuple[Dict[
     if analysis_mode == 'pe':
         rich_data = state.pe_data.get('rich_header')
         if rich_data and isinstance(rich_data, dict):
-            entries = rich_data.get('decoded_entries', rich_data.get('entries', []))
+            entries = rich_data.get('decoded_values', rich_data.get('decoded_entries', []))
             compiler_ids: set = set()
-            product_names: set = set()
+            product_ids: set = set()
             for entry in (entries if isinstance(entries, list) else []):
                 if isinstance(entry, dict):
-                    comp_id = entry.get('comp_id', entry.get('CompID'))
-                    prod = entry.get('product_name', entry.get('product', ''))
+                    comp_id = entry.get('raw_comp_id', entry.get('comp_id'))
+                    prod_id = entry.get('product_id_dec', entry.get('product_id_hex'))
                     if comp_id is not None:
                         compiler_ids.add(comp_id)
-                    if prod:
-                        product_names.add(str(prod))
+                    if prod_id is not None:
+                        product_ids.add(str(prod_id))
             result: Dict[str, Any] = {
                 "present": True,
                 "entry_count": len(entries) if isinstance(entries, list) else 0,
                 "unique_compiler_ids": len(compiler_ids),
-                "products_used": sorted(product_names)[:10],
+                "unique_product_ids": sorted(product_ids)[:10],
                 "checksum_valid": rich_data.get('checksum_valid', rich_data.get('valid')),
                 "raw_hash": rich_data.get('hash', rich_data.get('checksum')),
             }
@@ -1324,7 +1324,7 @@ def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], i
     risk_score = 0
     detected: Dict[str, Any] = {"detected_languages": []}
 
-    sections_data = state.pe_data.get('sections', [])
+    sections_data = state.pe_data.get('sections') or []
     section_names: set = set()
     for sec in sections_data:
         if isinstance(sec, dict):
@@ -1363,17 +1363,24 @@ def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], i
         if ".NET" not in detected["detected_languages"]:
             detected["detected_languages"].append(".NET")
 
-    # --- Rich header compiler hints (Delphi, MSVC, MinGW) ---
+    # --- Rich header compiler hints (Delphi, MSVC) ---
+    # Rich header entries contain product_id_dec and build_number, not human-readable
+    # names. Known product IDs: Delphi linker prod_ids are in the 0x00-0x04 range,
+    # MSVC uses higher IDs. We detect by checking build_number patterns.
     rich_data = state.pe_data.get('rich_header')
     if rich_data and isinstance(rich_data, dict):
-        entries = rich_data.get('decoded_entries', rich_data.get('entries', []))
+        entries = rich_data.get('decoded_values', rich_data.get('decoded_entries', []))
         for entry in (entries if isinstance(entries, list) else []):
             if isinstance(entry, dict):
-                prod = str(entry.get('product_name', entry.get('product', ''))).lower()
-                if 'delphi' in prod and 'Delphi' not in detected["detected_languages"]:
-                    detected["detected_languages"].append("Delphi")
-                elif 'visual c' in prod and 'MSVC' not in detected["detected_languages"]:
-                    detected["detected_languages"].append("MSVC")
+                prod_id = entry.get('product_id_dec', 0)
+                build_num = entry.get('build_number', 0)
+                if isinstance(prod_id, int):
+                    # Delphi/C++Builder uses product IDs 1-4
+                    if prod_id in (1, 2, 3, 4) and 'Delphi' not in detected["detected_languages"]:
+                        detected["detected_languages"].append("Delphi")
+                    # MSVC linker/compiler product IDs >= 5 (various VS versions)
+                    elif prod_id >= 5 and 'MSVC' not in detected["detected_languages"]:
+                        detected["detected_languages"].append("MSVC")
 
     if not detected["detected_languages"]:
         detected["detected_languages"] = ["Unknown / native C/C++"]

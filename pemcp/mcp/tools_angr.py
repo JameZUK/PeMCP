@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper, _log_task_exception
-from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
+from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
 
 if ANGR_AVAILABLE:
     import angr
@@ -468,63 +468,62 @@ async def analyze_binary_loops(
         # Configuration requested by the user
         req_config = {"resolve_jumps": resolve_indirect_jumps, "data_refs": scan_data_refs}
 
-        # Use atomic snapshot to avoid race conditions with concurrent callers
-        project, cfg = state.get_angr_snapshot()
+        # Use _init_lock to prevent concurrent callers from duplicating
+        # expensive project/CFG/loop builds (same lock as _ensure_project_and_cfg)
+        with _init_lock:
+            project, cfg = state.get_angr_snapshot()
 
-        # Determine if we need to rebuild the CFG
-        need_rebuild = False
+            # Determine if we need to rebuild the CFG
+            need_rebuild = False
 
-        if project is None:
-            project = angr.Project(state.filepath, auto_load_libs=False)
-            state.set_angr_results(project, None, state.angr_loop_cache, state.angr_loop_cache_config)
-            need_rebuild = True
-        elif cfg is None:
-            need_rebuild = True
-        else:
-            # If we have a CFG, check if it satisfies the request.
-            current_has_data = (state.angr_loop_cache_config or {}).get('data_refs', False)
-            if scan_data_refs and not current_has_data:
+            if project is None:
+                project = angr.Project(state.filepath, auto_load_libs=False)
+                state.set_angr_results(project, None, state.angr_loop_cache, state.angr_loop_cache_config)
                 need_rebuild = True
+            elif cfg is None:
+                need_rebuild = True
+            else:
+                current_has_data = (state.angr_loop_cache_config or {}).get('data_refs', False)
+                if scan_data_refs and not current_has_data:
+                    need_rebuild = True
 
-        if need_rebuild:
-            if task_id_for_progress: _update_progress(task_id_for_progress, 10, "Building/Upgrading Control Flow Graph...")
+            if need_rebuild:
+                if task_id_for_progress: _update_progress(task_id_for_progress, 10, "Building/Upgrading Control Flow Graph...")
 
-            # CFG Generation (Blocking)
-            new_cfg = project.analyses.CFGFast(
-                normalize=True,
-                resolve_indirect_jumps=resolve_indirect_jumps,
-                data_references=scan_data_refs,
-                force_complete_scan=scan_data_refs
-            )
-            # Use atomic setter to store results
-            state.set_angr_results(project, new_cfg, None, state.angr_loop_cache_config)
-            cfg = new_cfg
+                new_cfg = project.analyses.CFGFast(
+                    normalize=True,
+                    resolve_indirect_jumps=resolve_indirect_jumps,
+                    data_references=scan_data_refs,
+                    force_complete_scan=scan_data_refs
+                )
+                state.set_angr_results(project, new_cfg, None, state.angr_loop_cache_config)
+                cfg = new_cfg
 
-        # Ensure loop cache exists
-        if state.angr_loop_cache is None:
-            if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...")
+            # Ensure loop cache exists
+            if state.angr_loop_cache is None:
+                if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...")
 
-            loop_finder = project.analyses.LoopFinder(kb=project.kb)
-            raw_loops = {}
+                loop_finder = project.analyses.LoopFinder(kb=project.kb)
+                raw_loops = {}
 
-            for loop in loop_finder.loops:
-                try:
-                    node = cfg.model.get_any_node(loop.entry.addr)
-                    if node and node.function_address:
-                        func_addr = node.function_address
-                        if func_addr not in raw_loops: raw_loops[func_addr] = []
+                for loop in loop_finder.loops:
+                    try:
+                        node = cfg.model.get_any_node(loop.entry.addr)
+                        if node and node.function_address:
+                            func_addr = node.function_address
+                            if func_addr not in raw_loops: raw_loops[func_addr] = []
 
-                        block_count = len(list(loop.body_nodes))
-                        raw_loops[func_addr].append({
-                            "entry": hex(loop.entry.addr),
-                            "blocks": block_count,
-                            "subloops": bool(loop.subloops)
-                        })
-                except Exception: continue
+                            block_count = len(list(loop.body_nodes))
+                            raw_loops[func_addr].append({
+                                "entry": hex(loop.entry.addr),
+                                "blocks": block_count,
+                                "subloops": bool(loop.subloops)
+                            })
+                    except Exception: continue
 
-            state.set_angr_results(project, cfg, raw_loops, req_config)
-        else:
-            if task_id_for_progress: _update_progress(task_id_for_progress, 90, "Using cached analysis data...")
+                state.set_angr_results(project, cfg, raw_loops, req_config)
+            else:
+                if task_id_for_progress: _update_progress(task_id_for_progress, 90, "Using cached analysis data...")
 
         # Filtering Results
         if task_id_for_progress: _update_progress(task_id_for_progress, 95, "Formatting results...")

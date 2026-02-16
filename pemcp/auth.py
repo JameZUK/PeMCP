@@ -1,4 +1,5 @@
 """ASGI middleware for bearer token authentication in HTTP transport mode."""
+import hmac
 import logging
 
 logger = logging.getLogger("PeMCP")
@@ -10,6 +11,9 @@ class BearerAuthMiddleware:
     Wraps the FastMCP ASGI app to enforce authentication before any MCP
     processing occurs.  Non-HTTP ASGI events (lifespan, websocket) are
     passed through unchanged.
+
+    Uses ``hmac.compare_digest()`` for constant-time comparison to prevent
+    timing side-channel attacks on the API key.
 
     Usage::
 
@@ -27,7 +31,8 @@ class BearerAuthMiddleware:
             headers = dict(scope.get("headers", []))
             auth_header = headers.get(b"authorization", b"").decode("utf-8", "ignore")
             expected = f"Bearer {self.api_key}"
-            if auth_header != expected:
+            # Constant-time comparison to prevent timing side-channel attacks
+            if not hmac.compare_digest(auth_header, expected):
                 logger.warning("Rejected unauthenticated HTTP request")
                 await send({
                     "type": "http.response.start",
