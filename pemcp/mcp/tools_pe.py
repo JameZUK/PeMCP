@@ -25,7 +25,18 @@ from pemcp.parsers.floss import _parse_floss_analysis
 from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
 from pemcp.mock import MockPE
 
-_analysis_semaphore = asyncio.Semaphore(int(os.environ.get("PEMCP_MAX_CONCURRENT_ANALYSES", "3")))
+def _safe_env_int(key: str, default: int) -> int:
+    """Read an environment variable as int with fallback to default."""
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        logger.warning("Invalid value for %s=%r, using default %d", key, val, default)
+        return default
+
+_analysis_semaphore = asyncio.Semaphore(_safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3))
 
 if ANGR_AVAILABLE:
     import angr
@@ -137,7 +148,7 @@ async def open_file(
         raise RuntimeError(f"[open_file] File not found: {abs_path}")
 
     # Reject files that are too large to analyze safely in memory
-    MAX_FILE_SIZE = int(os.environ.get("PEMCP_MAX_FILE_SIZE_MB", "256")) * 1024 * 1024
+    MAX_FILE_SIZE = _safe_env_int("PEMCP_MAX_FILE_SIZE_MB", 256) * 1024 * 1024
     file_size = os.path.getsize(abs_path)
     if file_size > MAX_FILE_SIZE:
         raise RuntimeError(
@@ -337,7 +348,7 @@ async def open_file(
                         progress_callback=_progress_cb,
                     )
 
-                _PE_ANALYSIS_TIMEOUT = int(os.environ.get("PEMCP_ANALYSIS_TIMEOUT", "600"))
+                _PE_ANALYSIS_TIMEOUT = _safe_env_int("PEMCP_ANALYSIS_TIMEOUT", 600)
                 try:
                     state.pe_data = await asyncio.wait_for(
                         asyncio.to_thread(_run_analysis),

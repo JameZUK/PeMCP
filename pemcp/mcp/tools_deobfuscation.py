@@ -282,6 +282,14 @@ async def find_and_decode_encoded_strings(
     if not (isinstance(max_decode_layers, int) and 1 <= max_decode_layers <= 10):
         raise ValueError("Parameter 'max_decode_layers' must be an integer between 1 and 10.")
 
+    # Validate regex patterns upfront to avoid wasting CPU on decode cycles
+    if decoded_regex_patterns:
+        for i, pat in enumerate(decoded_regex_patterns):
+            try:
+                re.compile(pat)
+            except re.error as e:
+                raise ValueError(f"Invalid regex pattern at index {i} ('{pat}'): {e}")
+
     # --- Setup ---
     if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
         raise RuntimeError("No PE file loaded or PE data unavailable.")

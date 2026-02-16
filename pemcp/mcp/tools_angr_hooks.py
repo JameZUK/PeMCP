@@ -69,7 +69,10 @@ async def hook_function(
 
         hook_label = address_or_name
         if is_hex:
-            proj.hook(addr, hook_proc)
+            try:
+                proj.hook(addr, hook_proc)
+            except Exception as e:
+                return {"error": f"Failed to hook address {hex(addr)}: {e}"}
             hook_label = hex(addr)
         else:
             try:
@@ -77,6 +80,7 @@ async def hook_function(
             except Exception as e:
                 return {"error": f"Failed to hook symbol '{address_or_name}': {e}"}
 
+        # Register hook in state AFTER successful hooking to avoid ghost entries
         state.angr_hooks[hook_label] = {
             "target": hook_label,
             "return_value": hex(ret_val) if ret_val is not None else "void",
