@@ -48,11 +48,31 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Check syntax
+      - name: Install dependencies for syntax check
         run: |
-          python -m py_compile pemcp/state.py
-          python -m py_compile pemcp/cache.py
-          python -m py_compile pemcp/hashing.py
-          python -m py_compile pemcp/mock.py
-          python -m py_compile pemcp/user_config.py
-          python -m py_compile pemcp/utils.py
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check syntax (all Python files)
+        run: |
+          python -c "
+          import pathlib, py_compile, sys
+          errors = []
+          for p in sorted(pathlib.Path('pemcp').rglob('*.py')):
+              try:
+                  py_compile.compile(str(p), doraise=True)
+              except py_compile.PyCompileError as e:
+                  errors.append(str(e))
+          for p in sorted(pathlib.Path('tests').rglob('*.py')):
+              try:
+                  py_compile.compile(str(p), doraise=True)
+              except py_compile.PyCompileError as e:
+                  errors.append(str(e))
+          if errors:
+              print(f'{len(errors)} syntax error(s) found:')
+              for e in errors:
+                  print(e)
+              sys.exit(1)
+          else:
+              print('All Python files passed syntax check.')
+          "
