@@ -381,8 +381,10 @@ def _parse_floss_analysis(
             logger.info(f"Performing regex search with pattern: '{regex_search_pattern}'")
 
         try:
+            from pemcp.utils import validate_regex_pattern
+            validate_regex_pattern(regex_search_pattern)
             pattern = re.compile(regex_search_pattern, re.IGNORECASE)
-        except re.error as e:
+        except (re.error, ValueError) as e:
             logger.error(f"Invalid regex pattern provided: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
             floss_results_dict["regex_matches"] = [{"error": f"Invalid regex pattern: {e}"}]
             return floss_results_dict

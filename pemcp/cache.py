@@ -93,7 +93,12 @@ class AnalysisCache:
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(meta, f, indent=2)
-            tmp.replace(META_FILE)  # atomic on POSIX
+            # Path.replace() is atomic on POSIX (rename(2) syscall).
+            # On Windows this is NOT atomic and can fail if the target
+            # is locked by another process.  Since PeMCP primarily targets
+            # Linux/Docker deployments this is acceptable; Windows users
+            # may see rare cache metadata corruption under high concurrency.
+            tmp.replace(META_FILE)
         except OSError as e:
             logger.error(f"Cache meta write error: {e}")
 
@@ -203,7 +208,7 @@ class AnalysisCache:
                 tmp = entry_path.with_suffix(".tmp")
                 with gzip.open(tmp, "wt", encoding="utf-8") as f:
                     json.dump(wrapper, f)
-                tmp.replace(entry_path)
+                tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
 
                 file_size = entry_path.stat().st_size
                 meta = self._load_meta()

@@ -83,13 +83,14 @@ class AnalyzerState:
     def check_path_allowed(self, file_path: str) -> None:
         """Raise RuntimeError if the path is outside all allowed directories."""
         import os
+        from pathlib import Path
         if self.allowed_paths is None:
             return  # No restriction configured
-        resolved = os.path.realpath(file_path)
+        resolved = Path(os.path.realpath(file_path))
         for allowed in self.allowed_paths:
-            allowed_resolved = os.path.realpath(allowed)
+            allowed_resolved = Path(os.path.realpath(allowed))
             # Allow if the file is exactly the allowed path or inside it
-            if resolved == allowed_resolved or resolved.startswith(allowed_resolved + os.sep):
+            if resolved == allowed_resolved or resolved.is_relative_to(allowed_resolved):
                 return
         raise RuntimeError(
             f"Access denied: '{file_path}' is outside the allowed paths. "
@@ -148,8 +149,8 @@ class AnalyzerState:
                 if self is _default_state or self.pe_object is not _default_state.pe_object:
                     try:
                         self.pe_object.close()
-                    except Exception:
-                        logger.debug("Failed to close PE object", exc_info=True)
+                    except (OSError, AttributeError) as e:
+                        logger.debug("Failed to close PE object: %s", e)
                 self.pe_object = None
 
 
