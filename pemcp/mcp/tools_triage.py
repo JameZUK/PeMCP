@@ -1,10 +1,8 @@
 """MCP tool for comprehensive automated binary triage."""
 import math
-import mmap
 import os
 import re
 import datetime
-import struct
 import asyncio
 
 from typing import Dict, Any, Optional, List, Tuple
@@ -251,7 +249,11 @@ def _triage_packing_assessment(indicator_limit: int) -> Tuple[Dict[str, Any], in
     # PEiD matches
     ep_matches = peid_data.get('ep_matches', [])
     heuristic_matches = peid_data.get('heuristic_matches', [])
-    packer_names = [m.get('name', m.get('match', 'unknown')) for m in (ep_matches + heuristic_matches) if isinstance(m, dict)]
+    packer_names = [
+        m.get('name', m.get('match', 'unknown')) if isinstance(m, dict) else str(m)
+        for m in (ep_matches + heuristic_matches)
+        if isinstance(m, (dict, str))
+    ]
     if packer_names:
         risk_score += 4
 

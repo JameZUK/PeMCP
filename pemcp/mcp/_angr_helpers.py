@@ -1,10 +1,14 @@
 """Shared helper functions for angr-based analysis tools."""
+import threading
 from typing import Dict, Any
 
 from pemcp.config import state, logger, ANGR_AVAILABLE
 
 if ANGR_AVAILABLE:
     import angr
+
+# Serialize project/CFG initialization to prevent duplicate expensive builds
+_init_lock = threading.Lock()
 
 
 def _rebuild_project_with_hooks():
@@ -60,18 +64,24 @@ def _rebuild_project_with_hooks():
 
 
 def _ensure_project_and_cfg():
-    """Ensure angr project and CFG are initialized."""
-    project, cfg = state.get_angr_snapshot()
-    if project is None:
-        project = angr.Project(state.filepath, auto_load_libs=False)
-        state.set_angr_results(project, None, state.angr_loop_cache, state.angr_loop_cache_config)
-    if cfg is None:
-        if state.angr_hooks:
-            _rebuild_project_with_hooks()
-            project, cfg = state.get_angr_snapshot()
+    """Ensure angr project and CFG are initialized.
+
+    Uses a module-level lock to prevent concurrent callers from both
+    creating separate ``angr.Project`` instances (expensive) when the
+    first caller has not yet stored its result.
+    """
+    with _init_lock:
+        project, cfg = state.get_angr_snapshot()
+        if project is None:
+            project = angr.Project(state.filepath, auto_load_libs=False)
+            state.set_angr_results(project, None, state.angr_loop_cache, state.angr_loop_cache_config)
         if cfg is None:
-            cfg = project.analyses.CFGFast(normalize=True)
-            state.set_angr_results(project, cfg, state.angr_loop_cache, state.angr_loop_cache_config)
+            if state.angr_hooks:
+                _rebuild_project_with_hooks()
+                project, cfg = state.get_angr_snapshot()
+            if cfg is None:
+                cfg = project.analyses.CFGFast(normalize=True)
+                state.set_angr_results(project, cfg, state.angr_loop_cache, state.angr_loop_cache_config)
 
 
 def _parse_addr(hex_string: str, name: str = "address") -> int:
