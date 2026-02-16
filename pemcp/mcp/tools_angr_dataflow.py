@@ -129,21 +129,26 @@ async def get_reaching_definitions(
             _update_progress(task_id_for_progress, 80, "Formatting results...")
 
         definitions = []
+        _skipped_defs = 0
         try:
             for defn in rd.all_definitions:
-                atom = defn.atom
-                entry = {
-                    "atom": str(atom),
-                    "codeloc": str(defn.codeloc) if hasattr(defn, 'codeloc') else None,
-                }
-                definitions.append(entry)
-                if len(definitions) >= limit:
-                    break
+                try:
+                    atom = defn.atom
+                    entry = {
+                        "atom": str(atom),
+                        "codeloc": str(defn.codeloc) if hasattr(defn, 'codeloc') else None,
+                    }
+                    definitions.append(entry)
+                    if len(definitions) >= limit:
+                        break
+                except Exception:
+                    _skipped_defs += 1
         except Exception:
-            pass
+            _skipped_defs += 1
 
         # If target_instruction is specified, extract the observed result at that point
         observed = None
+        _skipped_obs = 0
         if target_insn is not None:
             try:
                 from angr.analyses.reaching_definitions.dep_graph import DepGraph
@@ -168,7 +173,7 @@ async def get_reaching_definitions(
                         }
                         break
             except Exception:
-                pass
+                _skipped_obs += 1
 
         result = {
             "function_name": func.name,
@@ -176,6 +181,13 @@ async def get_reaching_definitions(
             "total_definitions": len(definitions),
             "definitions": definitions,
         }
+        if _skipped_defs:
+            result["warnings"] = f"{_skipped_defs} definition(s) skipped due to processing errors"
+        if _skipped_obs:
+            result.setdefault("warnings", "")
+            if result["warnings"]:
+                result["warnings"] += "; "
+            result["warnings"] += f"{_skipped_obs} observation(s) skipped due to processing errors"
         if observed:
             result["observed_at_target"] = observed
 
@@ -273,21 +285,26 @@ async def get_data_dependencies(
 
         # Collect all definitions as a flat list
         definitions = []
+        _skipped_defs = 0
         try:
             for defn in rd.all_definitions:
-                entry = {
-                    "atom": str(defn.atom),
-                    "codeloc": str(defn.codeloc) if hasattr(defn, 'codeloc') else None,
-                }
-                definitions.append(entry)
-                if len(definitions) >= limit:
-                    break
+                try:
+                    entry = {
+                        "atom": str(defn.atom),
+                        "codeloc": str(defn.codeloc) if hasattr(defn, 'codeloc') else None,
+                    }
+                    definitions.append(entry)
+                    if len(definitions) >= limit:
+                        break
+                except Exception:
+                    _skipped_defs += 1
         except Exception:
-            pass
+            _skipped_defs += 1
 
         # If an instruction is targeted, filter definitions relevant to it
         if insn_addr is not None:
             filtered = []
+            _skipped_obs = 0
             for defn_entry in definitions:
                 codeloc_str = defn_entry.get("codeloc", "")
                 if codeloc_str and hex(insn_addr) in codeloc_str:
@@ -308,9 +325,9 @@ async def get_data_dependencies(
                                     break
                             break
                 except Exception:
-                    pass
+                    _skipped_obs += 1
 
-            return {
+            result_targeted = {
                 "function_name": func.name,
                 "address": hex(addr_used),
                 "target": hex(insn_addr),
@@ -319,6 +336,14 @@ async def get_data_dependencies(
                 "total_related": len(filtered),
                 "dependencies": filtered[:limit],
             }
+            _warnings = []
+            if _skipped_defs:
+                _warnings.append(f"{_skipped_defs} definition(s) skipped due to processing errors")
+            if _skipped_obs:
+                _warnings.append(f"{_skipped_obs} observation(s) skipped due to processing errors")
+            if _warnings:
+                result_targeted["warnings"] = "; ".join(_warnings)
+            return result_targeted
 
         # Dependency graph edges if available
         edges = []
@@ -329,7 +354,7 @@ async def get_data_dependencies(
             except Exception:
                 pass
 
-        return {
+        result_full = {
             "function_name": func.name,
             "address": hex(addr_used),
             "method": "ReachingDefinitions",
@@ -338,6 +363,9 @@ async def get_data_dependencies(
             "definitions": definitions[:limit],
             "edges": edges,
         }
+        if _skipped_defs:
+            result_full["warnings"] = f"{_skipped_defs} definition(s) skipped due to processing errors"
+        return result_full
 
     if run_in_background:
         task_id = str(uuid.uuid4())
