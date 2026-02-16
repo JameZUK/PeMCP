@@ -1307,7 +1307,82 @@ def _triage_high_value_strings(sifter_score_threshold: float, indicator_limit: i
 
 
 # ===================================================================
-#  Section 8 — Risk Score & Suggested Next Tools
+#  Section 8 — Compiler / Language Detection
+# ===================================================================
+
+# Known Go section names and string indicators
+_GO_SECTION_NAMES = {'.gopclntab', '.go.buildinfo', '.go.itab', '.go.buildid', 'go.buildid'}
+_GO_STRING_MARKERS = ('Go build', 'go.buildid', 'runtime.main', 'runtime.goexit',
+                      'runtime/internal/', 'go.itab.', 'go.string.')
+# Known Rust string indicators
+_RUST_STRING_MARKERS = ('rustc/', '.rustc', 'rust_begin_unwind', 'rust_panic',
+                        'core::panicking', 'std::panicking', 'alloc::raw_vec')
+
+
+def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], int]:
+    """Detect the source language / compiler toolchain from sections and strings."""
+    risk_score = 0
+    detected: Dict[str, Any] = {"detected_languages": []}
+
+    sections_data = state.pe_data.get('sections', [])
+    section_names: set = set()
+    for sec in sections_data:
+        if isinstance(sec, dict):
+            name = sec.get('name', sec.get('name_str', '')).strip().lower()
+            if name:
+                section_names.add(name)
+
+    # --- Go detection ---
+    go_evidence: List[str] = []
+    for sn in section_names:
+        if sn in {n.lower() for n in _GO_SECTION_NAMES}:
+            go_evidence.append(f"section '{sn}'")
+    for marker in _GO_STRING_MARKERS:
+        if any(marker in s for s in all_string_values):
+            go_evidence.append(f"string '{marker}'")
+            break  # one string match is enough
+    if go_evidence:
+        detected["detected_languages"].append("Go")
+        detected["go_indicators"] = go_evidence[:5]
+
+    # --- Rust detection ---
+    rust_evidence: List[str] = []
+    for sn in section_names:
+        if sn == '.rustc':
+            rust_evidence.append("section '.rustc'")
+    for marker in _RUST_STRING_MARKERS:
+        if any(marker in s for s in all_string_values):
+            rust_evidence.append(f"string '{marker}'")
+            break
+    if rust_evidence:
+        detected["detected_languages"].append("Rust")
+        detected["rust_indicators"] = rust_evidence[:5]
+
+    # --- .NET is already detected in dotnet_indicators, just cross-reference ---
+    if state.pe_data.get('com_descriptor'):
+        if ".NET" not in detected["detected_languages"]:
+            detected["detected_languages"].append(".NET")
+
+    # --- Rich header compiler hints (Delphi, MSVC, MinGW) ---
+    rich_data = state.pe_data.get('rich_header')
+    if rich_data and isinstance(rich_data, dict):
+        entries = rich_data.get('decoded_entries', rich_data.get('entries', []))
+        for entry in (entries if isinstance(entries, list) else []):
+            if isinstance(entry, dict):
+                prod = str(entry.get('product_name', entry.get('product', ''))).lower()
+                if 'delphi' in prod and 'Delphi' not in detected["detected_languages"]:
+                    detected["detected_languages"].append("Delphi")
+                elif 'visual c' in prod and 'MSVC' not in detected["detected_languages"]:
+                    detected["detected_languages"].append("MSVC")
+
+    if not detected["detected_languages"]:
+        detected["detected_languages"] = ["Unknown / native C/C++"]
+
+    return detected, risk_score
+
+
+# ===================================================================
+#  Section 9 — Risk Score & Suggested Next Tools
 # ===================================================================
 
 def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_report: Dict[str, Any]) -> Dict[str, Any]:
@@ -1331,11 +1406,13 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
     network_iocs = triage_report.get("network_iocs", {})
     found_ips = network_iocs.get("ip_addresses", [])
     found_urls = network_iocs.get("urls", [])
+    detected_langs = triage_report.get("compiler_language", {}).get("detected_languages", [])
 
     suggested: List[str] = []
     if analysis_mode == 'pe':
         if is_likely_packed:
-            suggested.append("auto_unpack_pe — attempt automatic unpacking")
+            suggested.append("auto_unpack_pe — attempt automatic unpacking (uses Unipacker for UPX, ASPack, PEtite, FSG)")
+            suggested.append("detect_packing — run angr-based multi-heuristic packing analysis")
             suggested.append("get_pe_data(key='peid_matches') — review packer signatures")
         else:
             if not triage_report["suspicious_capabilities"]:
@@ -1347,7 +1424,13 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
             suggested.append("scan_for_embedded_files — scan overlay for embedded binaries")
         if triage_report.get("resource_anomalies"):
             suggested.append("get_pe_data(key='resources_summary') — inspect suspicious resources")
-        if triage_report.get("dotnet_indicators", {}).get("is_dotnet"):
+        # Language-specific tool suggestions
+        if "Go" in detected_langs:
+            suggested.append("go_analyze — extract Go compiler version, packages, types, and build ID")
+        if "Rust" in detected_langs:
+            suggested.append("rust_analyze — extract Rust compiler version, dependencies, and toolchain")
+            suggested.append("rust_demangle_symbols — demangle Rust symbol names for readability")
+        if triage_report.get("dotnet_indicators", {}).get("is_dotnet") or ".NET" in detected_langs:
             suggested.append("dotnet_analyze — extract .NET types, methods, and user strings")
         if triage_report.get("tls_callbacks", {}).get("present") and triage_report["tls_callbacks"].get("callback_count", 0) > 0:
             suggested.append("get_pe_data(key='tls_info') — inspect TLS callback addresses")
@@ -1355,11 +1438,20 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
     elif analysis_mode == 'elf':
         suggested.append("elf_analyze — full ELF header, section, and symbol analysis")
         suggested.append("elf_dwarf_info — extract debug symbols and source file names")
+        if "Go" in detected_langs:
+            suggested.append("go_analyze — extract Go compiler version, packages, types, and build ID")
+        if "Rust" in detected_langs:
+            suggested.append("rust_analyze — extract Rust compiler version, dependencies, and toolchain")
+            suggested.append("rust_demangle_symbols — demangle Rust symbol names for readability")
         if triage_report.get("elf_security", {}).get("stripped"):
             suggested.append("decompile_function — use angr to decompile stripped functions")
         suggested.append("parse_binary_with_lief — cross-format binary analysis")
     elif analysis_mode == 'macho':
         suggested.append("macho_analyze — full Mach-O load commands, segments, and symbols")
+        if "Go" in detected_langs:
+            suggested.append("go_analyze — extract Go compiler version, packages, types, and build ID")
+        if "Rust" in detected_langs:
+            suggested.append("rust_analyze — extract Rust compiler version, dependencies, and toolchain")
         suggested.append("parse_binary_with_lief — cross-format binary analysis")
     elif analysis_mode == 'shellcode':
         suggested.append("emulate_shellcode_with_speakeasy — emulate with Windows API hooks")
@@ -1368,7 +1460,7 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
     if risk_score >= 8:
         suggested.append("get_virustotal_report_for_loaded_file — check community reputation")
     suggested.append("compute_similarity_hashes — compute ssdeep/TLSH for sample clustering")
-    result["suggested_next_tools"] = suggested[:7]
+    result["suggested_next_tools"] = suggested[:8]
 
     return result
 
@@ -1427,6 +1519,7 @@ async def get_triage_report(
         - high_value_strings: ML-ranked high-value strings
         - elf_security: PIE, NX, RELRO, stack canaries, stripped status (ELF)
         - macho_security: PIE, code signing, entitlements (Mach-O)
+        - compiler_language: detected source language (Go, Rust, .NET, Delphi, MSVC)
         - risk_score / risk_level: cumulative risk assessment
         - suggested_next_tools: format-aware recommended next analysis steps
     """
@@ -1460,6 +1553,7 @@ async def get_triage_report(
         "high_value_strings": [],
         "elf_security": {},
         "macho_security": {},
+        "compiler_language": {},
         "risk_score": 0,
         "risk_level": "UNKNOWN",
         "suggested_next_tools": [],
@@ -1631,7 +1725,14 @@ async def get_triage_report(
     risk_score += delta
 
     # ---------------------------------------------------------------
-    # 8. Risk Score & Suggested Next Tools
+    # 8. Compiler / Language Detection
+    # ---------------------------------------------------------------
+    lang_data, delta = _triage_compiler_language(all_string_values)
+    triage_report["compiler_language"] = lang_data
+    risk_score += delta
+
+    # ---------------------------------------------------------------
+    # 9. Risk Score & Suggested Next Tools
     # ---------------------------------------------------------------
     risk_data = _triage_risk_and_suggestions(risk_score, analysis_mode, triage_report)
     triage_report["risk_score"] = risk_data["risk_score"]
