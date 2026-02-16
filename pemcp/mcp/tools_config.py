@@ -101,13 +101,21 @@ async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, 
     if not key_value or not key_value.strip():
         raise ValueError("[set_api_key] key_value must not be empty.")
 
+    # Warn about cleartext transmission in HTTP mode without TLS
+    if not state.api_key:
+        await ctx.warning(
+            "API key is being transmitted over an unencrypted MCP connection. "
+            "Use a TLS-terminating reverse proxy in production deployments."
+        )
+
     set_config_value(key_name, key_value.strip())
     await ctx.info(f"API key '{key_name}' saved to persistent configuration.")
 
     return {
         "status": "success",
         "message": f"Key '{key_name}' saved successfully. It will be used automatically in future sessions.",
-        "note": "Environment variables always take priority over stored keys.",
+        "note": "Environment variables always take priority over stored keys. "
+                "Use environment variables instead of this tool for sensitive keys in production.",
     }
 
 

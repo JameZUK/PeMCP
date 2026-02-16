@@ -68,7 +68,11 @@ def _build_quick_indicators(pe_data: Dict[str, Any]) -> Dict[str, Any]:
     peid = pe_data.get('peid_matches', {})
     ep_matches = peid.get('ep_matches', []) if isinstance(peid, dict) else []
     heuristic = peid.get('heuristic_matches', []) if isinstance(peid, dict) else []
-    packer_names = [m.get('name', m.get('match', '?')) for m in (ep_matches + heuristic) if isinstance(m, dict)]
+    packer_names = [
+        m.get('name', m.get('match', '?')) if isinstance(m, dict) else str(m)
+        for m in (ep_matches + heuristic)
+        if isinstance(m, (dict, str))
+    ]
     indicators["peid_detections"] = packer_names[:3] if packer_names else []
 
     # Digital signature
@@ -333,7 +337,18 @@ async def open_file(
                         progress_callback=_progress_cb,
                     )
 
-                state.pe_data = await asyncio.to_thread(_run_analysis)
+                _PE_ANALYSIS_TIMEOUT = int(os.environ.get("PEMCP_ANALYSIS_TIMEOUT", "600"))
+                try:
+                    state.pe_data = await asyncio.wait_for(
+                        asyncio.to_thread(_run_analysis),
+                        timeout=_PE_ANALYSIS_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    raise RuntimeError(
+                        f"[open_file] PE analysis timed out after {_PE_ANALYSIS_TIMEOUT}s. "
+                        "The file may be malformed or excessively complex. "
+                        "Set PEMCP_ANALYSIS_TIMEOUT env var to increase the limit."
+                    )
                 await ctx.report_progress(95, 100)
 
                 # Store in cache
