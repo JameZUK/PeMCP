@@ -130,8 +130,14 @@ def _parse_sections(pe: pefile.PE) -> List[Dict[str, Any]]:
         for section in pe.sections:
             sec_dict = section.dump_dict()
             sec_dict['name_str'] = section.Name.decode('utf-8', 'ignore').rstrip('\x00')
+            sec_dict['name'] = sec_dict['name_str']  # convenience alias
             sec_dict['characteristics_list'] = get_section_characteristics(section.Characteristics)
+            sec_dict['characteristics_str'] = ', '.join(sec_dict['characteristics_list'])
             sec_dict['entropy'] = section.get_entropy()
+            # Convenience numeric keys (dump_dict() wraps these in sub-dicts)
+            sec_dict['virtual_size'] = section.Misc_VirtualSize
+            sec_dict['raw_size'] = section.SizeOfRawData
+            sec_dict['virtual_address'] = section.VirtualAddress
             try:
                 section_data = section.get_data()
                 sec_dict['md5'] = hashlib.md5(section_data).hexdigest()

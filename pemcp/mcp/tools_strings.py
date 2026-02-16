@@ -885,14 +885,17 @@ async def get_strings_for_function(
         for item in str_list:
             if not isinstance(item, dict): continue
             is_match = False
-            if 'references' in item:
-                for ref in item.get('references', []):
-                    if ref.get('function_va') and int(ref.get('function_va', '0x0'), 16) == function_va:
-                        is_match = True; break
-            elif 'function_va' in item and int(item.get('function_va', '0x0'), 16) == function_va:
-                is_match = True
-            elif 'decoding_routine_va' in item and int(item.get('decoding_routine_va', '0x0'), 16) == function_va:
-                is_match = True
+            try:
+                if 'references' in item:
+                    for ref in item.get('references', []):
+                        if ref.get('function_va') and int(ref.get('function_va', '0x0'), 16) == function_va:
+                            is_match = True; break
+                elif 'function_va' in item and int(item.get('function_va', '0x0'), 16) == function_va:
+                    is_match = True
+                elif 'decoding_routine_va' in item and int(item.get('decoding_routine_va', '0x0'), 16) == function_va:
+                    is_match = True
+            except (ValueError, TypeError):
+                continue  # Skip items with non-hex VA strings
 
             if is_match:
                 item_with_context = item.copy()
@@ -1008,19 +1011,22 @@ async def fuzzy_search_strings(
         return []
 
     # --- Fuzzy Matching Logic ---
-    matches = []
-    for item in all_strings:
-        target_string = item.get("string")
-        if not target_string:
-            continue
+    # Batch all comparisons in a single thread to avoid per-string dispatch overhead.
+    # fuzz.ratio is microsecond-level CPU work; thread scheduling dominates otherwise.
+    def _batch_fuzzy_match():
+        results = []
+        for item in all_strings:
+            target_string = item.get("string")
+            if not target_string:
+                continue
+            ratio = fuzz.ratio(query_string, target_string)
+            if ratio >= min_similarity_ratio:
+                match_item = item.copy()
+                match_item['similarity_ratio'] = ratio
+                results.append(match_item)
+        return results
 
-        # Calculate the similarity ratio
-        ratio = await asyncio.to_thread(fuzz.ratio, query_string, target_string)
-
-        if ratio >= min_similarity_ratio:
-            match_item = item.copy()
-            match_item['similarity_ratio'] = ratio
-            matches.append(match_item)
+    matches = await asyncio.to_thread(_batch_fuzzy_match)
 
     # --- Sorting and Finalizing ---
     matches.sort(key=lambda x: x.get('similarity_ratio', 0), reverse=True)
