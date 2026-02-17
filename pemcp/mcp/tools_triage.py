@@ -1,7 +1,9 @@
 """MCP tool for comprehensive automated binary triage."""
 import math
+import mmap
 import os
 import re
+import struct
 import datetime
 import asyncio
 

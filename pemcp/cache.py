@@ -112,6 +112,10 @@ class AnalysisCache:
 
         Returns the ``pe_data`` dict (with *filepath* patched to the
         caller's current path) or ``None`` on miss / invalid entry.
+
+        The gzip decompression (potentially slow for large analyses) runs
+        outside the lock to avoid blocking concurrent ``put()`` / ``get()``
+        callers.  The lock is only held for metadata updates.
         """
         if not self.enabled:
             return None
@@ -122,52 +126,55 @@ class AnalysisCache:
         if not entry_path.exists():
             return None
 
-        with self._lock:
-            try:
-                with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                    wrapper = json.load(f)
-
-                cmeta = wrapper.get("_cache_meta", {})
-
-                if cmeta.get("cache_format_version") != CACHE_FORMAT_VERSION:
-                    logger.info(f"Cache format mismatch for {sha256[:12]}..., ignoring.")
-                    return None
-
-                if cmeta.get("pemcp_version") != _get_pemcp_version():
-                    logger.info(
-                        f"Cache version mismatch for {sha256[:12]}... "
-                        f"(cached={cmeta.get('pemcp_version')}, "
-                        f"current={_get_pemcp_version()}). Invalidating."
-                    )
-                    self._remove_entry_and_meta(sha256)
-                    return None
-
-                pe_data = wrapper.get("pe_data")
-                if pe_data is None:
-                    return None
-
-                # Patch session-specific field
-                pe_data["filepath"] = current_filepath
-
-                # Touch LRU timestamp (throttled to reduce I/O)
-                try:
-                    meta = self._load_meta()
-                    if sha256 in meta:
-                        last = meta[sha256].get("last_accessed", 0)
-                        now = time.time()
-                        if now - last > 60:  # Only write if >60s since last update
-                            meta[sha256]["last_accessed"] = now
-                            self._save_meta(meta)
-                except OSError:
-                    pass  # Stale LRU timestamp is acceptable
-
-                logger.info(f"Cache HIT for {sha256[:12]}...")
-                return pe_data
-
-            except (gzip.BadGzipFile, json.JSONDecodeError, OSError, KeyError) as e:
-                logger.warning(f"Cache read error for {sha256[:12]}...: {e}")
+        # --- Read and decompress OUTSIDE the lock (this can be slow) ---
+        try:
+            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                wrapper = json.load(f)
+        except (gzip.BadGzipFile, json.JSONDecodeError, OSError, KeyError) as e:
+            logger.warning(f"Cache read error for {sha256[:12]}...: {e}")
+            with self._lock:
                 self._remove_entry_and_meta(sha256)
-                return None
+            return None
+
+        # --- Validate cache metadata (no lock needed, local data) ---
+        cmeta = wrapper.get("_cache_meta", {})
+
+        if cmeta.get("cache_format_version") != CACHE_FORMAT_VERSION:
+            logger.info(f"Cache format mismatch for {sha256[:12]}..., ignoring.")
+            return None
+
+        if cmeta.get("pemcp_version") != _get_pemcp_version():
+            logger.info(
+                f"Cache version mismatch for {sha256[:12]}... "
+                f"(cached={cmeta.get('pemcp_version')}, "
+                f"current={_get_pemcp_version()}). Invalidating."
+            )
+            with self._lock:
+                self._remove_entry_and_meta(sha256)
+            return None
+
+        pe_data = wrapper.get("pe_data")
+        if pe_data is None:
+            return None
+
+        # Patch session-specific field
+        pe_data["filepath"] = current_filepath
+
+        # --- Touch LRU timestamp under the lock (throttled) ---
+        try:
+            with self._lock:
+                meta = self._load_meta()
+                if sha256 in meta:
+                    last = meta[sha256].get("last_accessed", 0)
+                    now = time.time()
+                    if now - last > 60:  # Only write if >60s since last update
+                        meta[sha256]["last_accessed"] = now
+                        self._save_meta(meta)
+        except OSError:
+            pass  # Stale LRU timestamp is acceptable
+
+        logger.info(f"Cache HIT for {sha256[:12]}...")
+        return pe_data
 
     def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str) -> bool:
         """

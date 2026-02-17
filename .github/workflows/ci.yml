@@ -52,6 +52,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          pip install ruff
 
       - name: Check syntax (all Python files)
         run: |
@@ -76,3 +77,9 @@ jobs:
           else:
               print('All Python files passed syntax check.')
           "
+
+      - name: Lint with ruff (critical rules only)
+        run: |
+          ruff check pemcp/ tests/ \
+            --select=E9,F63,F7,F82 \
+            --no-fix

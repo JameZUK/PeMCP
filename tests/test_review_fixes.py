@@ -16,6 +16,8 @@ import json
 import pytest
 import asyncio
 
+pytest.importorskip("pefile", reason="pefile not installed")
+
 
 def _run(coro):
     """Helper to run async functions in tests."""
