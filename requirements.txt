@@ -10,8 +10,7 @@
 pefile>=2024.8.26
 
 # --- Advanced Binary Analysis & Emulation ---
-# Includes unicorn engine support for fast emulation
-angr[unicorn]>=9.2
+angr>=9.2
 vivisect>=1.1.0
 # FLIRT signature parsing (used by angr's built-in FlirtAnalysis)
 nampa>=0.1
