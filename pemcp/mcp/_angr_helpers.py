@@ -95,20 +95,32 @@ def _parse_addr(hex_string: str, name: str = "address") -> int:
 
 def _resolve_function_address(target_addr: int):
     """Resolve a function address, trying RVA-to-VA correction if needed.
-    Returns (function_object, address_used)."""
+    Returns (function_object, address_used).
+
+    Uses a local snapshot of the CFG to avoid races with background workers
+    that may replace ``state.angr_cfg`` between the lock release inside
+    ``_ensure_project_and_cfg()`` and the attribute access here.
+    """
     _ensure_project_and_cfg()
+    # Take a local snapshot so a concurrent reset cannot set cfg to None
+    _project, cfg = state.get_angr_snapshot()
+    if cfg is None:
+        raise RuntimeError(
+            "CFG is not available. The background analysis may still be running "
+            "or was reset. Use check_task_status('startup-angr') to monitor progress."
+        )
     addr_to_use = target_addr
 
-    if addr_to_use not in state.angr_cfg.functions:
+    if addr_to_use not in cfg.functions:
         if (state.pe_object
                 and hasattr(state.pe_object, 'OPTIONAL_HEADER')
                 and state.pe_object.OPTIONAL_HEADER):
             image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
             potential_va = target_addr + image_base
-            if potential_va in state.angr_cfg.functions:
+            if potential_va in cfg.functions:
                 addr_to_use = potential_va
 
-    func = state.angr_cfg.functions[addr_to_use]  # may raise KeyError
+    func = cfg.functions[addr_to_use]  # may raise KeyError
     return func, addr_to_use
 
 
