@@ -1,0 +1,10 @@
+# Minimal dependencies for CI unit tests.
+# Heavy optional packages (angr, capa, floss, etc.) are NOT needed —
+# all their imports are guarded and tests skip/mock them gracefully.
+
+# Core (unconditionally imported by pemcp.config)
+pefile>=2024.8.26
+networkx>=3.0
+
+# Server infrastructure (used by pemcp.mcp.server at import time)
+mcp[cli]>=1.0
