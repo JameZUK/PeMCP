@@ -29,6 +29,7 @@ jobs:
         run: |
           python -m pytest tests/ -v --tb=short \
             --cov=pemcp --cov-report=xml --cov-report=term-missing \
+            --cov-config=.coveragerc \
             --cov-fail-under=60
 
       - name: Upload coverage report
