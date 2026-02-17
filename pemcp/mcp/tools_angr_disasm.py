@@ -73,6 +73,7 @@ async def disassemble_at_address(
         }
 
     result = await asyncio.to_thread(_disasm)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "disassemble_at_address")
 
 
@@ -108,8 +109,8 @@ async def get_calling_conventions(
 
             try:
                 state.angr_project.analyses.CallingConventionAnalysis(func, cfg=state.angr_cfg.model, analyze_callsites=True)
-            except Exception:
-                pass  # best-effort; results still land on func
+            except Exception as e:
+                logger.debug("Skipped item during processing: %s", e)
 
             return _format_cc_info(func)
 
@@ -120,12 +121,14 @@ async def get_calling_conventions(
             state.angr_project.analyses.CompleteCallingConventionsAnalysis(
                 recover_variables=True, cfg=state.angr_cfg.model,
             )
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped item during processing: %s", e)
             try:
                 state.angr_project.analyses.CompleteCallingConventionsAnalysis(
                     recover_variables=False, cfg=state.angr_cfg.model,
                 )
-            except Exception:
+            except Exception as e:
+                logger.debug("Skipped item during processing: %s", e)
                 # Final fallback: run per-function CallingConventionAnalysis
                 # in a loop, which is slower but more compatible.
                 try:
@@ -136,8 +139,8 @@ async def get_calling_conventions(
                             state.angr_project.analyses.CallingConventionAnalysis(
                                 _func, cfg=state.angr_cfg.model, analyze_callsites=True,
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Skipped item during processing: %s", e)
                 except Exception as e:
                     tb = traceback.format_exc()
                     logger.error("CC recovery failed: %s", tb)
@@ -159,6 +162,7 @@ async def get_calling_conventions(
         }
 
     result = await asyncio.to_thread(_recover)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_calling_conventions", "the 'limit' parameter")
 
 
@@ -231,9 +235,9 @@ async def get_function_variables(
                         params.append(entry)
                     else:
                         variables.append(entry)
-            except Exception:
+            except Exception as e:
                 # Some builds have get_variables with different signatures
-                pass
+                logger.debug("Skipped item during processing: %s", e)
 
         if not variables and not params:
             # Fallback: try the older property-based API
@@ -268,6 +272,7 @@ async def get_function_variables(
         }
 
     result = await asyncio.to_thread(_recover)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_function_variables", "the 'limit' parameter")
 
 
@@ -314,8 +319,8 @@ async def identify_library_functions(
                     if os.path.isdir(sd):
                         try:
                             angr.flirt.load_signatures(sd)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.debug("Skipped item during processing: %s", e)
 
             if signature_path:
                 state.angr_project.analyses.Flirt(signature_path)
@@ -359,6 +364,7 @@ async def identify_library_functions(
         }
 
     result = await asyncio.to_thread(_flirt)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "identify_library_functions", "the 'limit' parameter")
 
 
@@ -392,8 +398,8 @@ async def get_annotated_disassembly(
         # Try running variable recovery to get names
         try:
             state.angr_project.analyses.VariableRecoveryFast(func)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Skipped item during processing: %s", e)
 
         # Build xref lookup for this function
         xref_map = {}
@@ -408,8 +414,8 @@ async def get_annotated_disassembly(
                                 "sort": xref.memory_data.sort,
                                 "content": str(xref.memory_data.content)[:60] if xref.memory_data.content else None,
                             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Skipped item during processing: %s", e)
 
         # Build callee lookup from CFG
         call_targets = {}
@@ -419,8 +425,8 @@ async def get_annotated_disassembly(
                 for succ in callgraph.successors(addr_used):
                     if succ in state.angr_cfg.functions:
                         call_targets[succ] = state.angr_cfg.functions[succ].name
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Skipped item during processing: %s", e)
 
         instructions = []
         for block in func.blocks:
@@ -461,4 +467,5 @@ async def get_annotated_disassembly(
         }
 
     result = await asyncio.to_thread(_annotate)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_annotated_disassembly", "the 'limit' parameter")

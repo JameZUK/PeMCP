@@ -4,6 +4,8 @@ import struct
 import tempfile
 import pytest
 
+pytest.importorskip("pefile", reason="pefile not installed")
+
 
 class TestFormatDetectMarkers:
     """Verify that language detection markers cover Go and Rust beyond the header."""

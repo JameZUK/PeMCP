@@ -2,6 +2,8 @@
 import math
 import pytest
 
+pytest.importorskip("pefile", reason="pefile not installed")
+
 from pemcp.hashing import SSDeep, ssdeep_hasher
 from pemcp.parsers.strings import (
     _get_string_category,

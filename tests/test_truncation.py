@@ -3,6 +3,8 @@ import json
 import pytest
 import asyncio
 
+pytest.importorskip("pefile", reason="pefile not installed")
+
 from unittest.mock import AsyncMock
 
 from pemcp.mcp.server import _check_mcp_response_size

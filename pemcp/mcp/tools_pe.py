@@ -36,6 +36,10 @@ def _safe_env_int(key: str, default: int) -> int:
         logger.warning("Invalid value for %s=%r, using default %d", key, val, default)
         return default
 
+# Limit concurrent heavy analyses (open_file with full PE parsing, FLOSS, etc.).
+# This is a global semaphore shared across all HTTP sessions.  In multi-tenant
+# deployments, one user's analysis can block another if the limit is reached.
+# Increase via PEMCP_MAX_CONCURRENT_ANALYSES for high-concurrency environments.
 _analysis_semaphore = asyncio.Semaphore(_safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3))
 
 if ANGR_AVAILABLE:
