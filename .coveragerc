@@ -1,0 +1,26 @@
+[run]
+omit =
+    # MCP tool modules — require optional deps or full server context
+    pemcp/mcp/tools_*.py
+    pemcp/mcp/server.py
+    pemcp/mcp/_angr_helpers.py
+    pemcp/mcp/_format_helpers.py
+    # Parsers requiring optional heavy deps
+    pemcp/parsers/capa.py
+    pemcp/parsers/floss.py
+    pemcp/parsers/pe.py
+    pemcp/parsers/signatures.py
+    # Config (mostly optional-import availability checks)
+    pemcp/config.py
+    # Server/CLI entry points (integration, not unit-tested)
+    pemcp/__main__.py
+    pemcp/main.py
+    pemcp/cli/*
+    pemcp/background.py
+    pemcp/resources.py
+
+[report]
+exclude_lines =
+    pragma: no cover
+    if TYPE_CHECKING
+    raise NotImplementedError
