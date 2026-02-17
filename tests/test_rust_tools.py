@@ -3,6 +3,9 @@ import os
 import struct
 import tempfile
 import pytest
+
+pytest.importorskip("pefile", reason="pefile not installed")
+
 from pemcp.mcp.tools_rust import _rust_string_scan
 
 

@@ -3,7 +3,7 @@ import datetime
 import math
 import pytest
 
-import pefile
+pefile = pytest.importorskip("pefile", reason="pefile not installed")
 
 from pemcp.utils import (
     shannon_entropy,

@@ -1,6 +1,8 @@
 """Unit tests for MCP server helpers and validation functions."""
 import pytest
 
+pytest.importorskip("pefile", reason="pefile not installed")
+
 from pemcp.mcp._angr_helpers import _parse_addr, _raise_on_error_dict
 from pemcp.mcp._format_helpers import _check_lib
 from pemcp.mcp.server import _check_pe_loaded, _check_data_key_available

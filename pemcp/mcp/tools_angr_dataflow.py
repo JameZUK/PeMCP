@@ -141,9 +141,11 @@ async def get_reaching_definitions(
                     definitions.append(entry)
                     if len(definitions) >= limit:
                         break
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped definition during RDA iteration: %s", e)
                     _skipped_defs += 1
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped definition enumeration during RDA: %s", e)
             _skipped_defs += 1
 
         # If target_instruction is specified, extract the observed result at that point
@@ -172,7 +174,8 @@ async def get_reaching_definitions(
                             "live_register_definitions": live_defs[:limit],
                         }
                         break
-            except Exception:
+            except Exception as e:
+                logger.debug("Skipped observation during RDA target extraction: %s", e)
                 _skipped_obs += 1
 
         result = {
@@ -207,6 +210,7 @@ async def get_reaching_definitions(
 
     await ctx.info(f"Running reaching definitions for {function_address}")
     result = await asyncio.to_thread(_rda)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_reaching_definitions", "the 'limit' parameter")
 
 
@@ -280,7 +284,8 @@ async def get_data_dependencies(
             dep_graph = getattr(rd, 'dep_graph', None)
             if dep_graph is not None:
                 dep_graph = dep_graph.graph if hasattr(dep_graph, 'graph') else dep_graph
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped dep_graph extraction during data dependency analysis: %s", e)
             dep_graph = None
 
         # Collect all definitions as a flat list
@@ -296,9 +301,11 @@ async def get_data_dependencies(
                     definitions.append(entry)
                     if len(definitions) >= limit:
                         break
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped definition during data dependency iteration: %s", e)
                     _skipped_defs += 1
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped definition enumeration during data dependency analysis: %s", e)
             _skipped_defs += 1
 
         # If an instruction is targeted, filter definitions relevant to it
@@ -324,7 +331,8 @@ async def get_data_dependencies(
                                 if len(filtered) >= limit:
                                     break
                             break
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped observation during data dependency target extraction: %s", e)
                     _skipped_obs += 1
 
             result_targeted = {
@@ -351,8 +359,8 @@ async def get_data_dependencies(
             try:
                 for src, dst in list(dep_graph.edges())[:limit]:
                     edges.append({"src": str(src), "dst": str(dst)})
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Skipped item during dep_graph edge iteration: %s", e, exc_info=True)
 
         result_full = {
             "function_name": func.name,
@@ -381,6 +389,7 @@ async def get_data_dependencies(
 
     await ctx.info(f"Analysing data dependencies for {function_address}")
     result = await asyncio.to_thread(_ddg)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_data_dependencies", "the 'limit' parameter")
 
 
@@ -484,6 +493,7 @@ async def get_control_dependencies(
         }
 
     result = await asyncio.to_thread(_cdg)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_control_dependencies", "the 'limit' parameter")
 
 
@@ -550,8 +560,8 @@ async def propagate_constants(
                         })
                     if len(replacements) >= limit:
                         break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Skipped item during propagator replacement extraction: %s", e, exc_info=True)
 
         return {
             "function_name": func.name,
@@ -561,6 +571,7 @@ async def propagate_constants(
         }
 
     result = await asyncio.to_thread(_propagate)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "propagate_constants", "the 'limit' parameter")
 
 
@@ -641,8 +652,8 @@ async def get_value_set_analysis(
                 for node in list(graph.nodes())[:limit]:
                     entry = {"address": hex(node.addr) if hasattr(node, 'addr') else str(node)}
                     nodes_info.append(entry)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Skipped item during VFG graph node extraction: %s", e, exc_info=True)
 
         return {
             "function_name": func.name,
@@ -665,4 +676,5 @@ async def get_value_set_analysis(
 
     await ctx.info(f"Running VFG for {function_address}")
     result = await asyncio.to_thread(_vsa)
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_value_set_analysis", "the 'limit' parameter")

@@ -1,5 +1,8 @@
 """Unit tests for Go binary analysis tool helpers."""
 import pytest
+
+pytest.importorskip("pefile", reason="pefile not installed")
+
 from pemcp.mcp.tools_go import _safe_str, _safe_int
 
 

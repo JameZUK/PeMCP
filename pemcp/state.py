@@ -26,6 +26,7 @@ class AnalyzerState:
         self.filepath: Optional[str] = None
         self.pe_data: Optional[Dict[str, Any]] = None
         self.pe_object: Optional[Any] = None  # pefile.PE or MockPE
+        self._inherited_pe_object: bool = False  # True if pe_object was inherited from _default_state
         self.pefile_version: Optional[str] = None
         self.loaded_from_cache: bool = False
 
@@ -143,15 +144,21 @@ class AnalyzerState:
     def close_pe(self):
         with self._pe_lock:
             if self.pe_object:
-                # Close the PE object if we own it.  Sessions that inherited
-                # the reference from _default_state must NOT close it (doing
-                # so would invalidate the object for all other sessions).
-                if self is _default_state or self.pe_object is not _default_state.pe_object:
+                # Close the PE object only if we own it.  Sessions that
+                # inherited the reference at creation time must NOT close
+                # it — doing so would invalidate the object for all other
+                # sessions and the default state.
+                # We use the ``_inherited_pe_object`` flag rather than
+                # comparing ``is _default_state.pe_object`` because the
+                # default state's reference can change if another session
+                # calls ``open_file``.
+                if self is _default_state or not self._inherited_pe_object:
                     try:
                         self.pe_object.close()
                     except (OSError, AttributeError) as e:
                         logger.debug("Failed to close PE object: %s", e)
                 self.pe_object = None
+                self._inherited_pe_object = False
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +230,7 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
                 new_state.filepath = _default_state.filepath
                 new_state.pe_data = _default_state.pe_data
                 new_state.pe_object = _default_state.pe_object
+                new_state._inherited_pe_object = True
                 new_state.pefile_version = _default_state.pefile_version
                 new_state.loaded_from_cache = _default_state.loaded_from_cache
                 new_state.angr_project = _default_state.angr_project
@@ -230,9 +238,11 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             _session_registry[session_key] = new_state
         result = _session_registry[session_key]
 
-    # Clean up stale sessions outside the lock
+    # Clean up stale sessions outside the lock.
+    # Sessions with inherited PE objects must not close them (close_pe
+    # now checks _inherited_pe_object flag).
     for stale in stale_to_cleanup:
-        if stale.pe_object is not None and stale.pe_object is not _default_state.pe_object:
+        if stale.pe_object is not None:
             stale.close_pe()
         if stale.angr_project is not None and stale.angr_project is not _default_state.angr_project:
             stale.reset_angr()

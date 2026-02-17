@@ -1,5 +1,8 @@
 """Unit tests for triage helper functions — compiler detection and mode normalization."""
 import pytest
+
+pytest.importorskip("pefile", reason="pefile not installed")
+
 from unittest.mock import patch, MagicMock
 
 from pemcp.state import AnalyzerState
