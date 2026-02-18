@@ -224,18 +224,56 @@ class TestStringsToolSafety:
 # ===================================================================
 
 class TestUnipackerTimeout:
-    """Verify unipacker checks done_event.is_set() after wait."""
+    """Verify unipacker runner handles timeouts and the tool uses subprocess."""
 
-    def test_timeout_returns_warning(self):
-        """Verify the unipacker code checks wait() return value."""
+    def test_timeout_returns_warning_in_runner(self):
+        """Verify the unipacker runner script handles timeouts."""
+        runner_path = os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "unipacker_runner.py"
+        )
+        with open(runner_path) as f:
+            source = f.read()
+        assert "if not done_event.wait(timeout=" in source
+        assert '"status": "timeout"' in source
+        assert "Unpacking timed out" in source
+
+    def test_tool_uses_subprocess_runner(self):
+        """Verify auto_unpack_pe uses _run_unipacker subprocess pattern."""
         libs_path = os.path.join(
             os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_new_libs.py"
         )
         with open(libs_path) as f:
             source = f.read()
-        assert "if not done_event.wait(timeout=300):" in source
-        assert '"status": "timeout"' in source
-        assert "Unpacking timed out" in source
+        assert "_run_unipacker(" in source
+        assert "_UNIPACKER_VENV_PYTHON" in source
+        assert "_UNIPACKER_RUNNER" in source
+
+
+class TestUnipackerRunner:
+    """Test unipacker_runner.py structure and error handling."""
+
+    def test_runner_has_unpack_pe_action(self):
+        """Verify the runner script handles the unpack_pe action."""
+        runner_path = os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "unipacker_runner.py"
+        )
+        with open(runner_path) as f:
+            source = f.read()
+        # Verify action dispatch
+        assert '"unpack_pe"' in source
+        assert "def unpack_pe(cmd):" in source
+        # Verify JSON stdin/stdout pattern
+        assert "json.loads(sys.stdin.read())" in source
+        assert "json.dump(result, sys.stdout)" in source
+
+    def test_runner_handles_unknown_action(self):
+        """Verify the runner returns error for unknown actions."""
+        runner_path = os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "unipacker_runner.py"
+        )
+        with open(runner_path) as f:
+            source = f.read()
+        assert "Unknown action" in source
 
 
 # ===================================================================
@@ -261,15 +299,18 @@ class TestBinwalkFailureSurfacing:
 # ===================================================================
 
 class TestSubprocessCleanup:
-    """Verify speakeasy subprocess cleanup handles errors."""
+    """Verify speakeasy and unipacker subprocess cleanup handles errors."""
 
     def test_kill_wait_wrapped_in_try(self):
-        """Verify proc.kill/wait is wrapped in try/except."""
+        """Verify proc.kill/wait is wrapped in try/except for both runners."""
         libs_path = os.path.join(
             os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_new_libs.py"
         )
         with open(libs_path) as f:
             source = f.read()
-        # Find the timeout handler in _run_speakeasy
+        # Find the timeout handlers in _run_speakeasy and _run_unipacker
         assert "proc.kill()" in source
         assert "# Best-effort cleanup" in source
+        # Verify both runner functions exist
+        assert "_run_speakeasy" in source
+        assert "_run_unipacker" in source

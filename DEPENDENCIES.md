@@ -44,23 +44,23 @@ satisfied" and do nothing.
 
 Even `--force-reinstall` can be confused by the stale metadata.
 
-### Current fix (Dockerfile lines 83-90)
+### Current fix: venv isolation for both speakeasy and unipacker
 
-```dockerfile
-# Nuke both packages, then install unicorn fresh from PyPI.
-RUN pip uninstall -y unicorn unicorn-unipacker 2>/dev/null; \
-    pip install --no-cache-dir "unicorn>=2.0.0"
-```
+Both speakeasy and unipacker are installed in **separate virtualenvs**
+so their unicorn 1.x dependencies never touch the main environment:
 
-**This MUST remain the last `pip install` in the Dockerfile.**  Any later
-`pip install` that pulls in `unicorn-unipacker` (or any other package
-that writes to `site-packages/unicorn/`) will re-break angr.
+- **speakeasy-emulator** → `/app/speakeasy-venv` (unicorn 1.x via
+  `unicorn==1.0.2`).  Invoked via `scripts/speakeasy_runner.py`.
+- **unipacker** → `/app/unipacker-venv` (unicorn 1.x via
+  `unicorn-unipacker`).  Invoked via `scripts/unipacker_runner.py`.
 
-### Speakeasy isolation
+The main environment keeps unicorn 2.x for angr.  No nuke-and-reinstall
+step is needed because neither conflicting package is installed in the
+main env.
 
-speakeasy-emulator is installed in a **separate virtualenv**
-(`/app/speakeasy-venv`) because it hard-requires `unicorn==1.0.2`.
-The main environment keeps unicorn 2.x for angr.
+Both runners use the same subprocess pattern: the tool function sends a
+JSON command via stdin, the runner script (executed with the venv's
+Python) does the work, and returns a JSON result via stdout.
 
 ### Runtime safety net (pemcp/config.py)
 
@@ -112,7 +112,7 @@ RUN pip install --no-cache-dir --force-reinstall \
 
 ---
 
-## 4. Best-effort packages (unipacker, dotnetfile, binwalk, pygore)
+## 4. Best-effort packages (dotnetfile, binwalk, pygore)
 
 These are installed with `|| true` so a failure in one does not block
 the others or the entire build.  They may have fragile or conflicting
@@ -121,6 +121,9 @@ dependencies.
 If any of these break the build, the simplest fix is to comment them
 out — PeMCP will detect their absence at runtime and disable the
 corresponding tools.
+
+Note: unipacker was previously in this group but is now installed in
+its own isolated venv (see section 1).
 
 ---
 
@@ -158,7 +161,7 @@ PeMCP's imports.  These are handled with compatibility shims:
 |---------|---------|-------------------|---------------------|------|
 | **dncil** >=1.0.2 | `dncil.cil.error.CilError` | `dncil.cil.error.MethodBodyFormatError` | `config.py`, `tools_dotnet.py` | `import MethodBodyFormatError as CilError` |
 | **angr** >=9.2.199 | `analyses.FlirtAnalysis()` | `analyses.Flirt()` | `tools_angr_disasm.py` | Direct rename + auto-load FLIRT sigs |
-| **unipacker** >=1.0.8 | `UnpackerEngine(filepath, ...)` | `UnpackerEngine(Sample(filepath), ...)` | `tools_new_libs.py` | Wrap path in `Sample()` object |
+| **unipacker** >=1.0.8 | `UnpackerEngine(filepath, ...)` | `UnpackerEngine(Sample(filepath), ...)` | `scripts/unipacker_runner.py` | Wrap path in `Sample()` object (in venv runner) |
 | **angr** >=9.2.199 | `ProcedureEngine()` (no args) | `ProcedureEngine(project)` | `tools_angr_dataflow.py` | Monkey-patch `VFG._get_simsuccessors` |
 
 ### dncil: CilError → MethodBodyFormatError
@@ -274,8 +277,9 @@ only available from GitHub, install it in the Dockerfile via
 
 1. **Read the build log carefully.** Look for packages that install into
    the `unicorn` namespace or downgrade existing packages.
-2. **Check the diagnostic step output.** The build prints both the main
-   env and speakeasy venv unicorn versions.  Main env must be 2.x.
+2. **Check the diagnostic step output.** The build prints the main env,
+   speakeasy venv, and unipacker venv unicorn versions.  Main env must
+   be 2.x.
 3. **Run an interactive shell** in a partial build to inspect:
    ```bash
    podman run --rm -it --entrypoint bash pemcp-toolkit
@@ -283,8 +287,8 @@ only available from GitHub, install it in the Dockerfile via
    pip list | grep -i unicorn
    ```
 4. **If the assert fails**, the unicorn namespace has been clobbered
-   again.  Check whether a new package (added after the uninstall step)
-   pulls in `unicorn-unipacker` or another unicorn fork.
+   again.  Check whether a new package installed in the main env pulls
+   in `unicorn-unipacker` or another unicorn fork.
 
 ---
 
@@ -296,13 +300,12 @@ only available from GitHub, install it in the Dockerfile via
 3. Core deps (pefile, requests, mcp, etc.)
 4. Extended libs (lief, capstone, dnfile, dncil, etc.)
 5. speakeasy-emulator    → isolated in /app/speakeasy-venv (unicorn 1.x)
-6. unipacker             → installs unicorn-unipacker (clobbers unicorn 2.x!)
-7. dotnetfile, binwalk, pygore
+6. unipacker             → isolated in /app/unipacker-venv (unicorn 1.x)
+7. dotnetfile, binwalk, pygore (best-effort, main env)
 8. oscrypto patch
-9. NUKE unicorn-unipacker + reinstall unicorn 2.x   ← MUST BE LAST
-10. Assert UC_ARCH_RISCV exists                      ← build-time guard
+9. Assert UC_ARCH_RISCV exists                      ← build-time guard
 ```
 
-Adding new pip packages?  Insert them **before step 9**.  Never add
-anything after the unicorn restore step that could re-introduce a
-unicorn fork.
+Since both speakeasy and unipacker are now in isolated venvs, there is
+no longer a nuke-and-reinstall step.  The main env's unicorn 2.x is
+never touched after step 1.
