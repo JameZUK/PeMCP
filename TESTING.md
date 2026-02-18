@@ -1,6 +1,6 @@
 # Testing Guide
 
-PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 105 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
+PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 113 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
 
 ---
 
@@ -211,7 +211,7 @@ When adding new unit tests, follow these conventions:
 
 ## Integration Tests
 
-The integration test suite (`mcp_test_client.py`) covers all **105 MCP tools** across 19 test categories. Tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
+The integration test suite (`mcp_test_client.py`) covers all **113 MCP tools** across 20 test categories. Tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
 
 ### Prerequisites
 
@@ -277,7 +277,7 @@ pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
 pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
 pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
 pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 105 tools exist
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 113 tools exist
 ```
 
 ### Environment Variables
@@ -318,6 +318,7 @@ The integration test suite is organised into 19 classes:
 | `TestAngrHooks` | `hook_function`, `list_hooks`, `unhook_function` | `pe_file`, `angr` |
 | `TestAngrForensic` | 5 forensic tools (packing, code caves, call graph, etc.) | `pe_file`, `angr` |
 | `TestExtendedLibraries` | 9 extended library tools (LIEF, Capstone, Keystone, Speakeasy, etc.) | `optional_lib` |
+| `TestQilingEmulation` | 8 Qiling tools (emulation, shellcode, tracing, API hooks, unpacking, memory search, rootfs download) | `optional_lib` |
 | `TestMultiFormat` | 8 multi-format tools (ELF, Mach-O, .NET, Go, Rust) | `optional_lib` |
 | `TestErrorHandling` | Invalid inputs, nonexistent files, bad addresses | mixed |
 | `TestToolDiscovery` | Lists server tools and reports coverage (warns on missing) | `no_file` |
