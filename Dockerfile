@@ -73,11 +73,20 @@ RUN python -m venv /app/speakeasy-venv && \
     /app/speakeasy-venv/bin/pip install --no-cache-dir --upgrade pip && \
     /app/speakeasy-venv/bin/pip install --no-cache-dir speakeasy-emulator
 
+# --- Install unipacker in an isolated venv (requires unicorn 1.x) ---
+# unipacker pulls in unicorn-unipacker, a fork of unicorn 1.x that
+# installs into the same site-packages/unicorn/ namespace as the real
+# unicorn package, silently overwriting 2.x module files with 1.x code.
+# By isolating unipacker in its own venv we avoid the namespace collision
+# entirely -- no more nuke-and-reinstall of unicorn after the build.
+RUN python -m venv /app/unipacker-venv && \
+    /app/unipacker-venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /app/unipacker-venv/bin/pip install --no-cache-dir unipacker
+
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
 # but combined into a single layer to reduce image layer count.
-RUN pip install --no-cache-dir unipacker || true && \
-    pip install --no-cache-dir dotnetfile || true && \
+RUN pip install --no-cache-dir dotnetfile || true && \
     pip install --no-cache-dir binwalk || true && \
     pip install --no-cache-dir pygore || true
 
@@ -85,20 +94,13 @@ RUN pip install --no-cache-dir unipacker || true && \
 RUN pip install --no-cache-dir --force-reinstall \
     git+https://github.com/wbond/oscrypto.git@d5f3437ed24257895ae1edd9e503cfb352e635a8
 
-# --- Restore unicorn 2.x (MUST be the last pip install) ---
-# unicorn-unipacker (pulled in by unipacker) installs into the same
-# site-packages/unicorn/ namespace as the real unicorn package,
-# overwriting the 2.x module files with 1.x code.  pip's registry
-# still shows unicorn==2.1.x so even --force-reinstall can be confused
-# by the stale metadata.  Nuke both packages first, then install fresh.
-RUN pip uninstall -y unicorn unicorn-unipacker 2>/dev/null; \
-    pip install --no-cache-dir "unicorn>=2.0.0"
-
 # Show the final unicorn versions for build-log diagnostics.
 # Main env: unicorn 2.x → angr native unicorn bridge works.
 # Speakeasy venv: unicorn 1.x → speakeasy emulation works.
+# Unipacker venv: unicorn 1.x (via unicorn-unipacker) → unipacker works.
 RUN python -c "import unicorn; print('main env unicorn', unicorn.__version__); assert hasattr(unicorn, 'UC_ARCH_RISCV'), 'UC_ARCH_RISCV missing!'" && \
-    /app/speakeasy-venv/bin/python -c "import unicorn; print('speakeasy venv unicorn', unicorn.__version__)"
+    /app/speakeasy-venv/bin/python -c "import unicorn; print('speakeasy venv unicorn', unicorn.__version__)" && \
+    /app/unipacker-venv/bin/python -c "import unicorn; print('unipacker venv unicorn', unicorn.__version__)"
 
 # --- Pre-populate capa rules (avoids runtime download + write permission issues) ---
 # Downloaded at build time so the container never needs write access to /app.

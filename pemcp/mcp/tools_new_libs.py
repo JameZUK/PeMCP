@@ -14,7 +14,9 @@ from pemcp.config import (
     LIEF_AVAILABLE, CAPSTONE_AVAILABLE, KEYSTONE_AVAILABLE,
     SPEAKEASY_AVAILABLE, _SPEAKEASY_VENV_PYTHON, _SPEAKEASY_RUNNER,
     _check_speakeasy_available,
-    UNIPACKER_AVAILABLE, DOTNETFILE_AVAILABLE,
+    _UNIPACKER_VENV_PYTHON, _UNIPACKER_RUNNER,
+    _check_unipacker_available,
+    DOTNETFILE_AVAILABLE,
     PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_angr_ready, _check_mcp_response_size
@@ -27,15 +29,6 @@ if CAPSTONE_AVAILABLE:
     import capstone
 if KEYSTONE_AVAILABLE:
     import keystone
-if UNIPACKER_AVAILABLE:
-    from unipacker.core import UnpackerClient
-    try:
-        from unipacker.core import UnpackerEngine, SimpleClient
-        from unipacker.core import Sample as _UnipackerSample
-    except ImportError:
-        UnpackerEngine = None
-        SimpleClient = None
-        _UnipackerSample = None
 if DOTNETFILE_AVAILABLE:
     import dotnetfile
 if PPDEEP_AVAILABLE:
@@ -666,8 +659,40 @@ async def emulate_shellcode_with_speakeasy(
 
 
 # ===================================================================
-#  UN{I}PACKER — Automatic PE unpacking
+#  UN{I}PACKER — Automatic PE unpacking (via isolated venv subprocess)
 # ===================================================================
+
+async def _run_unipacker(cmd: dict, timeout_seconds: int) -> dict:
+    """Invoke the unipacker runner subprocess in the isolated venv."""
+    proc = await asyncio.create_subprocess_exec(
+        str(_UNIPACKER_VENV_PYTHON), str(_UNIPACKER_RUNNER),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    input_data = json.dumps(cmd).encode()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=input_data),
+            timeout=timeout_seconds + 30,  # buffer beyond unpacking timeout
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass  # Best-effort cleanup; process may already be dead
+        return {"error": f"Unipacker timed out after {timeout_seconds}s"}
+
+    if proc.returncode != 0:
+        err_msg = stderr.decode(errors="replace")[:500]
+        return {"error": f"Unipacker runner failed (exit {proc.returncode}): {err_msg}"}
+
+    try:
+        return json.loads(stdout.decode())
+    except json.JSONDecodeError:
+        return {"error": f"Invalid JSON from unipacker runner: {stdout.decode(errors='replace')[:500]}"}
+
 
 @tool_decorator
 async def auto_unpack_pe(
@@ -683,7 +708,7 @@ async def auto_unpack_pe(
         output_path: Where to save the unpacked binary. Default: <original>_unpacked.exe.
     """
     await ctx.info("Auto-unpacking PE")
-    _check_lib("unipacker", UNIPACKER_AVAILABLE, "auto_unpack_pe")
+    _check_lib("unipacker", _check_unipacker_available(), "auto_unpack_pe")
     _check_pe_loaded("auto_unpack_pe")
 
     if not output_path:
@@ -693,61 +718,18 @@ async def auto_unpack_pe(
     # Validate output path against sandbox
     state.check_path_allowed(os.path.abspath(output_path))
 
-    def _unpack():
-        import threading
+    timeout_seconds = 300
+    result = await _run_unipacker({
+        "action": "unpack_pe",
+        "filepath": state.filepath,
+        "output_path": output_path,
+        "timeout_seconds": timeout_seconds,
+    }, timeout_seconds)
 
-        try:
-            # The correct unipacker API uses UnpackerEngine + SimpleClient:
-            #   engine = UnpackerEngine(sample_path, output_path)
-            #   client = SimpleClient(event)
-            #   engine.register_client(client)
-            #   engine.emu()
-            # UnpackerClient is just a callback interface, not the entry
-            # point for unpacking.
-            if UnpackerEngine is not None and SimpleClient is not None:
-                done_event = threading.Event()
-                client = SimpleClient(done_event)
-                # unipacker >=1.0.8 expects a Sample object, not a raw path
-                _sample = _UnipackerSample(state.filepath) if _UnipackerSample is not None else state.filepath
-                engine = UnpackerEngine(_sample, output_path)
-                engine.register_client(client)
-                engine.emu()
-                # Wait for completion (with timeout to avoid hanging)
-                if not done_event.wait(timeout=300):
-                    logger.warning("Unipacker timed out after 300s")
-                    return {
-                        "status": "timeout",
-                        "input_file": state.filepath,
-                        "output_file": output_path,
-                        "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
-                        "warning": "Unpacking timed out after 300s. Output may be incomplete.",
-                        "hint": "Use open_file() to load the output and check if it is valid.",
-                    }
-            else:
-                # Fallback: try calling UnpackerClient directly in case
-                # an older unipacker version has a simpler API.
-                try:
-                    client = UnpackerClient(state.filepath)
-                    if hasattr(client, 'unpack'):
-                        client.unpack(output_path)
-                    elif hasattr(client, 'run'):
-                        client.run()
-                except TypeError:
-                    client = UnpackerClient()
-                    if hasattr(client, 'unpack'):
-                        client.unpack(state.filepath, output_path)
+    # Add a hint for the user on success
+    if result.get("status") == "success":
+        result["hint"] = "Use open_file() to load the unpacked binary for further analysis."
 
-            return {
-                "status": "success",
-                "input_file": state.filepath,
-                "output_file": output_path,
-                "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
-                "hint": "Use open_file() to load the unpacked binary for further analysis.",
-            }
-        except Exception as e:
-            return {"error": f"Unpacking failed: {e}"}
-
-    result = await asyncio.to_thread(_unpack)
     return await _check_mcp_response_size(ctx, result, "auto_unpack_pe")
 
 
@@ -940,7 +922,7 @@ async def get_extended_capabilities(ctx: Context) -> Dict[str, Any]:
         "capstone": {"available": CAPSTONE_AVAILABLE, "purpose": "Multi-architecture disassembly"},
         "keystone": {"available": KEYSTONE_AVAILABLE, "purpose": "Multi-architecture assembly"},
         "speakeasy": {"available": _check_speakeasy_available(), "purpose": "Windows API emulation for malware analysis"},
-        "unipacker": {"available": UNIPACKER_AVAILABLE, "purpose": "Automatic PE unpacking"},
+        "unipacker": {"available": _check_unipacker_available(), "purpose": "Automatic PE unpacking"},
         "dotnetfile": {"available": DOTNETFILE_AVAILABLE, "purpose": ".NET PE metadata parsing"},
         "ppdeep": {"available": PPDEEP_AVAILABLE, "purpose": "ssdeep fuzzy hashing"},
         "tlsh": {"available": TLSH_AVAILABLE, "purpose": "TLSH locality-sensitive hashing"},
