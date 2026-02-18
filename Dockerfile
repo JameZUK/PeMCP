@@ -146,20 +146,24 @@ def _create_minimal_hive():
     hbin = bytearray(4096)
     hbin[0:4] = b'hbin'
     struct.pack_into('<I', hbin, 0x08, 0x1000)
+    # Root key cell: [size:4][nk record...]
+    # nk record starts at co+4; field offsets are from nk start
     co = 0x20
+    nk = co + 4
     kn = b'CMI-CreateHive{00000000-0000-0000-0000-000000000000}'
-    ct = (0x4C + len(kn) + 7) & ~7
+    ct = (4 + 0x4C + len(kn) + 7) & ~7  # cell size + nk header + name
     struct.pack_into('<i', hbin, co, -ct)
-    hbin[co+4:co+6] = b'nk'
-    struct.pack_into('<H', hbin, co+0x06, 0x24)
-    struct.pack_into('<I', hbin, co+0x14, 0xFFFFFFFF)
-    struct.pack_into('<I', hbin, co+0x20, 0xFFFFFFFF)
-    struct.pack_into('<I', hbin, co+0x24, 0xFFFFFFFF)
-    struct.pack_into('<I', hbin, co+0x2C, 0xFFFFFFFF)
-    struct.pack_into('<I', hbin, co+0x30, 0xFFFFFFFF)
-    struct.pack_into('<I', hbin, co+0x34, 0xFFFFFFFF)
-    struct.pack_into('<H', hbin, co+0x48, len(kn))
-    hbin[co+0x4C:co+0x4C+len(kn)] = kn
+    hbin[nk:nk+2] = b'nk'
+    struct.pack_into('<H', hbin, nk+0x02, 0x24)
+    struct.pack_into('<I', hbin, nk+0x10, 0xFFFFFFFF)  # parent
+    struct.pack_into('<I', hbin, nk+0x1C, 0xFFFFFFFF)  # stable subkey list
+    struct.pack_into('<I', hbin, nk+0x20, 0xFFFFFFFF)  # volatile subkey list
+    struct.pack_into('<I', hbin, nk+0x28, 0xFFFFFFFF)  # value list
+    struct.pack_into('<I', hbin, nk+0x2C, 0xFFFFFFFF)  # security desc
+    struct.pack_into('<I', hbin, nk+0x30, 0xFFFFFFFF)  # class name
+    struct.pack_into('<H', hbin, nk+0x48, len(kn))     # key name length
+    struct.pack_into('<H', hbin, nk+0x4A, 0)           # class name length
+    hbin[nk+0x4C:nk+0x4C+len(kn)] = kn
     fo = co + ct
     fs = 0x1000 - fo
     if fs > 4: struct.pack_into('<i', hbin, fo, fs)
@@ -169,13 +173,15 @@ hive_data = _create_minimal_hive()
 for win_dir in ["x86_windows", "x8664_windows"]:
     reg_dir = rootfs_dir / win_dir / "Windows" / "registry"
     reg_dir.mkdir(parents=True, exist_ok=True)
-    for hive in ["NTUSER.DAT", "SAM", "SECURITY", "SOFTWARE", "SYSTEM"]:
+    for hive in ["NTUSER.DAT", "SAM", "SECURITY", "SOFTWARE", "SYSTEM", "HARDWARE"]:
         hive_path = reg_dir / hive
         if not hive_path.exists():
             hive_path.write_bytes(hive_data)
             print(f"  Created registry stub: {win_dir}/Windows/registry/{hive}")
 
-# Verify key rootfs directories exist and have content
+# Verify key rootfs directories exist and have content.
+# NOTE: Windows DLLs are NOT included — users must provide them from a real
+# Windows installation.  See docs/QILING_ROOTFS.md for setup instructions.
 for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
     p = rootfs_dir / d
     count = sum(1 for _ in p.rglob('*') if _.is_file()) if p.is_dir() else 0
@@ -185,8 +191,8 @@ for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
         print(f"  rootfs MISSING or EMPTY: {d}")
 PYEOF
 
-# Make rootfs world-writable so the runtime download_qiling_rootfs tool can
-# add new OS/arch combinations when the container runs as a non-root UID.
+# Make rootfs world-writable so the runtime registry-stub generator and
+# user-mounted rootfs volumes work when the container runs as a non-root UID.
 RUN chmod -R 777 /app/qiling-rootfs
 
 # --- Install libraries that may have complex deps (best-effort) ---
@@ -242,8 +248,12 @@ COPY FastPrompt.txt .
 # (via --user) so the directory must be world-writable.
 RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
 
-# --- Declare volume for persistent cache and configuration ---
+# --- Declare volumes ---
+# Persistent cache and configuration
 VOLUME ["/app/home/.pemcp"]
+# Qiling rootfs — users can mount their own Windows DLLs, Linux libs, etc.
+# See docs/QILING_ROOTFS.md for setup instructions.
+VOLUME ["/app/qiling-rootfs"]
 
 # --- Expose Port ---
 EXPOSE 8082

@@ -89,6 +89,20 @@ async def emulate_binary_with_qiling(
     This is a cross-platform emulator — unlike Speakeasy (Windows-only), Qiling
     can emulate Linux ELF and macOS Mach-O binaries as well.
 
+    Rootfs requirements (OS-specific files needed for emulation):
+    - Linux ELF: Works out of the box — rootfs is pre-populated in the Docker image.
+    - Windows PE: Requires real Windows DLL files (ntdll.dll, kernel32.dll, etc.)
+      copied from a Windows installation into the rootfs.  Without DLLs, Qiling
+      cannot resolve imports and emulation will fail or produce no API calls.
+      To set up: copy DLLs from C:\\Windows\\SysWOW64\\ (for 32-bit PE) or
+      C:\\Windows\\System32\\ (for 64-bit PE) into qiling-rootfs/x86_windows/Windows/System32/
+      or qiling-rootfs/x8664_windows/Windows/System32/ on the host.  The directory
+      is auto-mounted into the container at /app/qiling-rootfs/.
+    - macOS Mach-O: Requires macOS system libraries (rarely needed).
+
+    If emulation fails with "rootfs not found" or "DLL not found", the user
+    needs to provide the required files.  See docs/QILING_ROOTFS.md for details.
+
     Args:
         timeout_seconds: Max emulation time in seconds (default 60).
         max_instructions: Max CPU instructions to emulate (0 = unlimited, use timeout only).
@@ -129,6 +143,15 @@ async def emulate_shellcode_with_qiling(
     x86/x64-only shellcode emulation.
 
     If no shellcode_hex is provided, uses the loaded file as raw shellcode.
+
+    Rootfs requirements:
+    - Shellcode emulation still requires a rootfs directory for the target OS.
+    - Linux: Pre-populated in Docker image — works immediately.
+    - Windows: Requires real DLL files for full API hooking.  Without DLLs,
+      shellcode runs but Windows API calls cannot be intercepted (you'll see
+      0 API calls in the output).  Copy DLLs from a Windows machine into
+      qiling-rootfs/x86_windows/Windows/System32/ (32-bit) or
+      qiling-rootfs/x8664_windows/Windows/System32/ (64-bit) on the host.
 
     Args:
         shellcode_hex: Hex-encoded shellcode bytes. If None, uses loaded file data.
@@ -174,6 +197,10 @@ async def qiling_trace_execution(
     executed instruction.  Complements angr's static CFG with actual dynamic
     execution paths.
 
+    Rootfs requirements: Same as emulate_binary_with_qiling.  Linux ELF works
+    out of the box.  Windows PE requires real DLLs in the rootfs — copy them
+    from a Windows installation into qiling-rootfs/<arch>_windows/Windows/System32/.
+
     Args:
         start_address: Hex address to begin tracing from (default: entry point).
         end_address: Hex address to stop tracing at (optional).
@@ -217,6 +244,11 @@ async def qiling_hook_api_calls(
 
     If no target_apis are specified, hooks ALL API calls (equivalent to
     emulate_binary_with_qiling but with more detailed argument capture).
+
+    Rootfs requirements: Same as emulate_binary_with_qiling.  Linux ELF works
+    out of the box.  Windows PE requires real DLLs — without them, API hooking
+    cannot function because Qiling cannot resolve import tables.  Copy DLLs
+    from a Windows installation into qiling-rootfs/<arch>_windows/Windows/System32/.
 
     Args:
         target_apis: List of API names to hook (e.g. ['CreateFileW', 'VirtualAlloc', 'connect']).
@@ -263,6 +295,11 @@ async def qiling_dump_unpacked_binary(
     If dump_address is specified, Qiling will stop emulation when that address is
     reached (e.g., the Original Entry Point) and dump from that address.  Otherwise,
     it runs until timeout and dumps the largest mapped memory region.
+
+    Rootfs requirements: Same as emulate_binary_with_qiling.  Windows PE unpacking
+    requires real DLLs in the rootfs because most packers call Windows APIs
+    (VirtualAlloc, VirtualProtect, LoadLibrary) during unpacking.  Copy DLLs
+    from a Windows installation into qiling-rootfs/<arch>_windows/Windows/System32/.
 
     Args:
         output_path: Where to save the unpacked binary. Default: <original>_qiling_unpacked.exe.
@@ -320,6 +357,13 @@ async def qiling_resolve_api_hashes(
     - djb2: DJB2 hash (Daniel J. Bernstein)
     - fnv1a: FNV-1a 32-bit hash
 
+    Rootfs requirements: This tool scans DLL export tables to build a hash lookup
+    database.  It REQUIRES real Windows DLL files in the rootfs to work — without
+    DLLs there are no exports to hash against and no hashes can be resolved.
+    Copy DLLs from C:\\Windows\\System32\\ (64-bit) or C:\\Windows\\SysWOW64\\
+    (32-bit) into qiling-rootfs/<arch>_windows/Windows/System32/ on the host.
+    The more DLLs you provide, the more hashes can be resolved.
+
     Args:
         hash_values: List of hash values to resolve (hex strings, e.g. ['0x6A4ABC5B']).
         hash_algorithm: Hash algorithm to use ('ror13', 'crc32', 'djb2', 'fnv1a').
@@ -362,6 +406,12 @@ async def qiling_memory_search(
     or other data that only appears in memory after the binary has run and
     unpacked/decrypted itself.
 
+    Rootfs requirements: Same as emulate_binary_with_qiling.  The binary must
+    actually run for memory search to find anything useful — Windows PE files
+    need real DLLs in the rootfs to execute beyond the first few instructions.
+    Copy DLLs from a Windows installation into
+    qiling-rootfs/<arch>_windows/Windows/System32/.
+
     Args:
         search_patterns: List of string patterns to search for (e.g. ['http://', 'cmd.exe']).
                          Both ASCII and UTF-16LE encodings are searched automatically.
@@ -390,42 +440,3 @@ async def qiling_memory_search(
         "limit": limit,
     }, timeout_seconds)
     return await _check_mcp_response_size(ctx, result, "qiling_memory_search", "the 'limit' parameter")
-
-
-# ===================================================================
-#  Tool 8: download_qiling_rootfs
-# ===================================================================
-
-@tool_decorator
-async def download_qiling_rootfs(
-    ctx: Context,
-    os_type: str = "windows",
-    architecture: str = "x86",
-) -> Dict[str, Any]:
-    """
-    Downloads Qiling Framework rootfs files (OS-specific DLLs, registry hives,
-    and system files) required for binary emulation.  These files are downloaded
-    from the official Qiling GitHub repository.
-
-    The Docker image pre-populates rootfs at build time, but this tool can be
-    used to fetch additional OS/architecture combinations on demand.
-
-    Supported combinations:
-    - windows/x86, windows/x8664
-    - linux/x86, linux/x8664, linux/arm, linux/arm64, linux/mips
-    - macos/x8664
-
-    Args:
-        os_type: Target OS ('windows', 'linux', 'macos').
-        architecture: Target architecture ('x86', 'x8664', 'arm', 'arm64', 'mips').
-    """
-    await ctx.info(f"Downloading Qiling rootfs for {os_type}/{architecture}")
-    _check_qiling("download_qiling_rootfs")
-
-    result = await _run_qiling({
-        "action": "download_rootfs",
-        "os_type": os_type,
-        "architecture": architecture,
-        "output_dir": _rootfs_path(),
-    }, 300)  # Download may take a while
-    return await _check_mcp_response_size(ctx, result, "download_qiling_rootfs")
