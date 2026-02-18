@@ -16,6 +16,7 @@ from pemcp.config import (
     _check_speakeasy_available,
     _UNIPACKER_VENV_PYTHON, _UNIPACKER_RUNNER,
     _check_unipacker_available,
+    _check_qiling_available,
     DOTNETFILE_AVAILABLE,
     PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
 )
@@ -923,6 +924,7 @@ async def get_extended_capabilities(ctx: Context) -> Dict[str, Any]:
         "keystone": {"available": KEYSTONE_AVAILABLE, "purpose": "Multi-architecture assembly"},
         "speakeasy": {"available": _check_speakeasy_available(), "purpose": "Windows API emulation for malware analysis"},
         "unipacker": {"available": _check_unipacker_available(), "purpose": "Automatic PE unpacking"},
+        "qiling": {"available": _check_qiling_available(), "purpose": "Cross-platform binary emulation (PE/ELF/Mach-O), multi-arch shellcode, dynamic unpacking, API hooking"},
         "dotnetfile": {"available": DOTNETFILE_AVAILABLE, "purpose": ".NET PE metadata parsing"},
         "ppdeep": {"available": PPDEEP_AVAILABLE, "purpose": "ssdeep fuzzy hashing"},
         "tlsh": {"available": TLSH_AVAILABLE, "purpose": "TLSH locality-sensitive hashing"},
