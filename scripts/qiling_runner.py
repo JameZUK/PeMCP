@@ -18,6 +18,46 @@ import traceback
 from qiling import Qiling
 from qiling.const import QL_VERBOSE
 
+try:
+    from qiling.const import QL_ARCH, QL_OS
+except ImportError:
+    QL_ARCH = None
+    QL_OS = None
+
+# Qiling's string→enum lookup for ostype/archtype is case-sensitive and
+# varies between versions.  Map our lowercase strings to the actual enum
+# constants so shellcode emulation works regardless of Qiling version.
+_ARCH_MAP = {
+    "x86": "X86",
+    "x8664": "X8664",
+    "arm": "ARM",
+    "arm64": "ARM64",
+    "mips": "MIPS",
+}
+
+_OS_MAP = {
+    "windows": "WINDOWS",
+    "linux": "LINUX",
+    "macos": "MACOS",
+    "freebsd": "FREEBSD",
+}
+
+
+def _ql_arch(arch_str):
+    """Convert our architecture string to a Qiling QL_ARCH enum value."""
+    if QL_ARCH is not None:
+        name = _ARCH_MAP.get(arch_str, arch_str.upper())
+        return QL_ARCH[name]
+    return arch_str
+
+
+def _ql_os(os_str):
+    """Convert our OS string to a Qiling QL_OS enum value."""
+    if QL_OS is not None:
+        name = _OS_MAP.get(os_str, os_str.upper())
+        return QL_OS[name]
+    return os_str
+
 
 # ---------------------------------------------------------------------------
 #  Helpers
@@ -258,8 +298,8 @@ def emulate_shellcode(cmd):
         ql = Qiling(
             code=sc_data,
             rootfs=rootfs,
-            ostype=os_type,
-            archtype=arch,
+            ostype=_ql_os(os_type),
+            archtype=_ql_arch(arch),
             verbose=QL_VERBOSE.DISABLED,
         )
     except Exception as e:
@@ -769,6 +809,93 @@ def memory_search(cmd):
     }
 
 
+def _create_minimal_registry_hive():
+    """Create a minimal valid Windows registry hive (regf format).
+
+    Qiling's RegistryManager requires NTUSER.DAT, SAM, SECURITY, SOFTWARE,
+    and SYSTEM hive files to initialise Windows emulation.  The official
+    qilingframework/rootfs repo cannot legally ship these (they contain
+    Microsoft IP), so we generate minimal-but-structurally-valid stubs.
+
+    The hive contains only a root key node with no subkeys or values —
+    enough for Qiling to open and parse the file without crashing.
+    """
+    # === Base block (regf header, 4096 bytes) ===
+    base = bytearray(4096)
+    base[0:4] = b'regf'
+    struct.pack_into('<I', base, 0x04, 1)        # primary sequence
+    struct.pack_into('<I', base, 0x08, 1)        # secondary sequence
+    struct.pack_into('<Q', base, 0x0C, 0)        # timestamp
+    struct.pack_into('<I', base, 0x14, 1)        # major version
+    struct.pack_into('<I', base, 0x18, 5)        # minor version (≥XP)
+    struct.pack_into('<I', base, 0x1C, 0)        # type: primary
+    struct.pack_into('<I', base, 0x20, 1)        # format: direct memory load
+    struct.pack_into('<I', base, 0x24, 0x20)     # root cell offset (in first hbin)
+    struct.pack_into('<I', base, 0x28, 0x1000)   # hive bins data size
+    struct.pack_into('<I', base, 0x2C, 1)        # clustering factor
+    # Checksum: XOR of first 127 DWORDs (offsets 0x000–0x1F8)
+    cksum = 0
+    for i in range(0, 0x1FC, 4):
+        cksum ^= struct.unpack_from('<I', base, i)[0]
+        cksum &= 0xFFFFFFFF
+    struct.pack_into('<I', base, 0x1FC, cksum)
+
+    # === First hive bin (hbin, 4096 bytes) ===
+    hbin = bytearray(4096)
+    hbin[0:4] = b'hbin'
+    struct.pack_into('<I', hbin, 0x04, 0)        # offset from data start
+    struct.pack_into('<I', hbin, 0x08, 0x1000)   # block size
+
+    # --- Root key cell at data offset 0x20 within hbin ---
+    co = 0x20  # cell offset
+    key_name = b'CMI-CreateHive{00000000-0000-0000-0000-000000000000}'
+    cell_data = 0x4C + len(key_name)             # nk fixed header + name
+    cell_total = (cell_data + 7) & ~7            # align to 8 bytes
+    struct.pack_into('<i', hbin, co, -cell_total) # negative = allocated
+    hbin[co+4:co+6] = b'nk'                      # signature
+    struct.pack_into('<H', hbin, co + 0x06, 0x24) # KEY_HIVE_ENTRY|KEY_COMP_NAME
+    struct.pack_into('<Q', hbin, co + 0x08, 0)   # timestamp
+    struct.pack_into('<I', hbin, co + 0x14, 0xFFFFFFFF)  # parent (none)
+    struct.pack_into('<I', hbin, co + 0x18, 0)   # stable subkeys
+    struct.pack_into('<I', hbin, co + 0x1C, 0)   # volatile subkeys
+    struct.pack_into('<I', hbin, co + 0x20, 0xFFFFFFFF)  # stable subkey list
+    struct.pack_into('<I', hbin, co + 0x24, 0xFFFFFFFF)  # volatile subkey list
+    struct.pack_into('<I', hbin, co + 0x28, 0)   # value count
+    struct.pack_into('<I', hbin, co + 0x2C, 0xFFFFFFFF)  # value list
+    struct.pack_into('<I', hbin, co + 0x30, 0xFFFFFFFF)  # security descriptor
+    struct.pack_into('<I', hbin, co + 0x34, 0xFFFFFFFF)  # class name
+    struct.pack_into('<H', hbin, co + 0x48, len(key_name))  # key name size
+    struct.pack_into('<H', hbin, co + 0x4A, 0)   # class name size
+    hbin[co + 0x4C:co + 0x4C + len(key_name)] = key_name
+
+    # Free-space cell fills the remainder of the hbin
+    free_off = co + cell_total
+    free_size = 0x1000 - free_off
+    if free_size > 4:
+        struct.pack_into('<i', hbin, free_off, free_size)  # positive = free
+
+    return bytes(base + hbin)
+
+
+def _ensure_windows_registry(target_dir):
+    """Create minimal Windows registry hive stubs if they don't exist.
+
+    Returns the number of hive files created (0 if all already existed).
+    """
+    reg_dir = os.path.join(target_dir, "Windows", "registry")
+    os.makedirs(reg_dir, exist_ok=True)
+
+    hive_names = ["NTUSER.DAT", "SAM", "SECURITY", "SOFTWARE", "SYSTEM"]
+    created = 0
+    for name in hive_names:
+        path = os.path.join(reg_dir, name)
+        if not os.path.exists(path):
+            with open(path, "wb") as f:
+                f.write(_create_minimal_registry_hive())
+            created += 1
+    return created
+
+
 def download_rootfs(cmd):
     """Download Qiling rootfs files for a specific OS/architecture."""
     os_type = cmd.get("os_type", "windows")
@@ -796,10 +923,16 @@ def download_rootfs(cmd):
 
     target_dir = os.path.join(output_dir, dir_name)
     if os.path.isdir(target_dir) and os.listdir(target_dir):
+        # Even if the directory exists, Windows rootfs may be missing
+        # registry hive stubs (they can't be legally distributed).
+        registry_created = 0
+        if os_type == "windows":
+            registry_created = _ensure_windows_registry(target_dir)
         return {
             "status": "already_exists",
             "rootfs_path": target_dir,
             "message": f"Rootfs for {os_type}/{arch} already exists at {target_dir}",
+            "registry_stubs_created": registry_created,
         }
 
     # Check that output_dir is writable before attempting a large download
@@ -846,12 +979,20 @@ def download_rootfs(cmd):
                 ),
             }
 
+        # Windows rootfs needs registry hive files that the repo cannot
+        # legally distribute.  Generate minimal valid stubs so Qiling's
+        # RegistryManager can initialise without crashing.
+        registry_created = 0
+        if os_type == "windows":
+            registry_created = _ensure_windows_registry(target_dir)
+
         return {
             "status": "success",
             "rootfs_path": target_dir,
             "os_type": os_type,
             "architecture": arch,
             "files_extracted": extracted_count,
+            "registry_stubs_created": registry_created,
         }
     except Exception as e:
         return {"error": f"Failed to download rootfs: {e}"}
