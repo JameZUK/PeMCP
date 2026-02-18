@@ -1,6 +1,6 @@
 # PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **105 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **113 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -71,6 +71,7 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 - **Capstone** — Multi-architecture standalone disassembly (x86, ARM, MIPS, etc.).
 - **Keystone** — Multi-architecture assembly (generate patches from mnemonics).
 - **Speakeasy** — Windows API emulation for malware analysis (full PE and shellcode).
+- **Qiling** — Cross-platform binary emulation (Windows/Linux/macOS, x86/x64/ARM/MIPS).
 - **Un{i}packer** — Automatic PE unpacking (UPX, ASPack, FSG, etc.).
 - **Binwalk** — Embedded file and firmware detection.
 - **ppdeep/TLSH** — Fuzzy hashing for sample similarity comparison.
@@ -89,7 +90,7 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 
 ### Robust Architecture
 
-- **Modular Package** — Clean `pemcp/` package structure with 8 tool modules, separated concerns (parsers, MCP tools, CLI, configuration).
+- **Modular Package** — Clean `pemcp/` package structure with 9 tool modules, separated concerns (parsers, MCP tools, CLI, configuration).
 - **Docker-First Design** — No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Thread-Safe State** — Centralised `AnalyzerState` class with locking for concurrent access.
 - **Background Tasks** — Long-running operations (symbolic execution, Angr CFG) run asynchronously with heartbeat monitoring.
@@ -417,6 +418,7 @@ Optional packages can be added individually:
 - `pip install pyelftools` — ELF/DWARF analysis
 - `pip install binwalk` — Embedded file detection
 - `pip install unipacker` — Automatic PE unpacking
+- `pip install qiling` — Cross-platform binary emulation (requires isolated venv with unicorn 1.x)
 - `pip install dotnetfile` — .NET PE metadata
 
 ---
@@ -560,7 +562,7 @@ docker run --rm -i \
 
 ## MCP Tools Reference
 
-PeMCP exposes **105 tools** organised into the following categories.
+PeMCP exposes **113 tools** organised into the following categories.
 
 ### File Management & Sample Discovery
 
@@ -720,6 +722,21 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `scan_for_embedded_files` | Detect embedded files/firmware with Binwalk. |
 | `get_extended_capabilities` | List all available tools and library versions. |
 
+### Qiling Cross-Platform Emulation (8 tools)
+
+| Tool | Description |
+|---|---|
+| `emulate_binary_with_qiling` | Full OS emulation of PE/ELF/Mach-O binaries with behavioural report (API calls, file/registry/network activity). Cross-platform — unlike Speakeasy (Windows-only), Qiling handles Linux ELF and macOS Mach-O as well. |
+| `emulate_shellcode_with_qiling` | Multi-architecture shellcode emulation (x86, x64, ARM, ARM64, MIPS) with API/syscall capture. |
+| `qiling_trace_execution` | Instruction-level execution tracing with addresses, sizes, and raw bytes for each executed instruction. |
+| `qiling_hook_api_calls` | Hook specific APIs/syscalls to capture arguments and return values during emulation. |
+| `qiling_dump_unpacked_binary` | Dynamic unpacking via emulation — handles custom/unknown packers that YARA-based unipacker cannot identify. |
+| `qiling_resolve_api_hashes` | Resolve API hash values (ROR13, CRC32, DJB2, FNV-1a) against known DLL exports. |
+| `qiling_memory_search` | Run a binary then search process memory for decrypted strings, C2 URLs, keys, or byte patterns. |
+| `download_qiling_rootfs` | Download OS-specific rootfs files (DLLs, registry hives, system libs) required for Qiling emulation. |
+
+> **Note:** Qiling runs in an isolated venv (`/app/qiling-venv`) with unicorn 1.x, keeping the main environment's unicorn 2.x intact for angr. Windows rootfs includes auto-generated minimal registry hive stubs since Microsoft registry files cannot be legally distributed.
+
 ### Multi-Format Binary Analysis (9 tools)
 
 | Tool | Description |
@@ -776,6 +793,7 @@ pemcp/
     ├── tools_angr_hooks.py      — Angr function hooking
     ├── tools_angr_forensic.py   — Angr forensic & advanced analysis
     ├── tools_new_libs.py        — LIEF/Capstone/Keystone/Speakeasy
+    ├── tools_qiling.py          — Qiling cross-platform emulation (8 tools)
     ├── tools_dotnet.py          — .NET analysis (dnfile/dncil)
     ├── tools_go.py              — Go binary analysis (pygore)
     ├── tools_rust.py            — Rust binary analysis
@@ -902,7 +920,7 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 PeMCP has two layers of testing, with automated CI via **GitHub Actions**:
 
 - **Unit tests** (`tests/`) — 276 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrized edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
-- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 105 MCP tools against a running server, organised into 19 test categories with pytest markers.
+- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 113 MCP tools against a running server, organised into 20 test categories with pytest markers.
 - **CI/CD** (`.github/workflows/ci.yml`) — Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (60% floor), and syntax checking on every push and PR.
 
 ```bash

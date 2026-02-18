@@ -20,10 +20,10 @@ namespace collision (described below) has resurfaced.
 
 ---
 
-## 1. The unicorn trilogy: angr, speakeasy, unipacker
+## 1. The unicorn quartet: angr, speakeasy, unipacker, qiling
 
-Three packages each need the `unicorn` CPU emulator, but they need
-**incompatible versions** and two of them silently clobber each other's
+Four packages each need the `unicorn` CPU emulator, but they need
+**incompatible versions** and some of them silently clobber each other's
 files.
 
 | Package            | Needs unicorn | Why                                                         |
@@ -31,6 +31,7 @@ files.
 | **angr\[unicorn\]**   | 2.x           | `archinfo` references `UC_ARCH_RISCV` (added in unicorn 2.0) |
 | **speakeasy-emulator** | 1.x (==1.0.2) | Uses the internal `_uc` C API removed in unicorn 2.x        |
 | **unipacker**      | 1.x (via `unicorn-unipacker`) | Fork of unicorn 1.x with the same Python namespace |
+| **qiling**         | 1.x           | Uses unicorn 1.x internal APIs for CPU emulation            |
 
 ### The namespace collision (unicorn vs unicorn-unipacker)
 
@@ -44,23 +45,58 @@ satisfied" and do nothing.
 
 Even `--force-reinstall` can be confused by the stale metadata.
 
-### Current fix: venv isolation for both speakeasy and unipacker
+### Current fix: venv isolation for speakeasy, unipacker, and qiling
 
-Both speakeasy and unipacker are installed in **separate virtualenvs**
-so their unicorn 1.x dependencies never touch the main environment:
+All three unicorn-1.x packages are installed in **separate virtualenvs**
+so their dependencies never touch the main environment:
 
 - **speakeasy-emulator** → `/app/speakeasy-venv` (unicorn 1.x via
   `unicorn==1.0.2`).  Invoked via `scripts/speakeasy_runner.py`.
 - **unipacker** → `/app/unipacker-venv` (unicorn 1.x via
   `unicorn-unipacker`).  Invoked via `scripts/unipacker_runner.py`.
+- **qiling** → `/app/qiling-venv` (unicorn 1.x).  Invoked via
+  `scripts/qiling_runner.py`.
 
 The main environment keeps unicorn 2.x for angr.  No nuke-and-reinstall
-step is needed because neither conflicting package is installed in the
+step is needed because no conflicting package is installed in the
 main env.
 
-Both runners use the same subprocess pattern: the tool function sends a
-JSON command via stdin, the runner script (executed with the venv's
-Python) does the work, and returns a JSON result via stdout.
+All three runners use the same subprocess pattern: the tool function
+sends a JSON command via stdin, the runner script (executed with the
+venv's Python) does the work, and returns a JSON result via stdout.
+
+#### Stdout pollution guard
+
+Emulator libraries (unipacker's `engine.emu()`, Qiling's emulation
+core) print log and debug messages directly to stdout during execution.
+Since the runners use stdout for JSON IPC with the parent process,
+these log lines corrupt the JSON output and cause `json.loads()` to
+fail in the parent.
+
+**Fix:** Each runner redirects `sys.stdout` to `sys.stderr` before
+dispatching the action, then restores it in a `finally` block before
+writing the JSON result.  This sends emulator log output to stderr
+(which the parent captures separately) while keeping stdout clean for
+the JSON response.
+
+#### Qiling Windows rootfs and registry hive stubs
+
+Qiling requires OS-specific rootfs directories containing DLLs,
+registry hives, and system files to initialise emulation.  Rootfs
+content is downloaded from the dedicated **qilingframework/rootfs**
+GitHub repository (not the main qiling repo, where `examples/rootfs/`
+is a git submodule that GitHub archive zips do not include).
+
+For Windows targets, Qiling's `RegistryManager` requires five registry
+hive files (`NTUSER.DAT`, `SAM`, `SECURITY`, `SOFTWARE`, `SYSTEM`)
+that cannot be legally distributed.  PeMCP generates minimal valid
+stubs — structurally correct regf-format files with an empty root key
+node — at both Docker build time and runtime (`download_rootfs`).
+These stubs satisfy Qiling's format parser so emulation can proceed.
+
+The rootfs directory (`/app/qiling-rootfs`) is set to `chmod -R 777`
+in the Dockerfile so the non-root runtime UID can write to it when
+downloading additional rootfs combinations on demand.
 
 ### Runtime safety net (pemcp/config.py)
 
@@ -295,17 +331,19 @@ only available from GitHub, install it in the Dockerfile via
 ## Dockerfile install order (and why it matters)
 
 ```
-1. angr[unicorn], nampa  → installs unicorn 2.x + archinfo, pyvex, cle, FLIRT parser
-2. flare-floss, capa, vivisect
-3. Core deps (pefile, requests, mcp, etc.)
-4. Extended libs (lief, capstone, dnfile, dncil, etc.)
-5. speakeasy-emulator    → isolated in /app/speakeasy-venv (unicorn 1.x)
-6. unipacker             → isolated in /app/unipacker-venv (unicorn 1.x)
-7. dotnetfile, binwalk, pygore (best-effort, main env)
-8. oscrypto patch
-9. Assert UC_ARCH_RISCV exists                      ← build-time guard
+ 1. angr[unicorn], nampa  → installs unicorn 2.x + archinfo, pyvex, cle, FLIRT parser
+ 2. flare-floss, capa, vivisect
+ 3. Core deps (pefile, requests, mcp, etc.)
+ 4. Extended libs (lief, capstone, dnfile, dncil, etc.)
+ 5. speakeasy-emulator    → isolated in /app/speakeasy-venv (unicorn 1.x)
+ 6. unipacker             → isolated in /app/unipacker-venv (unicorn 1.x)
+ 7. qiling                → isolated in /app/qiling-venv (unicorn 1.x)
+ 8. Qiling rootfs download + Windows registry hive stubs
+ 9. dotnetfile, binwalk, pygore (best-effort, main env)
+10. oscrypto patch
+11. Assert UC_ARCH_RISCV exists                      ← build-time guard
 ```
 
-Since both speakeasy and unipacker are now in isolated venvs, there is
-no longer a nuke-and-reinstall step.  The main env's unicorn 2.x is
-never touched after step 1.
+Since speakeasy, unipacker, and qiling are all in isolated venvs,
+there is no longer a nuke-and-reinstall step.  The main env's
+unicorn 2.x is never touched after step 1.
