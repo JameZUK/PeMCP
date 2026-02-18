@@ -180,9 +180,8 @@ for win_dir in ["x86_windows", "x8664_windows"]:
             print(f"  Created registry stub: {win_dir}/Windows/registry/{hive}")
 
 # Verify key rootfs directories exist and have content.
-# NOTE: Windows DLL stubs are generated at runtime by qiling_runner.py's
-# _ensure_windows_dlls() function (called from _find_rootfs on first use).
-# This avoids duplicating the PE generation code in the Dockerfile.
+# NOTE: Windows DLLs are NOT included — users must provide them from a real
+# Windows installation.  See docs/QILING_ROOTFS.md for setup instructions.
 for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
     p = rootfs_dir / d
     count = sum(1 for _ in p.rglob('*') if _.is_file()) if p.is_dir() else 0
@@ -249,8 +248,12 @@ COPY FastPrompt.txt .
 # (via --user) so the directory must be world-writable.
 RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
 
-# --- Declare volume for persistent cache and configuration ---
+# --- Declare volumes ---
+# Persistent cache and configuration
 VOLUME ["/app/home/.pemcp"]
+# Qiling rootfs — users can mount their own Windows DLLs, Linux libs, etc.
+# See docs/QILING_ROOTFS.md for setup instructions.
+VOLUME ["/app/qiling-rootfs"]
 
 # --- Expose Port ---
 EXPOSE 8082

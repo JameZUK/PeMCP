@@ -37,6 +37,7 @@ htmlcov/
 # PeMCP runtime artifacts
 capa_rules_store/
 samples/
+qiling-rootfs/
 
 # OS files
 .DS_Store
