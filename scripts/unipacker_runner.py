@@ -76,6 +76,14 @@ def main():
     cmd = json.loads(sys.stdin.read())
     action = cmd.get("action")
 
+    # Redirect stdout → stderr while unipacker runs.
+    # The unipacker library (engine.emu()) prints log messages directly to
+    # stdout (e.g. "Section hopping detected", "Fixing Imports...") which
+    # would corrupt the JSON result that the parent process expects on
+    # stdout.  Sending those logs to stderr keeps the JSON channel clean.
+    real_stdout = sys.stdout
+    sys.stdout = sys.stderr
+
     try:
         if action == "unpack_pe":
             result = unpack_pe(cmd)
@@ -83,6 +91,8 @@ def main():
             result = {"error": f"Unknown action: {action}"}
     except Exception as e:
         result = {"error": f"{type(e).__name__}: {e}"}
+    finally:
+        sys.stdout = real_stdout
 
     json.dump(result, sys.stdout)
 
