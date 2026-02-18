@@ -100,8 +100,8 @@ async def emulate_binary_with_qiling(
       is auto-mounted into the container at /app/qiling-rootfs/.
     - macOS Mach-O: Requires macOS system libraries (rarely needed).
 
-    If emulation fails with "rootfs not found" or "DLL not found", use
-    download_qiling_rootfs first, then provide Windows DLLs as described above.
+    If emulation fails with "rootfs not found" or "DLL not found", the user
+    needs to provide the required files.  See docs/QILING_ROOTFS.md for details.
 
     Args:
         timeout_seconds: Max emulation time in seconds (default 60).
@@ -440,68 +440,3 @@ async def qiling_memory_search(
         "limit": limit,
     }, timeout_seconds)
     return await _check_mcp_response_size(ctx, result, "qiling_memory_search", "the 'limit' parameter")
-
-
-# ===================================================================
-#  Tool 8: download_qiling_rootfs
-# ===================================================================
-
-@tool_decorator
-async def download_qiling_rootfs(
-    ctx: Context,
-    os_type: str = "windows",
-    architecture: str = "x86",
-) -> Dict[str, Any]:
-    """
-    Downloads Qiling Framework rootfs files (OS-specific system files and
-    directory structure) required for binary emulation.  Downloads from the
-    official Qiling GitHub repository.
-
-    The Docker image pre-populates rootfs at build time, but this tool can be
-    used to fetch additional OS/architecture combinations on demand.
-
-    IMPORTANT — Windows DLLs are NOT included in the download:
-    The Qiling rootfs repository provides directory structure and registry
-    stubs, but does NOT include Windows DLL files (ntdll.dll, kernel32.dll,
-    etc.) because they cannot be legally redistributed.  After running this
-    tool for a Windows target, the user must manually copy DLLs from a real
-    Windows installation:
-
-      For 32-bit PE analysis:
-        Copy C:\\Windows\\SysWOW64\\*.dll into
-        qiling-rootfs/x86_windows/Windows/System32/ on the host
-        (SysWOW64 contains the 32-bit DLLs despite the name)
-
-      For 64-bit PE analysis:
-        Copy C:\\Windows\\System32\\*.dll into
-        qiling-rootfs/x8664_windows/Windows/System32/ on the host
-
-    The qiling-rootfs/ directory next to run.sh or docker-compose.yml is
-    automatically mounted into the container.  Alternatively, use --rootfs
-    or PEMCP_ROOTFS to specify a custom path.
-
-    Minimum DLLs for basic Windows emulation:
-      ntdll.dll, kernel32.dll, user32.dll, advapi32.dll, ws2_32.dll, msvcrt.dll
-    More DLLs = better emulation coverage.
-
-    Linux rootfs works immediately — no additional files needed.
-
-    Supported combinations:
-    - windows/x86, windows/x8664
-    - linux/x86, linux/x8664, linux/arm, linux/arm64, linux/mips
-    - macos/x8664
-
-    Args:
-        os_type: Target OS ('windows', 'linux', 'macos').
-        architecture: Target architecture ('x86', 'x8664', 'arm', 'arm64', 'mips').
-    """
-    await ctx.info(f"Downloading Qiling rootfs for {os_type}/{architecture}")
-    _check_qiling("download_qiling_rootfs")
-
-    result = await _run_qiling({
-        "action": "download_rootfs",
-        "os_type": os_type,
-        "architecture": architecture,
-        "output_dir": _rootfs_path(),
-    }, 300)  # Download may take a while
-    return await _check_mcp_response_size(ctx, result, "download_qiling_rootfs")
