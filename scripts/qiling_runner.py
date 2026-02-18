@@ -192,6 +192,50 @@ def _detect_binary_format(filepath):
     return None, None, "Unknown format"
 
 
+def _check_windows_dlls(rootfs_dir):
+    """Check whether Windows DLL files are present in the rootfs.
+
+    Returns (has_dlls: bool, dll_warning: str|None).
+    """
+    sys32 = os.path.join(rootfs_dir, "Windows", "System32")
+    if not os.path.isdir(sys32):
+        return False, (
+            "Windows DLLs missing: no Windows/System32/ directory found in rootfs. "
+            "Windows PE emulation requires real DLL files (ntdll.dll, kernel32.dll, "
+            "user32.dll, advapi32.dll, ws2_32.dll, msvcrt.dll, etc.) copied from a "
+            "Windows installation. Without them, Qiling cannot resolve imports and "
+            "emulation will fail or produce no API call data. "
+            "To fix: copy DLLs from C:\\Windows\\SysWOW64\\ (for 32-bit PE) or "
+            "C:\\Windows\\System32\\ (for 64-bit PE) into "
+            "qiling-rootfs/<arch>_windows/Windows/System32/ on the Docker host. "
+            "The directory is automatically mounted into the container."
+        )
+    dlls = [f for f in os.listdir(sys32)
+            if f.lower().endswith(".dll") and os.path.isfile(os.path.join(sys32, f))]
+    if not dlls:
+        return False, (
+            "Windows DLLs missing: Windows/System32/ exists but contains no .dll files. "
+            "Windows PE emulation requires real DLL files (ntdll.dll, kernel32.dll, "
+            "user32.dll, advapi32.dll, ws2_32.dll, msvcrt.dll, etc.) copied from a "
+            "Windows installation. Without them, Qiling cannot resolve imports and "
+            "emulation will fail or produce no API call data. "
+            "To fix: copy DLLs from C:\\Windows\\SysWOW64\\ (for 32-bit PE) or "
+            "C:\\Windows\\System32\\ (for 64-bit PE) into this directory on the "
+            "Docker host. The qiling-rootfs/ directory is automatically mounted."
+        )
+    # Check for the essential minimum set
+    essential = {"ntdll.dll", "kernel32.dll"}
+    present = {f.lower() for f in dlls}
+    missing_essential = essential - present
+    if missing_essential:
+        return True, (
+            f"Essential Windows DLLs missing: {', '.join(sorted(missing_essential))}. "
+            f"Found {len(dlls)} DLLs but ntdll.dll and kernel32.dll are required "
+            f"at minimum. Copy them from a Windows installation."
+        )
+    return True, None
+
+
 def _find_rootfs(os_type, arch, rootfs_path):
     """Find the appropriate rootfs directory for the given OS and architecture."""
     if not rootfs_path:
@@ -212,30 +256,26 @@ def _find_rootfs(os_type, arch, rootfs_path):
 
     dir_name = rootfs_map.get((os_type, arch))
     if not dir_name:
-        return None, f"No rootfs mapping for {os_type}/{arch}"
+        return None, f"No rootfs mapping for {os_type}/{arch}", None
 
     rootfs = os.path.join(rootfs_path, dir_name)
     if os.path.isdir(rootfs):
         # Windows rootfs needs registry hive stubs that can't be legally
         # distributed.  Generate them on first use if missing.
+        dll_warning = None
         if os_type == "windows":
             _ensure_windows_registry(rootfs)
-            # Check for essential DLLs — warn if missing but don't block
-            sys32 = os.path.join(rootfs, "Windows", "System32")
-            if not os.path.isdir(sys32) or not any(
-                f.lower().endswith(".dll") for f in os.listdir(sys32)
-                if os.path.isfile(os.path.join(sys32, f))
-            ) if os.path.isdir(sys32) else True:
-                # Log a warning but still return the rootfs — emulation will
-                # partially work (registry init passes, DLL loading degrades).
-                pass
-        return rootfs, None
+            _, dll_warning = _check_windows_dlls(rootfs)
+        return rootfs, None, dll_warning
     return None, (
         f"Rootfs directory not found: {rootfs}. "
         f"Use the download_qiling_rootfs tool to fetch it, or mount your "
         f"own rootfs files at /app/qiling-rootfs/{dir_name}/. "
+        f"For Windows PE emulation you also need real Windows DLL files "
+        f"(ntdll.dll, kernel32.dll, etc.) copied from a Windows installation "
+        f"into {dir_name}/Windows/System32/. "
         f"See docs/QILING_ROOTFS.md for setup instructions."
-    )
+    ), None
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +294,7 @@ def emulate_binary(cmd):
     if os_type is None:
         return {"error": f"Cannot detect binary format: {fmt_desc}"}
 
-    rootfs, err = _find_rootfs(os_type, arch, rootfs_path)
+    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
     if err:
         return {"error": err}
 
@@ -270,7 +310,10 @@ def emulate_binary(cmd):
             verbose=QL_VERBOSE.DISABLED,
         )
     except Exception as e:
-        return {"error": f"Failed to initialize Qiling: {e}"}
+        err_msg = f"Failed to initialize Qiling: {e}"
+        if dll_warning:
+            err_msg += f"\n\nNote: {dll_warning}"
+        return {"error": err_msg}
 
     # Set up OS-appropriate API/syscall interception
     _setup_api_hooks(ql, os_type, api_calls, limit)
@@ -300,7 +343,7 @@ def emulate_binary(cmd):
             if len(network_activity) < limit:
                 network_activity.append({"api": entry["api"], "params": entry["params"]})
 
-    return {
+    result = {
         "status": "completed",
         "format": fmt_desc,
         "os_type": os_type,
@@ -311,6 +354,9 @@ def emulate_binary(cmd):
         "registry_activity": _safe_slice(registry_activity, limit),
         "network_activity": _safe_slice(network_activity, limit),
     }
+    if dll_warning:
+        result["warning"] = dll_warning
+    return result
 
 
 def emulate_shellcode(cmd):
@@ -332,7 +378,7 @@ def emulate_shellcode(cmd):
     else:
         return {"error": "No shellcode provided (no shellcode_hex or filepath)."}
 
-    rootfs, err = _find_rootfs(os_type, arch, rootfs_path)
+    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
     if err:
         return {"error": err}
 
@@ -347,7 +393,10 @@ def emulate_shellcode(cmd):
             verbose=QL_VERBOSE.DISABLED,
         )
     except Exception as e:
-        return {"error": f"Failed to initialize Qiling for shellcode: {e}"}
+        err_msg = f"Failed to initialize Qiling for shellcode: {e}"
+        if dll_warning:
+            err_msg += f"\n\nNote: {dll_warning}"
+        return {"error": err_msg}
 
     _setup_api_hooks(ql, os_type, api_calls, limit)
 
@@ -359,7 +408,7 @@ def emulate_shellcode(cmd):
     except Exception:
         pass
 
-    return {
+    result = {
         "status": "completed",
         "os_type": os_type,
         "architecture": arch,
@@ -368,6 +417,9 @@ def emulate_shellcode(cmd):
         "total_api_calls": len(api_calls),
         "api_calls": _safe_slice(api_calls, limit),
     }
+    if dll_warning:
+        result["warning"] = dll_warning
+    return result
 
 
 def trace_execution(cmd):
@@ -384,7 +436,7 @@ def trace_execution(cmd):
     if os_type is None:
         return {"error": f"Cannot detect binary format: {fmt_desc}"}
 
-    rootfs, err = _find_rootfs(os_type, arch, rootfs_path)
+    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
     if err:
         return {"error": err}
 
@@ -418,7 +470,10 @@ def trace_execution(cmd):
             verbose=QL_VERBOSE.DISABLED,
         )
     except Exception as e:
-        return {"error": f"Failed to initialize Qiling: {e}"}
+        err_msg = f"Failed to initialize Qiling: {e}"
+        if dll_warning:
+            err_msg += f"\n\nNote: {dll_warning}"
+        return {"error": err_msg}
 
     ql.hook_code(_code_hook)
 
@@ -435,13 +490,16 @@ def trace_execution(cmd):
     except Exception:
         pass
 
-    return {
+    result = {
         "status": "completed",
         "format": fmt_desc,
         "total_instructions_traced": len(instructions),
         "unique_addresses": len(unique_addresses),
         "instructions": _safe_slice(instructions, limit),
     }
+    if dll_warning:
+        result["warning"] = dll_warning
+    return result
 
 
 def hook_api_calls(cmd):
@@ -457,7 +515,7 @@ def hook_api_calls(cmd):
     if os_type is None:
         return {"error": f"Cannot detect binary format: {fmt_desc}"}
 
-    rootfs, err = _find_rootfs(os_type, arch, rootfs_path)
+    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
     if err:
         return {"error": err}
 
@@ -470,7 +528,10 @@ def hook_api_calls(cmd):
             verbose=QL_VERBOSE.DISABLED,
         )
     except Exception as e:
-        return {"error": f"Failed to initialize Qiling: {e}"}
+        err_msg = f"Failed to initialize Qiling: {e}"
+        if dll_warning:
+            err_msg += f"\n\nNote: {dll_warning}"
+        return {"error": err_msg}
 
     # If specific APIs requested, hook each; otherwise hook all.
     # For specific APIs on Windows, use set_api per name.
@@ -506,13 +567,16 @@ def hook_api_calls(cmd):
     except Exception:
         pass
 
-    return {
+    result = {
         "status": "completed",
         "format": fmt_desc,
         "target_apis": target_apis if target_apis else ["* (all)"],
         "total_captured": len(captured_calls),
         "captured_calls": _safe_slice(captured_calls, limit),
     }
+    if dll_warning:
+        result["warning"] = dll_warning
+    return result
 
 
 def dump_unpacked(cmd):
@@ -529,7 +593,7 @@ def dump_unpacked(cmd):
     if os_type is None:
         return {"error": f"Cannot detect binary format: {fmt_desc}"}
 
-    rootfs, err = _find_rootfs(os_type, arch, rootfs_path)
+    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
     if err:
         return {"error": err}
 
@@ -540,7 +604,10 @@ def dump_unpacked(cmd):
             verbose=QL_VERBOSE.DISABLED,
         )
     except Exception as e:
-        return {"error": f"Failed to initialize Qiling: {e}"}
+        err_msg = f"Failed to initialize Qiling: {e}"
+        if dll_warning:
+            err_msg += f"\n\nNote: {dll_warning}"
+        return {"error": err_msg}
 
     # If a specific dump address is provided, hook it to trigger dump
     dump_triggered = {"done": False}
@@ -586,7 +653,7 @@ def dump_unpacked(cmd):
         with open(output_path, "wb") as f:
             f.write(data)
 
-        return {
+        result = {
             "status": "success",
             "input_file": filepath,
             "output_file": output_path,
@@ -594,8 +661,14 @@ def dump_unpacked(cmd):
             "dump_address": dump_address or _hex(best_region[0]) if not dump_address and best_region else dump_address,
             "sha256": hashlib.sha256(data).hexdigest(),
         }
+        if dll_warning:
+            result["warning"] = dll_warning
+        return result
     except Exception as e:
-        return {"error": f"Memory dump failed: {e}"}
+        err_msg = f"Memory dump failed: {e}"
+        if dll_warning:
+            err_msg += f"\n\nNote: {dll_warning}"
+        return {"error": err_msg}
 
 
 def resolve_api_hashes(cmd):
@@ -611,9 +684,27 @@ def resolve_api_hashes(cmd):
         # Default to Windows x86 for hash resolution
         os_type, arch = "windows", "x86"
 
-    rootfs, err = _find_rootfs(os_type, arch, rootfs_path)
+    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
     if err:
         return {"error": err}
+
+    # API hash resolution absolutely requires DLLs — warn prominently
+    if dll_warning:
+        has_dlls, _ = _check_windows_dlls(rootfs)
+        if not has_dlls:
+            return {
+                "error": (
+                    "Cannot resolve API hashes: no Windows DLL files found in rootfs. "
+                    "This tool works by computing hashes of exported function names from "
+                    "real DLL files and matching them against your input hashes. Without "
+                    "DLLs, there are no exports to hash against. "
+                    "To fix: copy DLL files from a Windows installation into "
+                    "qiling-rootfs/<arch>_windows/Windows/System32/ on the Docker host. "
+                    "Key DLLs: kernel32.dll, ntdll.dll, user32.dll, advapi32.dll, "
+                    "ws2_32.dll, wininet.dll, shell32.dll, msvcrt.dll, ole32.dll, "
+                    "crypt32.dll. The more DLLs you provide, the more hashes can be resolved."
+                ),
+            }
 
     # Compute hashes for known DLL exports
     def _ror13(name):
@@ -760,7 +851,7 @@ def memory_search(cmd):
     if os_type is None:
         return {"error": f"Cannot detect binary format: {fmt_desc}"}
 
-    rootfs, err = _find_rootfs(os_type, arch, rootfs_path)
+    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
     if err:
         return {"error": err}
 
@@ -771,7 +862,10 @@ def memory_search(cmd):
             verbose=QL_VERBOSE.DISABLED,
         )
     except Exception as e:
-        return {"error": f"Failed to initialize Qiling: {e}"}
+        err_msg = f"Failed to initialize Qiling: {e}"
+        if dll_warning:
+            err_msg += f"\n\nNote: {dll_warning}"
+        return {"error": err_msg}
 
     # Run for N instructions to let the binary unpack/initialize
     try:
@@ -830,7 +924,7 @@ def memory_search(cmd):
     except Exception as e:
         return {"error": f"Memory search failed: {e}"}
 
-    return {
+    result = {
         "status": "completed",
         "format": fmt_desc,
         "search_patterns": search_patterns,
@@ -840,6 +934,9 @@ def memory_search(cmd):
         "total_matches": len(matches),
         "matches": _safe_slice(matches, limit),
     }
+    if dll_warning:
+        result["warning"] = dll_warning
+    return result
 
 
 # ---------------------------------------------------------------------------
