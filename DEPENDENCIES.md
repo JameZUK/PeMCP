@@ -91,12 +91,13 @@ For Windows targets, Qiling's `RegistryManager` requires five registry
 hive files (`NTUSER.DAT`, `SAM`, `SECURITY`, `SOFTWARE`, `SYSTEM`)
 that cannot be legally distributed.  PeMCP generates minimal valid
 stubs — structurally correct regf-format files with an empty root key
-node — at both Docker build time and runtime (`download_rootfs`).
+node — at both Docker build time and at runtime (on first use).
 These stubs satisfy Qiling's format parser so emulation can proceed.
 
-The rootfs directory (`/app/qiling-rootfs`) is set to `chmod -R 777`
-in the Dockerfile so the non-root runtime UID can write to it when
-downloading additional rootfs combinations on demand.
+The rootfs directory (`/app/qiling-rootfs`) is pre-populated at Docker
+build time with Linux rootfs files.  Windows PE emulation additionally
+requires real DLL files (ntdll.dll, kernel32.dll, etc.) copied from a
+Windows installation — see `docs/QILING_ROOTFS.md` for instructions.
 
 ### Runtime safety net (pemcp/config.py)
 
