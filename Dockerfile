@@ -123,6 +123,58 @@ with zipfile.ZipFile(zip_path, 'r') as zf:
             with zf.open(member) as src, open(dest, 'wb') as dst:
                 dst.write(src.read())
 os.remove(zip_path)
+
+# Windows rootfs needs registry hive files that the repo cannot legally
+# distribute.  Generate minimal valid stubs (regf format with an empty
+# root key) so Qiling's RegistryManager can initialise.
+import struct
+def _create_minimal_hive():
+    base = bytearray(4096)
+    base[0:4] = b'regf'
+    struct.pack_into('<I', base, 0x04, 1)
+    struct.pack_into('<I', base, 0x08, 1)
+    struct.pack_into('<I', base, 0x14, 1)
+    struct.pack_into('<I', base, 0x18, 5)
+    struct.pack_into('<I', base, 0x20, 1)
+    struct.pack_into('<I', base, 0x24, 0x20)
+    struct.pack_into('<I', base, 0x28, 0x1000)
+    struct.pack_into('<I', base, 0x2C, 1)
+    ck = 0
+    for i in range(0, 0x1FC, 4):
+        ck ^= struct.unpack_from('<I', base, i)[0]; ck &= 0xFFFFFFFF
+    struct.pack_into('<I', base, 0x1FC, ck)
+    hbin = bytearray(4096)
+    hbin[0:4] = b'hbin'
+    struct.pack_into('<I', hbin, 0x08, 0x1000)
+    co = 0x20
+    kn = b'CMI-CreateHive{00000000-0000-0000-0000-000000000000}'
+    ct = (0x4C + len(kn) + 7) & ~7
+    struct.pack_into('<i', hbin, co, -ct)
+    hbin[co+4:co+6] = b'nk'
+    struct.pack_into('<H', hbin, co+0x06, 0x24)
+    struct.pack_into('<I', hbin, co+0x14, 0xFFFFFFFF)
+    struct.pack_into('<I', hbin, co+0x20, 0xFFFFFFFF)
+    struct.pack_into('<I', hbin, co+0x24, 0xFFFFFFFF)
+    struct.pack_into('<I', hbin, co+0x2C, 0xFFFFFFFF)
+    struct.pack_into('<I', hbin, co+0x30, 0xFFFFFFFF)
+    struct.pack_into('<I', hbin, co+0x34, 0xFFFFFFFF)
+    struct.pack_into('<H', hbin, co+0x48, len(kn))
+    hbin[co+0x4C:co+0x4C+len(kn)] = kn
+    fo = co + ct
+    fs = 0x1000 - fo
+    if fs > 4: struct.pack_into('<i', hbin, fo, fs)
+    return bytes(base + hbin)
+
+hive_data = _create_minimal_hive()
+for win_dir in ["x86_windows", "x8664_windows"]:
+    reg_dir = rootfs_dir / win_dir / "Windows" / "registry"
+    reg_dir.mkdir(parents=True, exist_ok=True)
+    for hive in ["NTUSER.DAT", "SAM", "SECURITY", "SOFTWARE", "SYSTEM"]:
+        hive_path = reg_dir / hive
+        if not hive_path.exists():
+            hive_path.write_bytes(hive_data)
+            print(f"  Created registry stub: {win_dir}/Windows/registry/{hive}")
+
 # Verify key rootfs directories exist and have content
 for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
     p = rootfs_dir / d
