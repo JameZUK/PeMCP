@@ -216,10 +216,11 @@ def _find_rootfs(os_type, arch, rootfs_path):
 
     rootfs = os.path.join(rootfs_path, dir_name)
     if os.path.isdir(rootfs):
-        # Windows rootfs needs registry hive stubs that can't be legally
-        # distributed.  Generate them on first use if missing.
+        # Windows rootfs needs registry hive stubs and minimal DLL stubs
+        # that can't be legally distributed.  Generate on first use.
         if os_type == "windows":
             _ensure_windows_registry(rootfs)
+            _ensure_windows_dlls(rootfs, arch)
         return rootfs, None
     return None, f"Rootfs directory not found: {rootfs}. Use the download_qiling_rootfs tool to fetch it."
 
@@ -828,6 +829,373 @@ def memory_search(cmd):
     }
 
 
+# ---------------------------------------------------------------------------
+#  Minimal Windows DLL stubs for Qiling rootfs
+# ---------------------------------------------------------------------------
+
+# Core exports that Qiling's Python API hooks reference.  Only the names
+# matter — the code behind each export is a single RET because Qiling's
+# Python hooks intercept before native code runs.
+_WIN_DLL_EXPORTS = {
+    "ntdll.dll": [
+        "NtClose", "NtCreateFile", "NtOpenFile", "NtReadFile", "NtWriteFile",
+        "NtQueryInformationFile", "NtSetInformationFile", "NtCreateKey",
+        "NtOpenKey", "NtQueryValueKey", "NtSetValueKey", "NtDeleteKey",
+        "NtQuerySystemInformation", "NtAllocateVirtualMemory",
+        "NtFreeVirtualMemory", "NtProtectVirtualMemory",
+        "NtCreateSection", "NtMapViewOfSection", "NtUnmapViewOfSection",
+        "NtCreateProcess", "NtCreateThread", "NtTerminateProcess",
+        "NtDelayExecution", "NtQueryPerformanceCounter",
+        "RtlInitUnicodeString", "RtlInitAnsiString",
+        "RtlGetCurrentDirectory_U", "RtlDosPathNameToNtPathName_U",
+        "LdrLoadDll", "LdrGetProcedureAddress",
+    ],
+    "kernel32.dll": [
+        "CreateFileA", "CreateFileW", "ReadFile", "WriteFile", "CloseHandle",
+        "GetLastError", "SetLastError", "GetProcAddress", "LoadLibraryA",
+        "LoadLibraryW", "LoadLibraryExA", "LoadLibraryExW",
+        "GetModuleHandleA", "GetModuleHandleW", "GetModuleFileNameA",
+        "GetModuleFileNameW", "VirtualAlloc", "VirtualFree",
+        "VirtualProtect", "VirtualQuery", "GetSystemInfo",
+        "CreateProcessA", "CreateProcessW", "ExitProcess",
+        "GetCurrentProcess", "GetCurrentProcessId",
+        "GetCurrentThread", "GetCurrentThreadId",
+        "CreateThread", "ExitThread", "Sleep", "SleepEx",
+        "GetTickCount", "GetTickCount64",
+        "GetSystemTimeAsFileTime", "QueryPerformanceCounter",
+        "GetCommandLineA", "GetCommandLineW",
+        "GetEnvironmentVariableA", "GetEnvironmentVariableW",
+        "SetEnvironmentVariableA", "SetEnvironmentVariableW",
+        "GetFileSize", "GetFileSizeEx", "SetFilePointer",
+        "CreateMutexA", "CreateMutexW", "ReleaseMutex",
+        "WaitForSingleObject", "WaitForMultipleObjects",
+        "InitializeCriticalSection", "EnterCriticalSection",
+        "LeaveCriticalSection", "DeleteCriticalSection",
+        "HeapCreate", "HeapAlloc", "HeapFree", "HeapReAlloc",
+        "GetProcessHeap", "GlobalAlloc", "GlobalFree", "LocalAlloc", "LocalFree",
+        "OutputDebugStringA", "OutputDebugStringW",
+        "GetVersionExA", "GetVersionExW", "GetVersion",
+        "IsDebuggerPresent", "CheckRemoteDebuggerPresent",
+        "GetTempPathA", "GetTempPathW",
+        "GetWindowsDirectoryA", "GetWindowsDirectoryW",
+        "GetSystemDirectoryA", "GetSystemDirectoryW",
+        "FindFirstFileA", "FindFirstFileW", "FindNextFileA", "FindNextFileW",
+        "FindClose", "DeleteFileA", "DeleteFileW",
+        "MoveFileA", "MoveFileW", "CopyFileA", "CopyFileW",
+        "CreateDirectoryA", "CreateDirectoryW",
+        "RemoveDirectoryA", "RemoveDirectoryW",
+        "RegOpenKeyExA", "RegOpenKeyExW",
+        "RegQueryValueExA", "RegQueryValueExW",
+        "RegSetValueExA", "RegSetValueExW",
+        "RegCloseKey", "RegCreateKeyExA", "RegCreateKeyExW",
+        "GetFileAttributesA", "GetFileAttributesW",
+        "MultiByteToWideChar", "WideCharToMultiByte",
+        "lstrlenA", "lstrlenW", "lstrcpyA", "lstrcpyW",
+    ],
+    "user32.dll": [
+        "MessageBoxA", "MessageBoxW", "GetDesktopWindow",
+        "wsprintfA", "wsprintfW", "CharLowerA", "CharUpperA",
+    ],
+    "mscoree.dll": [
+        "CorExitProcess", "_CorExeMain", "_CorDllMain",
+    ],
+    "ucrtbase.dll": [
+        "malloc", "free", "calloc", "realloc", "printf", "sprintf",
+        "strlen", "strcpy", "strcat", "strcmp", "memcpy", "memset",
+        "fopen", "fclose", "fread", "fwrite",
+        "_initterm", "_initterm_e", "__p___argc", "__p___argv",
+        "_get_initial_narrow_environment", "_initialize_narrow_environment",
+        "_configure_narrow_argv", "_seh_filter_exe",
+        "_set_app_type", "_set_fmode",
+        "__setusermatherr", "_cexit", "_exit", "exit",
+    ],
+    "advapi32.dll": [
+        "RegOpenKeyExA", "RegOpenKeyExW",
+        "RegQueryValueExA", "RegQueryValueExW",
+        "RegSetValueExA", "RegSetValueExW",
+        "RegCloseKey", "RegCreateKeyExA", "RegCreateKeyExW",
+        "RegDeleteKeyA", "RegDeleteKeyW",
+        "RegDeleteValueA", "RegDeleteValueW",
+        "OpenProcessToken", "LookupPrivilegeValueA",
+        "AdjustTokenPrivileges", "GetUserNameA", "GetUserNameW",
+        "CreateServiceA", "CreateServiceW",
+        "OpenSCManagerA", "OpenSCManagerW",
+        "StartServiceA", "StartServiceW",
+        "CryptAcquireContextA", "CryptAcquireContextW",
+    ],
+    "ws2_32.dll": [
+        "WSAStartup", "WSACleanup", "WSAGetLastError",
+        "socket", "connect", "bind", "listen", "accept",
+        "send", "recv", "sendto", "recvfrom",
+        "closesocket", "ioctlsocket",
+        "gethostbyname", "getaddrinfo", "freeaddrinfo",
+        "inet_addr", "inet_ntoa", "htons", "ntohs", "htonl", "ntohl",
+        "select",
+    ],
+    "wininet.dll": [
+        "InternetOpenA", "InternetOpenW",
+        "InternetConnectA", "InternetConnectW",
+        "InternetOpenUrlA", "InternetOpenUrlW",
+        "HttpOpenRequestA", "HttpOpenRequestW",
+        "HttpSendRequestA", "HttpSendRequestW",
+        "InternetReadFile", "InternetCloseHandle",
+    ],
+}
+
+
+def _create_minimal_pe_dll(dll_name, export_names, arch="x86"):
+    """Create a minimal valid PE DLL with an export table.
+
+    The DLL has a single .text section containing RET instructions and an
+    export directory that lists the given function names.  Qiling's PE
+    loader can parse it, map it into emulated memory, and overlay its
+    Python API hooks on the exported addresses.
+
+    Parameters
+    ----------
+    dll_name : str
+        Name embedded in the export directory (e.g. "kernel32.dll").
+    export_names : list[str]
+        Function names to export.
+    arch : str
+        "x86" for 32-bit or "x8664" for 64-bit PE.
+
+    Returns
+    -------
+    bytes
+        Complete PE file content.
+    """
+    is_64 = (arch == "x8664")
+
+    # Encode strings early so we can compute sizes
+    dll_name_bytes = dll_name.encode("ascii") + b"\x00"
+    name_bytes_list = [n.encode("ascii") + b"\x00" for n in export_names]
+    num_exports = len(export_names)
+
+    # ─── Layout ─────────────────────────────────────────────────────
+    #  DOS header (64 bytes)
+    #  PE signature (4 bytes)
+    #  COFF header (20 bytes)
+    #  Optional header (112 for PE32, 128 for PE32+ ── we'll use actual sizes)
+    #  Section table (2 entries × 40 bytes = 80)
+    #  ---- .text section (aligned to 0x200) ----
+    #  ---- .edata section (export directory) ----
+
+    dos_size = 64
+    pe_sig_size = 4
+    coff_size = 20
+    opt_size = 224 if not is_64 else 240  # standard sizes including data dirs
+    num_sections = 2
+    section_table_size = num_sections * 40
+    headers_size = dos_size + pe_sig_size + coff_size + opt_size + section_table_size
+    file_align = 0x200
+    section_align = 0x1000
+
+    # Pad headers to file alignment
+    headers_raw = (headers_size + file_align - 1) & ~(file_align - 1)
+
+    # .text section: one RET per export + a DllMain-style entrypoint
+    # All exports point to a single RET instruction (0xC3 for x86/x64)
+    text_raw_size = file_align  # minimum one aligned block
+    text_rva = section_align
+
+    # .edata section: export directory
+    # Export directory table (40 bytes)
+    # + Address table (4 bytes × num_exports)
+    # + Name pointer table (4 bytes × num_exports)
+    # + Ordinal table (2 bytes × num_exports)
+    # + DLL name string
+    # + Function name strings
+    edata_fixed = 40  # IMAGE_EXPORT_DIRECTORY
+    addr_table_size = 4 * num_exports
+    name_ptr_table_size = 4 * num_exports
+    ordinal_table_size = 2 * num_exports
+    strings_size = len(dll_name_bytes) + sum(len(b) for b in name_bytes_list)
+
+    edata_data_size = (edata_fixed + addr_table_size + name_ptr_table_size +
+                       ordinal_table_size + strings_size)
+    edata_raw_size = (edata_data_size + file_align - 1) & ~(file_align - 1)
+    edata_rva = text_rva + section_align  # next section-aligned boundary
+
+    text_file_offset = headers_raw
+    edata_file_offset = text_file_offset + text_raw_size
+
+    total_size = edata_file_offset + edata_raw_size
+    image_size = edata_rva + section_align  # virtual image size
+
+    buf = bytearray(total_size)
+
+    # ─── DOS Header ─────────────────────────────────────────────────
+    buf[0:2] = b"MZ"
+    struct.pack_into("<I", buf, 0x3C, dos_size)  # e_lfanew → PE sig
+
+    # ─── PE Signature ───────────────────────────────────────────────
+    pe_off = dos_size
+    buf[pe_off:pe_off + 4] = b"PE\x00\x00"
+
+    # ─── COFF Header ───────────────────────────────────────────────
+    coff_off = pe_off + 4
+    machine = 0x8664 if is_64 else 0x14C
+    struct.pack_into("<H", buf, coff_off + 0, machine)          # Machine
+    struct.pack_into("<H", buf, coff_off + 2, num_sections)     # NumberOfSections
+    characteristics = 0x2000 | 0x0002 | 0x0100  # DLL | EXECUTABLE_IMAGE | 32BIT_MACHINE
+    if is_64:
+        characteristics = 0x2000 | 0x0002 | 0x0020  # DLL | EXECUTABLE | LARGE_ADDRESS_AWARE
+    struct.pack_into("<H", buf, coff_off + 16, opt_size)        # SizeOfOptionalHeader
+    struct.pack_into("<H", buf, coff_off + 18, characteristics) # Characteristics
+
+    # ─── Optional Header ───────────────────────────────────────────
+    opt_off = coff_off + coff_size
+    magic = 0x20B if is_64 else 0x10B
+    struct.pack_into("<H", buf, opt_off + 0, magic)             # Magic
+    buf[opt_off + 2] = 14  # MajorLinkerVersion
+    struct.pack_into("<I", buf, opt_off + 8, text_raw_size)     # SizeOfCode
+
+    ptr_size = 8 if is_64 else 4
+    if is_64:
+        struct.pack_into("<I", buf, opt_off + 16, 0)            # AddressOfEntryPoint
+        struct.pack_into("<Q", buf, opt_off + 24, 0x180000000)  # ImageBase
+    else:
+        struct.pack_into("<I", buf, opt_off + 16, text_rva)     # AddressOfEntryPoint
+        struct.pack_into("<I", buf, opt_off + 28, 0x10000000)   # ImageBase
+
+    struct.pack_into("<I", buf, opt_off + 32, section_align)    # SectionAlignment
+    struct.pack_into("<I", buf, opt_off + 36, file_align)       # FileAlignment
+    struct.pack_into("<H", buf, opt_off + 40, 6)                # MajorOSVersion
+    struct.pack_into("<H", buf, opt_off + 44, 6)                # MajorSubsystemVersion
+    struct.pack_into("<I", buf, opt_off + 56, image_size)       # SizeOfImage
+    struct.pack_into("<I", buf, opt_off + 60, headers_raw)      # SizeOfHeaders
+    struct.pack_into("<H", buf, opt_off + 68, 3)                # Subsystem (CONSOLE)
+
+    if is_64:
+        struct.pack_into("<Q", buf, opt_off + 72, 0x100000)     # SizeOfStackReserve
+        struct.pack_into("<Q", buf, opt_off + 80, 0x1000)       # SizeOfStackCommit
+        struct.pack_into("<Q", buf, opt_off + 88, 0x100000)     # SizeOfHeapReserve
+        struct.pack_into("<Q", buf, opt_off + 96, 0x1000)       # SizeOfHeapCommit
+        struct.pack_into("<I", buf, opt_off + 108, 16)          # NumberOfRvaAndSizes
+        # Data directory[0] = export table
+        dd_off = opt_off + 112
+    else:
+        struct.pack_into("<I", buf, opt_off + 72, 0x100000)     # SizeOfStackReserve
+        struct.pack_into("<I", buf, opt_off + 76, 0x1000)       # SizeOfStackCommit
+        struct.pack_into("<I", buf, opt_off + 80, 0x100000)     # SizeOfHeapReserve
+        struct.pack_into("<I", buf, opt_off + 84, 0x1000)       # SizeOfHeapCommit
+        struct.pack_into("<I", buf, opt_off + 92, 16)           # NumberOfRvaAndSizes
+        dd_off = opt_off + 96
+
+    # Data directory entry 0: Export table RVA and size
+    struct.pack_into("<I", buf, dd_off + 0, edata_rva)
+    struct.pack_into("<I", buf, dd_off + 4, edata_data_size)
+
+    # ─── Section Table ──────────────────────────────────────────────
+    sec_off = opt_off + opt_size
+
+    # .text section
+    buf[sec_off:sec_off + 8] = b".text\x00\x00\x00"
+    struct.pack_into("<I", buf, sec_off + 8, text_raw_size)     # VirtualSize
+    struct.pack_into("<I", buf, sec_off + 12, text_rva)         # VirtualAddress
+    struct.pack_into("<I", buf, sec_off + 16, text_raw_size)    # SizeOfRawData
+    struct.pack_into("<I", buf, sec_off + 20, text_file_offset) # PointerToRawData
+    struct.pack_into("<I", buf, sec_off + 36, 0x60000020)       # CODE|EXECUTE|READ
+
+    # .edata section
+    sec2_off = sec_off + 40
+    buf[sec2_off:sec2_off + 8] = b".edata\x00\x00"
+    struct.pack_into("<I", buf, sec2_off + 8, edata_data_size)  # VirtualSize
+    struct.pack_into("<I", buf, sec2_off + 12, edata_rva)       # VirtualAddress
+    struct.pack_into("<I", buf, sec2_off + 16, edata_raw_size)  # SizeOfRawData
+    struct.pack_into("<I", buf, sec2_off + 20, edata_file_offset)  # PointerToRawData
+    struct.pack_into("<I", buf, sec2_off + 36, 0x40000040)      # INITIALIZED_DATA|READ
+
+    # ─── .text content ──────────────────────────────────────────────
+    # Single RET instruction; all exports point here
+    buf[text_file_offset] = 0xC3  # RET
+
+    # For 64-bit, DllMain-style entry also returns TRUE
+    if is_64:
+        # mov eax, 1; ret
+        buf[text_file_offset:text_file_offset + 6] = b"\xB8\x01\x00\x00\x00\xC3"
+    else:
+        # mov eax, 1; ret 0Ch  (stdcall DllMain)
+        buf[text_file_offset:text_file_offset + 8] = b"\xB8\x01\x00\x00\x00\xC2\x0C\x00"
+
+    # ─── .edata content (export directory) ──────────────────────────
+    ed = edata_file_offset
+    # All exports point to the RET at text_rva
+    export_rva = text_rva
+
+    # Offsets within .edata (relative to edata_rva for RVAs)
+    addr_table_off = edata_fixed
+    name_table_off = addr_table_off + addr_table_size
+    ord_table_off = name_table_off + name_ptr_table_size
+    strings_off = ord_table_off + ordinal_table_size
+
+    # IMAGE_EXPORT_DIRECTORY (40 bytes)
+    #   +0x00 Characteristics (4)    +0x04 TimeDateStamp (4)
+    #   +0x08 MajorVersion (2)       +0x0A MinorVersion (2)
+    #   +0x0C Name (4)               +0x10 Base/OrdinalBase (4)
+    #   +0x14 NumberOfFunctions (4)   +0x18 NumberOfNames (4)
+    #   +0x1C AddressOfFunctions (4)  +0x20 AddressOfNames (4)
+    #   +0x24 AddressOfNameOrdinals (4)
+    dll_name_rva = edata_rva + strings_off
+    struct.pack_into("<I", buf, ed + 0x04, 0)                           # TimeDateStamp
+    struct.pack_into("<I", buf, ed + 0x0C, dll_name_rva)                # Name RVA
+    struct.pack_into("<I", buf, ed + 0x10, 1)                           # OrdinalBase
+    struct.pack_into("<I", buf, ed + 0x14, num_exports)                 # NumberOfFunctions
+    struct.pack_into("<I", buf, ed + 0x18, num_exports)                 # NumberOfNames
+    struct.pack_into("<I", buf, ed + 0x1C, edata_rva + addr_table_off)  # AddressOfFunctions
+    struct.pack_into("<I", buf, ed + 0x20, edata_rva + name_table_off)  # AddressOfNames
+    struct.pack_into("<I", buf, ed + 0x24, edata_rva + ord_table_off)   # AddressOfNameOrdinals
+
+    # Write DLL name string
+    str_pos = ed + strings_off
+    buf[str_pos:str_pos + len(dll_name_bytes)] = dll_name_bytes
+    str_pos += len(dll_name_bytes)
+
+    # Write function name strings, address table, name pointer table, ordinal table
+    for i, name_b in enumerate(name_bytes_list):
+        # Address table: all point to the RET instruction
+        struct.pack_into("<I", buf, ed + addr_table_off + i * 4, export_rva)
+        # Name pointer table: RVA of function name string
+        name_rva = edata_rva + (str_pos - ed)
+        struct.pack_into("<I", buf, ed + name_table_off + i * 4, name_rva)
+        # Ordinal table
+        struct.pack_into("<H", buf, ed + ord_table_off + i * 2, i)
+        # Function name string
+        buf[str_pos:str_pos + len(name_b)] = name_b
+        str_pos += len(name_b)
+
+    return bytes(buf)
+
+
+def _ensure_windows_dlls(target_dir, arch="x86"):
+    """Create minimal DLL stubs in <rootfs>/Windows/System32/ if missing.
+
+    Qiling's PE loader needs actual DLL files to parse export tables and
+    map functions into emulated memory.  The qilingframework/rootfs repo
+    cannot legally distribute Microsoft DLLs, so we generate minimal stubs
+    with correct export directories.  Qiling's Python API hooks intercept
+    calls before native code runs, so the stub code (a single RET) is fine.
+
+    Returns the number of DLL files created.
+    """
+    sys32_dir = os.path.join(target_dir, "Windows", "System32")
+    os.makedirs(sys32_dir, exist_ok=True)
+
+    created = 0
+    for dll_name, exports in _WIN_DLL_EXPORTS.items():
+        dll_path = os.path.join(sys32_dir, dll_name)
+        if not os.path.exists(dll_path):
+            try:
+                dll_data = _create_minimal_pe_dll(dll_name, exports, arch)
+                with open(dll_path, "wb") as f:
+                    f.write(dll_data)
+                created += 1
+            except Exception:
+                pass  # Best-effort; missing DLLs degrade gracefully
+    return created
+
+
 def _create_minimal_registry_hive():
     """Create a minimal valid Windows registry hive (regf format).
 
@@ -866,26 +1234,39 @@ def _create_minimal_registry_hive():
     struct.pack_into('<I', hbin, 0x08, 0x1000)   # block size
 
     # --- Root key cell at data offset 0x20 within hbin ---
-    co = 0x20  # cell offset
+    # Cell layout: [size:4][nk record...]
+    # NK record layout (offsets from nk start, i.e. cell_start + 4):
+    #   +0x00 sig(2) +0x02 flags(2) +0x04 timestamp(8) +0x0C spare(4)
+    #   +0x10 parent(4) +0x14 stable_subkeys(4) +0x18 volatile_subkeys(4)
+    #   +0x1C stable_list(4) +0x20 volatile_list(4) +0x24 value_count(4)
+    #   +0x28 value_list(4) +0x2C security(4) +0x30 class_name(4)
+    #   +0x34 max_subkey_name(4) +0x38 max_subkey_class(4)
+    #   +0x3C max_value_name(4) +0x40 max_value_data(4) +0x44 workvar(4)
+    #   +0x48 key_name_len(2) +0x4A class_name_len(2) +0x4C key_name(var)
+    co = 0x20  # cell offset within hbin
+    nk = co + 4  # nk record starts after 4-byte cell size
     key_name = b'CMI-CreateHive{00000000-0000-0000-0000-000000000000}'
-    cell_data = 0x4C + len(key_name)             # nk fixed header + name
-    cell_total = (cell_data + 7) & ~7            # align to 8 bytes
-    struct.pack_into('<i', hbin, co, -cell_total) # negative = allocated
-    hbin[co+4:co+6] = b'nk'                      # signature
-    struct.pack_into('<H', hbin, co + 0x06, 0x24) # KEY_HIVE_ENTRY|KEY_COMP_NAME
-    struct.pack_into('<Q', hbin, co + 0x08, 0)   # timestamp
-    struct.pack_into('<I', hbin, co + 0x14, 0xFFFFFFFF)  # parent (none)
-    struct.pack_into('<I', hbin, co + 0x18, 0)   # stable subkeys
-    struct.pack_into('<I', hbin, co + 0x1C, 0)   # volatile subkeys
-    struct.pack_into('<I', hbin, co + 0x20, 0xFFFFFFFF)  # stable subkey list
-    struct.pack_into('<I', hbin, co + 0x24, 0xFFFFFFFF)  # volatile subkey list
-    struct.pack_into('<I', hbin, co + 0x28, 0)   # value count
-    struct.pack_into('<I', hbin, co + 0x2C, 0xFFFFFFFF)  # value list
-    struct.pack_into('<I', hbin, co + 0x30, 0xFFFFFFFF)  # security descriptor
-    struct.pack_into('<I', hbin, co + 0x34, 0xFFFFFFFF)  # class name
-    struct.pack_into('<H', hbin, co + 0x48, len(key_name))  # key name size
-    struct.pack_into('<H', hbin, co + 0x4A, 0)   # class name size
-    hbin[co + 0x4C:co + 0x4C + len(key_name)] = key_name
+    nk_header_size = 0x4C  # fixed nk header before key name
+    cell_data = 4 + nk_header_size + len(key_name)  # size + header + name
+    cell_total = (cell_data + 7) & ~7  # align to 8 bytes
+    struct.pack_into('<i', hbin, co, -cell_total)  # negative = allocated
+    hbin[nk:nk+2] = b'nk'                          # +0x00 signature
+    struct.pack_into('<H', hbin, nk + 0x02, 0x24)  # +0x02 KEY_HIVE_ENTRY|KEY_COMP_NAME
+    struct.pack_into('<Q', hbin, nk + 0x04, 0)     # +0x04 timestamp
+    # +0x0C spare left as 0
+    struct.pack_into('<I', hbin, nk + 0x10, 0xFFFFFFFF)  # +0x10 parent (none)
+    struct.pack_into('<I', hbin, nk + 0x14, 0)     # +0x14 stable subkey count
+    struct.pack_into('<I', hbin, nk + 0x18, 0)     # +0x18 volatile subkey count
+    struct.pack_into('<I', hbin, nk + 0x1C, 0xFFFFFFFF)  # +0x1C stable subkey list
+    struct.pack_into('<I', hbin, nk + 0x20, 0xFFFFFFFF)  # +0x20 volatile subkey list
+    struct.pack_into('<I', hbin, nk + 0x24, 0)     # +0x24 value count
+    struct.pack_into('<I', hbin, nk + 0x28, 0xFFFFFFFF)  # +0x28 value list
+    struct.pack_into('<I', hbin, nk + 0x2C, 0xFFFFFFFF)  # +0x2C security descriptor
+    struct.pack_into('<I', hbin, nk + 0x30, 0xFFFFFFFF)  # +0x30 class name offset
+    # +0x34..0x44 max lengths and workvar left as 0
+    struct.pack_into('<H', hbin, nk + 0x48, len(key_name))  # +0x48 key name length
+    struct.pack_into('<H', hbin, nk + 0x4A, 0)     # +0x4A class name length
+    hbin[nk + 0x4C:nk + 0x4C + len(key_name)] = key_name  # +0x4C key name
 
     # Free-space cell fills the remainder of the hbin
     free_off = co + cell_total
@@ -904,7 +1285,9 @@ def _ensure_windows_registry(target_dir):
     reg_dir = os.path.join(target_dir, "Windows", "registry")
     os.makedirs(reg_dir, exist_ok=True)
 
-    hive_names = ["NTUSER.DAT", "SAM", "SECURITY", "SOFTWARE", "SYSTEM"]
+    # Qiling's RegHive opens ALL six hives; a missing one raises
+    # FileNotFoundError → "Windows registry hive not found".
+    hive_names = ["NTUSER.DAT", "SAM", "SECURITY", "SOFTWARE", "SYSTEM", "HARDWARE"]
     created = 0
     for name in hive_names:
         path = os.path.join(reg_dir, name)
@@ -943,15 +1326,18 @@ def download_rootfs(cmd):
     target_dir = os.path.join(output_dir, dir_name)
     if os.path.isdir(target_dir) and os.listdir(target_dir):
         # Even if the directory exists, Windows rootfs may be missing
-        # registry hive stubs (they can't be legally distributed).
+        # registry hive stubs and DLLs (they can't be legally distributed).
         registry_created = 0
+        dlls_created = 0
         if os_type == "windows":
             registry_created = _ensure_windows_registry(target_dir)
+            dlls_created = _ensure_windows_dlls(target_dir, arch)
         return {
             "status": "already_exists",
             "rootfs_path": target_dir,
             "message": f"Rootfs for {os_type}/{arch} already exists at {target_dir}",
             "registry_stubs_created": registry_created,
+            "dll_stubs_created": dlls_created,
         }
 
     # Check that output_dir is writable before attempting a large download
@@ -998,12 +1384,14 @@ def download_rootfs(cmd):
                 ),
             }
 
-        # Windows rootfs needs registry hive files that the repo cannot
-        # legally distribute.  Generate minimal valid stubs so Qiling's
-        # RegistryManager can initialise without crashing.
+        # Windows rootfs needs registry hive files and DLL stubs that
+        # the repo cannot legally distribute.  Generate minimal valid
+        # stubs so Qiling can initialise without crashing.
         registry_created = 0
+        dlls_created = 0
         if os_type == "windows":
             registry_created = _ensure_windows_registry(target_dir)
+            dlls_created = _ensure_windows_dlls(target_dir, arch)
 
         return {
             "status": "success",
@@ -1012,6 +1400,7 @@ def download_rootfs(cmd):
             "architecture": arch,
             "files_extracted": extracted_count,
             "registry_stubs_created": registry_created,
+            "dll_stubs_created": dlls_created,
         }
     except Exception as e:
         return {"error": f"Failed to download rootfs: {e}"}
