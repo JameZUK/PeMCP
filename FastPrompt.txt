@@ -36,7 +36,8 @@ Follow this sequence. The enhanced triage report performs most analysis in a sin
 
     --- IF THE FILE IS PACKED ---
     Stop here. Combine packing evidence, VirusTotal report, and file hashes.
-    Report as MALICIOUS or SUSPICIOUS. Recommend unpacking (use auto_unpack_pe tool if available).
+    Report as MALICIOUS or SUSPICIOUS. Recommend unpacking (use auto_unpack_pe tool for known packers,
+    or qiling_dump_unpacked_binary for custom/unknown packers).
 
     --- IF THE FILE IS NOT PACKED ---
     Proceed to Step 4 for in-depth analysis.
@@ -58,7 +59,13 @@ Follow this sequence. The enhanced triage report performs most analysis in a sin
         The triage report already extracts plaintext network IOCs, but encoded ones
         require this additional step.
 
-    d. Deep Dive (only if evidence is ambiguous):
+    d. Dynamic Emulation (if static analysis is insufficient):
+        Use emulate_binary_with_qiling for cross-platform behavioural analysis
+        (API calls, file/registry/network activity). Works on PE, ELF, and Mach-O.
+        Use emulate_shellcode_with_qiling for shellcode (x86/x64/ARM/MIPS).
+        Use qiling_memory_search to find decrypted C2 URLs, keys, or config blobs in memory.
+
+    e. Deep Dive (only if evidence is ambiguous):
         Use get_pe_data(key='tls_info') to check TLS callbacks (anti-analysis).
         Use get_pe_data(key='imports') for the full import list if needed.
         Use get_pe_data(key='digital_signature') for full certificate details.
