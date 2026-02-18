@@ -96,38 +96,46 @@ RUN python -m venv /app/qiling-venv && \
 # Qiling requires rootfs directories containing DLLs, registry hives, and
 # other OS-specific files to emulate binaries.  We download these at build
 # time from the official Qiling repository to avoid runtime downloads.
+#
+# IMPORTANT: Rootfs content lives in the dedicated qilingframework/rootfs
+# repository, NOT in the main qiling repo (where examples/rootfs/ is a git
+# submodule that GitHub archive zips do not include).
 RUN python <<'PYEOF'
 import urllib.request, zipfile, os, shutil, pathlib
 rootfs_dir = pathlib.Path("/app/qiling-rootfs")
 rootfs_dir.mkdir(exist_ok=True)
-# Download the Qiling examples archive which contains rootfs
-url = "https://github.com/qilingframework/qiling/archive/refs/heads/master.zip"
-zip_path = "/tmp/qiling-repo.zip"
+url = "https://github.com/qilingframework/rootfs/archive/refs/heads/master.zip"
+zip_path = "/tmp/qiling-rootfs.zip"
 urllib.request.urlretrieve(url, zip_path)
+prefix = "rootfs-master/"
 with zipfile.ZipFile(zip_path, 'r') as zf:
-    # Extract only the rootfs directories we need
     for member in zf.namelist():
-        # Extract rootfs entries (skip large/unnecessary files)
-        if '/examples/rootfs/' in member:
-            # Flatten path: qiling-master/examples/rootfs/... -> /app/qiling-rootfs/...
-            rel = member.split('/examples/rootfs/', 1)
-            if len(rel) == 2 and rel[1]:
-                dest = rootfs_dir / rel[1]
-                if member.endswith('/'):
-                    dest.mkdir(parents=True, exist_ok=True)
-                else:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    with zf.open(member) as src, open(dest, 'wb') as dst:
-                        dst.write(src.read())
+        if not member.startswith(prefix):
+            continue
+        rel = member[len(prefix):]
+        if not rel:
+            continue
+        dest = rootfs_dir / rel
+        if member.endswith('/'):
+            dest.mkdir(parents=True, exist_ok=True)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(member) as src, open(dest, 'wb') as dst:
+                dst.write(src.read())
 os.remove(zip_path)
-# Verify key rootfs directories exist
+# Verify key rootfs directories exist and have content
 for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
     p = rootfs_dir / d
-    if p.is_dir():
-        print(f"  rootfs OK: {d}")
+    count = sum(1 for _ in p.rglob('*') if _.is_file()) if p.is_dir() else 0
+    if count > 0:
+        print(f"  rootfs OK: {d} ({count} files)")
     else:
-        print(f"  rootfs MISSING: {d}")
+        print(f"  rootfs MISSING or EMPTY: {d}")
 PYEOF
+
+# Make rootfs world-writable so the runtime download_qiling_rootfs tool can
+# add new OS/arch combinations when the container runs as a non-root UID.
+RUN chmod -R 777 /app/qiling-rootfs
 
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
