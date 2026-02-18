@@ -191,8 +191,8 @@ for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
         print(f"  rootfs MISSING or EMPTY: {d}")
 PYEOF
 
-# Make rootfs world-writable so the runtime download_qiling_rootfs tool can
-# add new OS/arch combinations when the container runs as a non-root UID.
+# Make rootfs world-writable so the runtime registry-stub generator and
+# user-mounted rootfs volumes work when the container runs as a non-root UID.
 RUN chmod -R 777 /app/qiling-rootfs
 
 # --- Install libraries that may have complex deps (best-effort) ---

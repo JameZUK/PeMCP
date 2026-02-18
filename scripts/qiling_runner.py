@@ -269,8 +269,9 @@ def _find_rootfs(os_type, arch, rootfs_path):
         return rootfs, None, dll_warning
     return None, (
         f"Rootfs directory not found: {rootfs}. "
-        f"Use the download_qiling_rootfs tool to fetch it, or mount your "
-        f"own rootfs files at /app/qiling-rootfs/{dir_name}/. "
+        f"The rootfs is pre-populated in the Docker image at build time. "
+        f"If it is missing, rebuild the image or mount your own rootfs files "
+        f"at /app/qiling-rootfs/{dir_name}/ via the qiling-rootfs/ host directory. "
         f"For Windows PE emulation you also need real Windows DLL files "
         f"(ntdll.dll, kernel32.dll, etc.) copied from a Windows installation "
         f"into {dir_name}/Windows/System32/. "
@@ -1046,131 +1047,6 @@ def _ensure_windows_registry(target_dir):
     return created
 
 
-def download_rootfs(cmd):
-    """Download Qiling rootfs files for a specific OS/architecture."""
-    os_type = cmd.get("os_type", "windows")
-    arch = cmd.get("architecture", "x86")
-    output_dir = cmd.get("output_dir", "/app/qiling-rootfs")
-
-    import urllib.request
-    import zipfile
-    import tempfile
-
-    rootfs_map = {
-        ("windows", "x86"): "x86_windows",
-        ("windows", "x8664"): "x8664_windows",
-        ("linux", "x86"): "x86_linux",
-        ("linux", "x8664"): "x8664_linux",
-        ("linux", "arm"): "arm_linux",
-        ("linux", "arm64"): "arm64_linux",
-        ("linux", "mips"): "mips32_linux",
-        ("macos", "x8664"): "x8664_macos",
-    }
-
-    dir_name = rootfs_map.get((os_type, arch))
-    if not dir_name:
-        return {"error": f"No rootfs available for {os_type}/{arch}. Supported: {list(rootfs_map.keys())}"}
-
-    target_dir = os.path.join(output_dir, dir_name)
-    if os.path.isdir(target_dir) and os.listdir(target_dir):
-        # Even if the directory exists, Windows rootfs may be missing
-        # registry hive stubs (they can't be legally distributed).
-        registry_created = 0
-        if os_type == "windows":
-            registry_created = _ensure_windows_registry(target_dir)
-        # Check for Windows DLLs
-        sys32 = os.path.join(target_dir, "Windows", "System32")
-        has_dlls = os.path.isdir(sys32) and any(
-            f.lower().endswith(".dll") for f in os.listdir(sys32)
-            if os.path.isfile(os.path.join(sys32, f))
-        ) if os_type == "windows" else True
-        return {
-            "status": "already_exists",
-            "rootfs_path": target_dir,
-            "message": f"Rootfs for {os_type}/{arch} already exists at {target_dir}",
-            "registry_stubs_created": registry_created,
-            "windows_dlls_present": has_dlls,
-            "note": (
-                "Windows PE emulation requires DLL files (ntdll.dll, kernel32.dll, etc.) "
-                "in Windows/System32/. Mount them from a real Windows installation. "
-                "See docs/QILING_ROOTFS.md for instructions."
-            ) if os_type == "windows" and not has_dlls else None,
-        }
-
-    # Check that output_dir is writable before attempting a large download
-    if os.path.isdir(output_dir) and not os.access(output_dir, os.W_OK):
-        return {
-            "error": (
-                f"Permission denied: {output_dir} is not writable by uid {os.getuid()}. "
-                "Rebuild the Docker image to fix build-time permissions, or run: "
-                f"chmod -R 777 {output_dir}"
-            ),
-        }
-
-    # Rootfs content lives in the dedicated qilingframework/rootfs repo,
-    # NOT in the main qiling repo (where examples/rootfs/ is a submodule
-    # reference that GitHub archive zips do not include).
-    url = "https://github.com/qilingframework/rootfs/archive/refs/heads/master.zip"
-    prefix = f"rootfs-master/{dir_name}/"
-
-    tmp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
-            tmp_path = tmp.name
-            urllib.request.urlretrieve(url, tmp_path)
-
-        os.makedirs(target_dir, exist_ok=True)
-        extracted_count = 0
-
-        with zipfile.ZipFile(tmp_path, "r") as zf:
-            for member in zf.namelist():
-                if member.startswith(prefix) and not member.endswith("/"):
-                    rel_path = member[len(prefix):]
-                    if rel_path:
-                        dest = os.path.join(target_dir, rel_path)
-                        os.makedirs(os.path.dirname(dest), exist_ok=True)
-                        with zf.open(member) as src, open(dest, "wb") as dst:
-                            dst.write(src.read())
-                        extracted_count += 1
-
-        if extracted_count == 0:
-            return {
-                "error": (
-                    f"Downloaded archive but found no files under '{prefix}' "
-                    f"for {os_type}/{arch}. The rootfs repo structure may have changed."
-                ),
-            }
-
-        # Windows rootfs needs registry hive files that the repo cannot
-        # legally distribute.  Generate minimal valid stubs so Qiling's
-        # RegistryManager can initialise without crashing.
-        registry_created = 0
-        if os_type == "windows":
-            registry_created = _ensure_windows_registry(target_dir)
-
-        result = {
-            "status": "success",
-            "rootfs_path": target_dir,
-            "os_type": os_type,
-            "architecture": arch,
-            "files_extracted": extracted_count,
-            "registry_stubs_created": registry_created,
-        }
-        if os_type == "windows":
-            result["note"] = (
-                "Windows PE emulation also requires DLL files (ntdll.dll, "
-                "kernel32.dll, etc.) in Windows/System32/. These must be "
-                "copied from a real Windows installation. "
-                "See docs/QILING_ROOTFS.md for instructions."
-            )
-        return result
-    except Exception as e:
-        return {"error": f"Failed to download rootfs: {e}"}
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-
 # ---------------------------------------------------------------------------
 #  Main dispatcher
 # ---------------------------------------------------------------------------
@@ -1212,8 +1088,6 @@ def main():
             result = resolve_api_hashes(cmd)
         elif action == "memory_search":
             result = memory_search(cmd)
-        elif action == "download_rootfs":
-            result = download_rootfs(cmd)
         else:
             result = {"error": f"Unknown action: {action}"}
     except Exception as e:

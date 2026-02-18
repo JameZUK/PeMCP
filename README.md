@@ -733,9 +733,8 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `qiling_dump_unpacked_binary` | Dynamic unpacking via emulation — handles custom/unknown packers that YARA-based unipacker cannot identify. |
 | `qiling_resolve_api_hashes` | Resolve API hash values (ROR13, CRC32, DJB2, FNV-1a) against known DLL exports. |
 | `qiling_memory_search` | Run a binary then search process memory for decrypted strings, C2 URLs, keys, or byte patterns. |
-| `download_qiling_rootfs` | Download OS-specific rootfs files (DLLs, registry hives, system libs) required for Qiling emulation. |
 
-> **Note:** Qiling runs in an isolated venv (`/app/qiling-venv`) with unicorn 1.x, keeping the main environment's unicorn 2.x intact for angr. Windows rootfs includes auto-generated minimal registry hive stubs since Microsoft registry files cannot be legally distributed.
+> **Note:** Qiling runs in an isolated venv (`/app/qiling-venv`) with unicorn 1.x, keeping the main environment's unicorn 2.x intact for angr. Linux rootfs is pre-populated at Docker build time. Windows PE emulation requires real DLL files copied from a Windows installation — see `docs/QILING_ROOTFS.md` for setup instructions. Registry hive stubs are auto-generated at runtime.
 
 ### Multi-Format Binary Analysis (9 tools)
 
