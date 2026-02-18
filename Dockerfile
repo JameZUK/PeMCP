@@ -83,6 +83,52 @@ RUN python -m venv /app/unipacker-venv && \
     /app/unipacker-venv/bin/pip install --no-cache-dir --upgrade pip && \
     /app/unipacker-venv/bin/pip install --no-cache-dir unipacker
 
+# --- Install Qiling Framework in an isolated venv (requires unicorn 1.x) ---
+# Qiling is built on the Unicorn engine and requires unicorn 1.x, which
+# conflicts with the main env's unicorn 2.x (used by angr).  By isolating
+# Qiling in its own venv we keep angr's native unicorn bridge intact while
+# gaining Qiling's cross-platform binary emulation capabilities.
+RUN python -m venv /app/qiling-venv && \
+    /app/qiling-venv/bin/pip install --no-cache-dir --upgrade pip && \
+    /app/qiling-venv/bin/pip install --no-cache-dir qiling
+
+# --- Pre-populate Qiling rootfs (OS-specific files needed for emulation) ---
+# Qiling requires rootfs directories containing DLLs, registry hives, and
+# other OS-specific files to emulate binaries.  We download these at build
+# time from the official Qiling repository to avoid runtime downloads.
+RUN python <<'PYEOF'
+import urllib.request, zipfile, os, shutil, pathlib
+rootfs_dir = pathlib.Path("/app/qiling-rootfs")
+rootfs_dir.mkdir(exist_ok=True)
+# Download the Qiling examples archive which contains rootfs
+url = "https://github.com/qilingframework/qiling/archive/refs/heads/master.zip"
+zip_path = "/tmp/qiling-repo.zip"
+urllib.request.urlretrieve(url, zip_path)
+with zipfile.ZipFile(zip_path, 'r') as zf:
+    # Extract only the rootfs directories we need
+    for member in zf.namelist():
+        # Extract rootfs entries (skip large/unnecessary files)
+        if '/examples/rootfs/' in member:
+            # Flatten path: qiling-master/examples/rootfs/... -> /app/qiling-rootfs/...
+            rel = member.split('/examples/rootfs/', 1)
+            if len(rel) == 2 and rel[1]:
+                dest = rootfs_dir / rel[1]
+                if member.endswith('/'):
+                    dest.mkdir(parents=True, exist_ok=True)
+                else:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as src, open(dest, 'wb') as dst:
+                        dst.write(src.read())
+os.remove(zip_path)
+# Verify key rootfs directories exist
+for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
+    p = rootfs_dir / d
+    if p.is_dir():
+        print(f"  rootfs OK: {d}")
+    else:
+        print(f"  rootfs MISSING: {d}")
+PYEOF
+
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
 # but combined into a single layer to reduce image layer count.
@@ -98,9 +144,11 @@ RUN pip install --no-cache-dir --force-reinstall \
 # Main env: unicorn 2.x → angr native unicorn bridge works.
 # Speakeasy venv: unicorn 1.x → speakeasy emulation works.
 # Unipacker venv: unicorn 1.x (via unicorn-unipacker) → unipacker works.
+# Qiling venv: unicorn 1.x → Qiling Framework emulation works.
 RUN python -c "import unicorn; print('main env unicorn', unicorn.__version__); assert hasattr(unicorn, 'UC_ARCH_RISCV'), 'UC_ARCH_RISCV missing!'" && \
     /app/speakeasy-venv/bin/python -c "import unicorn; print('speakeasy venv unicorn', unicorn.__version__)" && \
-    /app/unipacker-venv/bin/python -c "import unicorn; print('unipacker venv unicorn', unicorn.__version__)"
+    /app/unipacker-venv/bin/python -c "import unicorn; print('unipacker venv unicorn', unicorn.__version__)" && \
+    /app/qiling-venv/bin/python -c "import unicorn; print('qiling venv unicorn', unicorn.__version__); from qiling import Qiling; print('qiling import OK')"
 
 # --- Pre-populate capa rules (avoids runtime download + write permission issues) ---
 # Downloaded at build time so the container never needs write access to /app.
