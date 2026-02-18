@@ -82,6 +82,59 @@ def _hex(val):
     return hex(val) if isinstance(val, int) else str(val)
 
 
+def _setup_api_hooks(ql, os_type, api_calls_list, limit):
+    """Set up API/syscall interception appropriate for the target OS.
+
+    Qiling uses different hook mechanisms per OS:
+    - Windows: ql.os.set_api("*", callback, QL_INTERCEPT.CALL)
+      callback signature: (ql, address, params)
+    - POSIX:   ql.os.set_syscall("*", callback, QL_INTERCEPT.CALL)
+      callback signature: (ql, syscall_name, *args)
+
+    set_api("*") on a POSIX target raises AttributeError because the
+    ELF/Mach-O loader has no 'is_driver' attribute.
+    """
+    if os_type == "windows":
+        def _win_api_hook(ql, address, params):
+            if len(api_calls_list) < limit * 2:
+                entry = {
+                    "api": "unknown",
+                    "address": _hex(address),
+                    "params": {},
+                    "retval": None,
+                }
+                if isinstance(params, dict):
+                    for k, v in list(params.items())[:5]:
+                        entry["params"][k] = str(v)[:200] if v is not None else None
+                    # Try to extract API name from params or function context
+                    entry["api"] = params.get("__name__", "unknown") if isinstance(params, dict) else "unknown"
+                api_calls_list.append(entry)
+        try:
+            ql.os.set_api("*", _win_api_hook, QL_INTERCEPT.CALL)
+        except Exception:
+            pass  # Fallback: no API capture if hooking fails
+    else:
+        # POSIX: hook syscalls instead of API calls
+        def _posix_syscall_hook(ql, *args):
+            if len(api_calls_list) < limit * 2:
+                # args[0] is typically the syscall number or name
+                syscall_id = args[0] if args else "unknown"
+                entry = {
+                    "api": str(syscall_id),
+                    "address": _hex(ql.arch.regs.arch_pc) if hasattr(ql.arch.regs, 'arch_pc') else None,
+                    "params": {},
+                    "retval": None,
+                }
+                # Remaining args are syscall parameters
+                for i, a in enumerate(args[1:6]):
+                    entry["params"][f"arg{i}"] = str(a)[:200] if a is not None else None
+                api_calls_list.append(entry)
+        try:
+            ql.os.set_syscall("*", _posix_syscall_hook, QL_INTERCEPT.CALL)
+        except Exception:
+            pass  # Fallback: no syscall capture if hooking fails
+
+
 def _detect_binary_format(filepath):
     """Detect binary format from magic bytes. Returns (os_type, arch, format_desc)."""
     with open(filepath, "rb") as f:
@@ -163,6 +216,10 @@ def _find_rootfs(os_type, arch, rootfs_path):
 
     rootfs = os.path.join(rootfs_path, dir_name)
     if os.path.isdir(rootfs):
+        # Windows rootfs needs registry hive stubs that can't be legally
+        # distributed.  Generate them on first use if missing.
+        if os_type == "windows":
+            _ensure_windows_registry(rootfs)
         return rootfs, None
     return None, f"Rootfs directory not found: {rootfs}. Use the download_qiling_rootfs tool to fetch it."
 
@@ -188,39 +245,9 @@ def emulate_binary(cmd):
         return {"error": err}
 
     api_calls = []
-    memory_writes = []
     file_activity = []
     registry_activity = []
     network_activity = []
-
-    def _api_hook(ql, address, params, retval, api_name):
-        """Collect API/syscall calls."""
-        if len(api_calls) < limit * 2:  # Collect extra, trim later
-            entry = {
-                "api": api_name or "unknown",
-                "address": _hex(address),
-                "params": {},
-                "retval": _hex(retval),
-            }
-            if params:
-                for k, v in list(params.items())[:5]:
-                    entry["params"][k] = str(v)[:200] if v is not None else None
-            api_calls.append(entry)
-
-            # Classify activity from API name
-            api_lower = (api_name or "").lower()
-            if any(k in api_lower for k in ("createfile", "writefile", "readfile", "deletefile",
-                                             "open", "write", "read", "fopen", "fwrite")):
-                if len(file_activity) < limit:
-                    file_activity.append({"api": api_name, "params": entry["params"]})
-            elif any(k in api_lower for k in ("regopen", "regset", "regquery", "regcreate", "regdelete")):
-                if len(registry_activity) < limit:
-                    registry_activity.append({"api": api_name, "params": entry["params"]})
-            elif any(k in api_lower for k in ("socket", "connect", "send", "recv", "wsastartup",
-                                               "bind", "listen", "accept", "getaddrinfo",
-                                               "internetopen", "httpopen", "urldownload")):
-                if len(network_activity) < limit:
-                    network_activity.append({"api": api_name, "params": entry["params"]})
 
     try:
         ql = Qiling(
@@ -231,8 +258,8 @@ def emulate_binary(cmd):
     except Exception as e:
         return {"error": f"Failed to initialize Qiling: {e}"}
 
-    # Set up syscall/API interception
-    ql.os.set_api("*", _api_hook, QL_INTERCEPT.CALL)
+    # Set up OS-appropriate API/syscall interception
+    _setup_api_hooks(ql, os_type, api_calls, limit)
 
     try:
         if max_instructions > 0:
@@ -242,6 +269,22 @@ def emulate_binary(cmd):
     except Exception:
         # Emulation may raise on exit or unhandled API -- expected
         pass
+
+    # Post-hoc activity classification from captured calls
+    for entry in api_calls:
+        api_lower = (entry.get("api") or "").lower()
+        if any(k in api_lower for k in ("createfile", "writefile", "readfile", "deletefile",
+                                         "open", "write", "read", "fopen", "fwrite")):
+            if len(file_activity) < limit:
+                file_activity.append({"api": entry["api"], "params": entry["params"]})
+        elif any(k in api_lower for k in ("regopen", "regset", "regquery", "regcreate", "regdelete")):
+            if len(registry_activity) < limit:
+                registry_activity.append({"api": entry["api"], "params": entry["params"]})
+        elif any(k in api_lower for k in ("socket", "connect", "send", "recv", "wsastartup",
+                                           "bind", "listen", "accept", "getaddrinfo",
+                                           "internetopen", "httpopen", "urldownload")):
+            if len(network_activity) < limit:
+                network_activity.append({"api": entry["api"], "params": entry["params"]})
 
     return {
         "status": "completed",
@@ -281,19 +324,6 @@ def emulate_shellcode(cmd):
 
     api_calls = []
 
-    def _api_hook(ql, address, params, retval, api_name):
-        if len(api_calls) < limit * 2:
-            entry = {
-                "api": api_name or "unknown",
-                "address": _hex(address),
-                "params": {},
-                "retval": _hex(retval),
-            }
-            if params:
-                for k, v in list(params.items())[:5]:
-                    entry["params"][k] = str(v)[:200] if v is not None else None
-            api_calls.append(entry)
-
     try:
         ql = Qiling(
             code=sc_data,
@@ -305,7 +335,7 @@ def emulate_shellcode(cmd):
     except Exception as e:
         return {"error": f"Failed to initialize Qiling for shellcode: {e}"}
 
-    ql.os.set_api("*", _api_hook, QL_INTERCEPT.CALL)
+    _setup_api_hooks(ql, os_type, api_calls, limit)
 
     try:
         if max_instructions > 0:
@@ -428,19 +458,21 @@ def hook_api_calls(cmd):
     except Exception as e:
         return {"error": f"Failed to initialize Qiling: {e}"}
 
-    # If specific APIs requested, hook each one; otherwise hook all
-    if target_apis:
+    # If specific APIs requested, hook each; otherwise hook all.
+    # For specific APIs on Windows, use set_api per name.
+    # For the wildcard case, use _setup_api_hooks which handles OS differences.
+    if target_apis and os_type == "windows":
         for api_name in target_apis:
             def _make_hook(name):
-                def _hook(ql, address, params, retval, api_name_actual):
+                def _hook(ql, address, params):
                     if len(captured_calls) < limit:
                         entry = {
-                            "api": api_name_actual or name,
+                            "api": name,
                             "address": _hex(address),
                             "params": {},
-                            "retval": _hex(retval),
+                            "retval": None,
                         }
-                        if params:
+                        if isinstance(params, dict):
                             for k, v in list(params.items())[:8]:
                                 entry["params"][k] = str(v)[:500] if v is not None else None
                         captured_calls.append(entry)
@@ -448,22 +480,9 @@ def hook_api_calls(cmd):
             try:
                 ql.os.set_api(api_name, _make_hook(api_name), QL_INTERCEPT.CALL)
             except Exception:
-                # API may not exist in the emulated environment
-                pass
+                pass  # API may not exist in the emulated environment
     else:
-        def _global_hook(ql, address, params, retval, api_name):
-            if len(captured_calls) < limit:
-                entry = {
-                    "api": api_name or "unknown",
-                    "address": _hex(address),
-                    "params": {},
-                    "retval": _hex(retval),
-                }
-                if params:
-                    for k, v in list(params.items())[:8]:
-                        entry["params"][k] = str(v)[:500] if v is not None else None
-                captured_calls.append(entry)
-        ql.os.set_api("*", _global_hook, QL_INTERCEPT.CALL)
+        _setup_api_hooks(ql, os_type, captured_calls, limit)
 
     try:
         kwargs = {"timeout": timeout_seconds * 1000000}
