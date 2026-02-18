@@ -20,6 +20,7 @@ IMAGE_NAME="pemcp-toolkit"
 CONTAINER_PORT="${PEMCP_PORT:-8082}"
 SAMPLES_DIR="${PEMCP_SAMPLES:-$(cd "$(dirname "$0")" && pwd)/samples}"
 CONTAINER_SAMPLES="/$(basename "$SAMPLES_DIR")"
+ROOTFS_DIR="${PEMCP_ROOTFS:-$(cd "$(dirname "$0")" && pwd)/qiling-rootfs}"
 
 # --- Detect container runtime ---
 detect_runtime() {
@@ -80,6 +81,13 @@ common_args() {
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:$MOUNT_OPTS"
         -v "pemcp-data:/app/home/.pemcp"
     )
+
+    # Mount Qiling rootfs if the directory exists on the host.
+    # Users place Windows DLLs, Linux libs, etc. here for Qiling emulation.
+    # See docs/QILING_ROOTFS.md for setup instructions.
+    if [[ -d "$ROOTFS_DIR" ]]; then
+        args+=(-v "$ROOTFS_DIR:/app/qiling-rootfs")
+    fi
 
     # Pass VT_API_KEY if set
     if [[ -n "${VT_API_KEY:-}" ]]; then
@@ -183,17 +191,23 @@ Options:
                     The container path mirrors the host folder name
                     (e.g. --samples ~/Downloads → /Downloads inside).
                     Default: ./samples/ next to this script (→ /samples).
+  --rootfs <dir>    Mount a Qiling rootfs directory into the container.
+                    Place Windows DLLs, Linux libs, etc. here for emulation.
+                    Default: ./qiling-rootfs/ next to this script.
+                    See docs/QILING_ROOTFS.md for setup instructions.
 
 Environment variables:
   VT_API_KEY        VirusTotal API key (passed into container)
   PEMCP_PORT        Host port for HTTP mode (default: 8082)
   PEMCP_SAMPLES     Default samples directory (overridden by --samples)
+  PEMCP_ROOTFS      Default Qiling rootfs directory (overridden by --rootfs)
 
 Examples:
   ./run.sh                                         # HTTP server, default samples/
   ./run.sh --stdio                                 # stdio server for Claude Code
   ./run.sh --samples ~/malware-zoo --stdio         # Mounted at /malware-zoo
   ./run.sh --analyze samples/suspicious.exe        # Analyze a single file
+  ./run.sh --rootfs ~/qiling-rootfs                # Custom rootfs for Qiling
   VT_API_KEY=abc123 PEMCP_PORT=9000 ./run.sh       # Custom port + API key
   PEMCP_SAMPLES=~/samples ./run.sh --stdio         # Via environment variable
 
@@ -222,6 +236,17 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             }
             CONTAINER_SAMPLES="/$(basename "$SAMPLES_DIR")"
+            shift 2
+            ;;
+        --rootfs)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --rootfs requires a directory path."
+                exit 1
+            fi
+            ROOTFS_DIR="$(cd "$2" 2>/dev/null && pwd)" || {
+                echo "Error: Rootfs directory not found: $2"
+                exit 1
+            }
             shift 2
             ;;
         --help|-h|--build|--stdio|--analyze|--shell)

@@ -16,6 +16,11 @@
 # Environment:
 #   Copy .env.example to .env and set your API keys there,
 #   or export VT_API_KEY in your shell before running.
+#
+# Qiling rootfs:
+#   To enable Windows PE emulation, copy DLLs from a Windows installation
+#   into ./qiling-rootfs/x86_windows/Windows/System32/ (and x8664_windows
+#   for 64-bit).  See docs/QILING_ROOTFS.md for detailed instructions.
 
 services:
   pemcp-http:
@@ -26,6 +31,7 @@ services:
     volumes:
       - ./samples:/samples:ro
       - pemcp-data:/app/home/.pemcp
+      - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
       - PEMCP_API_KEY=${PEMCP_API_KEY:-}
@@ -59,6 +65,7 @@ services:
     volumes:
       - ./samples:/samples:ro
       - pemcp-data:/app/home/.pemcp
+      - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
     command: ["--mcp-server", "--samples-path", "/samples"]
