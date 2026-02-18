@@ -802,9 +802,23 @@ def download_rootfs(cmd):
             "message": f"Rootfs for {os_type}/{arch} already exists at {target_dir}",
         }
 
-    url = "https://github.com/qilingframework/qiling/archive/refs/heads/master.zip"
-    prefix = f"qiling-master/examples/rootfs/{dir_name}/"
+    # Check that output_dir is writable before attempting a large download
+    if os.path.isdir(output_dir) and not os.access(output_dir, os.W_OK):
+        return {
+            "error": (
+                f"Permission denied: {output_dir} is not writable by uid {os.getuid()}. "
+                "Rebuild the Docker image to fix build-time permissions, or run: "
+                f"chmod -R 777 {output_dir}"
+            ),
+        }
 
+    # Rootfs content lives in the dedicated qilingframework/rootfs repo,
+    # NOT in the main qiling repo (where examples/rootfs/ is a submodule
+    # reference that GitHub archive zips do not include).
+    url = "https://github.com/qilingframework/rootfs/archive/refs/heads/master.zip"
+    prefix = f"rootfs-master/{dir_name}/"
+
+    tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
             tmp_path = tmp.name
@@ -824,7 +838,13 @@ def download_rootfs(cmd):
                             dst.write(src.read())
                         extracted_count += 1
 
-        os.remove(tmp_path)
+        if extracted_count == 0:
+            return {
+                "error": (
+                    f"Downloaded archive but found no files under '{prefix}' "
+                    f"for {os_type}/{arch}. The rootfs repo structure may have changed."
+                ),
+            }
 
         return {
             "status": "success",
@@ -834,9 +854,10 @@ def download_rootfs(cmd):
             "files_extracted": extracted_count,
         }
     except Exception as e:
-        if os.path.exists(tmp_path):
-            os.remove(tmp_path)
         return {"error": f"Failed to download rootfs: {e}"}
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            os.remove(tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -856,6 +877,14 @@ except ImportError:
 def main():
     cmd = json.loads(sys.stdin.read())
     action = cmd.get("action")
+
+    # Redirect stdout → stderr while Qiling runs.
+    # Qiling's emulator and internal helpers print log/debug messages
+    # directly to stdout which would corrupt the JSON result that the
+    # parent process expects on stdout.  Sending those to stderr keeps
+    # the JSON channel clean (same pattern as unipacker_runner.py).
+    real_stdout = sys.stdout
+    sys.stdout = sys.stderr
 
     try:
         if action == "emulate_binary":
@@ -878,6 +907,8 @@ def main():
             result = {"error": f"Unknown action: {action}"}
     except Exception as e:
         result = {"error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc()[:1000]}
+    finally:
+        sys.stdout = real_stdout
 
     json.dump(result, sys.stdout)
 
