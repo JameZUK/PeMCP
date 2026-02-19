@@ -14,8 +14,24 @@ import sys
 import threading
 
 
+def _validate_file_path(filepath):
+    """Validate that a file path exists and is a regular file.
+
+    Defense-in-depth: the parent MCP tool layer enforces path sandboxing,
+    but direct invocation of this runner (e.g. during development) would
+    bypass those checks.
+    """
+    if not filepath:
+        raise ValueError("No file path provided")
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"File not found: {filepath}")
+    if not os.path.isfile(filepath):
+        raise ValueError(f"Path is not a regular file: {filepath}")
+
+
 def unpack_pe(cmd):
     filepath = cmd["filepath"]
+    _validate_file_path(filepath)
     output_path = cmd["output_path"]
     timeout_seconds = cmd.get("timeout_seconds", 300)
 

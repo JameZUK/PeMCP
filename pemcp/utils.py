@@ -8,6 +8,31 @@ from typing import Dict, Any, Optional, List
 
 from pemcp.config import pefile
 
+# --- Safe slicing ---
+
+def _safe_slice(value, n):
+    """Safely slice a value to at most *n* items.
+
+    Handles lists, tuples, dicts, strings, sets, frozensets, and other
+    iterables.  Returns the original value unchanged if it cannot be sliced.
+    """
+    if isinstance(value, (list, tuple)):
+        return value[:n]
+    if isinstance(value, dict):
+        keys = list(value.keys())[:n]
+        return {k: value[k] for k in keys}
+    if isinstance(value, str):
+        return value[:n]
+    if isinstance(value, (set, frozenset)):
+        return type(value)(list(value)[:n])
+    # For other iterables (generators, etc.), materialise and slice
+    try:
+        items = list(value)
+        return items[:n]
+    except TypeError:
+        return value
+
+
 # --- ReDoS Protection ---
 _MAX_REGEX_PATTERN_LENGTH = 1000
 # Detects nested quantifiers that can cause catastrophic backtracking.
