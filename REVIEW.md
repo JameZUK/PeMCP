@@ -1,15 +1,16 @@
 # PeMCP Project Review
 
-**Date**: 2026-02-16
-**Scope**: Full codebase review — architecture, code quality, security, testing, documentation
+**Date**: 2026-02-18
+**Scope**: Full codebase review — architecture, code quality, security, concurrency, testing, documentation
+**Tests**: 355 passed, 3 skipped (2.96s) on Python 3.11
 
 ---
 
 ## Executive Summary
 
-PeMCP is a well-engineered ~14.5K-line Python toolkit for multi-format binary analysis and malware research. It operates as both a CLI report generator and an MCP (Model Context Protocol) server exposing 105 specialized tools for AI assistants. The project demonstrates strong architectural decisions — per-session state isolation, graceful dependency degradation, smart response truncation, and disk-based analysis caching. Several areas warrant attention: regex input validation, test coverage for integration paths, and minor concurrency edge cases.
+PeMCP is a ~24,500-line Python toolkit for multi-format binary analysis (PE, ELF, Mach-O, .NET, Go, Rust, shellcode) that operates as both a CLI report generator and an MCP server exposing 113 specialized tools. The project demonstrates strong architectural decisions: per-session state isolation, graceful dependency degradation for 20+ optional libraries, smart response truncation, disk-based analysis caching, and Docker-first deployment with venv isolation for incompatible unicorn versions.
 
-**Overall Assessment**: Production-quality project with a mature, security-conscious design. The issues identified below are improvements rather than blockers.
+This review identified **25 issues**: 3 critical, 5 high, 10 medium, and 7 low severity. The most impactful are concurrency bugs in angr state management, a logic error in the Qiling runner, and an authentication gap on WebSocket scopes. The project's fundamentals are solid — these are targeted issues rather than systemic problems.
 
 ---
 
@@ -17,207 +18,281 @@ PeMCP is a well-engineered ~14.5K-line Python toolkit for multi-format binary an
 
 ### Strengths
 
-- **Clean modular separation**: `pemcp/parsers/` (format-specific parsing), `pemcp/mcp/` (105 MCP tools across 22 modules), `pemcp/cli/` (output formatting), and core modules (`state.py`, `cache.py`, `config.py`) are clearly separated by responsibility.
-- **Per-session state isolation** (`state.py:274-291`): `StateProxy` + `contextvars` transparently routes attribute access to the correct `AnalyzerState` for each MCP session. Stdio mode collapses to a singleton; HTTP mode creates isolated sessions. This is a strong pattern for concurrent client support.
-- **Graceful dependency degradation** (`config.py:58-467`): 20+ optional libraries are detected at startup with individual availability flags. Missing libraries produce clear error messages rather than crashes. This is essential for a tool with this many optional dependencies.
-- **Smart response truncation** (`server.py:107-220`): MCP responses are auto-truncated to fit 64KB limits using an iterative heuristic that finds the largest element and reduces it proportionally. This prevents silent failures when tools produce large results.
-- **Analysis caching** (`cache.py`): SHA256-keyed, gzip-compressed disk cache with LRU eviction, version-based invalidation, and throttled LRU timestamp updates. Re-opening a previously analyzed file loads in ~10ms instead of 5-30s.
-- **Background task management** (`background.py`): Long-running operations (angr CFG, symbolic execution) run asynchronously with progress tracking, heartbeat monitoring, and status polling via MCP tools.
+- **Clean modular separation**: `pemcp/parsers/` (format-specific parsing), `pemcp/mcp/` (113 tools across 25 modules), `pemcp/cli/` (output formatting), and core modules (`state.py`, `cache.py`, `config.py`) have clear responsibilities.
+- **Per-session state isolation** (`state.py:274-291`): `StateProxy` + `contextvars` transparently routes attribute access to the correct `AnalyzerState`. Stdio mode collapses to a singleton; HTTP mode creates isolated sessions.
+- **Graceful dependency degradation** (`config.py:58-467`): 20+ optional libraries are detected at startup with individual availability flags. Missing libraries produce clear error messages rather than crashes.
+- **Smart response truncation** (`server.py:107-220`): MCP responses are auto-truncated to 64KB using an iterative heuristic that finds the largest element and reduces it proportionally.
+- **Analysis caching** (`cache.py`): SHA256-keyed, gzip-compressed disk cache with LRU eviction and version-based invalidation. Re-opening a previously analyzed file loads in ~10ms instead of 5-30s.
+- **Background task management** (`background.py`): Long-running operations run asynchronously with progress tracking, heartbeat monitoring, and status polling.
+- **Dependency isolation**: Docker build uses three separate venvs to resolve unicorn version conflicts between angr (2.x), speakeasy (1.x), unipacker (1.x), and qiling (1.x).
 
 ### Observations
 
-- **String-based mode dispatch**: Mode strings (`"pe"`, `"elf"`, `"macho"`, `"shellcode"`) are compared throughout the codebase. An `enum.Enum` would provide IDE autocomplete, prevent typo bugs, and make the valid modes self-documenting. Low severity but would improve maintainability.
-- **`config.py` serves dual duty**: It handles both library availability detection and global singleton creation (state, cache). Splitting availability detection into a separate module would reduce the import-time side effects and make testing easier.
-- **Fallback classes for FLOSS** (`config.py:158-159`): `DebugLevelFallbackFloss` and `StringTypeFallbackFloss` use inline class attributes rather than proper `Enum` definitions. These work but lose the semantic benefits of enums.
+- **String-based mode dispatch**: Mode strings (`"pe"`, `"elf"`, `"macho"`, `"shellcode"`) are compared throughout the codebase. An `enum.Enum` would prevent typo bugs and provide IDE autocomplete.
+- **`config.py` serves dual duty**: It handles both library availability detection and global singleton creation. Splitting these would reduce import-time side effects.
+- **Deep dict nesting in `pe_data`**: A large nested dict accessed via `.get()` chains. A `TypedDict` or dataclass definition would catch key typos at type-check time.
 
 ---
 
-## 2. Security
+## 2. Critical Issues
 
-### Strengths
+### 2.1 Bug: `'maps' in dir()` always evaluates incorrectly — `scripts/qiling_runner.py:934`
 
-- **Constant-time token comparison** (`auth.py:35`): Uses `hmac.compare_digest()` to prevent timing side-channel attacks on Bearer tokens.
-- **Path sandboxing** (`state.py:83-98`): Enforces `--allowed-paths` with `os.path.realpath()` resolution to prevent path traversal. HTTP mode requires explicit `--allowed-paths` configuration.
-- **File permission enforcement**: Cache directory created with `mode=0o700` (`cache.py:69`), config files set to `chmod(0o600)` (`user_config.py:58`).
-- **Zip extraction validation** (`resources.py:72-77`): Validates that zip members don't escape the target directory (zip-slip prevention).
-- **File size limits** (`tools_pe.py:140-147`): Configurable upper bound (default 256MB) prevents memory exhaustion from oversized inputs.
-- **Session TTL cleanup** (`state.py:201-237`): Stale sessions auto-evict after 3600 seconds, preventing memory leaks from abandoned HTTP sessions.
-- **Concurrency semaphore** (`tools_pe.py:28`): Limits concurrent analyses to prevent resource exhaustion (configurable via `PEMCP_MAX_CONCURRENT_ANALYSES`).
+```python
+"memory_regions_scanned": len(maps) if 'maps' in dir() else 0,
+```
 
-### Issues
+`dir()` in a function returns local scope names, but if `maps` was never assigned before an exception, this will either find the name in the enclosing scope (wrong value) or raise `NameError` (because `dir()` may list it as a local but it's unbound). The intent is to check whether `maps` was assigned before the exception.
 
-1. **Unvalidated regex patterns** — `main.py:94` accepts arbitrary regex via `--regex` without pre-compilation or timeout. This is a ReDoS (Regular Expression Denial of Service) vector. Crafted patterns like `(a+)+b` can cause exponential backtracking. **Recommendation**: Pre-compile with `re.compile()` inside a try/except, and consider applying a timeout to regex operations on untrusted input.
+**Fix**: Use `'maps' in locals()` instead.
 
-2. **Path check uses `startswith()`** — `state.py:92`:
-   ```python
-   if resolved == allowed_resolved or resolved.startswith(allowed_resolved + os.sep):
-   ```
-   While `os.sep` is appended (preventing `/allowed/dir` matching `/allowed/dir_evil`), using `pathlib.Path.is_relative_to()` (Python 3.9+) would be more idiomatic and less error-prone.
+### 2.2 Race condition: `get_global_data_refs` bypasses angr state lock — `pemcp/mcp/tools_angr.py:952-956`
 
-3. **No cryptographic verification of downloaded rules** — `resources.py` downloads PEiD signatures, YARA rules, and capa rules from remote URLs without signature verification. In a malware analysis context, a compromised rule set could produce misleading results. **Recommendation**: Consider pinning expected checksums for downloaded rule archives.
+```python
+def _scan_refs():
+    if state.angr_project is None:
+        state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
+    if state.angr_cfg is None:
+        state.angr_cfg = state.angr_project.analyses.CFGFast(
+            normalize=True, collect_data_references=True)
+```
 
-4. **API key in environment variables**: `VT_API_KEY` and `PEMCP_API_KEY` can appear in process listings (`/proc/PID/environ`). The `user_config.py` persistent storage mitigates this partially, but documentation should recommend secret management approaches for production deployments.
+This directly assigns to `state.angr_project` and `state.angr_cfg` without using the `_angr_lock` or `set_angr_results()` method. A concurrent tool call could observe a partially updated state. Additionally, this builds a CFG with `collect_data_references=True`, silently replacing the standard CFG and potentially breaking other angr tools.
 
----
+**Fix**: Use `_init_lock` for serialization and `set_angr_results()` for atomic updates, or build a separate local CFG rather than replacing the shared one.
 
-## 3. Error Handling
+### 2.3 Unvalidated file paths in subprocess runner scripts
 
-### Strengths
+**Files**: `scripts/qiling_runner.py`, `scripts/speakeasy_runner.py`, `scripts/unipacker_runner.py`
 
-- **`_safe_parse` pattern** (`parsers/pe.py:42-49`): Wraps individual parser functions and returns error dicts instead of crashing the entire analysis pipeline. A single parser failure doesn't prevent other analyses from completing.
-- **Actionable error messages**: MCP tool errors include specific guidance. For example, `_check_pe_loaded()` tells the client to use `open_file`, and `_check_angr_ready()` tells the client to check `startup-angr` task status.
-- **Recovery from corrupt cache** (`cache.py:162-164`): Bad gzip or JSON in cache entries triggers automatic removal rather than persistent errors.
+The runner scripts read file paths from JSON on stdin and pass them directly to emulation engines without any path validation. While the parent MCP tool layer enforces `check_path_allowed()`, the subprocess scripts have no defense-in-depth. Direct invocation of these scripts (e.g., during development) bypasses all path restrictions.
 
-### Issues
-
-1. **Broad exception catches**: Several locations catch bare `Exception`:
-   - `main.py:355` during pre-loading
-   - `background.py:100-102` in task execution
-   - `state.py:151` during PE close
-
-   While this prevents server crashes, it can mask programming errors. **Recommendation**: Log the exception type at WARNING level for broad catches, and narrow where practical.
-
-2. **Incomplete cleanup on `open_file` failure** (`tools_pe.py:173-179`): If `open_file` fails after resetting state (line 175-178), the session is left with `pe_data=None` and `filepath=None` but no error record. A subsequent tool call would get a generic "no file loaded" error rather than knowing the last open attempt failed. **Recommendation**: Consider storing a brief error state in `pe_data` on failure.
-
-3. **Resource downloads lack integrity validation** (`resources.py:26-42`): Partial downloads (network interruption mid-transfer) are deleted, but there's no checksum verification of completed downloads. A truncated but valid gzip could pass through.
+**Fix**: Add basic file existence and path validation within each runner script.
 
 ---
 
-## 4. Code Quality
+## 3. High Severity Issues
 
-### Strengths
+### 3.1 `StateProxy.__setattr__` bypasses own `__dict__` — `pemcp/state.py:294-298`
 
-- **Consistent style**: CamelCase classes, snake_case functions, clear prefixes (`_parse_`, `_check_`, `_safe_parse`). The codebase reads uniformly.
-- **Comprehensive docstrings**: Most public functions have Args/Returns documentation. MCP tool docstrings serve double duty as user-facing tool descriptions.
-- **Type hints**: Good coverage across function signatures using `typing` module (`Dict`, `List`, `Optional`, `Any`). Class attributes are explicitly typed in `AnalyzerState`.
-- **Thread-safety**: State management uses per-resource locks (`_pe_lock`, `_angr_lock`, `_task_lock`) with clean lock scoping. The `_evict_old_tasks()` method is documented to require lock held.
+```python
+def __setattr__(self, name: str, value):
+    setattr(get_current_state(), name, value)
+```
 
-### Observations
+ALL attribute sets are delegated to the underlying `AnalyzerState`. Any future maintainer adding an instance attribute to `StateProxy` will silently set it on the proxied state instead.
 
-- **Deep dict nesting**: `pe_data` is a large nested dict accessed via chains of `.get()` calls. This works but is fragile — a typo in a key name silently returns `None`. `TypedDict` definitions or a dataclass for `pe_data` structure would catch these at type-check time.
-- **`_MAX_LIMIT = 100_000`** (`tools_pe.py:23`): This bounds `limit` parameters to prevent excessive memory allocation, which is good. However, individual tools should document this ceiling in their parameter descriptions so MCP clients know the constraint exists.
-- **Monolithic `main.py`** (468 lines): The argument parser definition, mode dispatching, and server startup are all in one file. Extracting the argparse setup into a builder function would improve readability.
+**Fix**: Use `object.__setattr__` for `StateProxy`'s own private attributes, or document the limitation prominently.
+
+### 3.2 Session state cleanup race — `pemcp/state.py:209-250`
+
+Stale session cleanup runs inside `get_or_create_session_state`, meaning one client's connection triggers cleanup of another's session. The cleanup calls `stale.close_pe()` outside the registry lock, creating a TOCTOU race: session keys based on `id(session)` can be reused by Python's memory allocator, potentially reactivating a stale session between `pop` and cleanup.
+
+**Fix**: Mark sessions as "closing" inside the lock, or use a separate periodic cleanup task.
+
+### 3.3 Concurrent modification of `state.pe_data` dict — `pemcp/mcp/tools_pe.py:240-260`
+
+In `open_file`, the shellcode loading path modifies `state.pe_data` in a background thread while FLOSS analysis (also threaded) later mutates the same dict. Since `pe_data` is a plain dict with no lock, concurrent tool calls during loading could see partially-written data.
+
+**Fix**: Assemble the complete dict in the background thread and assign atomically, or add a lock around `pe_data` mutations.
+
+### 3.4 `_evict_if_needed` fragile iteration pattern — `pemcp/cache.py:260-268`
+
+The eviction loop iterates over `sorted_entries` (derived from `meta.items()`) while deleting from `meta`. The sorted list is a copy so this is safe in CPython, but the pattern is fragile. More importantly, `_remove_entry` can fail silently (filesystem errors), leaving metadata inconsistent with the filesystem.
+
+**Fix**: Handle `_remove_entry` failures by skipping the metadata deletion for that entry.
+
+### 3.5 Authentication bypass on WebSocket scopes — `pemcp/auth.py:50`
+
+```python
+# Non-HTTP scopes (lifespan, websocket) pass through
+await self.app(scope, receive, send)
+```
+
+The `BearerAuthMiddleware` only checks `scope["type"] == "http"`. WebSocket connections bypass authentication entirely. If the MCP SDK or a future transport uses WebSocket upgrading, API key protection would be silently absent.
+
+**Fix**: Also validate `scope["type"] == "websocket"` by inspecting handshake headers.
 
 ---
 
-## 5. Testing
+## 4. Medium Severity Issues
+
+### 4.1 Lazy availability checks lack synchronization — `pemcp/config.py:366-444`
+
+`_check_speakeasy_available()`, `_check_unipacker_available()`, and `_check_qiling_available()` use a global flag pattern without thread synchronization. In HTTP mode, two threads could run the subprocess check simultaneously.
+
+**Fix**: Use a `threading.Lock` to ensure the check runs exactly once.
+
+### 4.2 Exception swallowing in emulation runners — `scripts/speakeasy_runner.py:64-67`
+
+```python
+try:
+    se.run_module(module, timeout=timeout_seconds)
+except Exception:
+    pass
+```
+
+All exceptions from emulation are silently swallowed, including `MemoryError` and `KeyboardInterrupt`. This makes debugging emulation failures extremely difficult.
+
+**Fix**: Catch specific expected exceptions, or at minimum log the exception to stderr.
+
+### 4.3 `_run_background_task_wrapper` injects unexpected keyword — `pemcp/background.py:92`
+
+```python
+kwargs['task_id_for_progress'] = task_id
+```
+
+This unconditionally injects `task_id_for_progress` into kwargs. If the wrapped function doesn't accept `**kwargs` or this specific parameter, a `TypeError` occurs at runtime.
+
+**Fix**: Inspect the function signature before injecting, or document this contract.
+
+### 4.4 Unpinned Docker base image — `Dockerfile:6`
+
+```dockerfile
+FROM python:3.11-bookworm
+```
+
+The comments explain how to pin by digest but the actual FROM line uses an unpinned tag. Builds are not reproducible.
+
+**Fix**: Pin by digest for production builds.
+
+### 4.5 `chmod -R 777` on directories — `Dockerfile:196, 249`
+
+World-writable directories are a security concern. While the rationale is documented (arbitrary UID via `--user`), this grants write access to any process in the container.
+
+**Fix**: Use `chmod -R 775` with a dedicated group.
+
+### 4.6 `open_file` does not close PE object on error path — `pemcp/mcp/tools_pe.py:408-411`
+
+When loading from cache, a `pefile.PE` object is created at line 226. If the function later fails, the exception handler sets `state.pe_object = None` without calling `.close()`, orphaning the PE object.
+
+**Fix**: Call `state.close_pe()` in the exception handler instead of just clearing the reference.
+
+### 4.7 Missing timeout for CFG builds under lock — `pemcp/mcp/_angr_helpers.py:83`
+
+```python
+cfg = project.analyses.CFGFast(normalize=True)
+```
+
+CFG construction can hang on pathological binaries. This runs inside `_init_lock`, blocking ALL angr-based tools across ALL sessions.
+
+**Fix**: Move CFG construction outside the lock (after project creation), or add a timeout mechanism.
+
+### 4.8 Task status tracked via plain strings — `pemcp/mcp/server.py:77`
+
+```python
+if startup_task and startup_task["status"] == "running":
+```
+
+No central enum or constant definition for status values. A typo would silently break the check.
+
+**Fix**: Define status constants as an enum or module-level constants.
+
+### 4.9 Duplicated `_safe_slice` function — three locations
+
+`_safe_slice` is duplicated in `scripts/qiling_runner.py:66`, `scripts/speakeasy_runner.py:18`, and `pemcp/mcp/tools_new_libs.py:92` with slightly different implementations. The runner script duplication is acceptable (isolated venvs), but the main package version should live in `pemcp/utils.py`.
+
+### 4.10 Duplicated registry hive creation code
+
+The `_create_minimal_registry_hive` function is duplicated between `Dockerfile:131-170` (inline Python) and `scripts/qiling_runner.py:948-1047` with different implementations.
+
+**Fix**: Extract into a standalone script and invoke from both locations.
+
+---
+
+## 5. Low Severity Issues
+
+### 5.1 CI coverage threshold at 60%
+
+For a security-focused tool analyzing untrusted binaries, 60% is low. Recommend gradually increasing to 80%.
+
+### 5.2 Ruff lint rules too narrow
+
+Only syntax errors and undefined names are checked (`E9,F63,F7,F82`). Common bugs like unused variables (F841) and unreachable code are not caught.
+
+**Fix**: Expand to include at least `F` (pyflakes) and `E` (pycodestyle) categories.
+
+### 5.3 `QL_INTERCEPT` import at module bottom — `scripts/qiling_runner.py:1054`
+
+The constant is imported at the bottom of the file but used at line 89. This works because it's called at runtime, not import time, but the ordering is misleading.
+
+### 5.4 Circular import concern in `cache.py:26-34`
+
+Lazy import of `pemcp.__version__` to avoid circular imports (`config.py` -> `cache.py` -> `__init__.py`). Consider a standalone `_version.py` module.
+
+### 5.5 Expensive truncation re-serialization — `pemcp/mcp/server.py:107-220`
+
+The size-checking function serializes to JSON, checks size, deep-copies, and re-serializes up to 5 times. For large responses this causes significant CPU/memory overhead.
+
+### 5.6 f-strings in logging calls — multiple files
+
+```python
+logger.warning(f"Failed to import: {CAPA_IMPORT_ERROR}")
+```
+
+The string formatting always happens even if the log level filters the message. Standard practice is `logger.warning("Failed: %s", err)`.
+
+### 5.7 Global analysis semaphore lacks per-session fairness — `pemcp/mcp/tools_pe.py:43`
+
+The analysis semaphore is shared across all HTTP sessions. One client could monopolize all slots while others hang indefinitely.
+
+---
+
+## 6. Testing
 
 ### Strengths
 
-- **276 unit tests** across 16 test files, running in ~2 seconds with no external dependencies (no server, no binaries, no heavy libraries required).
-- **Good marker system** (`pytest.ini`): Tests are categorized with markers (`no_file`, `pe_file`, `angr`, `optional_lib`, `unit`) for selective execution.
-- **Parametrized edge cases** (`test_parametrized.py`): Uses `@pytest.mark.parametrize` for systematic boundary testing.
-- **Concurrency testing** (`test_concurrency.py`): Validates thread-safety of state management.
-- **CI/CD pipeline** (`.github/workflows/ci.yml`): Runs on Python 3.10/3.11/3.12 with 60% coverage floor enforcement.
-- **Integration test suite** (`mcp_test_client.py`): 109KB end-to-end test client covering all 105 tools across 19 categories (requires running server).
+- **355 unit tests** across 19 files, running in ~3 seconds with no external dependencies.
+- **Good marker system** (`pytest.ini`): Tests categorized with markers (`no_file`, `pe_file`, `angr`, `optional_lib`, `unit`).
+- **Parametrized edge cases** (`test_parametrized.py`): Systematic boundary testing with 95+ parametrized cases.
+- **Concurrency testing** (`test_concurrency.py`): Thread-safety validation for state management.
+- **CI/CD pipeline**: GitHub Actions on Python 3.10/3.11/3.12 with coverage enforcement.
+- **Integration test suite** (`mcp_test_client.py`): 129 end-to-end tests covering all 113 tools.
 
 ### Gaps
 
-1. **Path sandboxing edge cases**: `check_path_allowed()` is tested for basic success/failure, but tests for symbolic links, relative traversal (`../..`), and Unicode path normalization would strengthen confidence in this security boundary.
-
-2. **Malformed binary resilience**: The parsers handle errors via `_safe_parse`, but there are no tests feeding deliberately malformed or adversarial binaries to verify the error-dict fallback actually works for every parser.
-
-3. **Cache concurrency**: `cache.py` uses threading locks and atomic file replacement, but there are no multi-threaded stress tests verifying cache integrity under concurrent reads/writes.
-
-4. **MCP response truncation**: The smart truncation logic (`server.py:107-220`) handles multiple data types and iterates up to 5 times. This deserves dedicated unit tests with oversized dicts, lists, strings, and nested structures.
+1. **Path sandboxing edge cases**: No tests for symbolic links, relative traversal (`../..`), or Unicode path normalization.
+2. **Malformed binary resilience**: No tests feeding adversarial binaries to verify `_safe_parse` fallback behavior.
+3. **Cache concurrency**: No multi-threaded stress tests for cache integrity under concurrent reads/writes.
+4. **Auth middleware**: No tests for WebSocket scope handling or edge cases in token comparison.
 
 ---
 
-## 6. Documentation
+## 7. Documentation
 
 ### Strengths
 
-- **Comprehensive README** (~42KB): Covers installation, usage, all 105 tools, Docker deployment, and configuration examples.
-- **TESTING.md**: Detailed guide for running unit and integration tests.
-- **DEPENDENCIES.md**: Documents the unicorn/speakeasy dependency conflict and its workaround — useful institutional knowledge.
-- **`.env.example`** and **`.mcp.json`**: Configuration templates reduce setup friction.
+- **Comprehensive README** (~44KB): Covers installation, all 113 tools, Docker deployment, and configuration.
+- **TESTING.md** (16KB): Detailed guide for running unit and integration tests.
+- **DEPENDENCIES.md** (14KB): Documents the unicorn version conflict and venv isolation solution.
+- **FastPrompt.txt**: Pre-built security analyst prompt for automated analysis workflow.
 
 ### Gaps
 
-- **Security hardening guide**: No documentation on recommended deployment practices — TLS termination proxy, network isolation, secret management, or least-privilege file system configuration.
-- **Architecture overview**: The `StateProxy` delegation pattern, session lifecycle, and cache invalidation strategy are well-implemented but undocumented. A brief architecture document would help new contributors.
+- **Security hardening guide**: No documentation on TLS termination, network isolation, or secret management for production deployments.
+- **Architecture document**: The `StateProxy` delegation pattern, session lifecycle, and cache invalidation strategy are well-implemented but not documented for contributors.
 
 ---
 
-## 7. Specific Findings
+## 8. Summary
 
-### 7.1 `state.py:92` — Path check improvement
+| Severity | Count | Key Issues |
+|----------|-------|------------|
+| **Critical** | 3 | `dir()` bug in qiling runner, angr state race condition, unvalidated runner paths |
+| **High** | 5 | StateProxy fragility, session cleanup race, pe_data mutation race, cache eviction, WebSocket auth bypass |
+| **Medium** | 10 | Lazy check synchronization, exception swallowing, background task injection, unpinned Docker image, PE leak on error, CFG timeout, others |
+| **Low** | 7 | Coverage threshold, lint rules, import ordering, circular imports, truncation cost, logging format, semaphore fairness |
+| **Total** | **25** | |
 
-```python
-# Current
-if resolved == allowed_resolved or resolved.startswith(allowed_resolved + os.sep):
+### Priority Recommendations
 
-# Recommended (Python 3.9+)
-if Path(resolved).is_relative_to(allowed_resolved):
-```
+1. **Fix the `'maps' in dir()` bug** in `qiling_runner.py` — will cause `NameError` on failure paths.
+2. **Add locking to `get_global_data_refs`** or use a separate local CFG — race condition that can silently corrupt shared angr state.
+3. **Validate WebSocket scopes** in `BearerAuthMiddleware` — authentication gap for HTTP transport mode.
+4. **Add a lock around `pe_data` mutations** during file loading — concurrent readers can see partial state.
+5. **Close PE objects on error paths** in `open_file` — resource leak.
+6. **Gradually expand test coverage** — target 80% and add edge-case tests for security boundaries.
 
-`is_relative_to()` is purpose-built for this check and avoids edge cases with string prefix matching.
+### Overall Assessment
 
-### 7.2 `cache.py:96` — Atomic write portability
-
-```python
-tmp.replace(META_FILE)  # atomic on POSIX
-```
-
-The comment correctly notes this is atomic on POSIX. On Windows, `replace()` is not atomic and can fail if the target is locked. Since PeMCP primarily targets Linux/Docker deployments, this is low risk, but worth noting for cross-platform use.
-
-### 7.3 `config.py:158-159` — Fallback class style
-
-```python
-class DebugLevelFallbackFloss: NONE, DEFAULT, TRACE, SUPERTRACE = 0, 1, 2, 3
-class StringTypeFallbackFloss: STATIC, STACK, TIGHT, DECODED = "static", "stack", "tight", "decoded"
-```
-
-These use tuple unpacking into class variables. While functional, `IntEnum` / `StrEnum` (Python 3.11+) would provide proper enum semantics and better IDE support.
-
-### 7.4 `tools_pe.py:162` — Fallback mode for unrecognized formats
-
-When auto-detection fails to match known magic bytes, the code falls back to PE mode:
-
-```python
-mode = "pe"  # fallback to PE, pefile will report errors if invalid
-```
-
-This is reasonable behavior with an appropriate warning to the client. The warning message at line 163-166 clearly tells the user to specify an explicit mode.
-
-### 7.5 `server.py:30` — Context extraction approach
-
-```python
-for arg in list(args) + list(kwargs.values()):
-    if isinstance(arg, Context):
-```
-
-Iterating over all arguments to find the Context object is pragmatic but fragile if a tool ever receives a non-Context argument that is an instance of Context. Since FastMCP guarantees Context is always passed, this is safe in practice.
-
-### 7.6 Session state inheritance (`state.py:221-228`)
-
-New HTTP sessions inherit pre-loaded file data from `_default_state` via direct attribute copying. This is a shared reference — both the new session and the default state point to the same `pe_object`. The `close_pe()` method at line 148 correctly checks for this:
-
-```python
-if self is _default_state or self.pe_object is not _default_state.pe_object:
-```
-
-This is a subtle but correctly handled ownership pattern.
-
----
-
-## 8. Summary of Recommendations
-
-| Priority | Issue | Location | Recommendation |
-|----------|-------|----------|----------------|
-| **High** | Unvalidated regex input | `main.py:94` | Pre-compile with try/except; add timeout for regex operations |
-| **Medium** | Path check uses `startswith()` | `state.py:92` | Use `Path.is_relative_to()` (Python 3.9+) |
-| **Medium** | No integrity check on downloaded rules | `resources.py` | Pin expected checksums for rule archives |
-| **Medium** | Missing truncation unit tests | `server.py:107-220` | Add parametrized tests for oversized responses |
-| **Medium** | Missing path sandboxing edge-case tests | `state.py:83-98` | Add symlink and Unicode path tests |
-| **Low** | Broad exception catches | Multiple files | Narrow exception types where practical |
-| **Low** | String-based mode dispatch | Multiple files | Consider `enum.Enum` for mode values |
-| **Low** | Fallback classes not using Enum | `config.py:158-159` | Use `IntEnum`/`StrEnum` for fallback types |
-| **Low** | `open_file` leaves no error state on failure | `tools_pe.py:173-179` | Store error summary in state on failure |
-| **Low** | Cache atomic write on Windows | `cache.py:96` | Document POSIX-only atomicity; add Windows note |
-
----
-
-## 9. Conclusion
-
-PeMCP is a well-structured, security-conscious project that successfully bridges AI assistants and low-level binary analysis. The architecture handles the inherent complexity of 27 dependencies, 105 tools, and multi-format support with clean patterns for isolation, caching, and degradation. The high-priority item (regex validation) should be addressed; the remaining items are quality improvements that would strengthen an already solid codebase.
+PeMCP is a well-engineered, feature-rich binary analysis platform. The 113-tool MCP interface, multi-format support, and Docker-first deployment model are substantial achievements. The architecture handles significant complexity (20+ optional libraries, incompatible dependency versions, concurrent multi-session access) with clean patterns. The critical and high issues are targeted concurrency and validation bugs rather than systemic design problems — they should be straightforward to address.
