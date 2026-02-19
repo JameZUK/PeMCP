@@ -8,6 +8,7 @@ import os
 import sys
 import logging
 import shutil
+import threading
 
 from pathlib import Path
 
@@ -362,86 +363,98 @@ SPEAKEASY_AVAILABLE = None  # None = not yet checked; will be lazy-checked
 SPEAKEASY_IMPORT_ERROR = ""
 _SPEAKEASY_VENV_PYTHON = Path("/app/speakeasy-venv/bin/python")
 _SPEAKEASY_RUNNER = DATA_DIR / "scripts" / "speakeasy_runner.py"
+_speakeasy_check_lock = threading.Lock()
 
 def _check_speakeasy_available():
     """Lazy check for Speakeasy availability. Called on first use."""
     global SPEAKEASY_AVAILABLE, SPEAKEASY_IMPORT_ERROR
     if SPEAKEASY_AVAILABLE is not None:
         return SPEAKEASY_AVAILABLE
-    if _SPEAKEASY_VENV_PYTHON.is_file() and _SPEAKEASY_RUNNER.is_file():
-        try:
-            import subprocess as _sp
-            _speakeasy_result = _sp.run(
-                [str(_SPEAKEASY_VENV_PYTHON), "-c", "import speakeasy"],
-                capture_output=True, timeout=10,
-            )
-            SPEAKEASY_AVAILABLE = _speakeasy_result.returncode == 0
-            if not SPEAKEASY_AVAILABLE:
-                SPEAKEASY_IMPORT_ERROR = f"speakeasy import failed in venv: {_speakeasy_result.stderr.decode()[:200]}"
-        except Exception as _e:
+    with _speakeasy_check_lock:
+        if SPEAKEASY_AVAILABLE is not None:
+            return SPEAKEASY_AVAILABLE
+        if _SPEAKEASY_VENV_PYTHON.is_file() and _SPEAKEASY_RUNNER.is_file():
+            try:
+                import subprocess as _sp
+                _speakeasy_result = _sp.run(
+                    [str(_SPEAKEASY_VENV_PYTHON), "-c", "import speakeasy"],
+                    capture_output=True, timeout=10,
+                )
+                SPEAKEASY_AVAILABLE = _speakeasy_result.returncode == 0
+                if not SPEAKEASY_AVAILABLE:
+                    SPEAKEASY_IMPORT_ERROR = f"speakeasy import failed in venv: {_speakeasy_result.stderr.decode()[:200]}"
+            except Exception as _e:
+                SPEAKEASY_AVAILABLE = False
+                SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv check failed: {_e}"
+        else:
             SPEAKEASY_AVAILABLE = False
-            SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv check failed: {_e}"
-    else:
-        SPEAKEASY_AVAILABLE = False
-        SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv not found (expected {_SPEAKEASY_VENV_PYTHON})"
-    return SPEAKEASY_AVAILABLE
+            SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv not found (expected {_SPEAKEASY_VENV_PYTHON})"
+        return SPEAKEASY_AVAILABLE
 
 UNIPACKER_AVAILABLE = None  # None = not yet checked; will be lazy-checked
 UNIPACKER_IMPORT_ERROR = ""
 _UNIPACKER_VENV_PYTHON = Path("/app/unipacker-venv/bin/python")
 _UNIPACKER_RUNNER = DATA_DIR / "scripts" / "unipacker_runner.py"
+_unipacker_check_lock = threading.Lock()
 
 def _check_unipacker_available():
     """Lazy check for Unipacker availability. Called on first use."""
     global UNIPACKER_AVAILABLE, UNIPACKER_IMPORT_ERROR
     if UNIPACKER_AVAILABLE is not None:
         return UNIPACKER_AVAILABLE
-    if _UNIPACKER_VENV_PYTHON.is_file() and _UNIPACKER_RUNNER.is_file():
-        try:
-            import subprocess as _sp
-            _unipacker_result = _sp.run(
-                [str(_UNIPACKER_VENV_PYTHON), "-c", "from unipacker.core import UnpackerClient"],
-                capture_output=True, timeout=10,
-            )
-            UNIPACKER_AVAILABLE = _unipacker_result.returncode == 0
-            if not UNIPACKER_AVAILABLE:
-                UNIPACKER_IMPORT_ERROR = f"unipacker import failed in venv: {_unipacker_result.stderr.decode()[:200]}"
-        except Exception as _e:
+    with _unipacker_check_lock:
+        if UNIPACKER_AVAILABLE is not None:
+            return UNIPACKER_AVAILABLE
+        if _UNIPACKER_VENV_PYTHON.is_file() and _UNIPACKER_RUNNER.is_file():
+            try:
+                import subprocess as _sp
+                _unipacker_result = _sp.run(
+                    [str(_UNIPACKER_VENV_PYTHON), "-c", "from unipacker.core import UnpackerClient"],
+                    capture_output=True, timeout=10,
+                )
+                UNIPACKER_AVAILABLE = _unipacker_result.returncode == 0
+                if not UNIPACKER_AVAILABLE:
+                    UNIPACKER_IMPORT_ERROR = f"unipacker import failed in venv: {_unipacker_result.stderr.decode()[:200]}"
+            except Exception as _e:
+                UNIPACKER_AVAILABLE = False
+                UNIPACKER_IMPORT_ERROR = f"Unipacker venv check failed: {_e}"
+        else:
             UNIPACKER_AVAILABLE = False
-            UNIPACKER_IMPORT_ERROR = f"Unipacker venv check failed: {_e}"
-    else:
-        UNIPACKER_AVAILABLE = False
-        UNIPACKER_IMPORT_ERROR = f"Unipacker venv not found (expected {_UNIPACKER_VENV_PYTHON})"
-    return UNIPACKER_AVAILABLE
+            UNIPACKER_IMPORT_ERROR = f"Unipacker venv not found (expected {_UNIPACKER_VENV_PYTHON})"
+        return UNIPACKER_AVAILABLE
 
 QILING_AVAILABLE = None  # None = not yet checked; will be lazy-checked
 QILING_IMPORT_ERROR = ""
 _QILING_VENV_PYTHON = Path("/app/qiling-venv/bin/python")
 _QILING_RUNNER = DATA_DIR / "scripts" / "qiling_runner.py"
 _QILING_DEFAULT_ROOTFS = Path("/app/qiling-rootfs")
+_qiling_check_lock = threading.Lock()
 
 def _check_qiling_available():
     """Lazy check for Qiling Framework availability. Called on first use."""
     global QILING_AVAILABLE, QILING_IMPORT_ERROR
     if QILING_AVAILABLE is not None:
         return QILING_AVAILABLE
-    if _QILING_VENV_PYTHON.is_file() and _QILING_RUNNER.is_file():
-        try:
-            import subprocess as _sp
-            _qiling_result = _sp.run(
-                [str(_QILING_VENV_PYTHON), "-c", "from qiling import Qiling"],
-                capture_output=True, timeout=15,
-            )
-            QILING_AVAILABLE = _qiling_result.returncode == 0
-            if not QILING_AVAILABLE:
-                QILING_IMPORT_ERROR = f"qiling import failed in venv: {_qiling_result.stderr.decode()[:200]}"
-        except Exception as _e:
+    with _qiling_check_lock:
+        if QILING_AVAILABLE is not None:
+            return QILING_AVAILABLE
+        if _QILING_VENV_PYTHON.is_file() and _QILING_RUNNER.is_file():
+            try:
+                import subprocess as _sp
+                _qiling_result = _sp.run(
+                    [str(_QILING_VENV_PYTHON), "-c", "from qiling import Qiling"],
+                    capture_output=True, timeout=15,
+                )
+                QILING_AVAILABLE = _qiling_result.returncode == 0
+                if not QILING_AVAILABLE:
+                    QILING_IMPORT_ERROR = f"qiling import failed in venv: {_qiling_result.stderr.decode()[:200]}"
+            except Exception as _e:
+                QILING_AVAILABLE = False
+                QILING_IMPORT_ERROR = f"Qiling venv check failed: {_e}"
+        else:
             QILING_AVAILABLE = False
-            QILING_IMPORT_ERROR = f"Qiling venv check failed: {_e}"
-    else:
-        QILING_AVAILABLE = False
-        QILING_IMPORT_ERROR = f"Qiling venv not found (expected {_QILING_VENV_PYTHON})"
-    return QILING_AVAILABLE
+            QILING_IMPORT_ERROR = f"Qiling venv not found (expected {_QILING_VENV_PYTHON})"
+        return QILING_AVAILABLE
 
 DOTNETFILE_AVAILABLE = False
 try:

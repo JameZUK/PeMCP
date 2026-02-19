@@ -9,8 +9,8 @@ class BearerAuthMiddleware:
     """ASGI middleware that requires a valid Bearer token on every HTTP request.
 
     Wraps the FastMCP ASGI app to enforce authentication before any MCP
-    processing occurs.  Non-HTTP ASGI events (lifespan, websocket) are
-    passed through unchanged.
+    processing occurs.  Both HTTP and WebSocket connections are validated.
+    Only lifespan events pass through without authentication.
 
     Uses ``hmac.compare_digest()`` for constant-time comparison to prevent
     timing side-channel attacks on the API key.
@@ -27,13 +27,17 @@ class BearerAuthMiddleware:
         self.api_key = api_key
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
+        if scope["type"] in ("http", "websocket"):
             headers = dict(scope.get("headers", []))
             auth_header = headers.get(b"authorization", b"").decode("utf-8", "ignore")
             expected = f"Bearer {self.api_key}"
             # Constant-time comparison to prevent timing side-channel attacks
             if not hmac.compare_digest(auth_header, expected):
-                logger.warning("Rejected unauthenticated HTTP request")
+                logger.warning("Rejected unauthenticated %s request", scope["type"])
+                if scope["type"] == "websocket":
+                    # Reject WebSocket upgrade with a close code
+                    await send({"type": "websocket.close", "code": 4003})
+                    return
                 await send({
                     "type": "http.response.start",
                     "status": 401,
@@ -47,5 +51,5 @@ class BearerAuthMiddleware:
                     "body": b'{"error": "Unauthorized. Provide a valid Bearer token via the Authorization header."}',
                 })
                 return
-        # Non-HTTP scopes (lifespan, websocket) or authenticated requests pass through
+        # Lifespan scopes or authenticated requests pass through
         await self.app(scope, receive, send)

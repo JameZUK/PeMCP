@@ -89,28 +89,7 @@ def _check_lib(lib_name: str, available: bool, tool_name: str):
         )
 
 
-def _safe_slice(value, n):
-    """Safely slice a value to at most *n* items.
-
-    Speakeasy report fields may be lists, dicts, or other types.
-    Slicing a dict raises ``TypeError: unhashable type: 'slice'``,
-    so we handle each type explicitly.
-    """
-    if isinstance(value, (list, tuple)):
-        return value[:n]
-    if isinstance(value, dict):
-        keys = list(value.keys())[:n]
-        return {k: value[k] for k in keys}
-    if isinstance(value, str):
-        return value[:n]
-    if isinstance(value, (set, frozenset)):
-        return type(value)(list(value)[:n])
-    # For other iterables (generators, etc.), materialise and slice
-    try:
-        items = list(value)
-        return items[:n]
-    except TypeError:
-        return value
+from pemcp.utils import _safe_slice  # noqa: E402 — canonical implementation in utils.py
 
 
 # ===================================================================

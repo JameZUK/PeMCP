@@ -19,6 +19,11 @@ MAX_COMPLETED_TASKS = 50
 # Stale session TTL in seconds (1 hour).
 SESSION_TTL_SECONDS = 3600
 
+# Task status constants — use these instead of raw strings to prevent typo bugs.
+TASK_RUNNING = "running"
+TASK_COMPLETED = "completed"
+TASK_FAILED = "failed"
+
 
 class AnalyzerState:
     """Per-session state for a single analyzed file."""
@@ -110,7 +115,7 @@ class AnalyzerState:
         """
         finished = [
             (tid, t) for tid, t in self.background_tasks.items()
-            if t.get("status") in ("completed", "failed")
+            if t.get("status") in (TASK_COMPLETED, TASK_FAILED)
         ]
         if len(finished) <= MAX_COMPLETED_TASKS:
             return
@@ -208,14 +213,19 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
 
     stale_to_cleanup = []
     with _registry_lock:
-        # Collect stale sessions
+        # Collect stale sessions — mark them as closing inside the lock
+        # to prevent TOCTOU races with session key reuse.
         now = time.time()
         stale_keys = [
             key for key, st in _session_registry.items()
             if (now - st.last_active) > SESSION_TTL_SECONDS
         ]
         for key in stale_keys:
-            stale_to_cleanup.append(_session_registry.pop(key))
+            stale_session = _session_registry.pop(key)
+            # Mark as closing so it cannot be reactivated if the id()
+            # is reused by Python's memory allocator.
+            stale_session.last_active = 0
+            stale_to_cleanup.append(stale_session)
 
         if session_key not in _session_registry:
             new_state = AnalyzerState()
@@ -289,13 +299,22 @@ class StateProxy:
     In stdio mode the default state is used.  In HTTP mode the per-session
     state set by the tool decorator is used.  All existing code that does
     ``state.pe_data``, ``state.filepath = ...``, etc. works unchanged.
+
+    Note: ``__setattr__`` delegates ALL attribute sets to the underlying
+    ``AnalyzerState``.  If you need to store private attributes on the proxy
+    itself, use ``object.__setattr__(self, name, value)`` explicitly.
     """
 
     def __getattr__(self, name: str):
         return getattr(get_current_state(), name)
 
     def __setattr__(self, name: str, value):
-        setattr(get_current_state(), name, value)
+        # Allow StateProxy's own private attributes (prefixed with _proxy_)
+        # to be stored on the proxy instance itself rather than delegating.
+        if name.startswith("_proxy_"):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(get_current_state(), name, value)
 
     def __repr__(self):
         current = get_current_state()

@@ -262,7 +262,13 @@ class AnalysisCache:
             if total_size <= self.max_size_bytes:
                 break
             size = meta[sha].get("size_bytes", 0)
-            self._remove_entry(sha)
+            try:
+                self._remove_entry(sha)
+            except Exception as e:
+                # If filesystem removal fails, skip this entry to keep
+                # metadata consistent with what's actually on disk.
+                logger.warning("Cache eviction skipped %s: %s", sha[:12], e)
+                continue
             total_size -= size
             del meta[sha]
             evicted += 1
