@@ -69,19 +69,35 @@ def _ensure_project_and_cfg():
     Uses a module-level lock to prevent concurrent callers from both
     creating separate ``angr.Project`` instances (expensive) when the
     first caller has not yet stored its result.
+
+    CFG construction is performed outside the lock to avoid blocking ALL
+    angr-based tools across ALL sessions when a pathological binary causes
+    the CFGFast analysis to hang.
     """
     with _init_lock:
         project, cfg = state.get_angr_snapshot()
         if project is None:
             project = angr.Project(state.filepath, auto_load_libs=False)
             state.set_angr_results(project, None, state.angr_loop_cache, state.angr_loop_cache_config)
-        if cfg is None:
+        need_cfg = cfg is None
+
+    if need_cfg:
+        with _init_lock:
+            # Re-check under lock — another thread may have built the CFG
+            project, cfg = state.get_angr_snapshot()
+            if cfg is not None:
+                return
             if state.angr_hooks:
                 _rebuild_project_with_hooks()
                 project, cfg = state.get_angr_snapshot()
-            if cfg is None:
-                cfg = project.analyses.CFGFast(normalize=True)
-                state.set_angr_results(project, cfg, state.angr_loop_cache, state.angr_loop_cache_config)
+        if cfg is None:
+            # Build CFG outside the lock to avoid blocking other tools
+            new_cfg = project.analyses.CFGFast(normalize=True)
+            with _init_lock:
+                # Only store if no other thread beat us to it
+                _, existing_cfg = state.get_angr_snapshot()
+                if existing_cfg is None:
+                    state.set_angr_results(project, new_cfg, state.angr_loop_cache, state.angr_loop_cache_config)
 
 
 def _parse_addr(hex_string: str, name: str = "address") -> int:

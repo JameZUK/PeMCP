@@ -1,9 +1,8 @@
 # --- Base Image ---
-# For reproducible production builds, pin by digest:
+# Pinned by digest for reproducible builds.  To update:
 #   docker pull python:3.11-bookworm
 #   docker inspect python:3.11-bookworm --format='{{index .RepoDigests 0}}'
-# Then replace the FROM line with: FROM python:3.11-bookworm@sha256:<digest>
-FROM python:3.11-bookworm
+FROM python:3.11-bookworm@sha256:8e216665dcf37c1498da01c218fa27e12ccb87c71e51dcf779b5d7f8a9b9d57b
 
 # --- Set Working Directory ---
 WORKDIR /app
@@ -100,8 +99,13 @@ RUN python -m venv /app/qiling-venv && \
 # IMPORTANT: Rootfs content lives in the dedicated qilingframework/rootfs
 # repository, NOT in the main qiling repo (where examples/rootfs/ is a git
 # submodule that GitHub archive zips do not include).
+
+# Copy the registry hive script early so the rootfs setup can use it.
+# (Full scripts/ COPY happens later to preserve Docker layer caching.)
+COPY scripts/create_registry_hives.py /app/scripts/create_registry_hives.py
+
 RUN python <<'PYEOF'
-import urllib.request, zipfile, os, shutil, pathlib
+import urllib.request, zipfile, os, sys, shutil, pathlib
 rootfs_dir = pathlib.Path("/app/qiling-rootfs")
 rootfs_dir.mkdir(exist_ok=True)
 url = "https://github.com/qilingframework/rootfs/archive/refs/heads/master.zip"
@@ -124,60 +128,11 @@ with zipfile.ZipFile(zip_path, 'r') as zf:
                 dst.write(src.read())
 os.remove(zip_path)
 
-# Windows rootfs needs registry hive files that the repo cannot legally
-# distribute.  Generate minimal valid stubs (regf format with an empty
-# root key) so Qiling's RegistryManager can initialise.
-import struct
-def _create_minimal_hive():
-    base = bytearray(4096)
-    base[0:4] = b'regf'
-    struct.pack_into('<I', base, 0x04, 1)
-    struct.pack_into('<I', base, 0x08, 1)
-    struct.pack_into('<I', base, 0x14, 1)
-    struct.pack_into('<I', base, 0x18, 5)
-    struct.pack_into('<I', base, 0x20, 1)
-    struct.pack_into('<I', base, 0x24, 0x20)
-    struct.pack_into('<I', base, 0x28, 0x1000)
-    struct.pack_into('<I', base, 0x2C, 1)
-    ck = 0
-    for i in range(0, 0x1FC, 4):
-        ck ^= struct.unpack_from('<I', base, i)[0]; ck &= 0xFFFFFFFF
-    struct.pack_into('<I', base, 0x1FC, ck)
-    hbin = bytearray(4096)
-    hbin[0:4] = b'hbin'
-    struct.pack_into('<I', hbin, 0x08, 0x1000)
-    # Root key cell: [size:4][nk record...]
-    # nk record starts at co+4; field offsets are from nk start
-    co = 0x20
-    nk = co + 4
-    kn = b'CMI-CreateHive{00000000-0000-0000-0000-000000000000}'
-    ct = (4 + 0x4C + len(kn) + 7) & ~7  # cell size + nk header + name
-    struct.pack_into('<i', hbin, co, -ct)
-    hbin[nk:nk+2] = b'nk'
-    struct.pack_into('<H', hbin, nk+0x02, 0x24)
-    struct.pack_into('<I', hbin, nk+0x10, 0xFFFFFFFF)  # parent
-    struct.pack_into('<I', hbin, nk+0x1C, 0xFFFFFFFF)  # stable subkey list
-    struct.pack_into('<I', hbin, nk+0x20, 0xFFFFFFFF)  # volatile subkey list
-    struct.pack_into('<I', hbin, nk+0x28, 0xFFFFFFFF)  # value list
-    struct.pack_into('<I', hbin, nk+0x2C, 0xFFFFFFFF)  # security desc
-    struct.pack_into('<I', hbin, nk+0x30, 0xFFFFFFFF)  # class name
-    struct.pack_into('<H', hbin, nk+0x48, len(kn))     # key name length
-    struct.pack_into('<H', hbin, nk+0x4A, 0)           # class name length
-    hbin[nk+0x4C:nk+0x4C+len(kn)] = kn
-    fo = co + ct
-    fs = 0x1000 - fo
-    if fs > 4: struct.pack_into('<i', hbin, fo, fs)
-    return bytes(base + hbin)
-
-hive_data = _create_minimal_hive()
-for win_dir in ["x86_windows", "x8664_windows"]:
-    reg_dir = rootfs_dir / win_dir / "Windows" / "registry"
-    reg_dir.mkdir(parents=True, exist_ok=True)
-    for hive in ["NTUSER.DAT", "SAM", "SECURITY", "SOFTWARE", "SYSTEM", "HARDWARE"]:
-        hive_path = reg_dir / hive
-        if not hive_path.exists():
-            hive_path.write_bytes(hive_data)
-            print(f"  Created registry stub: {win_dir}/Windows/registry/{hive}")
+# Create registry hive stubs using the shared script
+# (canonical implementation lives in scripts/create_registry_hives.py)
+sys.path.insert(0, "/app/scripts")
+from create_registry_hives import ensure_registry_hives
+ensure_registry_hives(str(rootfs_dir))
 
 # Verify key rootfs directories exist and have content.
 # NOTE: Windows DLLs are NOT included — users must provide them from a real
@@ -191,9 +146,10 @@ for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
         print(f"  rootfs MISSING or EMPTY: {d}")
 PYEOF
 
-# Make rootfs world-writable so the runtime registry-stub generator and
+# Make rootfs group-writable so the runtime registry-stub generator and
 # user-mounted rootfs volumes work when the container runs as a non-root UID.
-RUN chmod -R 777 /app/qiling-rootfs
+# Using 775 with a dedicated group instead of world-writable 777.
+RUN groupadd -r pemcp && chmod -R 775 /app/qiling-rootfs && chgrp -R pemcp /app/qiling-rootfs
 
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
@@ -242,11 +198,9 @@ COPY FastPrompt.txt .
 
 # --- Create writable home directory for runtime data ---
 # run.sh passes --user "$(id -u):$(id -g)" so the container runs as the
-# host user.  HOME is set to /app/home which is world-readable/executable
-# so any UID can create ~/.pemcp/cache and config.json inside it.
-# 777 is intentional: the container runs as an arbitrary non-root UID
-# (via --user) so the directory must be world-writable.
-RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
+# host user.  HOME is set to /app/home which is group-writable so any
+# UID in the pemcp group can create ~/.pemcp/cache and config.json.
+RUN mkdir -p /app/home/.pemcp/cache && chgrp -R pemcp /app/home && chmod -R 775 /app/home
 
 # --- Declare volumes ---
 # Persistent cache and configuration

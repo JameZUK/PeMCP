@@ -63,6 +63,21 @@ def _ql_os(os_str):
 #  Helpers
 # ---------------------------------------------------------------------------
 
+def _validate_file_path(filepath):
+    """Validate that a file path exists and is a regular file.
+
+    Defense-in-depth: the parent MCP tool layer enforces path sandboxing,
+    but direct invocation of this runner (e.g. during development) would
+    bypass those checks.
+    """
+    if not filepath:
+        raise ValueError("No file path provided")
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"File not found: {filepath}")
+    if not os.path.isfile(filepath):
+        raise ValueError(f"Path is not a regular file: {filepath}")
+
+
 def _safe_slice(value, n):
     """Safely slice a value to at most *n* items."""
     if isinstance(value, (list, tuple)):
@@ -286,6 +301,7 @@ def _find_rootfs(os_type, arch, rootfs_path):
 def emulate_binary(cmd):
     """Full binary emulation with behavioral report."""
     filepath = cmd["filepath"]
+    _validate_file_path(filepath)
     rootfs_path = cmd.get("rootfs_path")
     timeout_seconds = cmd.get("timeout_seconds", 60)
     max_instructions = cmd.get("max_instructions", 0)
@@ -374,6 +390,7 @@ def emulate_shellcode(cmd):
     if shellcode_hex:
         sc_data = bytes.fromhex(shellcode_hex)
     elif filepath:
+        _validate_file_path(filepath)
         with open(filepath, "rb") as f:
             sc_data = f.read()
     else:
@@ -426,6 +443,7 @@ def emulate_shellcode(cmd):
 def trace_execution(cmd):
     """Instruction-level execution tracing."""
     filepath = cmd["filepath"]
+    _validate_file_path(filepath)
     rootfs_path = cmd.get("rootfs_path")
     start_address = cmd.get("start_address")
     end_address = cmd.get("end_address")
@@ -506,6 +524,7 @@ def trace_execution(cmd):
 def hook_api_calls(cmd):
     """Targeted API/syscall hooking with argument capture."""
     filepath = cmd["filepath"]
+    _validate_file_path(filepath)
     rootfs_path = cmd.get("rootfs_path")
     target_apis = cmd.get("target_apis", [])
     timeout_seconds = cmd.get("timeout_seconds", 60)
@@ -583,6 +602,7 @@ def hook_api_calls(cmd):
 def dump_unpacked(cmd):
     """Dynamic unpacking: run binary until OEP, then dump memory."""
     filepath = cmd["filepath"]
+    _validate_file_path(filepath)
     rootfs_path = cmd.get("rootfs_path")
     output_path = cmd["output_path"]
     dump_address = cmd.get("dump_address")
@@ -675,6 +695,7 @@ def dump_unpacked(cmd):
 def resolve_api_hashes(cmd):
     """Resolve API hash values by emulating hash computation routines."""
     filepath = cmd["filepath"]
+    _validate_file_path(filepath)
     rootfs_path = cmd.get("rootfs_path")
     hash_values = cmd.get("hash_values", [])
     hash_algorithm = cmd.get("hash_algorithm", "ror13")
@@ -840,6 +861,7 @@ def resolve_api_hashes(cmd):
 def memory_search(cmd):
     """Run binary then search process memory for patterns."""
     filepath = cmd["filepath"]
+    _validate_file_path(filepath)
     rootfs_path = cmd.get("rootfs_path")
     search_patterns = cmd.get("search_patterns", [])
     search_hex = cmd.get("search_hex")
@@ -931,7 +953,7 @@ def memory_search(cmd):
         "search_patterns": search_patterns,
         "search_hex": search_hex,
         "instructions_executed": max_instructions,
-        "memory_regions_scanned": len(maps) if 'maps' in dir() else 0,
+        "memory_regions_scanned": len(maps) if 'maps' in locals() else 0,
         "total_matches": len(matches),
         "matches": _safe_slice(matches, limit),
     }
@@ -944,86 +966,9 @@ def memory_search(cmd):
 #  Windows rootfs helpers (registry hive stubs)
 # ---------------------------------------------------------------------------
 
-
-def _create_minimal_registry_hive():
-    """Create a minimal valid Windows registry hive (regf format).
-
-    Qiling's RegistryManager requires NTUSER.DAT, SAM, SECURITY, SOFTWARE,
-    and SYSTEM hive files to initialise Windows emulation.  The official
-    qilingframework/rootfs repo cannot legally ship these (they contain
-    Microsoft IP), so we generate minimal-but-structurally-valid stubs.
-
-    The hive contains only a root key node with no subkeys or values —
-    enough for Qiling to open and parse the file without crashing.
-    """
-    # === Base block (regf header, 4096 bytes) ===
-    base = bytearray(4096)
-    base[0:4] = b'regf'
-    struct.pack_into('<I', base, 0x04, 1)        # primary sequence
-    struct.pack_into('<I', base, 0x08, 1)        # secondary sequence
-    struct.pack_into('<Q', base, 0x0C, 0)        # timestamp
-    struct.pack_into('<I', base, 0x14, 1)        # major version
-    struct.pack_into('<I', base, 0x18, 5)        # minor version (≥XP)
-    struct.pack_into('<I', base, 0x1C, 0)        # type: primary
-    struct.pack_into('<I', base, 0x20, 1)        # format: direct memory load
-    struct.pack_into('<I', base, 0x24, 0x20)     # root cell offset (in first hbin)
-    struct.pack_into('<I', base, 0x28, 0x1000)   # hive bins data size
-    struct.pack_into('<I', base, 0x2C, 1)        # clustering factor
-    # Checksum: XOR of first 127 DWORDs (offsets 0x000–0x1F8)
-    cksum = 0
-    for i in range(0, 0x1FC, 4):
-        cksum ^= struct.unpack_from('<I', base, i)[0]
-        cksum &= 0xFFFFFFFF
-    struct.pack_into('<I', base, 0x1FC, cksum)
-
-    # === First hive bin (hbin, 4096 bytes) ===
-    hbin = bytearray(4096)
-    hbin[0:4] = b'hbin'
-    struct.pack_into('<I', hbin, 0x04, 0)        # offset from data start
-    struct.pack_into('<I', hbin, 0x08, 0x1000)   # block size
-
-    # --- Root key cell at data offset 0x20 within hbin ---
-    # Cell layout: [size:4][nk record...]
-    # NK record layout (offsets from nk start, i.e. cell_start + 4):
-    #   +0x00 sig(2) +0x02 flags(2) +0x04 timestamp(8) +0x0C spare(4)
-    #   +0x10 parent(4) +0x14 stable_subkeys(4) +0x18 volatile_subkeys(4)
-    #   +0x1C stable_list(4) +0x20 volatile_list(4) +0x24 value_count(4)
-    #   +0x28 value_list(4) +0x2C security(4) +0x30 class_name(4)
-    #   +0x34 max_subkey_name(4) +0x38 max_subkey_class(4)
-    #   +0x3C max_value_name(4) +0x40 max_value_data(4) +0x44 workvar(4)
-    #   +0x48 key_name_len(2) +0x4A class_name_len(2) +0x4C key_name(var)
-    co = 0x20  # cell offset within hbin
-    nk = co + 4  # nk record starts after 4-byte cell size
-    key_name = b'CMI-CreateHive{00000000-0000-0000-0000-000000000000}'
-    nk_header_size = 0x4C  # fixed nk header before key name
-    cell_data = 4 + nk_header_size + len(key_name)  # size + header + name
-    cell_total = (cell_data + 7) & ~7  # align to 8 bytes
-    struct.pack_into('<i', hbin, co, -cell_total)  # negative = allocated
-    hbin[nk:nk+2] = b'nk'                          # +0x00 signature
-    struct.pack_into('<H', hbin, nk + 0x02, 0x24)  # +0x02 KEY_HIVE_ENTRY|KEY_COMP_NAME
-    struct.pack_into('<Q', hbin, nk + 0x04, 0)     # +0x04 timestamp
-    # +0x0C spare left as 0
-    struct.pack_into('<I', hbin, nk + 0x10, 0xFFFFFFFF)  # +0x10 parent (none)
-    struct.pack_into('<I', hbin, nk + 0x14, 0)     # +0x14 stable subkey count
-    struct.pack_into('<I', hbin, nk + 0x18, 0)     # +0x18 volatile subkey count
-    struct.pack_into('<I', hbin, nk + 0x1C, 0xFFFFFFFF)  # +0x1C stable subkey list
-    struct.pack_into('<I', hbin, nk + 0x20, 0xFFFFFFFF)  # +0x20 volatile subkey list
-    struct.pack_into('<I', hbin, nk + 0x24, 0)     # +0x24 value count
-    struct.pack_into('<I', hbin, nk + 0x28, 0xFFFFFFFF)  # +0x28 value list
-    struct.pack_into('<I', hbin, nk + 0x2C, 0xFFFFFFFF)  # +0x2C security descriptor
-    struct.pack_into('<I', hbin, nk + 0x30, 0xFFFFFFFF)  # +0x30 class name offset
-    # +0x34..0x44 max lengths and workvar left as 0
-    struct.pack_into('<H', hbin, nk + 0x48, len(key_name))  # +0x48 key name length
-    struct.pack_into('<H', hbin, nk + 0x4A, 0)     # +0x4A class name length
-    hbin[nk + 0x4C:nk + 0x4C + len(key_name)] = key_name  # +0x4C key name
-
-    # Free-space cell fills the remainder of the hbin
-    free_off = co + cell_total
-    free_size = 0x1000 - free_off
-    if free_size > 4:
-        struct.pack_into('<i', hbin, free_off, free_size)  # positive = free
-
-    return bytes(base + hbin)
+# Import the canonical implementation from the shared script.
+# Both the Dockerfile and this runner use the same code.
+from create_registry_hives import create_minimal_registry_hive as _create_minimal_registry_hive
 
 
 def _ensure_windows_registry(target_dir):

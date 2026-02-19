@@ -1,5 +1,6 @@
 """Background task management: heartbeat monitoring, progress tracking, async wrappers."""
 import datetime
+import inspect
 import sys
 import time
 import asyncio
@@ -7,7 +8,10 @@ import threading
 import logging
 
 from pemcp.config import state, logger
-from pemcp.state import get_current_state, set_current_state, get_all_session_states
+from pemcp.state import (
+    get_current_state, set_current_state, get_all_session_states,
+    TASK_RUNNING, TASK_COMPLETED, TASK_FAILED,
+)
 
 # Global lock and flag for the heartbeat monitor thread (shared across sessions)
 _monitor_lock = threading.Lock()
@@ -29,7 +33,7 @@ def _console_heartbeat_loop():
         for session_state in get_all_session_states():
             for task_id in session_state.get_all_task_ids():
                 task = session_state.get_task(task_id)
-                if task and task["status"] == "running":
+                if task and task["status"] == TASK_RUNNING:
                     running_entries.append((task_id, task))
 
         if running_entries:
@@ -88,22 +92,28 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
         return func(*args, **kwargs)
 
     try:
-        # Inject the task_id into the function if it accepts 'task_id_for_progress'
-        kwargs['task_id_for_progress'] = task_id
+        # Inject the task_id only if the function accepts it (via explicit
+        # parameter or **kwargs) to avoid TypeError for functions that don't.
+        sig = inspect.signature(func)
+        params = sig.parameters
+        if 'task_id_for_progress' in params or any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+        ):
+            kwargs['task_id_for_progress'] = task_id
 
         result = await asyncio.to_thread(_thread_wrapper)
 
-        state.update_task(task_id, result=result, status="completed",
+        state.update_task(task_id, result=result, status=TASK_COMPLETED,
                           progress_percent=100, progress_message="Analysis complete.")
         print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
 
     except (OSError, RuntimeError, ValueError, TypeError) as e:
         logger.error(f"Background task {task_id} failed: {type(e).__name__}: {e}", exc_info=True)
-        state.update_task(task_id, error=str(e), status="failed")
+        state.update_task(task_id, error=str(e), status=TASK_FAILED)
         print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
     except Exception as e:
         logger.error(f"Background task {task_id} failed unexpectedly: {type(e).__name__}: {e}", exc_info=True)
-        state.update_task(task_id, error=str(e), status="failed")
+        state.update_task(task_id, error=str(e), status=TASK_FAILED)
         print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
 
 
@@ -168,7 +178,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         # 4. Mark Complete
         state.update_task(
             task_id,
-            status="completed",
+            status=TASK_COMPLETED,
             result={"message": "Analysis ready."},
             progress_percent=100,
             progress_message="Background analysis complete.",
@@ -177,11 +187,11 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
     except (OSError, RuntimeError, ValueError) as e:
         logger.error(f"Background Angr analysis failed: {type(e).__name__}: {e}", exc_info=True)
-        state.update_task(task_id, status="failed", error=str(e))
+        state.update_task(task_id, status=TASK_FAILED, error=str(e))
         _update_progress(task_id, 0, f"Failed: {e}")
     except Exception as e:
         logger.error(f"Background Angr analysis failed unexpectedly: {type(e).__name__}: {e}", exc_info=True)
-        state.update_task(task_id, status="failed", error=str(e))
+        state.update_task(task_id, status=TASK_FAILED, error=str(e))
         _update_progress(task_id, 0, f"Failed: {e}")
 
 
@@ -198,7 +208,7 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
     _session_state = get_current_state()
 
     state.set_task(task_id, {
-        "status": "running",
+        "status": TASK_RUNNING,
         "progress_percent": 0,
         "progress_message": "Starting background pre-analysis...",
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
