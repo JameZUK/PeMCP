@@ -1,8 +1,9 @@
 # --- Base Image ---
-# Pinned by digest for reproducible builds.  To update:
+# For reproducible production builds, pin by digest:
 #   docker pull python:3.11-bookworm
 #   docker inspect python:3.11-bookworm --format='{{index .RepoDigests 0}}'
-FROM python:3.11-bookworm@sha256:8e216665dcf37c1498da01c218fa27e12ccb87c71e51dcf779b5d7f8a9b9d57b
+# Then replace the FROM line with: FROM python:3.11-bookworm@sha256:<digest>
+FROM python:3.11-bookworm
 
 # --- Set Working Directory ---
 WORKDIR /app
@@ -146,10 +147,11 @@ for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
         print(f"  rootfs MISSING or EMPTY: {d}")
 PYEOF
 
-# Make rootfs group-writable so the runtime registry-stub generator and
+# Make rootfs world-writable so the runtime registry-stub generator and
 # user-mounted rootfs volumes work when the container runs as a non-root UID.
-# Using 775 with a dedicated group instead of world-writable 777.
-RUN groupadd -r pemcp && chmod -R 775 /app/qiling-rootfs && chgrp -R pemcp /app/qiling-rootfs
+# 777 is required because run.sh passes --user "$(id -u):$(id -g)" with an
+# arbitrary host UID/GID that cannot be predicted at build time.
+RUN chmod -R 777 /app/qiling-rootfs
 
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
@@ -198,9 +200,11 @@ COPY FastPrompt.txt .
 
 # --- Create writable home directory for runtime data ---
 # run.sh passes --user "$(id -u):$(id -g)" so the container runs as the
-# host user.  HOME is set to /app/home which is group-writable so any
-# UID in the pemcp group can create ~/.pemcp/cache and config.json.
-RUN mkdir -p /app/home/.pemcp/cache && chgrp -R pemcp /app/home && chmod -R 775 /app/home
+# host user.  HOME is set to /app/home which is world-readable/executable
+# so any UID can create ~/.pemcp/cache and config.json inside it.
+# 777 is required because the arbitrary host UID cannot be predicted at
+# build time.  This is safe because the container is single-tenant.
+RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
 
 # --- Declare volumes ---
 # Persistent cache and configuration
