@@ -106,8 +106,11 @@ common_args() {
 # --- Commands ---
 cmd_http() {
     ensure_image
+    local pemcp_vol_path
+    pemcp_vol_path=$($RUNTIME volume inspect pemcp-data --format '{{.Mountpoint}}' 2>/dev/null || echo "pemcp-data (named volume)")
     echo "[*] Starting PeMCP HTTP server on port $CONTAINER_PORT..."
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)"
+    echo "[*] Config/cache (.pemcp): $pemcp_vol_path"
     echo "[*] MCP endpoint: http://127.0.0.1:$CONTAINER_PORT/mcp"
     echo "[*] Press Ctrl+C to stop."
     echo ""
@@ -123,8 +126,11 @@ cmd_http() {
 
 cmd_stdio() {
     ensure_image
+    local pemcp_vol_path
+    pemcp_vol_path=$($RUNTIME volume inspect pemcp-data --format '{{.Mountpoint}}' 2>/dev/null || echo "pemcp-data (named volume)")
     echo "[*] Starting PeMCP in stdio MCP mode..." >&2
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)" >&2
+    echo "[*] Config/cache (.pemcp): $pemcp_vol_path" >&2
     # shellcheck disable=SC2046
     $RUNTIME run -i \
         $(common_args) \
