@@ -10,7 +10,7 @@ from pemcp.config import (
     state, logger, FastMCP, Context,
     ANGR_AVAILABLE, MAX_MCP_RESPONSE_SIZE_BYTES, MAX_MCP_RESPONSE_SIZE_KB,
 )
-from pemcp.state import get_session_key_from_context, activate_session_state, get_current_state
+from pemcp.state import get_session_key_from_context, activate_session_state, get_current_state, TASK_RUNNING
 
 # --- MCP Server Setup ---
 mcp_server = FastMCP("PEFileAnalyzerMCP")
@@ -74,7 +74,7 @@ def _check_angr_ready(tool_name: str, *, require_cfg: bool = True) -> None:
     # Check if background angr startup is still running
     if require_cfg:
         startup_task = state.get_task("startup-angr")
-        if startup_task and startup_task["status"] == "running":
+        if startup_task and startup_task["status"] == TASK_RUNNING:
             progress = startup_task.get("progress_percent", 0)
             msg = startup_task.get("progress_message", "Initializing...")
             raise RuntimeError(

@@ -237,9 +237,9 @@ async def open_file(
                 await ctx.info("Loading raw shellcode...")
 
                 def _load_shellcode():
-                    state.pe_object = MockPE(_raw_file_data)
-                    state.filepath = abs_path
-                    state.pe_data = {
+                    # Build the complete dict locally, then assign atomically
+                    # to avoid concurrent readers seeing a partially-written dict.
+                    pe_data = {
                         "filepath": abs_path,
                         "mode": "shellcode",
                         "file_hashes": _parse_file_hashes(_raw_file_data),
@@ -249,6 +249,9 @@ async def open_file(
                         ],
                         "floss_analysis": {"status": "Pending..."},
                     }
+                    state.pe_object = MockPE(_raw_file_data)
+                    state.filepath = abs_path
+                    state.pe_data = pe_data
 
                 await asyncio.to_thread(_load_shellcode)
                 await ctx.report_progress(30, 100)
@@ -257,12 +260,16 @@ async def open_file(
                     await ctx.info("Running FLOSS analysis on shellcode...")
 
                     def _run_floss():
-                        state.pe_data['floss_analysis'] = _parse_floss_analysis(
+                        # Build an updated copy and assign atomically to
+                        # prevent concurrent readers from seeing partial state.
+                        updated = dict(state.pe_data)
+                        updated['floss_analysis'] = _parse_floss_analysis(
                             abs_path, FLOSS_MIN_LENGTH_DEFAULT, 0,
                             Actual_DebugLevel_Floss.NONE, "auto",
                             [], [], [], True,
                         )
-                        _perform_unified_string_sifting(state.pe_data)
+                        _perform_unified_string_sifting(updated)
+                        state.pe_data = updated
 
                     await asyncio.to_thread(_run_floss)
 
@@ -406,14 +413,15 @@ async def open_file(
         return result
 
     except Exception as e:
-        # Clean up on failure, but preserve an error record so clients can
-        # distinguish "no file ever loaded" from "last open attempt failed".
+        # Clean up on failure — close any PE object that was created to
+        # prevent resource leaks, then preserve an error record so clients
+        # can distinguish "no file ever loaded" from "last open attempt failed".
         state.filepath = None
         state.pe_data = {
             "error": f"open_file failed: {type(e).__name__}: {e}",
             "failed_path": abs_path,
         }
-        state.pe_object = None
+        state.close_pe()
         logger.error(f"open_file failed for '{abs_path}': {e}", exc_info=True)
         raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e
     finally:

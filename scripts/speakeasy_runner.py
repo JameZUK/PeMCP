@@ -15,6 +15,22 @@ import speakeasy
 import speakeasy.winenv.arch as _arch
 
 
+def _validate_file_path(filepath):
+    """Validate that a file path exists and is a regular file.
+
+    Defense-in-depth: the parent MCP tool layer enforces path sandboxing,
+    but direct invocation of this runner (e.g. during development) would
+    bypass those checks.
+    """
+    import os
+    if not filepath:
+        raise ValueError("No file path provided")
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"File not found: {filepath}")
+    if not os.path.isfile(filepath):
+        raise ValueError(f"Path is not a regular file: {filepath}")
+
+
 def _safe_slice(value, n):
     """Safely slice a value to at most *n* items."""
     if isinstance(value, (list, tuple)):
@@ -51,6 +67,7 @@ def _collect_api_calls(report, limit):
 
 def emulate_pe(cmd):
     filepath = cmd["filepath"]
+    _validate_file_path(filepath)
     timeout_seconds = cmd.get("timeout_seconds", 60)
     limit = cmd.get("limit", 200)
 
@@ -62,9 +79,12 @@ def emulate_pe(cmd):
 
     try:
         se.run_module(module, timeout=timeout_seconds)
-    except Exception:
-        # Emulation may raise on exit or unhandled API -- expected
-        pass
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        # Emulation may raise on exit or unhandled API -- expected.
+        # Log to stderr for debugging without breaking the JSON result.
+        print(f"[speakeasy] Emulation exception (non-fatal): {type(e).__name__}: {e}", file=sys.stderr)
 
     report = se.get_report()
     return {
@@ -90,6 +110,7 @@ def emulate_shellcode(cmd):
     if shellcode_hex:
         sc_data = bytes.fromhex(shellcode_hex)
     elif filepath:
+        _validate_file_path(filepath)
         with open(filepath, "rb") as f:
             sc_data = f.read()
     else:
@@ -111,9 +132,11 @@ def emulate_shellcode(cmd):
 
     try:
         se.run_shellcode(addr, timeout=timeout_seconds)
-    except Exception:
-        # Emulation may raise on exit or unhandled API -- expected
-        pass
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e:
+        # Emulation may raise on exit or unhandled API -- expected.
+        print(f"[speakeasy] Shellcode emulation exception (non-fatal): {type(e).__name__}: {e}", file=sys.stderr)
 
     report = se.get_report()
     return {

@@ -945,18 +945,17 @@ async def get_global_data_refs(
 
     def _scan_refs():
 
-        # NOTE: We cannot use _ensure_project_and_cfg() here because it builds
-        # the CFG with CFGFast(normalize=True) only, whereas this analysis
-        # requires collect_data_references=True in order to populate xrefs for
-        # global memory accesses.
-        if state.angr_project is None:
-            state.angr_project = angr.Project(state.filepath, auto_load_libs=False)
-        # We need a CFG that tracks data references for this to work best
-        if state.angr_cfg is None:
-            state.angr_cfg = state.angr_project.analyses.CFGFast(normalize=True, collect_data_references=True)
+        # Ensure a project exists via the standard locked path, then build a
+        # *local* CFG with collect_data_references=True.  We must NOT replace
+        # the shared state.angr_cfg because other tools expect a standard CFG
+        # built without data-reference collection.
+        _ensure_project_and_cfg()
+        project, _ = state.get_angr_snapshot()
+        # Build a separate local CFG with data reference tracking
+        local_cfg = project.analyses.CFGFast(normalize=True, collect_data_references=True)
 
         try:
-            func = state.angr_cfg.functions[target_addr]
+            func = local_cfg.functions[target_addr]
         except KeyError: return {"error": f"No function found at {hex(target_addr)}."}
 
         refs_found = []
@@ -966,7 +965,7 @@ async def get_global_data_refs(
             for insn_addr in block.instruction_addrs:
                 # --- FIX: Access XRefs using the dictionary index ---
                 # .xrefs_by_ins_addr returns a set of XRef objects originating from this address
-                xrefs = state.angr_project.kb.xrefs.xrefs_by_ins_addr.get(insn_addr, [])
+                xrefs = project.kb.xrefs.xrefs_by_ins_addr.get(insn_addr, [])
 
                 for xref in xrefs:
                     # We care about memory data (not code jumps)
