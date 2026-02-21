@@ -176,9 +176,13 @@ class AnalysisCache:
         logger.info(f"Cache HIT for {sha256[:12]}...")
         return pe_data
 
-    def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str) -> bool:
+    def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str,
+            notes: Optional[list] = None, tool_history: Optional[list] = None) -> bool:
         """
         Store a ``pe_data`` dict in the cache.  Returns True on success.
+
+        Optionally includes session notes and tool history alongside the
+        analysis data.
         """
         if not self.enabled:
             return False
@@ -204,6 +208,8 @@ class AnalysisCache:
                 ],
             },
             "pe_data": {k: v for k, v in pe_data.items() if k != "filepath"},
+            "notes": notes or [],
+            "tool_history": tool_history or [],
         }
 
         with self._lock:
@@ -293,6 +299,70 @@ class AnalysisCache:
         meta = self._load_meta()
         meta.pop(sha256, None)
         self._save_meta(meta)
+
+    # ------------------------------------------------------------------
+    #  Session data helpers (notes + tool history)
+    # ------------------------------------------------------------------
+
+    def get_session_metadata(self, sha256: str) -> Optional[Dict[str, Any]]:
+        """Read notes and tool_history from a cache entry without loading pe_data.
+
+        Returns ``{"notes": [...], "tool_history": [...]}`` or ``None`` on
+        miss / error.
+        """
+        if not self.enabled:
+            return None
+
+        sha256 = sha256.lower()
+        entry_path = self._entry_path(sha256)
+
+        if not entry_path.exists():
+            return None
+
+        try:
+            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                wrapper = json.load(f)
+        except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
+            logger.warning(f"Cache session metadata read error for {sha256[:12]}...: {e}")
+            return None
+
+        return {
+            "notes": wrapper.get("notes", []),
+            "tool_history": wrapper.get("tool_history", []),
+        }
+
+    def update_session_data(self, sha256: str,
+                            notes: Optional[list] = None,
+                            tool_history: Optional[list] = None) -> bool:
+        """Update notes and/or tool_history for an existing cache entry.
+
+        Reads the gzip wrapper, replaces the specified keys, and writes
+        it back atomically.  Returns True on success.
+        """
+        if not self.enabled:
+            return False
+
+        sha256 = sha256.lower()
+
+        with self._lock:
+            entry_path = self._entry_path(sha256)
+            if not entry_path.exists():
+                return False
+            try:
+                with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                    wrapper = json.load(f)
+                if notes is not None:
+                    wrapper["notes"] = notes
+                if tool_history is not None:
+                    wrapper["tool_history"] = tool_history
+                tmp = entry_path.with_suffix(".tmp")
+                with gzip.open(tmp, "wt", encoding="utf-8") as f:
+                    json.dump(wrapper, f)
+                tmp.replace(entry_path)
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session data for {sha256[:12]}...: {e}")
+                return False
 
     # ------------------------------------------------------------------
     #  Management helpers (exposed via MCP tools)

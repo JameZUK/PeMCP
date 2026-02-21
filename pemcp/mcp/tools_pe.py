@@ -226,6 +226,13 @@ async def open_file(
                             lambda: pefile.PE(data=_raw_file_data, fast_load=False)
                         )
                     _loaded_from_cache = True
+
+                    # Restore notes and previous session history from cache
+                    session_meta = analysis_cache.get_session_metadata(_file_sha256)
+                    if session_meta:
+                        state.notes = session_meta.get("notes", [])
+                        state.previous_session_history = session_meta.get("tool_history", [])
+
                     await ctx.info(f"Analysis loaded from cache (SHA256: {_file_sha256[:16]}...)")
                     await ctx.report_progress(95, 100)
 
@@ -410,6 +417,20 @@ async def open_file(
             # Quick indicators for PE files — instant first-look data
             result["quick_indicators"] = _build_quick_indicators(state.pe_data)
             result["suggested_next"] = "Call get_triage_report for comprehensive automated analysis."
+
+        # Include session context when loading from cache with prior data
+        cached_notes = getattr(state, "notes", []) or []
+        prev_history = getattr(state, "previous_session_history", []) or []
+        if cached_notes or prev_history:
+            result["session_context"] = {
+                "notes_count": len(cached_notes),
+                "recent_notes": cached_notes[-5:],
+                "previous_tools_run": [h["tool_name"] for h in prev_history[-20:]],
+                "previous_tools_count": len(prev_history),
+                "last_analyzed": prev_history[-1]["timestamp"] if prev_history else None,
+                "hint": "Call get_session_summary for full context, or get_notes to review all notes.",
+            }
+
         return result
 
     except Exception as e:
@@ -446,12 +467,24 @@ async def close_file(ctx: Context) -> Dict[str, str]:
 
     closed_path = state.filepath
 
+    # Persist notes and tool history to cache before clearing state
+    sha = (state.pe_data or {}).get("file_hashes", {}).get("sha256") if state.pe_data else None
+    if sha:
+        analysis_cache.update_session_data(
+            sha,
+            notes=state.get_all_notes_snapshot(),
+            tool_history=state.get_tool_history_snapshot(),
+        )
+
     # Use atomic reset methods (safe for shared references from default state)
     state.close_pe()
     state.reset_angr()
     state.pe_data = None
     state.filepath = None
     state.loaded_from_cache = False
+    state.notes = []
+    state.tool_history = []
+    state.previous_session_history = []
 
     await ctx.info(f"Closed file: {closed_path}")
     return {"status": "success", "message": f"File '{closed_path}' closed and analysis data cleared."}
