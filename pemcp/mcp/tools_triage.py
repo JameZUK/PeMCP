@@ -480,7 +480,18 @@ def _triage_network_iocs(indicator_limit: int, all_string_values: set) -> Tuple[
             octets = ip.split('.')
             if all(0 <= int(o) <= 255 for o in octets):
                 first = int(octets[0])
-                if first not in (0, 10, 127, 255) and not (first == 192 and int(octets[1]) == 168) and not (first == 172 and 16 <= int(octets[1]) <= 31):
+                second = int(octets[1])
+                third = int(octets[2])
+                if (
+                    first not in (0, 10, 127, 255)
+                    and not (first == 192 and second == 168)           # private
+                    and not (first == 172 and 16 <= second <= 31)      # private
+                    and not (first == 169 and second == 254)           # link-local
+                    and not (224 <= first <= 239)                      # multicast
+                    and not (first == 192 and second == 0 and third == 2)    # TEST-NET-1
+                    and not (first == 198 and second == 51 and third == 100) # TEST-NET-2
+                    and not (first == 203 and second == 0 and third == 113)  # TEST-NET-3
+                ):
                     found_ips.add(ip)
         for m in url_pattern.finditer(s):
             found_urls.add(m.group())
@@ -1757,17 +1768,19 @@ async def get_triage_report(
     if compact:
         # Build compact summary: risk info + top findings as one-liners
         findings = []
-        sus = triage_report.get("suspicious_imports", {})
-        if isinstance(sus, dict):
-            for imp in sus.get("items", [])[:3]:
+        # suspicious_imports is a list of dicts with 'function', 'dll', 'risk' keys
+        sus = triage_report.get("suspicious_imports", [])
+        if isinstance(sus, list):
+            for imp in sus[:3]:
                 if isinstance(imp, dict):
                     findings.append(
                         f"Suspicious import: {imp.get('function', '?')} "
-                        f"({imp.get('dll', '?')}) — {imp.get('severity', '?')}"
+                        f"({imp.get('dll', '?')}) — {imp.get('risk', '?')}"
                     )
         packing = triage_report.get("packing_assessment", {})
         if isinstance(packing, dict) and packing.get("likely_packed"):
-            packer = packing.get("packer_name", "unknown packer")
+            packer_names = packing.get("peid_matches", [])
+            packer = packer_names[0] if packer_names else "unknown packer"
             findings.append(f"Likely packed ({packer})")
         net = triage_report.get("network_iocs", {})
         if isinstance(net, dict):
@@ -1775,14 +1788,16 @@ async def get_triage_report(
                 ioc_list = net.get(ioc_type, [])
                 if isinstance(ioc_list, list) and ioc_list:
                     findings.append(f"{ioc_type}: {', '.join(str(x) for x in ioc_list[:3])}")
-        caps = triage_report.get("suspicious_capabilities", {})
-        if isinstance(caps, dict):
-            for cap in caps.get("items", [])[:3]:
+        # suspicious_capabilities is a list of dicts with 'capability', 'namespace', 'severity'
+        caps = triage_report.get("suspicious_capabilities", [])
+        if isinstance(caps, list):
+            for cap in caps[:3]:
                 if isinstance(cap, dict):
-                    findings.append(f"Capability: {cap.get('rule', '?')} ({cap.get('namespace', '?')})")
+                    findings.append(f"Capability: {cap.get('capability', '?')} ({cap.get('namespace', '?')})")
+        # digital_signature uses key "present" (from _triage_digital_signature)
         sig = triage_report.get("digital_signature", {})
         if isinstance(sig, dict):
-            if not sig.get("embedded_signature_present"):
+            if not sig.get("present"):
                 findings.append("Not digitally signed")
         compact_report = {
             "risk_score": triage_report["risk_score"],

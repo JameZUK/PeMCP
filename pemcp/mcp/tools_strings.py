@@ -17,7 +17,7 @@ from pemcp.mcp.server import (
     _check_mcp_response_size,
 )
 from pemcp.parsers.strings import _extract_strings_from_data, _search_specific_strings_in_data
-from pemcp.utils import validate_regex_pattern as _validate_regex_pattern
+from pemcp.utils import validate_regex_pattern as _validate_regex_pattern, safe_regex_search as _safe_regex_search
 
 # Upper bound on the 'limit' parameter to prevent excessive memory allocation
 _MAX_LIMIT = 100_000
@@ -125,7 +125,7 @@ async def search_floss_strings(
         if min_ok and max_ok:
             # Length and Regex filtering
             string_to_search = item.get("string", "")
-            if any(p.search(string_to_search) for p in compiled_patterns):
+            if any(_safe_regex_search(p, string_to_search) for p in compiled_patterns):
                 if len(string_to_search) >= min_length:
                     matches.append(item)
 
@@ -772,8 +772,10 @@ async def get_top_sifted_strings(
         raise ValueError("Parameter 'max_sifter_score' must be a number if provided.")
     if sort_order.lower() not in ['ascending', 'descending']:
         raise ValueError("Parameter 'sort_order' must be either 'ascending' or 'descending'.")
+    _compiled_filter_regex = None
     if filter_regex:
         _validate_regex_pattern(filter_regex)
+        _compiled_filter_regex = re.compile(filter_regex)
 
     # --- Data Retrieval and Aggregation ---
     _check_pe_loaded("get_top_sifted_strings")
@@ -816,7 +818,7 @@ async def get_top_sifted_strings(
         if min_length is not None and len(str_val) < min_length: continue
         if max_length is not None and len(str_val) > max_length: continue
         if filter_by_category is not None and category != filter_by_category: continue
-        if filter_regex and not re.search(filter_regex, str_val): continue
+        if _compiled_filter_regex and not _safe_regex_search(_compiled_filter_regex, str_val): continue
 
         filtered_strings.append(item)
 

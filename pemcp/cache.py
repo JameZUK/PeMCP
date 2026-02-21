@@ -157,6 +157,29 @@ class AnalysisCache:
         if pe_data is None:
             return None
 
+        # --- Validate file hasn't changed on disk (mtime / size) ---
+        try:
+            if os.path.exists(current_filepath):
+                current_mtime = os.path.getmtime(current_filepath)
+                current_size = os.path.getsize(current_filepath)
+                with self._lock:
+                    meta = self._load_meta()
+                    cached_meta = meta.get(sha256, {})
+                cached_mtime = cached_meta.get("file_mtime")
+                cached_size = cached_meta.get("file_size")
+                if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
+                    logger.info(f"Cache mtime mismatch for {sha256[:12]}..., invalidating.")
+                    with self._lock:
+                        self._remove_entry_and_meta(sha256)
+                    return None
+                if cached_size is not None and current_size != cached_size:
+                    logger.info(f"Cache file size mismatch for {sha256[:12]}..., invalidating.")
+                    with self._lock:
+                        self._remove_entry_and_meta(sha256)
+                    return None
+        except OSError:
+            pass  # If we can't stat the file, skip this validation
+
         # Patch session-specific field
         pe_data["filepath"] = current_filepath
 
@@ -231,6 +254,14 @@ class AnalysisCache:
                     "last_accessed": time.time(),
                     "size_bytes": file_size,
                     "mode": pe_data.get("mode", "unknown"),
+                    "file_mtime": (
+                        os.path.getmtime(original_filepath)
+                        if os.path.exists(original_filepath) else None
+                    ),
+                    "file_size": (
+                        os.path.getsize(original_filepath)
+                        if os.path.exists(original_filepath) else None
+                    ),
                 }
                 self._save_meta(meta)
 

@@ -201,22 +201,22 @@ class TestStringsToolSafety:
         assert "str_val = item.get('string', '')" in source
 
     def test_no_redundant_regex_compile(self):
-        """get_top_sifted_strings should not have redundant re.compile after validate."""
+        """get_top_sifted_strings should pre-compile regex for safe_regex_search."""
         strings_path = os.path.join(
             os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_strings.py"
         )
         with open(strings_path) as f:
             source = f.read()
         # Find the filter_regex validation block in get_top_sifted_strings
-        # It should just call _validate_regex_pattern, not also re.compile
         idx = source.index("def get_top_sifted_strings")
         next_func_idx = source.index("\n@tool_decorator", idx + 1) if "\n@tool_decorator" in source[idx+1:] else len(source)
         func_body = source[idx:idx + (next_func_idx - idx)]
-        # Should have _validate_regex_pattern but NOT a separate re.compile for the same purpose
+        # Should validate + pre-compile for use with safe_regex_search
         assert "_validate_regex_pattern(filter_regex)" in func_body
-        # The old pattern was: _validate_regex_pattern + try: re.compile ... except re.error
-        # This should be gone now
-        assert "re.compile(filter_regex)" not in func_body
+        # The old pattern had: try: re.compile ... except re.error (redundant error
+        # handling after validate).  Now we pre-compile once for safe_regex_search
+        # without a redundant try/except re.error block.
+        assert "except re.error" not in func_body
 
 
 # ===================================================================
@@ -314,3 +314,269 @@ class TestSubprocessCleanup:
         # Verify both runner functions exist
         assert "_run_speakeasy" in source
         assert "_run_unipacker" in source
+
+
+# ===================================================================
+# Iteration 11 review fixes
+# ===================================================================
+
+# Fix 1: Compact triage report data structure access
+# ===================================================================
+
+class TestCompactTriageDataAccess:
+    """Verify compact triage correctly reads list-based suspicious_imports and capabilities."""
+
+    def test_compact_reads_imports_as_list(self):
+        """The compact triage code must treat suspicious_imports as a list, not a dict."""
+        triage_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_triage.py"
+        )
+        with open(triage_path) as f:
+            source = f.read()
+        # Find the compact section
+        compact_idx = source.index("if compact:")
+        compact_block = source[compact_idx:compact_idx + 1500]
+        # Must NOT access .get("items", []) on suspicious_imports (it's a list)
+        assert 'sus.get("items"' not in compact_block, \
+            "Compact triage should not use .get('items') on suspicious_imports (it's a list)"
+        # Must use isinstance(sus, list) instead of isinstance(sus, dict)
+        assert "isinstance(sus, list)" in compact_block, \
+            "Compact triage should check isinstance(sus, list)"
+
+    def test_compact_reads_capabilities_as_list(self):
+        """The compact triage code must treat suspicious_capabilities as a list."""
+        triage_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_triage.py"
+        )
+        with open(triage_path) as f:
+            source = f.read()
+        compact_idx = source.index("if compact:")
+        compact_block = source[compact_idx:compact_idx + 1500]
+        assert 'caps.get("items"' not in compact_block, \
+            "Compact triage should not use .get('items') on capabilities (it's a list)"
+        assert "isinstance(caps, list)" in compact_block
+
+    def test_compact_uses_correct_signature_key(self):
+        """The compact triage must use 'present' key (not 'embedded_signature_present')."""
+        triage_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_triage.py"
+        )
+        with open(triage_path) as f:
+            source = f.read()
+        compact_idx = source.index("if compact:")
+        compact_block = source[compact_idx:compact_idx + 2500]
+        assert 'sig.get("embedded_signature_present")' not in compact_block, \
+            "Compact triage should use 'present' key, not 'embedded_signature_present'"
+        assert 'sig.get("present")' in compact_block
+
+
+# Fix 2: Thread-safe close_file
+# ===================================================================
+
+class TestCloseFileThreadSafety:
+    """Verify close_file uses thread-safe clear methods."""
+
+    def test_close_file_uses_clear_notes(self):
+        """close_file should call state.clear_notes() not state.notes = []."""
+        pe_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_pe.py"
+        )
+        with open(pe_path) as f:
+            source = f.read()
+        # Find the close_file function
+        idx = source.index("async def close_file")
+        next_func_idx = source.index("\n@tool_decorator", idx + 1) if "\n@tool_decorator" in source[idx+1:] else len(source)
+        func_body = source[idx:next_func_idx]
+        assert "state.notes = []" not in func_body, \
+            "close_file should use clear_notes() not direct assignment"
+        assert "clear_notes()" in func_body
+
+    def test_close_file_uses_clear_tool_history(self):
+        """close_file should call state.clear_tool_history() not state.tool_history = []."""
+        pe_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_pe.py"
+        )
+        with open(pe_path) as f:
+            source = f.read()
+        idx = source.index("async def close_file")
+        next_func_idx = source.index("\n@tool_decorator", idx + 1) if "\n@tool_decorator" in source[idx+1:] else len(source)
+        func_body = source[idx:next_func_idx]
+        assert "state.tool_history = []" not in func_body, \
+            "close_file should use clear_tool_history() not direct assignment"
+        assert "clear_tool_history()" in func_body
+
+    def test_clear_notes_exists_on_state(self):
+        """AnalyzerState must have a clear_notes method."""
+        from pemcp.state import AnalyzerState
+        s = AnalyzerState()
+        s.add_note("test note", category="general")
+        assert len(s.get_notes()) == 1
+        count = s.clear_notes()
+        assert count == 1
+        assert len(s.get_notes()) == 0
+
+
+# Fix 3: Regex timeout protection
+# ===================================================================
+
+class TestSafeRegexSearch:
+    """Verify safe_regex_search provides timeout protection."""
+
+    def test_safe_regex_search_exists(self):
+        """utils.py must export safe_regex_search."""
+        from pemcp.utils import safe_regex_search
+        assert callable(safe_regex_search)
+
+    def test_safe_regex_search_returns_match(self):
+        """safe_regex_search returns a match object for valid patterns."""
+        from pemcp.utils import safe_regex_search
+        pat = re.compile(r'hello')
+        result = safe_regex_search(pat, "say hello world")
+        assert result is not None
+        assert result.group() == "hello"
+
+    def test_safe_regex_search_returns_none_on_no_match(self):
+        """safe_regex_search returns None when pattern doesn't match."""
+        from pemcp.utils import safe_regex_search
+        pat = re.compile(r'xyz')
+        result = safe_regex_search(pat, "hello world")
+        assert result is None
+
+    def test_strings_tool_uses_safe_regex(self):
+        """tools_strings.py should import and use safe_regex_search."""
+        strings_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_strings.py"
+        )
+        with open(strings_path) as f:
+            source = f.read()
+        assert "safe_regex_search" in source, \
+            "tools_strings.py should use safe_regex_search for user-provided patterns"
+
+    def test_deobfuscation_tool_uses_safe_regex(self):
+        """tools_deobfuscation.py should import and use safe_regex_search."""
+        deobfuscation_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_deobfuscation.py"
+        )
+        with open(deobfuscation_path) as f:
+            source = f.read()
+        assert "safe_regex_search" in source, \
+            "tools_deobfuscation.py should use safe_regex_search for user-provided patterns"
+
+
+# Fix 4: Cache mtime/size validation
+# ===================================================================
+
+class TestCacheMtimeValidation:
+    """Verify cache stores and validates file mtime and size."""
+
+    def test_cache_put_stores_mtime_and_size(self):
+        """cache.py put() must store file_mtime and file_size in metadata."""
+        cache_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "cache.py"
+        )
+        with open(cache_path) as f:
+            source = f.read()
+        # Find the put method's meta assignment
+        put_idx = source.index("def put(")
+        put_end = source.index("\ndef ", put_idx + 10) if "\ndef " in source[put_idx+10:] else len(source)
+        put_body = source[put_idx:put_idx + (put_end - put_idx)]
+        assert '"file_mtime"' in put_body, "put() must store file_mtime in cache metadata"
+        assert '"file_size"' in put_body, "put() must store file_size in cache metadata"
+
+    def test_cache_get_validates_mtime(self):
+        """cache.py get() must check file_mtime on cache hit."""
+        cache_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "cache.py"
+        )
+        with open(cache_path) as f:
+            source = f.read()
+        get_idx = source.index("def get(")
+        get_end = source.index("\ndef ", get_idx + 10) if "\ndef " in source[get_idx+10:] else len(source)
+        get_body = source[get_idx:get_idx + (get_end - get_idx)]
+        assert "file_mtime" in get_body, "get() must validate file_mtime"
+        assert "file_size" in get_body, "get() must validate file_size"
+
+
+# Improvement 5: IP filtering
+# ===================================================================
+
+class TestIPFiltering:
+    """Verify triage filters non-routable IPs from IOC extraction."""
+
+    def _extract_ips(self, test_strings):
+        """Helper to run the IP extraction logic from _triage_network_iocs."""
+        from unittest.mock import patch, MagicMock
+        from pemcp.state import AnalyzerState
+
+        mock_state = AnalyzerState()
+        mock_state.pe_data = {}
+
+        with patch("pemcp.mcp.tools_triage.state", mock_state):
+            from pemcp.mcp.tools_triage import _triage_network_iocs
+            result, _ = _triage_network_iocs(100, test_strings)
+            return result.get("ip_addresses", [])
+
+    def test_filters_private_10_range(self):
+        ips = self._extract_ips({"connect to 10.0.0.1 server"})
+        assert "10.0.0.1" not in ips
+
+    def test_filters_private_192_168_range(self):
+        ips = self._extract_ips({"connect to 192.168.1.1 server"})
+        assert "192.168.1.1" not in ips
+
+    def test_filters_private_172_range(self):
+        ips = self._extract_ips({"connect to 172.16.0.1 server"})
+        assert "172.16.0.1" not in ips
+
+    def test_filters_link_local(self):
+        ips = self._extract_ips({"connect to 169.254.1.1 server"})
+        assert "169.254.1.1" not in ips
+
+    def test_filters_multicast(self):
+        ips = self._extract_ips({"connect to 224.0.0.1 server"})
+        assert "224.0.0.1" not in ips
+        ips = self._extract_ips({"connect to 239.255.255.255 server"})
+        assert "239.255.255.255" not in ips
+
+    def test_filters_test_net_1(self):
+        ips = self._extract_ips({"connect to 192.0.2.1 server"})
+        assert "192.0.2.1" not in ips
+
+    def test_filters_test_net_2(self):
+        ips = self._extract_ips({"connect to 198.51.100.1 server"})
+        assert "198.51.100.1" not in ips
+
+    def test_filters_test_net_3(self):
+        ips = self._extract_ips({"connect to 203.0.113.1 server"})
+        assert "203.0.113.1" not in ips
+
+    def test_keeps_public_ip(self):
+        ips = self._extract_ips({"connect to 8.8.8.8 server"})
+        assert "8.8.8.8" in ips
+
+    def test_filters_loopback(self):
+        ips = self._extract_ips({"connect to 127.0.0.1 server"})
+        assert "127.0.0.1" not in ips
+
+
+# Improvement 6: Background task exception handling
+# ===================================================================
+
+class TestBackgroundExceptionHandling:
+    """Verify background task uses single consolidated exception handler."""
+
+    def test_no_redundant_except_blocks(self):
+        """background.py should use a single except Exception block."""
+        bg_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "background.py"
+        )
+        with open(bg_path) as f:
+            source = f.read()
+        # Find the wrapper function
+        wrapper_idx = source.index("async def _run_background_task_wrapper")
+        next_func_idx = source.index("\ndef ", wrapper_idx + 10) if "\ndef " in source[wrapper_idx+10:] else len(source)
+        wrapper_body = source[wrapper_idx:wrapper_idx + (next_func_idx - wrapper_idx)]
+        # Should NOT have the specific exception types before the general one
+        assert "except (OSError, RuntimeError, ValueError, TypeError)" not in wrapper_body, \
+            "Background task should use a single 'except Exception' block"
+        assert "except Exception as e:" in wrapper_body

@@ -482,8 +482,8 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     state.pe_data = None
     state.filepath = None
     state.loaded_from_cache = False
-    state.notes = []
-    state.tool_history = []
+    state.clear_notes()
+    state.clear_tool_history()
     state.previous_session_history = []
 
     await ctx.info(f"Closed file: {closed_path}")
