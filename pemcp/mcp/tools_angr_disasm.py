@@ -469,3 +469,257 @@ async def get_annotated_disassembly(
     result = await asyncio.to_thread(_annotate)
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_annotated_disassembly", "the 'limit' parameter")
+
+
+# ---- Smart Function Map (AI-friendly ranking & grouping) ----
+
+@tool_decorator
+async def get_function_map(
+    ctx: Context,
+    limit: int = 30,
+    group_by: str = "category",
+    include_details: bool = False,
+) -> Dict[str, Any]:
+    """
+    Ranks all functions by 'interestingness' and groups them by purpose.
+
+    Combines complexity, suspicious API calls, string references, cross-reference
+    count, and entry point status into a single score per function. Groups into
+    categories like process_injection, networking, crypto, anti_analysis, etc.
+
+    Much more context-efficient than listing all 500+ functions — targets the
+    AI directly at the functions worth decompiling.
+
+    Falls back to import-based categorization when angr is not available.
+
+    Args:
+        ctx: The MCP Context object.
+        limit: (int) Max number of top functions to return. Default 30.
+        group_by: (str) 'category' for semantic grouping, 'score' for flat ranked list.
+        include_details: (bool) If True, include callee names and string refs per function.
+
+    Returns:
+        A dictionary with scored, grouped functions and a suggested starting point.
+    """
+    from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB, RISK_ORDER, CATEGORY_DESCRIPTIONS
+    from pemcp.mcp.server import _check_pe_loaded
+
+    _check_pe_loaded("get_function_map")
+
+    # PE-only fallback when angr is unavailable
+    if not ANGR_AVAILABLE or state.angr_project is None or state.angr_cfg is None:
+        return await _pe_only_function_map(ctx, limit)
+
+    def _build_map():
+        _ensure_project_and_cfg()
+
+        # Build a set of known string addresses for xref matching
+        string_addrs: Dict[int, str] = {}
+        pe_data = state.pe_data or {}
+        for s_list_key in ('basic_ascii_strings',):
+            for s_obj in (pe_data.get(s_list_key) or []):
+                if isinstance(s_obj, dict):
+                    addr = s_obj.get('offset')
+                    val = s_obj.get('string', '')
+                    if isinstance(addr, int) and val:
+                        string_addrs[addr] = val[:60]
+
+        callgraph = state.angr_cfg.functions.callgraph
+        entry_addr = state.angr_project.entry
+
+        scored_funcs = []
+        for addr, func in state.angr_cfg.functions.items():
+            if func.is_simprocedure or func.is_syscall:
+                continue
+
+            # Block count (complexity proxy)
+            try:
+                block_count = len(list(func.blocks))
+            except Exception:
+                block_count = 0
+            if block_count == 0:
+                continue
+
+            # Edge count
+            try:
+                edge_count = func.graph.number_of_edges()
+            except Exception:
+                edge_count = 0
+
+            # Callers (xref in count)
+            try:
+                callers = list(callgraph.predecessors(addr))
+            except Exception:
+                callers = []
+
+            # Callees — identify suspicious APIs
+            suspicious_callees = []
+            callee_names = []
+            categories_hit: set = set()
+            try:
+                for callee_addr in callgraph.successors(addr):
+                    if callee_addr in state.angr_cfg.functions:
+                        callee_func = state.angr_cfg.functions[callee_addr]
+                        cname = callee_func.name
+                        callee_names.append(cname)
+                        for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
+                            if api_name in cname:
+                                suspicious_callees.append({"name": cname, "risk": risk, "category": cat})
+                                categories_hit.add(cat)
+                                break
+            except Exception:
+                pass
+
+            # String references
+            string_refs = []
+            try:
+                for block in func.blocks:
+                    for insn_addr in block.instruction_addrs:
+                        xrefs = state.angr_project.kb.xrefs.xrefs_by_ins_addr.get(insn_addr, [])
+                        for xref in xrefs:
+                            if xref.memory_data and xref.memory_data.addr in string_addrs:
+                                string_refs.append(string_addrs[xref.memory_data.addr])
+            except Exception:
+                pass
+
+            # Compute score
+            is_entry = (addr == entry_addr)
+            score = (
+                min(block_count, 100)  # complexity (capped)
+                + len(suspicious_callees) * 15
+                + min(len(string_refs), 20) * 2
+                + min(len(callers), 10)
+                + (20 if is_entry else 0)
+            )
+
+            # Primary category — pick the highest-risk one
+            primary_cat = "main_logic"
+            if categories_hit:
+                sorted_cats = sorted(
+                    categories_hit,
+                    key=lambda c: min(
+                        (RISK_ORDER.get(r, 3) for api, (r, ct) in CATEGORIZED_IMPORTS_DB.items() if ct == c),
+                        default=3,
+                    ),
+                )
+                primary_cat = sorted_cats[0]
+            elif block_count >= 20:
+                primary_cat = "main_logic"
+            else:
+                primary_cat = "utility"
+
+            # Build reason string
+            reasons = []
+            if suspicious_callees:
+                api_list = ', '.join(s['name'] for s in suspicious_callees[:3])
+                reasons.append(f"calls {api_list}")
+            if len(callers) > 3:
+                reasons.append(f"{len(callers)} callers")
+            if string_refs:
+                reasons.append(f"{len(string_refs)} string refs")
+            if is_entry:
+                reasons.append("entry point")
+            reason = '; '.join(reasons) if reasons else f"{block_count} blocks"
+
+            entry = {
+                "addr": hex(addr),
+                "name": func.name,
+                "score": score,
+                "reason": reason,
+                "blocks": block_count,
+                "category": primary_cat,
+            }
+            if include_details:
+                entry["callees"] = callee_names[:15]
+                entry["suspicious_apis"] = suspicious_callees
+                entry["string_refs"] = string_refs[:10]
+                entry["callers"] = [hex(c) for c in callers[:10]]
+
+            scored_funcs.append(entry)
+
+        # Sort by score descending
+        scored_funcs.sort(key=lambda x: x['score'], reverse=True)
+
+        return scored_funcs
+
+    scored = await asyncio.to_thread(_build_map)
+
+    # Cache for use by other tools
+    state._cached_function_scores = scored
+
+    total_functions = len(scored)
+    top = scored[:limit]
+
+    if group_by == "category":
+        groups: Dict[str, list] = {}
+        for f in top:
+            cat = f.get("category", "other")
+            groups.setdefault(cat, []).append(f)
+        result = {
+            "total_functions": total_functions,
+            "returned": len(top),
+            "groups": groups,
+        }
+    else:
+        result = {
+            "total_functions": total_functions,
+            "returned": len(top),
+            "functions": top,
+        }
+
+    # Suggested starting point
+    if top:
+        best = top[0]
+        result["suggested_start"] = (
+            f"{best['addr']} ({best['name']}) — score {best['score']}, {best['reason']}"
+        )
+
+    return await _check_mcp_response_size(ctx, result, "get_function_map")
+
+
+async def _pe_only_function_map(ctx: Context, limit: int) -> Dict[str, Any]:
+    """Fallback function map using PE import data only (no angr required)."""
+    from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB, CATEGORY_DESCRIPTIONS
+
+    pe_data = state.pe_data or {}
+    imports = pe_data.get('imports', [])
+
+    by_category: Dict[str, list] = {}
+    total_suspicious = 0
+
+    for dll_entry in imports:
+        if not isinstance(dll_entry, dict):
+            continue
+        dll_name = dll_entry.get('dll_name', 'Unknown')
+        for sym in dll_entry.get('symbols', []):
+            func_name = sym.get('name', '') if isinstance(sym, dict) else ''
+            for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
+                if api_name in func_name:
+                    by_category.setdefault(cat, []).append({
+                        "dll": dll_name,
+                        "function": func_name,
+                        "risk": risk,
+                    })
+                    total_suspicious += 1
+                    break
+
+    # Truncate each category
+    for cat in by_category:
+        by_category[cat] = by_category[cat][:limit]
+
+    result: Dict[str, Any] = {
+        "mode": "pe_only",
+        "note": "angr is not available — showing import-based categorization only. "
+                "No function-level scoring or grouping. Use get_focused_imports() for detailed import analysis.",
+        "total_suspicious_apis": total_suspicious,
+        "categories": {
+            cat: {
+                "description": CATEGORY_DESCRIPTIONS.get(cat, cat),
+                "count": len(items),
+                "apis": [i["function"] for i in items[:5]],
+            }
+            for cat, items in sorted(by_category.items())
+        },
+    }
+
+    return await _check_mcp_response_size(ctx, result, "get_function_map")

@@ -21,6 +21,7 @@ CONTAINER_PORT="${PEMCP_PORT:-8082}"
 SAMPLES_DIR="${PEMCP_SAMPLES:-$(cd "$(dirname "$0")" && pwd)/samples}"
 CONTAINER_SAMPLES="/$(basename "$SAMPLES_DIR")"
 ROOTFS_DIR="${PEMCP_ROOTFS:-$(cd "$(dirname "$0")" && pwd)/qiling-rootfs}"
+OUTPUT_DIR="${PEMCP_OUTPUT:-$(cd "$(dirname "$0")" && pwd)/output}"
 
 # --- Detect container runtime ---
 detect_runtime() {
@@ -78,9 +79,20 @@ common_args() {
         --user "$(id -u):$(id -g)"
         -e "HOME=/app/home"
         -e "USER=${USER:-pemcp}"
+        -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:$MOUNT_OPTS"
         -v "pemcp-data:/app/home/.pemcp"
     )
+
+    # Mount output directory if it exists (create it on first use)
+    if [[ -n "${OUTPUT_DIR:-}" ]]; then
+        mkdir -p "$OUTPUT_DIR" 2>/dev/null || true
+        if [[ -d "$OUTPUT_DIR" ]]; then
+            args+=(-v "$OUTPUT_DIR:/output:rw")
+            args+=(-e "PEMCP_HOST_EXPORT=$OUTPUT_DIR")
+            args+=(-e "PEMCP_EXPORT_DIR=/output")
+        fi
+    fi
 
     # Mount Qiling rootfs if the directory exists on the host.
     # Users place Windows DLLs, Linux libs, etc. here for Qiling emulation.
@@ -197,6 +209,9 @@ Options:
                     The container path mirrors the host folder name
                     (e.g. --samples ~/Downloads → /Downloads inside).
                     Default: ./samples/ next to this script (→ /samples).
+  --output <dir>    Mount a writable output directory into the container at /output.
+                    Used for project exports, patched binaries, and reports.
+                    Default: ./output/ next to this script.
   --rootfs <dir>    Mount a Qiling rootfs directory into the container.
                     Place Windows DLLs, Linux libs, etc. here for emulation.
                     Default: ./qiling-rootfs/ next to this script.
@@ -206,6 +221,7 @@ Environment variables:
   VT_API_KEY        VirusTotal API key (passed into container)
   PEMCP_PORT        Host port for HTTP mode (default: 8082)
   PEMCP_SAMPLES     Default samples directory (overridden by --samples)
+  PEMCP_OUTPUT      Default output directory (overridden by --output)
   PEMCP_ROOTFS      Default Qiling rootfs directory (overridden by --rootfs)
 
 Examples:
@@ -251,6 +267,17 @@ while [[ $# -gt 0 ]]; do
             fi
             ROOTFS_DIR="$(cd "$2" 2>/dev/null && pwd)" || {
                 echo "Error: Rootfs directory not found: $2"
+                exit 1
+            }
+            shift 2
+            ;;
+        --output)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --output requires a directory path."
+                exit 1
+            fi
+            OUTPUT_DIR="$(mkdir -p "$2" 2>/dev/null; cd "$2" 2>/dev/null && pwd)" || {
+                echo "Error: Cannot create/access output directory: $2"
                 exit 1
             }
             shift 2
