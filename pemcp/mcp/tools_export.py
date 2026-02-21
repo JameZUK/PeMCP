@@ -214,7 +214,10 @@ async def import_project(
             binary_prefix = "binary/"
             for member in tar.getmembers():
                 if member.name.startswith(binary_prefix) and member.isfile():
-                    binary_name = member.name[len(binary_prefix):]
+                    # Use basename to prevent path traversal (e.g. "binary//etc/evil")
+                    binary_name = os.path.basename(member.name[len(binary_prefix):])
+                    if not binary_name:
+                        continue
                     bf = tar.extractfile(member)
                     if bf:
                         binary_data = bf.read()
@@ -233,8 +236,7 @@ async def import_project(
             json.dump(wrapper, f)
 
         # Update cache metadata
-        analysis_cache._lock.acquire()
-        try:
+        with analysis_cache._lock:
             meta = analysis_cache._load_meta()
             meta[sha256] = {
                 "original_filename": manifest.get("original_filename", "imported"),
@@ -244,8 +246,6 @@ async def import_project(
                 "mode": manifest.get("mode", "unknown"),
             }
             analysis_cache._save_meta(meta)
-        finally:
-            analysis_cache._lock.release()
 
         await ctx.info(f"Analysis data imported into cache (SHA256: {sha256[:16]}...)")
 

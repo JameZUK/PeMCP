@@ -10,6 +10,11 @@ Follow this sequence, optimised for context-efficient progressive disclosure.
     container/host path mappings. This tells you where to save exports and
     whether angr/capa/floss are available.
 
+    If the open_file response includes session_context (i.e. this file was
+    analysed before), call get_analysis_digest() FIRST to review previous
+    findings before re-doing analysis. Notes and history from prior sessions
+    are automatically restored.
+
 1. Comprehensive Triage (Single Call):
 
     Execute get_triage_report(compact=True) for a ~2KB initial assessment.
@@ -22,6 +27,9 @@ Follow this sequence, optimised for context-efficient progressive disclosure.
       - Section anomalies (W+X, virtual/raw size mismatch)
       - Risk score and risk level (CRITICAL/HIGH/MEDIUM/LOW/BENIGN)
       - Context-aware suggested next tools
+
+    The triage report automatically saves key findings as notes. These feed
+    into get_analysis_digest() for context-efficient progress tracking.
 
     NOTE: The open_file response also includes quick_indicators with key metrics.
 
@@ -62,19 +70,23 @@ Follow this sequence, optimised for context-efficient progressive disclosure.
         group by purpose (process injection, networking, crypto, anti-analysis).
         This replaces manually scanning get_function_complexity_list.
 
-    c. Targeted Decompilation:
+    c. Targeted Decompilation + Note-Taking:
         Decompile the top-scored functions from get_function_map.
-        After each decompilation, call auto_note_function(address) to save a
-        one-line summary — this builds up the analysis digest without keeping
-        full pseudocode in context.
+        IMPORTANT: After each decompilation, ALWAYS call auto_note_function(address)
+        to save a one-line summary. This builds the analysis digest without keeping
+        full pseudocode in context. If you discover a specific finding (e.g. a
+        decryption routine, a C2 check-in, an anti-debug trick), also call
+        add_note(content="...", category="tool_result") to record it.
 
     d. Cross-Reference Analysis:
         Use get_cross_reference_map(function_addresses=[...]) to understand
         relationships between functions in a single call.
 
     e. Periodic Digest:
-        Call get_analysis_digest() periodically to refresh your understanding
-        of what has been learned so far, without re-reading earlier outputs.
+        Call get_analysis_digest() periodically (every 3-5 decompilations) to
+        refresh your understanding of what has been learned so far. This aggregates
+        all your notes, triage findings, and coverage stats into a single summary
+        without re-reading earlier outputs.
 
 5. Extended Analysis (if needed):
 
@@ -91,7 +103,7 @@ Follow this sequence, optimised for context-efficient progressive disclosure.
     c. Hunt for Obfuscated IOCs:
         Use find_and_decode_encoded_strings to decode Base64/hex/XOR obfuscated strings.
         The triage report already extracts plaintext network IOCs, but encoded ones
-        require this additional step.
+        require this additional step. Record any decoded IOCs with add_note().
 
     d. Dynamic Emulation (if static analysis is insufficient):
         Use emulate_binary_with_qiling for cross-platform behavioural analysis
@@ -122,6 +134,8 @@ Follow this sequence, optimised for context-efficient progressive disclosure.
 
 7. Synthesise and Report:
 
+    Before writing your final report, call get_analysis_digest() to ensure you
+    have a complete picture of all findings accumulated across the session.
     Review ALL gathered evidence, weigh suspicious vs benign indicators.
 
 Reporting Format

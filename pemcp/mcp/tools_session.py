@@ -136,6 +136,14 @@ async def get_session_summary(
     if ANGR_AVAILABLE and "decompile_function_with_angr" not in ran_tools:
         suggested.append("decompile_function_with_angr")
 
+    # Notes-related suggestions based on analysis phase
+    phase = result["analysis_phase"]
+    func_notes = [n for n in notes if n.get("category") == "function"]
+    if phase in ("exploring", "advanced") and not func_notes:
+        suggested.append("auto_note_function(address) — record findings after decompiling each function")
+    if notes and "get_analysis_digest" not in ran_tools:
+        suggested.append("get_analysis_digest() — review accumulated findings")
+
     if suggested:
         result["suggested_next_tools"] = suggested
 

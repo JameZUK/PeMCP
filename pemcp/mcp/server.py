@@ -95,7 +95,7 @@ def tool_decorator(func):
                     duration_ms=duration_ms,
                 )
             except Exception:
-                pass  # Never let history recording break a tool
+                logger.debug("History recording failed for %s", tool_name, exc_info=True)
 
         return result
     return _raw_tool_decorator(_with_session)

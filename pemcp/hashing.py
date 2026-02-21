@@ -154,9 +154,8 @@ class SSDeep:
     def _score_strings(self, s1, s2, block_size):
         if not self._common_substring(s1, s2):
             return 0
-        if not s1 and not s2: return 100 if block_size >= self.BLOCKSIZE_MIN else 0
         if not s1 or not s2:
-            pass
+            return 0
 
         lev_score = self._levenshtein(s1, s2)
         sum_len = len(s1) + len(s2)

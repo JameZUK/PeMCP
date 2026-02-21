@@ -428,7 +428,12 @@ async def open_file(
                 "previous_tools_run": [h["tool_name"] for h in prev_history[-20:]],
                 "previous_tools_count": len(prev_history),
                 "last_analyzed": prev_history[-1]["timestamp"] if prev_history else None,
-                "hint": "Call get_session_summary for full context, or get_notes to review all notes.",
+                "hint": (
+                    "Previous analysis data restored. "
+                    "Call get_analysis_digest() to see what was learned, "
+                    "or get_session_summary() for full session context. "
+                    "Use add_note() and auto_note_function() to record new findings."
+                ),
             }
 
         return result
@@ -438,10 +443,7 @@ async def open_file(
         # prevent resource leaks, then preserve an error record so clients
         # can distinguish "no file ever loaded" from "last open attempt failed".
         state.filepath = None
-        state.pe_data = {
-            "error": f"open_file failed: {type(e).__name__}: {e}",
-            "failed_path": abs_path,
-        }
+        state.pe_data = None
         state.close_pe()
         logger.error(f"open_file failed for '{abs_path}': {e}", exc_info=True)
         raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e
