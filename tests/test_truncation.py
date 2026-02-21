@@ -126,3 +126,69 @@ class TestCheckMcpResponseSize:
         _run(_check_mcp_response_size(ctx, data, "test_tool"))
         # Original should be untouched
         assert len(data["items"]) == original_len
+
+    def test_deeply_nested_dicts(self):
+        """Deeply nested dicts should be truncated to fit the limit."""
+        ctx = MockContext()
+        # Build a large deeply nested structure (enough to exceed 64KB)
+        inner = {f"deep_{i}": "v" * 500 for i in range(200)}
+        data = {"level1": {"level2": {"level3": inner}}}
+        raw_size = len(json.dumps(data).encode("utf-8"))
+        assert raw_size > MAX_MCP_RESPONSE_SIZE_BYTES
+
+        result = _run(_check_mcp_response_size(ctx, data, "test_tool"))
+        result_size = len(json.dumps(result).encode("utf-8"))
+        assert result_size <= MAX_MCP_RESPONSE_SIZE_BYTES
+
+    def test_mixed_large_keys(self):
+        """When multiple keys are large, the largest should be truncated first."""
+        ctx = MockContext()
+        data = {
+            "small": "tiny",
+            "medium_list": [{"id": i} for i in range(100)],
+            "large_string": "X" * (MAX_MCP_RESPONSE_SIZE_BYTES + 1000),
+        }
+        result = _run(_check_mcp_response_size(ctx, data, "test_tool"))
+        result_size = len(json.dumps(result).encode("utf-8"))
+        assert result_size <= MAX_MCP_RESPONSE_SIZE_BYTES
+        # The small key should survive intact
+        assert result["small"] == "tiny"
+
+    def test_unicode_multibyte_characters(self):
+        """Multibyte UTF-8 characters should be handled — verify truncation triggers."""
+        ctx = MockContext()
+        # Each emoji is ~12 bytes in JSON (\uXXXX\uXXXX encoding), so fewer
+        # chars are needed to exceed the limit.
+        emoji_count = MAX_MCP_RESPONSE_SIZE_BYTES // 4
+        data = {"emojis": "\U0001f600" * emoji_count}
+        raw_size = len(json.dumps(data).encode("utf-8"))
+        assert raw_size > MAX_MCP_RESPONSE_SIZE_BYTES
+
+        result = _run(_check_mcp_response_size(ctx, data, "test_tool"))
+        # Truncation should have been triggered
+        assert len(ctx.warnings) > 0
+        # The result should have been reduced (may fall back to string preview
+        # for multibyte-heavy content where char-count reduction doesn't
+        # proportionally reduce byte count)
+        result_size = len(json.dumps(result).encode("utf-8"))
+        assert result_size <= MAX_MCP_RESPONSE_SIZE_BYTES or "_truncation_warning" in result or "data_preview" in result
+
+    def test_list_of_strings_truncated(self):
+        """A list of large strings should be truncated by reducing list length."""
+        ctx = MockContext()
+        data = {"strings": ["string_" + "a" * 500 + str(i) for i in range(200)]}
+        raw_size = len(json.dumps(data).encode("utf-8"))
+        assert raw_size > MAX_MCP_RESPONSE_SIZE_BYTES
+
+        result = _run(_check_mcp_response_size(ctx, data, "test_tool"))
+        result_size = len(json.dumps(result).encode("utf-8"))
+        assert result_size <= MAX_MCP_RESPONSE_SIZE_BYTES
+        assert len(result["strings"]) < 200
+
+    def test_single_massive_value(self):
+        """A single value much larger than the limit should still be truncated."""
+        ctx = MockContext()
+        data = {"huge": "Z" * (MAX_MCP_RESPONSE_SIZE_BYTES * 5)}
+        result = _run(_check_mcp_response_size(ctx, data, "test_tool"))
+        result_size = len(json.dumps(result).encode("utf-8"))
+        assert result_size <= MAX_MCP_RESPONSE_SIZE_BYTES

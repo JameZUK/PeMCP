@@ -1,4 +1,9 @@
-"""MCP tool for auto-detecting binary format from magic bytes."""
+"""MCP tool for auto-detecting binary format from magic bytes.
+
+Uses the canonical ``detect_format_from_magic()`` helper from
+``_format_helpers`` for basic PE/ELF/Mach-O classification, then adds
+enhanced detection for .NET, Java class files, Go, and Rust.
+"""
 import struct
 import asyncio
 from typing import Dict, Any, Optional
@@ -9,7 +14,40 @@ from pemcp.config import (
     PYELFTOOLS_AVAILABLE, LIEF_AVAILABLE,
 )
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
-from pemcp.mcp._format_helpers import _get_filepath, _MACHO_MAGICS, _MACHO_FAT_MAGICS
+from pemcp.mcp._format_helpers import (
+    _get_filepath, detect_format_from_magic, _MACHO_MAGICS, _MACHO_FAT_MAGICS,
+)
+
+
+def _check_dotnet(header: bytes) -> bool:
+    """Return True if the PE header contains a non-zero COM descriptor RVA (.NET)."""
+    try:
+        pe_offset = struct.unpack_from('<I', header, 0x3C)[0]
+        if pe_offset + 4 >= len(header) or header[pe_offset:pe_offset + 4] != b'PE\x00\x00':
+            return False
+        oh_offset = pe_offset + 24
+        oh_magic = struct.unpack_from('<H', header, oh_offset)[0]
+        if oh_magic == 0x10b:  # PE32
+            com_desc_rva_offset = oh_offset + 208
+        elif oh_magic == 0x20b:  # PE32+
+            com_desc_rva_offset = oh_offset + 224
+        else:
+            return False
+        if com_desc_rva_offset + 8 > len(header):
+            return False
+        return struct.unpack_from('<I', header, com_desc_rva_offset)[0] > 0
+    except Exception:
+        return False
+
+
+# Language-specific byte markers for deep scanning
+_GO_MARKERS = (b'Go build', b'go.buildid', b'runtime.main',
+               b'runtime.goexit', b'go.string.')
+_RUST_MARKERS = (b'rustc/', b'.rustc', b'rust_begin_unwind',
+                 b'rust_panic', b'core::panicking',
+                 b'core::result::Result', b'alloc::string::String',
+                 b'std::rt::lang_start', b'rust_eh_personality',
+                 b'__rust_alloc', b'__rust_dealloc')
 
 
 @tool_decorator
@@ -43,81 +81,51 @@ async def detect_binary_format(
         formats = []
         suggested_tools = []
 
-        # ELF
-        if header[:4] == b'\x7fELF':
+        # Use the canonical helper for basic format classification
+        base_format = detect_format_from_magic(header[:4])
+
+        if base_format == "elf":
             formats.append("ELF")
-            bits = "64-bit" if header[4] == 2 else "32-bit"
-            endian = "little-endian" if header[5] == 1 else "big-endian"
+            bits = "64-bit" if len(header) > 4 and header[4] == 2 else "32-bit"
+            endian = "little-endian" if len(header) > 5 and header[5] == 1 else "big-endian"
             result["elf_info"] = {"bits": bits, "endianness": endian}
             suggested_tools.extend(["elf_analyze", "elf_dwarf_info"])
 
-        # Mach-O
-        elif header[:4] in _MACHO_MAGICS:
-            formats.append("Mach-O")
-            is_64 = header[:4] in (b'\xfe\xed\xfa\xcf', b'\xcf\xfa\xed\xfe')
-            result["macho_info"] = {"bits": "64-bit" if is_64 else "32-bit"}
-            suggested_tools.extend(["macho_analyze"])
-
-        # Mach-O Fat/Universal
-        elif header[:4] in _MACHO_FAT_MAGICS:
-            # 0xCAFEBABE is shared between Mach-O Fat and Java class files
-            # Java class files have minor_version at offset 4 and major_version at offset 6
-            # with major_version typically 45-65 (Java 1.1 to Java 21)
-            if len(header) >= 8:
-                major_ver = struct.unpack_from('>H', header, 6)[0]
-                if 44 <= major_ver <= 68:
-                    formats.append("Java Class File (or Mach-O Fat)")
+        elif base_format == "macho":
+            # Distinguish between regular Mach-O and Fat/Universal
+            if header[:4] in _MACHO_FAT_MAGICS:
+                # 0xCAFEBABE is shared with Java class files
+                if len(header) >= 8:
+                    major_ver = struct.unpack_from('>H', header, 6)[0]
+                    if 44 <= major_ver <= 68:
+                        formats.append("Java Class File (or Mach-O Fat)")
+                    else:
+                        formats.append("Mach-O Fat/Universal")
                 else:
                     formats.append("Mach-O Fat/Universal")
             else:
-                formats.append("Mach-O Fat/Universal")
+                formats.append("Mach-O")
+                is_64 = header[:4] in (b'\xfe\xed\xfa\xcf', b'\xcf\xfa\xed\xfe')
+                result["macho_info"] = {"bits": "64-bit" if is_64 else "32-bit"}
             suggested_tools.extend(["macho_analyze"])
 
-        # PE
-        elif header[:2] == b'MZ':
+        elif base_format == "pe":
             formats.append("PE")
             suggested_tools.extend(["open_file", "get_triage_report"])
-
-            # Check for .NET
-            try:
-                pe_offset = struct.unpack_from('<I', header, 0x3C)[0]
-                if pe_offset + 4 < len(header) and header[pe_offset:pe_offset+4] == b'PE\x00\x00':
-                    # Check for COM descriptor (data directory index 14)
-                    oh_offset = pe_offset + 24
-                    # Optional header magic
-                    oh_magic = struct.unpack_from('<H', header, oh_offset)[0]
-                    if oh_magic == 0x10b:  # PE32
-                        com_desc_rva_offset = oh_offset + 208  # 14th data dir
-                    elif oh_magic == 0x20b:  # PE32+
-                        com_desc_rva_offset = oh_offset + 224
-                    else:
-                        com_desc_rva_offset = None
-
-                    if com_desc_rva_offset and com_desc_rva_offset + 8 <= len(header):
-                        com_rva = struct.unpack_from('<I', header, com_desc_rva_offset)[0]
-                        if com_rva > 0:
-                            formats.append(".NET")
-                            suggested_tools.extend(["dotnet_analyze", "dotnet_disassemble_method"])
-            except Exception:
-                pass
+            if _check_dotnet(header):
+                formats.append(".NET")
+                suggested_tools.extend(["dotnet_analyze", "dotnet_disassemble_method"])
 
         else:
             formats.append("Unknown")
 
         # Check for Go signatures (scan full scan_data, not just header)
-        _go_markers = (b'Go build', b'go.buildid', b'runtime.main',
-                       b'runtime.goexit', b'go.string.')
-        if any(marker in scan_data for marker in _go_markers):
+        if any(marker in scan_data for marker in _GO_MARKERS):
             formats.append("Go")
             suggested_tools.extend(["go_analyze"])
 
         # Check for Rust signatures (scan full scan_data for deeper markers)
-        _rust_markers = (b'rustc/', b'.rustc', b'rust_begin_unwind',
-                         b'rust_panic', b'core::panicking',
-                         b'core::result::Result', b'alloc::string::String',
-                         b'std::rt::lang_start', b'rust_eh_personality',
-                         b'__rust_alloc', b'__rust_dealloc')
-        if any(marker in scan_data for marker in _rust_markers):
+        if any(marker in scan_data for marker in _RUST_MARKERS):
             formats.append("Rust")
             suggested_tools.extend(["rust_analyze", "rust_demangle_symbols"])
 
