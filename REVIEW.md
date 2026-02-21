@@ -205,6 +205,72 @@ In a multi-tenant HTTP scenario, users can import archives containing large bina
 6. **Pin Docker base image** by digest for reproducible builds
 7. **Strengthen `import_project` path traversal** validation with `os.path.normpath()`
 
+---
+
+## 8. Notes, History & AI Progress Tracking — Review
+
+This section evaluates how well PeMCP supports AI clients in tracking their progress during large binary corpus analysis, and whether the note and history features are sufficiently advertised to MCP clients.
+
+### 8.1 Architecture Assessment: Strong
+
+The notes/history system is well-architected:
+
+- **Three-layer persistence**: In-memory (`AnalyzerState.notes`, `AnalyzerState.tool_history`) → disk cache (`analysis_cache.update_session_data`) → portable archive (`export_project`). This covers ephemeral sessions, cross-restart continuity, and cross-machine sharing.
+- **Automatic recording**: The `tool_decorator` in `server.py:61-101` records every tool invocation (except meta-tools) with parameters, result summary, and duration. The AI doesn't need to explicitly opt in.
+- **Auto-save triage notes**: `_auto_save_triage_notes()` in `tools_triage.py:1501` automatically creates `tool_result` category notes for risk assessment, critical imports, and IOCs. This means even a basic triage creates persistent context.
+- **Session context restoration**: `open_file` restores notes and history from cache (`tools_pe.py:225-229`) and includes a `session_context` field in the response (`tools_pe.py:423-439`) with a hint directing the AI to call `get_analysis_digest()`.
+- **Analysis digest vs session summary**: The distinction between `get_session_summary()` (what tools *ran*) and `get_analysis_digest()` (what was *learned*) is thoughtful and important for AI context management.
+
+### 8.2 Advertisement to MCP Clients: Adequate, with Gaps
+
+**What works well:**
+
+1. The `open_file` response includes `session_context.hint` when prior data exists — this is the most important touchpoint and it's handled correctly.
+2. The triage report includes `workflow_hints` (`tools_triage.py:34-39`) that explicitly guide note-taking.
+3. The `get_session_summary` response includes `suggested_next_tools` with note-related suggestions based on analysis phase (`tools_session.py:139-145`).
+4. The `FastPrompt.txt` analysis guide explicitly instructs the AI to call `auto_note_function()` after decompilations and `get_analysis_digest()` periodically.
+
+**Gaps identified and addressed in this review:**
+
+1. **`decompile_function_with_angr` returned no hint about note-taking.** This is the most common tool that should trigger a note. The docstring and response now include a `next_step` field reminding the AI to call `auto_note_function()`. *(Fixed in this review)*
+
+2. **Key Features section in README didn't mention notes/history.** The top-of-README feature list — what most users read first — had no mention of session continuity, notes, or AI progress tracking. A new "Session Continuity & AI Progress Tracking" section has been added. *(Fixed in this review)*
+
+3. **Typical Workflow section didn't show note-taking.** The quick-start workflow showed basic open→analyse→close but skipped the note-taking loop entirely. Updated to include `auto_note_function`, `get_analysis_digest`, and `export_project`. *(Fixed in this review)*
+
+4. **`open_file` docstring didn't mention `session_context`.** The primary tool docstring (which MCP clients see when discovering tools) didn't mention that the response includes session context for previously analysed files. *(Fixed in this review)*
+
+5. **`get_tool_history` docstring was minimal.** Didn't explain its purpose for AI progress tracking or mention the `get_analysis_digest` alternative. *(Fixed in this review)*
+
+### 8.3 Remaining Recommendations
+
+1. **Other analysis tools should hint at note-taking.** Currently only `decompile_function_with_angr` includes a `next_step` hint. Consider adding similar hints to `get_annotated_disassembly`, `emulate_function_execution`, `find_and_decode_encoded_strings`, and other tools where the AI may discover significant findings.
+
+2. **Consider an MCP resource for notes.** The MCP protocol supports `resources` — a read-only data channel that clients can subscribe to. Exposing notes as an MCP resource (e.g. `notes://current`) would allow clients to poll for updates without explicit tool calls. This is a larger architectural change but would improve discoverability.
+
+3. **Add a `get_progress_overview` tool.** A lightweight tool that returns just: analysis phase, note count, tool history count, and coverage percentage — without the full session summary payload. This would be cheap enough for an AI to call at the start of every turn.
+
+4. **The `since_last_digest` parameter on `get_analysis_digest` is defined but not functionally used.** The code sets `state.last_digest_timestamp` (`tools_session.py:280`) but doesn't filter the output based on it. This is dead functionality that should either be implemented or removed.
+
+5. **Consider auto-noting for decoded strings.** When `find_and_decode_encoded_strings` discovers base64/XOR-encoded IOCs, these should be auto-saved as `tool_result` notes (similar to how triage auto-saves). Currently the AI must remember to call `add_note()` manually.
+
+6. **Document the note categories more prominently.** The three categories (`general`, `function`, `tool_result`) have distinct semantic roles but this is only documented in the `add_note` parameter description. A brief explanation in the README's Session Persistence section would help.
+
+### 8.4 Documentation Reflection on Large Binary Corpus Analysis
+
+The documentation does address the challenge of large binary analysis with limited AI context windows, but it's spread across multiple locations:
+
+- **README "AI-Optimised Analysis"** section explains progressive disclosure
+- **README "Session Persistence & Notes"** section explains the note system
+- **FastPrompt.txt** provides the full analytical strategy
+- **Tool docstrings** individually explain their role
+
+**What's missing is a unified narrative.** The README explains *what* the tools do but doesn't explicitly state the *problem they solve*: "Binary analysis generates too much data for an AI context window. PeMCP's note system lets the AI work like a human analyst — investigate, record findings in shorthand, move on, and periodically review the accumulated picture."
+
+The new "Session Continuity & AI Progress Tracking" section added to Key Features addresses this gap.
+
 ### Overall Assessment
 
 PeMCP is a mature, production-quality binary analysis platform. The 113-tool MCP interface, multi-format support, session isolation, and Docker-first deployment model are substantial achievements. The codebase handles significant complexity (20+ optional libraries, incompatible dependency versions, concurrent multi-session access) with clean, well-documented patterns. Most critical issues from the previous review have been addressed. The remaining issues are targeted improvements rather than systemic problems.
+
+The notes and history system is well-designed and functionally complete. The main area for improvement is *advertisement* — making sure AI clients are consistently reminded to use notes at every relevant touchpoint, not just in the triage report and session summary. The changes made in this review address the most impactful gaps: the decompile response hint, the README Key Features and Typical Workflow sections, and the `open_file` docstring.
