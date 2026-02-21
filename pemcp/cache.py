@@ -156,44 +156,55 @@ class AnalysisCache:
         if pe_data is None:
             return None
 
-        # --- Validate file hasn't changed on disk (mtime / size) ---
+        # --- Validate file hasn't changed on disk AND touch LRU ---
+        # Single lock acquisition for both metadata validation and LRU update
+        # to reduce lock contention on the hot path.
         try:
-            if os.path.exists(current_filepath):
-                current_mtime = os.path.getmtime(current_filepath)
-                current_size = os.path.getsize(current_filepath)
-                with self._lock:
-                    meta = self._load_meta()
-                    cached_meta = meta.get(sha256, {})
+            file_exists = os.path.exists(current_filepath)
+            current_mtime = os.path.getmtime(current_filepath) if file_exists else None
+            current_size = os.path.getsize(current_filepath) if file_exists else None
+        except OSError:
+            file_exists = False
+            current_mtime = None
+            current_size = None
+
+        if file_exists and current_mtime is not None:
+            with self._lock:
+                meta = self._load_meta()
+                cached_meta = meta.get(sha256, {})
                 cached_mtime = cached_meta.get("file_mtime")
                 cached_size = cached_meta.get("file_size")
                 if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
                     logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
-                    with self._lock:
-                        self._remove_entry_and_meta(sha256)
+                    self._remove_entry_and_meta(sha256)
                     return None
                 if cached_size is not None and current_size != cached_size:
                     logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
-                    with self._lock:
-                        self._remove_entry_and_meta(sha256)
+                    self._remove_entry_and_meta(sha256)
                     return None
-        except OSError:
-            pass  # If we can't stat the file, skip this validation
-
-        # Patch session-specific field
-        pe_data["filepath"] = current_filepath
-
-        # --- Touch LRU timestamp under the lock (throttled) ---
-        try:
-            with self._lock:
-                meta = self._load_meta()
+                # Touch LRU timestamp (throttled to once per 60s)
                 if sha256 in meta:
                     last = meta[sha256].get("last_accessed", 0)
                     now = time.time()
-                    if now - last > 60:  # Only write if >60s since last update
+                    if now - last > 60:
                         meta[sha256]["last_accessed"] = now
                         self._save_meta(meta)
-        except OSError:
-            pass  # Stale LRU timestamp is acceptable
+        else:
+            # No file to validate; still update LRU
+            try:
+                with self._lock:
+                    meta = self._load_meta()
+                    if sha256 in meta:
+                        last = meta[sha256].get("last_accessed", 0)
+                        now = time.time()
+                        if now - last > 60:
+                            meta[sha256]["last_accessed"] = now
+                            self._save_meta(meta)
+            except OSError:
+                pass  # Stale LRU timestamp is acceptable
+
+        # Patch session-specific field
+        pe_data["filepath"] = current_filepath
 
         logger.info("Cache HIT for %s...", sha256[:12])
         return pe_data
