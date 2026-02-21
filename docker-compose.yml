@@ -30,6 +30,7 @@ services:
       - "127.0.0.1:${PEMCP_PORT:-8082}:8082"
     volumes:
       - ./samples:/samples:ro
+      - ${PEMCP_OUTPUT:-./output}:/output:rw
       - pemcp-data:/app/home/.pemcp
       - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
     environment:
@@ -43,6 +44,7 @@ services:
       - "0.0.0.0"
       - "--allowed-paths"
       - "/samples"
+      - "/output"
       - "--samples-path"
       - "/samples"
     restart: unless-stopped
@@ -64,6 +66,7 @@ services:
     stdin_open: true
     volumes:
       - ./samples:/samples:ro
+      - ${PEMCP_OUTPUT:-./output}:/output:rw
       - pemcp-data:/app/home/.pemcp
       - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
     environment:
