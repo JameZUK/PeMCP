@@ -224,13 +224,36 @@ def _parse_floss_analysis(
         logger.info("FLOSS: Starting static string context enrichment...")
         image_base_from_meta = floss_results_dict.get("metadata", {}).get("imagebase")
         if image_base_from_meta:
+            # Build file-offset-to-VA conversion table from PE sections
+            _offset_to_va_sections = []
+            try:
+                from pemcp.config import state as _fstate
+                pe_obj = _fstate.pe_object
+                if pe_obj and hasattr(pe_obj, 'sections'):
+                    for sec in pe_obj.sections:
+                        raw_ptr = sec.PointerToRawData
+                        raw_size = sec.SizeOfRawData
+                        virt_addr = sec.VirtualAddress
+                        if raw_size > 0:
+                            _offset_to_va_sections.append((raw_ptr, raw_size, virt_addr))
+            except Exception as e_sec:
+                logger.warning(f"Could not build offset-to-VA table: {e_sec}")
+
+            def _file_offset_to_va(file_offset):
+                """Convert a file offset to a virtual address using PE section mapping."""
+                for raw_ptr, raw_size, virt_addr in _offset_to_va_sections:
+                    if raw_ptr <= file_offset < raw_ptr + raw_size:
+                        return image_base_from_meta + virt_addr + (file_offset - raw_ptr)
+                # Fallback: treat offset as RVA (matches old behavior)
+                return image_base_from_meta + file_offset
+
             static_strings_list = floss_results_dict["strings"]["static_strings"]
             total_enriched_strings = 0
             logger.debug(f"Attempting to enrich {len(static_strings_list)} static strings.")
             for i, string_item in enumerate(static_strings_list):
                 try:
                     string_offset = int(string_item["offset"], 16)
-                    string_va = image_base_from_meta + string_offset
+                    string_va = _file_offset_to_va(string_offset)
                     xrefs = vw.getXrefsTo(string_va)
 
                     if i > 0 and i % 100 == 0:

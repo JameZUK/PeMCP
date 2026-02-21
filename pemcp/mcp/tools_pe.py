@@ -378,6 +378,10 @@ async def open_file(
                         "The file may be malformed or excessively complex. "
                         "Set PEMCP_ANALYSIS_TIMEOUT env var to increase the limit."
                     )
+
+                # Rank strings with StringSifter (PE mode)
+                await asyncio.to_thread(_perform_unified_string_sifting, state.pe_data)
+
                 await ctx.report_progress(95, 100)
 
                 # Store in cache
@@ -668,6 +672,9 @@ async def reanalyze_loaded_pe_file(
         state.pe_object = new_pe_obj_from_thread
         state.pe_data = new_parsed_data_from_thread
 
+        # Rank strings with StringSifter
+        _perform_unified_string_sifting(state.pe_data)
+
         # Update cache with fresh results
         sha256 = state.pe_data.get("file_hashes", {}).get("sha256")
         if sha256:
@@ -693,7 +700,7 @@ async def reanalyze_loaded_pe_file(
 
 
 @tool_decorator
-async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
+async def get_analyzed_file_summary(ctx: Context, limit: int = 50) -> Dict[str, Any]:
     """
     Retrieves a high-level summary of the pre-loaded and analyzed PE file.
 
@@ -702,7 +709,7 @@ async def get_analyzed_file_summary(ctx: Context, limit: int) -> Dict[str, Any]:
 
     Args:
         ctx: The MCP Context object.
-        limit: (int) Mandatory. Limits the number of top-level key-value pairs returned. Must be positive.
+        limit: (int) Limits the number of top-level key-value pairs returned. Must be positive. Default 50.
 
     Returns:
         A dictionary containing summary information.
