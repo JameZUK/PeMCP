@@ -7,6 +7,7 @@ import asyncio
 from typing import Dict, Any, Optional, List
 from pemcp.config import state, logger, Context, STRINGSIFTER_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
+from pemcp.utils import safe_regex_search as _safe_regex_search
 from pemcp.parsers.strings import _decode_single_byte_xor, _format_hex_dump_lines
 if STRINGSIFTER_AVAILABLE:
     from pemcp.mcp.tools_strings import _get_sifter_models
@@ -283,10 +284,11 @@ async def find_and_decode_encoded_strings(
         raise ValueError("Parameter 'max_decode_layers' must be an integer between 1 and 10.")
 
     # Validate regex patterns upfront to avoid wasting CPU on decode cycles
+    _compiled_decoded_regex = []
     if decoded_regex_patterns:
         for i, pat in enumerate(decoded_regex_patterns):
             try:
-                re.compile(pat)
+                _compiled_decoded_regex.append(re.compile(pat))
             except re.error as e:
                 raise ValueError(f"Invalid regex pattern at index {i} ('{pat}'): {e}")
 
@@ -377,12 +379,12 @@ async def find_and_decode_encoded_strings(
 
         # --- Final filtering and result creation ---
         if final_decoded_text and len(final_decoded_text) >= min_decoded_printable_length:
-            if decoded_regex_patterns:
+            if _compiled_decoded_regex:
                 try:
-                    if not any(re.search(p, final_decoded_text) for p in decoded_regex_patterns):
+                    if not any(_safe_regex_search(p, final_decoded_text) for p in _compiled_decoded_regex):
                         continue
-                except re.error:
-                    await ctx.warning("An invalid regex was skipped during search.")
+                except ValueError:
+                    await ctx.warning("A regex timed out during search (possible ReDoS). Skipping.")
                     continue
 
             snippet_start = max(0, start_offset - 16)

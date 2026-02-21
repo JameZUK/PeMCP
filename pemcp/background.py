@@ -107,12 +107,8 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
                           progress_percent=100, progress_message="Analysis complete.")
         print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
 
-    except (OSError, RuntimeError, ValueError, TypeError) as e:
-        logger.error(f"Background task {task_id} failed: {type(e).__name__}: {e}", exc_info=True)
-        state.update_task(task_id, error=str(e), status=TASK_FAILED)
-        print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
     except Exception as e:
-        logger.error(f"Background task {task_id} failed unexpectedly: {type(e).__name__}: {e}", exc_info=True)
+        logger.error(f"Background task {task_id} failed: {type(e).__name__}: {e}", exc_info=True)
         state.update_task(task_id, error=str(e), status=TASK_FAILED)
         print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
 
