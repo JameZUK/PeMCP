@@ -98,17 +98,17 @@ class TestFormatDetectMarkers:
     def test_rust_markers_list_is_comprehensive(self):
         """Ensure the Rust marker list includes deep-binary markers."""
         import inspect
-        from pemcp.mcp.tools_format_detect import detect_binary_format
-        source = inspect.getsource(detect_binary_format)
-        # These markers should be present in the detection logic
+        import pemcp.mcp.tools_format_detect as fmt_mod
+        source = inspect.getsource(fmt_mod)
+        # These markers should be present in the detection module
         for marker in ["rust_eh_personality", "__rust_alloc", "core::panicking"]:
             assert marker in source, f"Missing Rust marker: {marker}"
 
     def test_go_markers_list_is_comprehensive(self):
         """Ensure the Go marker list includes additional markers."""
         import inspect
-        from pemcp.mcp.tools_format_detect import detect_binary_format
-        source = inspect.getsource(detect_binary_format)
+        import pemcp.mcp.tools_format_detect as fmt_mod
+        source = inspect.getsource(fmt_mod)
         for marker in ["runtime.goexit", "go.string."]:
             assert marker in source, f"Missing Go marker: {marker}"
 

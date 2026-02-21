@@ -77,6 +77,7 @@ common_args() {
     local args=(
         --rm
         --user "$(id -u):$(id -g)"
+        --group-add 1500
         -e "HOME=/app/home"
         -e "USER=${USER:-pemcp}"
         -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
