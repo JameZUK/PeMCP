@@ -11,6 +11,22 @@ from pemcp.user_config import get_config_value, set_config_value, get_masked_con
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 
 
+def _resolve_export_dir() -> Optional[str]:
+    """Resolve the internal export directory from environment with fallback chain.
+
+    Checks PEMCP_EXPORT_DIR first, then falls back to /output, then /tmp.
+    Returns None if no usable directory is found.
+    """
+    export_dir = os.environ.get("PEMCP_EXPORT_DIR", "/output")
+    if os.path.isdir(export_dir):
+        return export_dir
+    if os.path.isdir("/output"):
+        return "/output"
+    if os.path.isdir("/tmp"):
+        return "/tmp"
+    return None
+
+
 def _build_mount_mappings() -> List[Dict[str, str]]:
     """Build a list of known container-to-host path mappings from environment variables.
 
@@ -46,9 +62,7 @@ def _build_mount_mappings() -> List[Dict[str, str]]:
 
     # Legacy: PEMCP_HOST_EXPORT maps to the export directory
     export_host = os.environ.get("PEMCP_HOST_EXPORT")
-    export_dir = os.environ.get("PEMCP_EXPORT_DIR", "/output")
-    if not os.path.isdir(export_dir):
-        export_dir = "/output" if os.path.isdir("/output") else None
+    export_dir = _resolve_export_dir()
     if export_host and export_dir:
         if not any(m["internal"] == export_dir for m in mappings):
             mappings.append({"internal": export_dir, "external": export_host})
@@ -169,22 +183,28 @@ def _get_environment_info() -> Dict[str, Any]:
             if p not in writable_paths:
                 writable_paths.append(p)
 
-    # Samples dir info
+    # Build mount mappings once — used for both path translation and host lookups
+    mount_mappings = _build_mount_mappings()
+
+    # Samples dir info — derive host path from mount mappings
     samples_internal = state.samples_path
-    samples_host = os.environ.get("PEMCP_HOST_SAMPLES")
+    samples_host = next(
+        (m["external"] for m in mount_mappings if m["internal"] == samples_internal),
+        None,
+    )
     samples_writable = (
         samples_internal is not None
         and os.path.isdir(samples_internal)
         and os.access(samples_internal, os.W_OK)
     )
 
-    # Export dir info
-    export_dir = os.environ.get("PEMCP_EXPORT_DIR", "/output")
-    if not os.path.isdir(export_dir):
-        # Fallback chain: /output -> /tmp
-        export_dir = "/output" if os.path.isdir("/output") else "/tmp"
-    export_host = os.environ.get("PEMCP_HOST_EXPORT")
-    export_writable = os.path.isdir(export_dir) and os.access(export_dir, os.W_OK)
+    # Export dir info — use shared helper, derive host path from mount mappings
+    export_dir = _resolve_export_dir()
+    export_host = next(
+        (m["external"] for m in mount_mappings if m["internal"] == export_dir),
+        None,
+    ) if export_dir else None
+    export_writable = export_dir is not None and os.path.isdir(export_dir) and os.access(export_dir, os.W_OK)
 
     # Cache dir
     cache_dir = os.path.expanduser("~/.pemcp/cache")
@@ -214,9 +234,6 @@ def _get_environment_info() -> Dict[str, Any]:
             "writable": export_writable,
         },
     }
-
-    # Include mount mappings for path translation
-    mount_mappings = _build_mount_mappings()
 
     return {
         "containerized": container_info["containerized"],
