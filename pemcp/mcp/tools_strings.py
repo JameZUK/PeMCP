@@ -248,7 +248,7 @@ async def get_capa_analysis_info(ctx: Context,
         limit: (int) Max capability rules to return. Must be positive.
         offset: (Optional[int]) Starting index for rule pagination. Defaults to 0.
         filter_rule_name: (Optional[str]) Filter rules by name/ID (substring, case-insensitive).
-        filter_namespace: (Optional[str]) Filter rules by namespace (exact, case-insensitive).
+        filter_namespace: (Optional[str]) Filter rules by namespace prefix (case-insensitive, e.g. 'anti-analysis' matches 'anti-analysis/obfuscation/...').
         filter_attck_id: (Optional[str]) Filter rules by ATT&CK ID/tactic (substring, case-insensitive).
         filter_mbc_id: (Optional[str]) Filter rules by MBC ID/objective (substring, case-insensitive).
         fields_per_rule: (Optional[List[str]]) Specific top-level fields for each rule (e.g., ["meta", "source", "matches"]).
@@ -341,7 +341,7 @@ async def get_capa_analysis_info(ctx: Context,
 
         passes_filter = True
         if filter_rule_name and filter_rule_name.lower() not in str(meta.get("name", rule_id)).lower(): passes_filter = False
-        if passes_filter and filter_namespace and meta.get("namespace", "").lower() != filter_namespace.lower(): passes_filter = False
+        if passes_filter and filter_namespace and not meta.get("namespace", "").lower().startswith(filter_namespace.lower()): passes_filter = False
 
         if passes_filter and filter_attck_id:
             attck_values = meta.get("att&ck", [])

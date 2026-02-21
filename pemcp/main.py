@@ -353,6 +353,7 @@ def main():
                         floss_quiet_mode_arg=floss_quiet_resolved,
                         analyses_to_skip=analyses_to_skip_arg_list
                     )
+                    _perform_unified_string_sifting(state.pe_data)
 
                 logger.info(f"MCP: Successfully loaded analysis for: {abs_input_file}.")
 

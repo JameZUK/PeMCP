@@ -14,7 +14,7 @@ if STRINGSIFTER_AVAILABLE:
 
 
 @tool_decorator
-async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_line: Optional[int]=16, limit_lines: Optional[int]=256) -> List[str]:
+async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_line: Optional[int]=16, limit_lines: Optional[int]=256, offset: Optional[int] = None) -> List[str]:
     """
     Retrieves a hex dump of a specified region from the pre-loaded PE file.
     'limit_lines' controls the number of lines in the output.
@@ -25,6 +25,7 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
     Args:
         ctx: The MCP Context object.
         start_offset: (int) The starting offset (0-based) in the file from which to begin the hex dump.
+        offset: (Optional[int]) Alias for start_offset. If provided, overrides start_offset.
         length: (int) The number of bytes to include in the hex dump. Must be positive.
         bytes_per_line: (Optional[int]) The number of bytes to display per line. Defaults to 16. Must be positive.
         limit_lines: (Optional[int]) The maximum number of lines to return. Defaults to 256. Must be positive.
@@ -35,6 +36,8 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
         RuntimeError: If no PE file is currently loaded or a hex dump error occurs.
         ValueError: If inputs are invalid, or if the response size exceeds the server limit.
     """
+    if offset is not None:
+        start_offset = offset  # Allow 'offset' as an alias for 'start_offset'
     await ctx.info(f"Hex dump requested: Offset {hex(start_offset)}, Length {length}, Bytes/Line {bytes_per_line}, Limit Lines {limit_lines}")
     if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
         raise RuntimeError(
@@ -319,20 +322,21 @@ async def find_and_decode_encoded_strings(
         original_encoded_bytes = match.group(0)
         start_offset = match.start()
 
-        # --- HEURISTIC: Calculate confidence based on section ---
-        confidence = 0.5 # Default low confidence
+        # --- HEURISTIC: Calculate initial confidence based on section ---
+        section_confidence = 0.5  # Default low confidence
         try:
             section = pe.get_section_by_offset(start_offset)
             if section:
                 sec_name = section.Name.decode('utf-8', 'ignore').strip('\x00')
                 if '.data' in sec_name or '.rdata' in sec_name:
-                    confidence = 1.0 # High confidence for data sections
+                    section_confidence = 1.0  # High confidence for data sections
                 elif '.text' not in sec_name:
-                    confidence = 0.8 # Medium confidence for other non-code sections
+                    section_confidence = 0.8  # Medium confidence for other non-code sections
         except Exception:
-            pass # Keep default confidence if section lookup fails
+            pass  # Keep default confidence if section lookup fails
 
-        if confidence < min_confidence:
+        # Early filter: skip candidates that can't possibly reach min_confidence
+        if section_confidence < min_confidence:
             continue
 
         # --- MULTI-LAYER DECODING ---
@@ -379,6 +383,30 @@ async def find_and_decode_encoded_strings(
 
         # --- Final filtering and result creation ---
         if final_decoded_text and len(final_decoded_text) >= min_decoded_printable_length:
+            # Adjust confidence based on decoded content quality
+            confidence = section_confidence
+            decoded_stripped = final_decoded_text.strip()
+
+            # Reduce confidence for purely numeric strings (dates, versions)
+            if decoded_stripped.isdigit():
+                confidence *= 0.3
+
+            # Reduce confidence for common benign patterns
+            _benign_patterns = (
+                re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}'),    # date YYYY-MM-DD
+                re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}'),   # version x.y.z
+                re.compile(r'^[A-Z][a-z]+ \d{1,2},? \d{4}'), # "January 1, 2024"
+            )
+            if any(p.match(decoded_stripped) for p in _benign_patterns):
+                confidence *= 0.4
+
+            # Very short decoded strings are less interesting
+            if len(decoded_stripped) < 8:
+                confidence *= 0.7
+
+            if confidence < min_confidence:
+                continue
+
             if _compiled_decoded_regex:
                 try:
                     if not any(_safe_regex_search(p, final_decoded_text) for p in _compiled_decoded_regex):
