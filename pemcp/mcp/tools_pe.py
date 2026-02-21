@@ -517,20 +517,7 @@ async def reanalyze_loaded_pe_file(
     skip_capa_analysis: Optional[bool] = None,
     skip_floss_analysis: Optional[bool] = None,
     pre_analyze_angr: bool = False,
-    floss_min_length: Optional[int] = None,
-    floss_verbose_level: Optional[int] = None,
-    floss_script_debug_level_for_floss_loggers: Optional[str] = None,
-    floss_format: Optional[str] = None,
-    floss_no_static: Optional[bool] = None,
-    floss_no_stack: Optional[bool] = None,
-    floss_no_tight: Optional[bool] = None,
-    floss_no_decoded: Optional[bool] = None,
-    floss_only_static: Optional[bool] = None,
-    floss_only_stack: Optional[bool] = None,
-    floss_only_tight: Optional[bool] = None,
-    floss_only_decoded: Optional[bool] = None,
-    floss_functions: Optional[List[str]] = None,
-    floss_quiet: Optional[bool] = None,
+    floss_options: Optional[Dict[str, Any]] = None,
     verbose_mcp_output: bool = False,
     skip_full_peid_scan: bool = False,
     peid_scan_all_sigs_heuristically: bool = False
@@ -542,6 +529,25 @@ async def reanalyze_loaded_pe_file(
 
     If 'pre_analyze_angr' is True, it will also build the Angr Control Flow Graph (CFG) to speed up
     subsequent decompilation and graph queries.
+
+    Args:
+        ctx: The MCP Context object.
+        peid_db_path: (str) Optional path to a custom PEiD database.
+        yara_rules_path: (str) Optional path to custom YARA rules.
+        capa_rules_dir: (str) Optional path to capa rules directory.
+        capa_sigs_dir: (str) Optional path to capa signatures directory.
+        analyses_to_skip: (list[str]) Analysis names to skip (e.g. ["capa", "floss", "yara", "peid"]).
+        skip_capa_analysis: (bool) Shorthand to skip/force capa analysis.
+        skip_floss_analysis: (bool) Shorthand to skip/force FLOSS analysis.
+        pre_analyze_angr: (bool) If True, build the Angr CFG for faster subsequent analysis.
+        floss_options: (dict) Optional FLOSS configuration. Accepted keys:
+            min_length (int), verbose_level (int), debug_level (str: NONE/DEFAULT/TRACE/SUPERTRACE),
+            format (str), no_static/no_stack/no_tight/no_decoded (bool),
+            only_static/only_stack/only_tight/only_decoded (bool),
+            functions (list[str]: hex addresses), quiet (bool).
+        verbose_mcp_output: (bool) Enable verbose output. Default False.
+        skip_full_peid_scan: (bool) Skip full PEiD scan. Default False.
+        peid_scan_all_sigs_heuristically: (bool) Enable heuristic PEiD scanning. Default False.
     """
 
     if state.filepath is None or not os.path.exists(state.filepath):
@@ -612,38 +618,43 @@ async def reanalyze_loaded_pe_file(
         else:
             current_capa_sigs_dir_to_use = capa_sigs_dir
 
-    mcp_floss_min_len = floss_min_length if floss_min_length is not None else FLOSS_MIN_LENGTH_DEFAULT
-    mcp_floss_verbose_level = floss_verbose_level if floss_verbose_level is not None else 0
+    # Unpack FLOSS options from the consolidated dict (defaults for all keys)
+    fo = floss_options or {}
+    mcp_floss_min_len = fo.get("min_length", FLOSS_MIN_LENGTH_DEFAULT)
+    mcp_floss_verbose_level = fo.get("verbose_level", 0)
 
     mcp_floss_script_debug_level_enum_val = Actual_DebugLevel_Floss.NONE
-    if floss_script_debug_level_for_floss_loggers:
+    floss_debug_level_str = fo.get("debug_level")
+    if floss_debug_level_str:
         floss_debug_map = {
             "NONE": Actual_DebugLevel_Floss.NONE, "DEFAULT": Actual_DebugLevel_Floss.DEFAULT,
             "DEBUG": Actual_DebugLevel_Floss.DEFAULT,
             "TRACE": Actual_DebugLevel_Floss.TRACE, "SUPERTRACE": Actual_DebugLevel_Floss.SUPERTRACE
         }
-        mcp_floss_script_debug_level_enum_val = floss_debug_map.get(floss_script_debug_level_for_floss_loggers.upper(), Actual_DebugLevel_Floss.NONE)
+        mcp_floss_script_debug_level_enum_val = floss_debug_map.get(str(floss_debug_level_str).upper(), Actual_DebugLevel_Floss.NONE)
 
-    mcp_floss_format_hint = floss_format if floss_format is not None else "auto"
+    mcp_floss_format_hint = fo.get("format", "auto")
 
     mcp_floss_disabled_types = []
-    if floss_no_static: mcp_floss_disabled_types.append(Actual_StringType_Floss.STATIC)
-    if floss_no_stack: mcp_floss_disabled_types.append(Actual_StringType_Floss.STACK)
-    if floss_no_tight: mcp_floss_disabled_types.append(Actual_StringType_Floss.TIGHT)
-    if floss_no_decoded: mcp_floss_disabled_types.append(Actual_StringType_Floss.DECODED)
+    if fo.get("no_static"): mcp_floss_disabled_types.append(Actual_StringType_Floss.STATIC)
+    if fo.get("no_stack"): mcp_floss_disabled_types.append(Actual_StringType_Floss.STACK)
+    if fo.get("no_tight"): mcp_floss_disabled_types.append(Actual_StringType_Floss.TIGHT)
+    if fo.get("no_decoded"): mcp_floss_disabled_types.append(Actual_StringType_Floss.DECODED)
 
     mcp_floss_only_types = []
-    if floss_only_static: mcp_floss_only_types.append(Actual_StringType_Floss.STATIC)
-    if floss_only_stack: mcp_floss_only_types.append(Actual_StringType_Floss.STACK)
-    if floss_only_tight: mcp_floss_only_types.append(Actual_StringType_Floss.TIGHT)
-    if floss_only_decoded: mcp_floss_only_types.append(Actual_StringType_Floss.DECODED)
+    if fo.get("only_static"): mcp_floss_only_types.append(Actual_StringType_Floss.STATIC)
+    if fo.get("only_stack"): mcp_floss_only_types.append(Actual_StringType_Floss.STACK)
+    if fo.get("only_tight"): mcp_floss_only_types.append(Actual_StringType_Floss.TIGHT)
+    if fo.get("only_decoded"): mcp_floss_only_types.append(Actual_StringType_Floss.DECODED)
 
     mcp_floss_functions_to_analyze = []
+    floss_functions = fo.get("functions")
     if floss_functions:
         for func_str in floss_functions:
             try: mcp_floss_functions_to_analyze.append(int(func_str, 0))
             except ValueError: await ctx.warning(f"Invalid FLOSS function address '{func_str}', skipping.")
 
+    floss_quiet = fo.get("quiet")
     mcp_floss_quiet_mode = floss_quiet if floss_quiet is not None else (not verbose_mcp_output)
 
     def perform_analysis_in_thread():
