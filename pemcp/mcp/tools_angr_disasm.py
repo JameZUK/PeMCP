@@ -464,6 +464,10 @@ async def get_annotated_disassembly(
             "address": hex(addr_used),
             "instruction_count": len(instructions),
             "instructions": instructions,
+            "next_step": (
+                "Call auto_note_function(address) to save a behavioral summary, "
+                "or add_note(content, category='tool_result') to record specific findings."
+            ),
         }
 
     result = await asyncio.to_thread(_annotate)
