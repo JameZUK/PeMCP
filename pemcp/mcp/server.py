@@ -3,6 +3,7 @@ import copy
 import functools
 import json
 import logging
+import time
 
 from typing import Dict, Any, Optional
 
@@ -16,6 +17,46 @@ from pemcp.state import get_session_key_from_context, activate_session_state, ge
 mcp_server = FastMCP("PEFileAnalyzerMCP")
 _raw_tool_decorator = mcp_server.tool()
 
+# Tools excluded from automatic history recording to avoid noise / recursion.
+_SKIP_HISTORY_TOOLS = frozenset({
+    "get_tool_history", "clear_tool_history", "get_session_summary",
+    "get_notes", "add_note", "delete_note", "update_note",
+})
+
+
+def _extract_key_params(kwargs: dict) -> Dict[str, Any]:
+    """Build a compact parameter snapshot for history recording."""
+    params: Dict[str, Any] = {}
+    for k, v in kwargs.items():
+        if k == "ctx":
+            continue
+        if isinstance(v, str) and len(v) > 200:
+            params[k] = v[:200] + "..."
+        elif isinstance(v, (list, dict)):
+            params[k] = f"<{type(v).__name__}({len(v)})>"
+        else:
+            params[k] = v
+    return params
+
+
+def _build_result_summary(result: Any) -> str:
+    """Extract a short summary string from a tool result."""
+    if not isinstance(result, dict):
+        return ""
+    parts = []
+    if "status" in result:
+        parts.append(f"status={result['status']}")
+    if "risk_level" in result:
+        parts.append(f"risk_level={result['risk_level']}")
+    if "count" in result:
+        parts.append(f"count={result['count']}")
+    if "error" in result:
+        parts.append(f"error={str(result['error'])[:80]}")
+    if not parts:
+        keys = list(result.keys())[:3]
+        parts.append(f"keys: {', '.join(keys)}")
+    return "; ".join(parts)[:200]
+
 
 def tool_decorator(func):
     """MCP tool decorator that activates per-session state before each call.
@@ -23,6 +64,9 @@ def tool_decorator(func):
     Wraps the underlying FastMCP ``tool()`` decorator so that every tool
     invocation first resolves the correct ``AnalyzerState`` for the current
     MCP session (relevant in HTTP mode with concurrent clients).
+
+    Automatically records tool invocations in the session's tool history
+    (except for meta-tools listed in ``_SKIP_HISTORY_TOOLS``).
     """
     @functools.wraps(func)
     async def _with_session(*args, **kwargs):
@@ -33,8 +77,27 @@ def tool_decorator(func):
                 activate_session_state(key)
                 break
         # Update last-active timestamp for session TTL tracking
-        get_current_state().touch()
-        return await func(*args, **kwargs)
+        current_state = get_current_state()
+        current_state.touch()
+
+        start_time = time.time()
+        result = await func(*args, **kwargs)
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        # Record tool invocation in history (skip meta-tools)
+        tool_name = func.__name__
+        if tool_name not in _SKIP_HISTORY_TOOLS:
+            try:
+                current_state.record_tool_call(
+                    tool_name=tool_name,
+                    parameters=_extract_key_params(kwargs),
+                    result_summary=_build_result_summary(result),
+                    duration_ms=duration_ms,
+                )
+            except Exception:
+                pass  # Never let history recording break a tool
+
+        return result
     return _raw_tool_decorator(_with_session)
 
 # --- MCP Feedback Helpers ---

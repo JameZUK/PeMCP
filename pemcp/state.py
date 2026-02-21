@@ -6,6 +6,7 @@ In HTTP mode each MCP session gets its own ``AnalyzerState`` instance so
 concurrent clients cannot interfere with each other.
 """
 import contextvars
+import datetime
 import logging
 import time
 import threading
@@ -15,6 +16,9 @@ logger = logging.getLogger("PeMCP")
 
 # Maximum number of completed/failed background tasks to retain per session.
 MAX_COMPLETED_TASKS = 50
+
+# Maximum number of tool history entries to retain per session.
+MAX_TOOL_HISTORY = 500
 
 # Stale session TTL in seconds (1 hour).
 SESSION_TTL_SECONDS = 3600
@@ -59,6 +63,18 @@ class AnalyzerState:
         self._task_lock = threading.Lock()
         self.background_tasks: Dict[str, Dict[str, Any]] = {}
         self.monitor_thread_started = False
+
+        # Notes (persisted per-binary via cache)
+        self._notes_lock = threading.Lock()
+        self._notes_counter: int = 0
+        self.notes: List[Dict[str, Any]] = []
+
+        # Tool History (per-session, saved to cache on close)
+        self._history_lock = threading.Lock()
+        self.tool_history: List[Dict[str, Any]] = []
+
+        # Previous session context (populated from cache on open_file)
+        self.previous_session_history: List[Dict[str, Any]] = []
 
         # Timestamp of last activity (for session TTL cleanup)
         self.last_active: float = time.time()
@@ -124,6 +140,110 @@ class AnalyzerState:
         to_remove = len(finished) - MAX_COMPLETED_TASKS
         for tid, _ in finished[:to_remove]:
             del self.background_tasks[tid]
+
+    # ------------------------------------------------------------------
+    #  Notes accessors
+    # ------------------------------------------------------------------
+
+    def add_note(self, content: str, category: str = "general",
+                 address: Optional[str] = None, tool_name: Optional[str] = None) -> Dict[str, Any]:
+        """Thread-safe note creation. Returns the new note dict."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        with self._notes_lock:
+            self._notes_counter += 1
+            note: Dict[str, Any] = {
+                "id": f"n_{int(now.timestamp())}_{self._notes_counter}",
+                "category": category,
+                "address": address,
+                "tool_name": tool_name,
+                "content": content,
+                "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+            }
+            self.notes.append(note)
+            return dict(note)
+
+    def get_notes(self, category: Optional[str] = None,
+                  address: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Thread-safe filtered read of notes. Returns copies."""
+        with self._notes_lock:
+            result = list(self.notes)
+        if category:
+            result = [n for n in result if n.get("category") == category]
+        if address:
+            result = [n for n in result if n.get("address") == address]
+        return result
+
+    def update_note(self, note_id: str, **kwargs) -> Optional[Dict[str, Any]]:
+        """Thread-safe partial update. Returns updated note or None."""
+        with self._notes_lock:
+            for note in self.notes:
+                if note["id"] == note_id:
+                    for k, v in kwargs.items():
+                        if k in ("content", "category", "address", "tool_name") and v is not None:
+                            note[k] = v
+                    note["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    return dict(note)
+        return None
+
+    def delete_note(self, note_id: str) -> bool:
+        """Thread-safe note removal. Returns True if found and deleted."""
+        with self._notes_lock:
+            for i, note in enumerate(self.notes):
+                if note["id"] == note_id:
+                    self.notes.pop(i)
+                    return True
+        return False
+
+    def get_all_notes_snapshot(self) -> List[Dict[str, Any]]:
+        """Thread-safe snapshot of all notes for cache persistence."""
+        with self._notes_lock:
+            return [dict(n) for n in self.notes]
+
+    # ------------------------------------------------------------------
+    #  Tool history accessors
+    # ------------------------------------------------------------------
+
+    def record_tool_call(self, tool_name: str, parameters: Dict[str, Any],
+                         result_summary: str, duration_ms: int) -> None:
+        """Thread-safe recording of a tool invocation."""
+        entry: Dict[str, Any] = {
+            "tool_name": tool_name,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "timestamp_epoch": time.time(),
+            "parameters": parameters,
+            "result_summary": result_summary,
+            "duration_ms": duration_ms,
+            "sha256": (self.pe_data or {}).get("file_hashes", {}).get("sha256"),
+        }
+        with self._history_lock:
+            self.tool_history.append(entry)
+            if len(self.tool_history) > MAX_TOOL_HISTORY:
+                self.tool_history = self.tool_history[-MAX_TOOL_HISTORY:]
+
+    def get_tool_history(self, tool_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Thread-safe filtered read of tool history."""
+        with self._history_lock:
+            result = list(self.tool_history)
+        if tool_name:
+            result = [h for h in result if h.get("tool_name") == tool_name]
+        return result
+
+    def clear_tool_history(self) -> int:
+        """Thread-safe clear. Returns count of entries removed."""
+        with self._history_lock:
+            count = len(self.tool_history)
+            self.tool_history = []
+            return count
+
+    def get_tool_history_snapshot(self) -> List[Dict[str, Any]]:
+        """Thread-safe snapshot of history for cache persistence."""
+        with self._history_lock:
+            return list(self.tool_history)
+
+    # ------------------------------------------------------------------
+    #  Angr state
+    # ------------------------------------------------------------------
 
     def set_angr_results(self, project, cfg, loop_cache, loop_cache_config):
         """Atomically set all angr analysis results."""
