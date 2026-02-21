@@ -112,6 +112,14 @@ common_args() {
         args+=(--env-file "$env_file")
     fi
 
+    # Build PEMCP_PATH_MAP: semicolon-separated internal=external path pairs
+    # so MCP clients can translate container paths to host paths.
+    local path_map="$CONTAINER_SAMPLES=$SAMPLES_DIR"
+    if [[ -n "${OUTPUT_DIR:-}" && -d "$OUTPUT_DIR" ]]; then
+        path_map="$path_map;/output=$OUTPUT_DIR"
+    fi
+    args+=(-e "PEMCP_PATH_MAP=$path_map")
+
     echo "${args[@]}"
 }
 
@@ -175,6 +183,7 @@ cmd_analyze() {
     $RUNTIME run -it \
         $(common_args) \
         -v "$dir:/app/input:ro${SELINUX_SUFFIX}" \
+        -e "PEMCP_PATH_MAP=$CONTAINER_SAMPLES=$SAMPLES_DIR;/app/input=$dir" \
         "$IMAGE_NAME" \
         --input-file "/app/input/$base" --verbose \
         "$@"

@@ -16,6 +16,7 @@ from pemcp.config import (
     DEFAULT_PEID_DB_PATH,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from pemcp.mcp.tools_config import build_path_info
 from pemcp.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from pemcp.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
 
@@ -402,9 +403,12 @@ async def open_file(
         await ctx.report_progress(100, 100)
         await ctx.info(f"File loaded successfully: {abs_path}")
 
+        path_info = build_path_info(abs_path)
         result = {
             "status": "success",
             "filepath": abs_path,
+            "internal_path": path_info["internal_path"],
+            "external_path": path_info["external_path"],
             "mode": mode,
             "loaded_from_cache": _loaded_from_cache,
             "analyses_skipped": skip_list if skip_list else "none",
@@ -472,6 +476,7 @@ async def close_file(ctx: Context) -> Dict[str, str]:
         return {"status": "no_file", "message": "No file was loaded."}
 
     closed_path = state.filepath
+    closed_path_info = build_path_info(closed_path)
 
     # Persist notes and tool history to cache before clearing state
     sha = (state.pe_data or {}).get("file_hashes", {}).get("sha256") if state.pe_data else None
@@ -493,7 +498,12 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     state.previous_session_history = []
 
     await ctx.info(f"Closed file: {closed_path}")
-    return {"status": "success", "message": f"File '{closed_path}' closed and analysis data cleared."}
+    return {
+        "status": "success",
+        "message": f"File '{closed_path}' closed and analysis data cleared.",
+        "internal_path": closed_path_info["internal_path"],
+        "external_path": closed_path_info["external_path"],
+    }
 
 
 @tool_decorator

@@ -36,6 +36,7 @@ services:
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
       - PEMCP_API_KEY=${PEMCP_API_KEY:-}
+      - PEMCP_PATH_MAP=/samples=${PEMCP_SAMPLES:-./samples};/output=${PEMCP_OUTPUT:-./output}
     command:
       - "--mcp-server"
       - "--mcp-transport"
@@ -71,6 +72,7 @@ services:
       - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
+      - PEMCP_PATH_MAP=/samples=${PEMCP_SAMPLES:-./samples};/output=${PEMCP_OUTPUT:-./output}
     command: ["--mcp-server", "--samples-path", "/samples"]
     profiles:
       - stdio
