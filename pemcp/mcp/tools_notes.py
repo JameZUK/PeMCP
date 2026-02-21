@@ -147,8 +147,9 @@ async def delete_note(
 @tool_decorator
 async def auto_note_function(
     ctx: Context,
-    function_address: str,
+    function_address: str = "",
     custom_summary: Optional[str] = None,
+    address: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Auto-generates a one-line behavioral summary of a function and saves it as a
@@ -162,6 +163,7 @@ async def auto_note_function(
     Args:
         ctx: The MCP Context object.
         function_address: (str) Hex address of the function (e.g. '0x401000').
+        address: (Optional[str]) Alias for function_address.
         custom_summary: (Optional[str]) If provided, use this as the summary
             instead of auto-generating. Useful when you've read the decompilation
             and want to record a specific finding.
@@ -171,6 +173,11 @@ async def auto_note_function(
         and the note ID.
     """
     from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB, CATEGORY_DESCRIPTIONS
+
+    if address is not None and not function_address:
+        function_address = address
+    if not function_address:
+        raise ValueError("Either 'function_address' or 'address' must be provided.")
 
     _check_pe_loaded("auto_note_function")
 

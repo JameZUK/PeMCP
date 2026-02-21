@@ -871,7 +871,17 @@ async def scan_for_embedded_files(
             if BINWALK_CLI_ONLY:
                 results, warning = _scan_cli()
             else:
-                results = _scan_python_api()
+                try:
+                    results = _scan_python_api()
+                except Exception as e_api:
+                    if shutil.which("binwalk"):
+                        logger.warning(
+                            "Binwalk Python API failed (%s), falling back to CLI",
+                            e_api,
+                        )
+                        results, warning = _scan_cli()
+                    else:
+                        raise
             response = {
                 "total_found": len(results),
                 "embedded_files": results[:limit],

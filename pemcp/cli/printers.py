@@ -528,6 +528,7 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
         floss_quiet_mode_cli,
         analyses_to_skip=effective_analyses_to_skip
     )
+    _perform_unified_string_sifting(cli_pe_info_dict)
 
     _print_file_hashes_cli(cli_pe_info_dict.get('file_hashes',{}))
     _print_dos_header_cli(cli_pe_info_dict.get('dos_header',{}))
