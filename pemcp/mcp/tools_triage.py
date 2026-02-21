@@ -28,6 +28,18 @@ if STRINGSIFTER_AVAILABLE:
 
 
 # ===================================================================
+#  Workflow hints — included in triage output to guide note-taking
+# ===================================================================
+
+_TRIAGE_WORKFLOW_HINTS = [
+    "Key triage findings have been auto-saved as notes — call get_analysis_digest() to review.",
+    "After decompiling a function, call auto_note_function(address) to record what you learned.",
+    "Use add_note(content, category='tool_result') to save important manual findings.",
+    "Call get_analysis_digest() periodically to see accumulated findings without re-reading earlier outputs.",
+]
+
+
+# ===================================================================
 #  Suspicious Import Database (risk-categorized)
 # ===================================================================
 
@@ -1486,6 +1498,81 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
 
 
 # ===================================================================
+#  Auto-note helper — saves key triage findings for the analysis digest
+# ===================================================================
+
+def _auto_save_triage_notes(triage_report: Dict[str, Any]) -> None:
+    """Auto-create 'tool_result' notes from triage findings.
+
+    Called after each triage run so that ``get_analysis_digest()`` always
+    has meaningful data.  Skips if triage notes already exist to avoid
+    duplicates on re-triage.
+    """
+    from pemcp.mcp.tools_notes import _persist_notes_to_cache
+
+    # Check if triage notes already exist (idempotent)
+    existing = state.get_notes(category="tool_result")
+    if any(n.get("content", "").startswith("Triage:") for n in existing):
+        return
+
+    risk_level = triage_report.get("risk_level", "UNKNOWN")
+    risk_score = triage_report.get("risk_score", 0)
+
+    # Build risk summary
+    parts = [f"{risk_level} risk (score {risk_score})"]
+    packing = triage_report.get("packing_assessment", {})
+    if isinstance(packing, dict) and packing.get("likely_packed"):
+        packer_names = packing.get("peid_matches", [])
+        packer = packer_names[0] if packer_names else "unknown packer"
+        parts.append(f"likely packed ({packer})")
+    sig = triage_report.get("digital_signature", {})
+    if isinstance(sig, dict):
+        parts.append("signed" if sig.get("present") else "unsigned")
+
+    sus = triage_report.get("suspicious_imports", [])
+    critical_imports = []
+    if isinstance(sus, list):
+        critical_imports = [
+            imp.get("function", "?")
+            for imp in sus
+            if isinstance(imp, dict) and imp.get("risk") == "CRITICAL"
+        ]
+    if critical_imports:
+        parts.append(f"{len(critical_imports)} CRITICAL imports")
+
+    state.add_note(
+        content=f"Triage: {', '.join(parts)}",
+        category="tool_result",
+        tool_name="get_triage_report",
+    )
+
+    # Note critical imports individually (up to 3)
+    for func_name in critical_imports[:3]:
+        state.add_note(
+            content=f"CRITICAL import: {func_name}",
+            category="tool_result",
+            tool_name="get_triage_report",
+        )
+
+    # Note network IOCs if present
+    net = triage_report.get("network_iocs", {})
+    if isinstance(net, dict):
+        ioc_parts = []
+        for ioc_type in ("ip_addresses", "urls", "domains"):
+            ioc_list = net.get(ioc_type, [])
+            if isinstance(ioc_list, list) and ioc_list:
+                ioc_parts.append(f"{len(ioc_list)} {ioc_type.replace('_', ' ')}")
+        if ioc_parts:
+            state.add_note(
+                content=f"Network IOCs: {', '.join(ioc_parts)}",
+                category="tool_result",
+                tool_name="get_triage_report",
+            )
+
+    _persist_notes_to_cache()
+
+
+# ===================================================================
 #  Public tool — Orchestrator
 # ===================================================================
 
@@ -1765,6 +1852,9 @@ async def get_triage_report(
     # Cache for use by get_analysis_digest and other progressive tools
     state._cached_triage = triage_report
 
+    # Auto-save key triage findings as notes for the analysis digest
+    _auto_save_triage_notes(triage_report)
+
     if compact:
         # Build compact summary: risk info + top findings as one-liners
         findings = []
@@ -1806,7 +1896,9 @@ async def get_triage_report(
             "top_findings": findings[:8],
             "suggested_next_tools": triage_report.get("suggested_next_tools", []),
             "note": "Use get_triage_report(compact=False) for full details.",
+            "workflow_hints": _TRIAGE_WORKFLOW_HINTS,
         }
         return await _check_mcp_response_size(ctx, compact_report, "get_triage_report")
 
+    triage_report["workflow_hints"] = _TRIAGE_WORKFLOW_HINTS
     return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "the 'indicator_limit' parameter")

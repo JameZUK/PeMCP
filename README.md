@@ -768,16 +768,27 @@ These tools are designed for progressive, context-efficient analysis by AI clien
 #### Recommended AI Workflow
 
 1. **`get_config()`** — discover writable paths, container environment, and available libraries
-2. **`open_file(path)`** — load binary, auto-starts background angr CFG
-3. **`get_triage_report(compact=True)`** — initial risk assessment in ~2KB
+2. **`open_file(path)`** — load binary, auto-starts background angr CFG. If `session_context` is present, call `get_analysis_digest()` first to review previous findings.
+3. **`get_triage_report(compact=True)`** — initial risk assessment in ~2KB. **Key findings are auto-saved as notes.**
 4. **`get_focused_imports()`** — understand what suspicious APIs are imported
 5. **`get_strings_summary()`** — categorised string overview
 6. **`get_function_map(limit=20)`** — find the most interesting functions to investigate
 7. **`decompile_function_with_angr(address)`** — deep-dive into each target
-8. **`auto_note_function(address)`** — record what you learned from each function
-9. **`get_analysis_digest()`** — refresh your understanding as context fills up
+8. **`auto_note_function(address)`** — **ALWAYS call after each decompilation** to record what you learned
+9. **`add_note(content, category='tool_result')`** — record any important manual findings (decoded IOCs, anti-debug tricks, etc.)
+10. **`get_analysis_digest()`** — call every 3-5 decompilations to refresh your understanding
 
 ### Session Persistence & Notes
+
+Notes and tool history are the primary mechanism for preserving analysis context across sessions and managing long-running investigations within limited context windows. All notes and history persist to disk automatically.
+
+**How notes work:**
+- **Automatic**: `get_triage_report()` auto-saves risk assessment, critical imports, and IOCs as `tool_result` notes
+- **Function summaries**: `auto_note_function(address)` generates and saves one-line behavioral summaries from API patterns — call this after every decompilation
+- **Manual findings**: `add_note(content, category='tool_result')` records specific observations (decoded C2 URLs, crypto keys, evasion techniques)
+- **Aggregation**: `get_analysis_digest()` compiles all notes into an actionable summary with coverage stats and unexplored targets
+- **Persistence**: Notes survive server restarts. When the same file is reopened, all previous notes and history are restored automatically
+- **Export**: `export_project` bundles analysis + notes + history + optionally the binary into a `.pemcp_project.tar.gz` for sharing
 
 | Tool | Description |
 |---|---|
