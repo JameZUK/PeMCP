@@ -1,6 +1,6 @@
 """MCP tools for managing analysis notes on the currently loaded file."""
-from typing import Dict, Any, Optional
-from pemcp.config import state, Context, analysis_cache
+from typing import Dict, Any, Optional, List
+from pemcp.config import state, logger, Context, analysis_cache, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
 
@@ -142,3 +142,99 @@ async def delete_note(
     _persist_notes_to_cache()
     await ctx.info(f"Note deleted: {note_id}")
     return {"status": "success", "message": f"Note '{note_id}' deleted."}
+
+
+@tool_decorator
+async def auto_note_function(
+    ctx: Context,
+    function_address: str,
+    custom_summary: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Auto-generates a one-line behavioral summary of a function and saves it as a
+    persistent note. Uses API call pattern matching (not LLM inference) based on
+    the function's callees in the CFG.
+
+    Call this after decompiling a function to build up the analysis digest —
+    later, get_analysis_digest() will aggregate all function notes without
+    needing the full decompilation output in context.
+
+    Args:
+        ctx: The MCP Context object.
+        function_address: (str) Hex address of the function (e.g. '0x401000').
+        custom_summary: (Optional[str]) If provided, use this as the summary
+            instead of auto-generating. Useful when you've read the decompilation
+            and want to record a specific finding.
+
+    Returns:
+        A dictionary with the function name, auto-generated summary, APIs called,
+        and the note ID.
+    """
+    from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB, CATEGORY_DESCRIPTIONS
+
+    _check_pe_loaded("auto_note_function")
+
+    apis_called: List[str] = []
+    category_tags: List[str] = []
+    func_name = f"sub_{function_address.replace('0x', '')}"
+
+    if ANGR_AVAILABLE and state.angr_project is not None and state.angr_cfg is not None:
+        from pemcp.mcp._angr_helpers import _parse_addr, _resolve_function_address, _ensure_project_and_cfg
+
+        target_addr = _parse_addr(function_address)
+
+        try:
+            _ensure_project_and_cfg()
+            func, addr_used = _resolve_function_address(target_addr)
+            func_name = func.name
+
+            # Get callees from CFG
+            callgraph = state.angr_cfg.functions.callgraph
+            cats_seen: set = set()
+            try:
+                for callee_addr in callgraph.successors(addr_used):
+                    if callee_addr in state.angr_cfg.functions:
+                        cname = state.angr_cfg.functions[callee_addr].name
+                        for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
+                            if api_name in cname:
+                                apis_called.append(cname)
+                                cats_seen.add(cat)
+                                break
+            except Exception:
+                pass
+            category_tags = sorted(cats_seen)
+        except Exception as e:
+            logger.debug("auto_note_function: angr lookup failed: %s", e)
+
+    # Generate auto summary
+    if custom_summary:
+        summary = custom_summary
+    elif apis_called:
+        cat_descs = []
+        for cat in category_tags[:3]:
+            desc = CATEGORY_DESCRIPTIONS.get(cat, cat).split(" — ")[0]
+            cat_descs.append(desc)
+        api_list = ', '.join(apis_called[:5])
+        if cat_descs:
+            summary = f"{'; '.join(cat_descs)} using {api_list}"
+        else:
+            summary = f"Calls {api_list}"
+    else:
+        summary = custom_summary or f"Function at {function_address} (no suspicious APIs detected)"
+
+    # Save as a persistent note
+    note = state.add_note(
+        content=summary,
+        category="function",
+        address=function_address,
+    )
+    _persist_notes_to_cache()
+
+    return {
+        "address": function_address,
+        "function_name": func_name,
+        "auto_summary": summary,
+        "note_id": note["id"],
+        "apis_called": apis_called[:10],
+        "category_tags": category_tags,
+    }

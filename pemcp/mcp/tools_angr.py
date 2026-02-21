@@ -795,7 +795,8 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
 async def get_function_complexity_list(
     ctx: Context,
     limit: int = 20,
-    sort_by: str = "blocks"  # "blocks" or "edges"
+    sort_by: str = "blocks",  # "blocks" or "edges"
+    compact: bool = False,
 ) -> Dict[str, Any]:
     """
     Lists functions ranked by complexity (block count or edge count).
@@ -804,6 +805,8 @@ async def get_function_complexity_list(
     Args:
         limit: Max number of functions to return.
         sort_by: Criterion to sort by: 'blocks' (default) or 'edges'.
+        compact: (bool) If True, return minimal fields (addr, name, blocks) only.
+            Reduces per-function output size significantly. Default False.
     """
 
     await ctx.info(f"Requesting function complexity list. Limit: {limit}, Sort: {sort_by}")
@@ -827,20 +830,29 @@ async def get_function_complexity_list(
                 # Fallback if access fails
                 block_count = 0
 
-            # func.graph.edges usually returns a View, list() ensures it's countable
-            edge_count = len(list(func.graph.edges))
+            if compact:
+                funcs_data.append({
+                    "name": func.name,
+                    "addr": hex(func.addr),
+                    "blocks": block_count,
+                })
+            else:
+                # func.graph.edges usually returns a View, list() ensures it's countable
+                edge_count = len(list(func.graph.edges))
 
-            funcs_data.append({
-                "name": func.name,
-                "address": hex(func.addr),
-                "blocks": block_count,
-                "edges": edge_count,
-                "is_entry_point": (func.addr == state.angr_project.entry)
-            })
+                funcs_data.append({
+                    "name": func.name,
+                    "address": hex(func.addr),
+                    "blocks": block_count,
+                    "edges": edge_count,
+                    "is_entry_point": (func.addr == state.angr_project.entry)
+                })
 
         # Sort
-        key = "edges" if sort_by == "edges" else "blocks"
-        funcs_data.sort(key=lambda x: x[key], reverse=True)
+        key = "blocks"
+        if not compact and sort_by == "edges":
+            key = "edges"
+        funcs_data.sort(key=lambda x: x.get(key, 0), reverse=True)
 
         return {
             "total_functions_scanned": len(funcs_data),
@@ -1068,3 +1080,138 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
     result = await asyncio.to_thread(_patch)
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "patch_binary_memory")
+
+
+# ---- Cross-Reference Map (multi-dimensional, AI-friendly) ----
+
+@tool_decorator
+async def get_cross_reference_map(
+    ctx: Context,
+    function_addresses: List[str],
+    depth: int = 1,
+) -> Dict[str, Any]:
+    """
+    Returns a unified cross-reference view for one or more functions — connecting
+    API calls, string references, callers, callees, suspicious imports, and
+    complexity in a single compact response.
+
+    Eliminates the need to call 3-4 separate tools (decompile, xrefs, strings,
+    imports) to understand what a function does and how it connects.
+
+    Args:
+        ctx: The MCP Context object.
+        function_addresses: (List[str]) One or more hex addresses of functions to map.
+        depth: (int) Callee depth to follow (1 = direct callees only, 2 = callees of callees). Default 1.
+
+    Returns:
+        A dictionary with per-function cross-reference data.
+    """
+    from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB
+
+    _check_angr_ready("get_cross_reference_map")
+    if not function_addresses:
+        raise ValueError("function_addresses must contain at least one address.")
+
+    parsed_addrs = [_parse_addr(a) for a in function_addresses[:10]]  # cap at 10
+
+    def _build_xref_map():
+        _ensure_project_and_cfg()
+
+        callgraph = state.angr_cfg.functions.callgraph
+
+        # String address lookup
+        string_addrs: Dict[int, str] = {}
+        pe_data = state.pe_data or {}
+        for s_obj in (pe_data.get('basic_ascii_strings') or []):
+            if isinstance(s_obj, dict):
+                addr = s_obj.get('offset')
+                val = s_obj.get('string', '')
+                if isinstance(addr, int) and val:
+                    string_addrs[addr] = val[:80]
+
+        functions_result: Dict[str, Any] = {}
+
+        for target_addr in parsed_addrs:
+            try:
+                func, addr_used = _resolve_function_address(target_addr)
+            except KeyError:
+                functions_result[hex(target_addr)] = {"error": "Function not found"}
+                continue
+
+            # Callees (depth-aware)
+            calls = []
+            suspicious_apis = []
+            visited = set()
+
+            def _collect_callees(fn_addr, current_depth):
+                if current_depth > depth or fn_addr in visited:
+                    return
+                visited.add(fn_addr)
+                try:
+                    for callee_addr in callgraph.successors(fn_addr):
+                        if callee_addr in state.angr_cfg.functions:
+                            cfunc = state.angr_cfg.functions[callee_addr]
+                            cname = cfunc.name
+                            if cname not in calls:
+                                calls.append(cname)
+                            for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
+                                if api_name in cname:
+                                    suspicious_apis.append({"name": cname, "risk": risk, "category": cat})
+                                    break
+                            if current_depth < depth:
+                                _collect_callees(callee_addr, current_depth + 1)
+                except Exception:
+                    pass
+
+            _collect_callees(addr_used, 1)
+
+            # Callers
+            callers = []
+            try:
+                for caller_addr in callgraph.predecessors(addr_used):
+                    if caller_addr in state.angr_cfg.functions:
+                        callers.append(state.angr_cfg.functions[caller_addr].name)
+            except Exception:
+                pass
+
+            # String references
+            strings_referenced = []
+            try:
+                for block in func.blocks:
+                    for insn_addr in block.instruction_addrs:
+                        xrefs = state.angr_project.kb.xrefs.xrefs_by_ins_addr.get(insn_addr, [])
+                        for xref in xrefs:
+                            if xref.memory_data and xref.memory_data.addr in string_addrs:
+                                s = string_addrs[xref.memory_data.addr]
+                                if s not in strings_referenced:
+                                    strings_referenced.append(s)
+            except Exception:
+                pass
+
+            # Complexity
+            try:
+                block_count = len(list(func.blocks))
+                edge_count = func.graph.number_of_edges()
+            except Exception:
+                block_count = 0
+                edge_count = 0
+
+            functions_result[hex(addr_used)] = {
+                "name": func.name,
+                "calls": calls[:30],
+                "called_by": callers[:20],
+                "strings_referenced": strings_referenced[:20],
+                "suspicious_apis": suspicious_apis,
+                "complexity": {"blocks": block_count, "edges": edge_count},
+            }
+
+        return functions_result
+
+    result_data = await asyncio.to_thread(_build_xref_map)
+
+    result = {
+        "functions": result_data,
+        "depth": depth,
+    }
+
+    return await _check_mcp_response_size(ctx, result, "get_cross_reference_map")

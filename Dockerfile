@@ -206,6 +206,11 @@ COPY FastPrompt.txt .
 # build time.  This is safe because the container is single-tenant.
 RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
 
+# --- Create writable output directory ---
+# Default export/output directory for project archives, patched binaries, and reports.
+# run.sh mounts a host directory here; without a mount this provides a writable fallback.
+RUN mkdir -p /output && chmod 777 /output
+
 # --- Declare volumes ---
 # Persistent cache and configuration
 VOLUME ["/app/home/.pemcp"]
