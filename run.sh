@@ -98,7 +98,7 @@ common_args() {
     # Users place Windows DLLs, Linux libs, etc. here for Qiling emulation.
     # See docs/QILING_ROOTFS.md for setup instructions.
     if [[ -d "$ROOTFS_DIR" ]]; then
-        args+=(-v "$ROOTFS_DIR:/app/qiling-rootfs")
+        args+=(-v "$ROOTFS_DIR:/app/qiling-rootfs:rw${SELINUX_SUFFIX}")
     fi
 
     # Pass VT_API_KEY if set
@@ -133,6 +133,7 @@ cmd_http() {
         "$IMAGE_NAME" \
         --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
         --samples-path "$CONTAINER_SAMPLES" \
+        --allowed-paths "$CONTAINER_SAMPLES" "/output" \
         "$@"
 }
 
@@ -173,7 +174,7 @@ cmd_analyze() {
     # shellcheck disable=SC2046
     $RUNTIME run -it \
         $(common_args) \
-        -v "$dir:/app/input:$MOUNT_OPTS" \
+        -v "$dir:/app/input:ro${SELINUX_SUFFIX}" \
         "$IMAGE_NAME" \
         --input-file "/app/input/$base" --verbose \
         "$@"
