@@ -149,9 +149,11 @@ PYEOF
 
 # Make rootfs group-writable so the runtime registry-stub generator and
 # user-mounted rootfs volumes work when the container runs as a non-root UID.
-# A dedicated 'pemcp' group (GID 1500) is used with 775 permissions instead of
-# world-writable 777.  run.sh adds --group-add 1500 to grant access.
-RUN groupadd -g 1500 pemcp && chmod -R 775 /app/qiling-rootfs && chgrp -R pemcp /app/qiling-rootfs
+# A dedicated group (gid 1500) is used so the container user can write without
+# full world-writable (777) permissions.  run.sh passes --group-add 1500.
+RUN groupadd -g 1500 pemcp && \
+    chown -R root:pemcp /app/qiling-rootfs && \
+    chmod -R 775 /app/qiling-rootfs
 
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
@@ -199,15 +201,18 @@ COPY userdb.txt .
 COPY FastPrompt.txt .
 
 # --- Create writable home directory for runtime data ---
-# run.sh passes --user "$(id -u):$(id -g)" so the container runs as the
-# host user.  HOME is set to /app/home which is group-writable via the
-# 'pemcp' group (GID 1500).  run.sh adds --group-add 1500.
-RUN mkdir -p /app/home/.pemcp/cache && chgrp -R pemcp /app/home && chmod -R 775 /app/home
+# run.sh passes --user "$(id -u):$(id -g)" --group-add 1500 so the
+# container runs as the host user with membership in the pemcp group.
+# Group-writable (775) so any UID in the pemcp group can create
+# ~/.pemcp/cache and config.json inside it.
+RUN mkdir -p /app/home/.pemcp/cache && \
+    chown -R root:pemcp /app/home && \
+    chmod -R 775 /app/home
 
 # --- Create writable output directory ---
 # Default export/output directory for project archives, patched binaries, and reports.
 # run.sh mounts a host directory here; without a mount this provides a writable fallback.
-RUN mkdir -p /output && chgrp pemcp /output && chmod 775 /output
+RUN mkdir -p /output && chown root:pemcp /output && chmod 775 /output
 
 # --- Declare volumes ---
 # Persistent cache and configuration

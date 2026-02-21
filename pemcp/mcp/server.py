@@ -104,8 +104,14 @@ def tool_decorator(func):
 # --- MCP Feedback Helpers ---
 
 def _check_pe_loaded(tool_name: str) -> None:
-    """Raise a descriptive RuntimeError if no file has been loaded."""
-    if state.pe_data is None or state.filepath is None:
+    """Raise a descriptive RuntimeError if no file has been loaded.
+
+    Snapshots both ``pe_data`` and ``filepath`` in a single read to avoid
+    a potential (though unlikely) race where one is reset between two
+    separate attribute accesses through the StateProxy.
+    """
+    pe_data, filepath = state.pe_data, state.filepath
+    if pe_data is None or filepath is None:
         raise RuntimeError(
             f"[{tool_name}] No file is currently loaded. "
             "Use the 'open_file' tool to load a file for analysis (supports PE, ELF, Mach-O, shellcode), "

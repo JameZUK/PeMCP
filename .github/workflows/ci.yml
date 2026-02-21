@@ -82,5 +82,5 @@ jobs:
       - name: Lint with ruff
         run: |
           ruff check pemcp/ tests/ \
-            --select=E9,F63,F7,F82,F841,W291,W292,W293 \
+            --select=E9,F63,F7,F82,F841,W291,W292,W293,B006,B007,B018,UP031,UP032,RUF005,RUF010,RUF019,G010 \
             --no-fix
