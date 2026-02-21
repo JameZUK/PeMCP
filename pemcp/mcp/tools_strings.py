@@ -1005,3 +1005,141 @@ async def fuzzy_search_strings(
     data_to_send = matches[:limit]
     limit_info = "the 'limit' parameter or by adjusting 'min_similarity_ratio'"
     return await _check_mcp_response_size(ctx, data_to_send, "fuzzy_search_strings", limit_info)
+
+
+# ---- Categorized String Summary (AI-friendly) ----
+
+@tool_decorator
+async def get_strings_summary(
+    ctx: Context,
+    top_per_category: int = 5,
+    min_sifter_score: float = 0.0,
+    categories: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    Categorizes all extracted strings by type and returns counts with top examples.
+    Far more context-efficient than dumping thousands of raw strings.
+
+    Categories: urls, ip_addresses, domains, file_paths, registry_keys,
+    mutex_names, email_addresses, base64_blobs, high_value (ML-scored).
+
+    Args:
+        ctx: The MCP Context object.
+        top_per_category: (int) Max example strings per category. Default 5.
+        min_sifter_score: (float) Minimum StringSifter score to include in 'high_value'. Default 0.0.
+        categories: (Optional[List[str]]) Filter to specific categories. None = all.
+
+    Returns:
+        A dictionary with categorized string counts and examples.
+    """
+    from pemcp.mcp._category_maps import STRING_CATEGORY_PATTERNS, BENIGN_IP_PREFIXES
+
+    _check_pe_loaded("get_strings_summary")
+
+    # Collect all string values (reuse pattern from triage)
+    all_strings: list = []
+    all_string_values: set = set()
+
+    # FLOSS strings with metadata
+    if 'floss_analysis' in state.pe_data and isinstance(state.pe_data['floss_analysis'], dict):
+        floss_strings = state.pe_data['floss_analysis'].get('strings')
+        if isinstance(floss_strings, dict):
+            for str_list in floss_strings.values():
+                if isinstance(str_list, list):
+                    for s in str_list:
+                        if isinstance(s, dict):
+                            val = s.get('string', '')
+                            if val and val not in all_string_values:
+                                all_string_values.add(val)
+                                all_strings.append(s)
+                        elif isinstance(s, str) and s not in all_string_values:
+                            all_string_values.add(s)
+                            all_strings.append({"string": s})
+
+    # Basic ASCII strings
+    basic = state.pe_data.get('basic_ascii_strings', [])
+    if isinstance(basic, list):
+        for s in basic:
+            if isinstance(s, dict):
+                val = s.get('string', '')
+                if val and val not in all_string_values:
+                    all_string_values.add(val)
+                    all_strings.append(s)
+            elif isinstance(s, str) and s not in all_string_values:
+                all_string_values.add(s)
+                all_strings.append({"string": s})
+
+    total_strings = len(all_strings)
+
+    # Categorize using patterns
+    categorized: Dict[str, list] = {cat: [] for cat in STRING_CATEGORY_PATTERNS}
+    categorized["high_value"] = []
+
+    for s_obj in all_strings:
+        s = s_obj.get("string", "") if isinstance(s_obj, dict) else str(s_obj)
+        if not s:
+            continue
+
+        for cat_name, pattern in STRING_CATEGORY_PATTERNS.items():
+            m = pattern.search(s)
+            if m:
+                # IP validation: skip private/benign IPs
+                if cat_name == "ip_addresses":
+                    ip = m.group()
+                    octets = ip.split('.')
+                    try:
+                        first = int(octets[0])
+                        if first in BENIGN_IP_PREFIXES:
+                            continue
+                        if first == 192 and int(octets[1]) == 168:
+                            continue
+                        if first == 172 and 16 <= int(octets[1]) <= 31:
+                            continue
+                        if not all(0 <= int(o) <= 255 for o in octets):
+                            continue
+                    except (ValueError, IndexError):
+                        continue
+                categorized[cat_name].append(s)
+
+        # High-value strings (ML-scored)
+        score = s_obj.get("sifter_score", 0.0) if isinstance(s_obj, dict) else 0.0
+        if isinstance(score, (int, float)) and score >= max(min_sifter_score, 7.0):
+            categorized["high_value"].append(s)
+
+    # Build result
+    result_categories: Dict[str, Any] = {}
+    active_cats = categories or list(categorized.keys())
+
+    for cat_name in active_cats:
+        if cat_name not in categorized:
+            continue
+        items = categorized[cat_name]
+        # Deduplicate
+        unique = list(dict.fromkeys(items))
+        if unique:
+            result_categories[cat_name] = {
+                "count": len(unique),
+                "examples": unique[:top_per_category],
+            }
+
+    # Sifter score distribution
+    score_dist: Dict[str, int] = {"9-10": 0, "7-9": 0, "5-7": 0, "0-5": 0}
+    for s_obj in all_strings:
+        score = s_obj.get("sifter_score", 0.0) if isinstance(s_obj, dict) else 0.0
+        if isinstance(score, (int, float)):
+            if score >= 9.0:
+                score_dist["9-10"] += 1
+            elif score >= 7.0:
+                score_dist["7-9"] += 1
+            elif score >= 5.0:
+                score_dist["5-7"] += 1
+            else:
+                score_dist["0-5"] += 1
+
+    result: Dict[str, Any] = {
+        "total_strings": total_strings,
+        "categorized": result_categories,
+        "sifter_score_distribution": score_dist,
+    }
+
+    return await _check_mcp_response_size(ctx, result, "get_strings_summary")

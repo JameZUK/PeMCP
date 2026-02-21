@@ -1482,7 +1482,8 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
 async def get_triage_report(
     ctx: Context,
     sifter_score_threshold: float = 8.0,
-    indicator_limit: int = 20
+    indicator_limit: int = 20,
+    compact: bool = False,
 ) -> Dict[str, Any]:
     """
     Comprehensive automated triage of the loaded binary. Works across PE, ELF,
@@ -1502,6 +1503,8 @@ async def get_triage_report(
         ctx: The MCP Context object.
         sifter_score_threshold: (float) Min sifter score for high-value string indicators.
         indicator_limit: (int) Max items per category in the report.
+        compact: (bool) If True, return only risk level, risk score, top findings,
+            and suggested next tools (~2KB instead of ~20KB). Default False.
 
     Returns:
         A comprehensive triage dictionary with sections:
@@ -1747,5 +1750,48 @@ async def get_triage_report(
     triage_report["risk_score"] = risk_data["risk_score"]
     triage_report["risk_level"] = risk_data["risk_level"]
     triage_report["suggested_next_tools"] = risk_data["suggested_next_tools"]
+
+    # Cache for use by get_analysis_digest and other progressive tools
+    state._cached_triage = triage_report
+
+    if compact:
+        # Build compact summary: risk info + top findings as one-liners
+        findings = []
+        sus = triage_report.get("suspicious_imports", {})
+        if isinstance(sus, dict):
+            for imp in sus.get("items", [])[:3]:
+                if isinstance(imp, dict):
+                    findings.append(
+                        f"Suspicious import: {imp.get('function', '?')} "
+                        f"({imp.get('dll', '?')}) — {imp.get('severity', '?')}"
+                    )
+        packing = triage_report.get("packing_assessment", {})
+        if isinstance(packing, dict) and packing.get("likely_packed"):
+            packer = packing.get("packer_name", "unknown packer")
+            findings.append(f"Likely packed ({packer})")
+        net = triage_report.get("network_iocs", {})
+        if isinstance(net, dict):
+            for ioc_type in ("urls", "ip_addresses", "domains"):
+                ioc_list = net.get(ioc_type, [])
+                if isinstance(ioc_list, list) and ioc_list:
+                    findings.append(f"{ioc_type}: {', '.join(str(x) for x in ioc_list[:3])}")
+        caps = triage_report.get("suspicious_capabilities", {})
+        if isinstance(caps, dict):
+            for cap in caps.get("items", [])[:3]:
+                if isinstance(cap, dict):
+                    findings.append(f"Capability: {cap.get('rule', '?')} ({cap.get('namespace', '?')})")
+        sig = triage_report.get("digital_signature", {})
+        if isinstance(sig, dict):
+            if not sig.get("embedded_signature_present"):
+                findings.append("Not digitally signed")
+        compact_report = {
+            "risk_score": triage_report["risk_score"],
+            "risk_level": triage_report["risk_level"],
+            "file_info": triage_report.get("file_info", {}),
+            "top_findings": findings[:8],
+            "suggested_next_tools": triage_report.get("suggested_next_tools", []),
+            "note": "Use get_triage_report(compact=False) for full details.",
+        }
+        return await _check_mcp_response_size(ctx, compact_report, "get_triage_report")
 
     return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "the 'indicator_limit' parameter")

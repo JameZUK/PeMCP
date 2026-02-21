@@ -1,6 +1,7 @@
 """MCP tools for configuration, task status, and utility functions."""
 import datetime
-from typing import Dict, Any
+import os
+from typing import Dict, Any, List
 from pemcp.config import (
     state, Context,
     ANGR_AVAILABLE, CAPA_AVAILABLE, FLOSS_AVAILABLE,
@@ -8,6 +9,111 @@ from pemcp.config import (
 )
 from pemcp.user_config import get_config_value, set_config_value, get_masked_config
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
+
+
+def _detect_container() -> Dict[str, Any]:
+    """Detect if running inside a container and return runtime info."""
+    containerized = False
+    container_type = None
+
+    # Docker detection
+    if os.path.exists("/.dockerenv"):
+        containerized = True
+        container_type = "docker"
+    # Podman detection
+    elif os.path.exists("/run/.containerenv"):
+        containerized = True
+        container_type = "podman"
+    else:
+        # Fallback: check cgroup for docker/containerd
+        try:
+            with open("/proc/1/cgroup", "r") as f:
+                cgroup = f.read()
+                if "docker" in cgroup or "containerd" in cgroup:
+                    containerized = True
+                    container_type = "docker"
+                elif "libpod" in cgroup:
+                    containerized = True
+                    container_type = "podman"
+        except (OSError, IOError):
+            pass
+
+    return {"containerized": containerized, "container_type": container_type}
+
+
+def _get_environment_info() -> Dict[str, Any]:
+    """Build environment/path information for AI clients."""
+    container_info = _detect_container()
+
+    # Known paths to check for writability
+    candidate_paths = [
+        "/tmp",
+        "/app/home/.pemcp",
+        "/output",
+        os.path.expanduser("~/.pemcp"),
+    ]
+    if state.samples_path:
+        candidate_paths.append(state.samples_path)
+
+    writable_paths: List[str] = []
+    for p in candidate_paths:
+        if os.path.isdir(p) and os.access(p, os.W_OK):
+            if p not in writable_paths:
+                writable_paths.append(p)
+
+    # Samples dir info
+    samples_internal = state.samples_path
+    samples_host = os.environ.get("PEMCP_HOST_SAMPLES")
+    samples_writable = (
+        samples_internal is not None
+        and os.path.isdir(samples_internal)
+        and os.access(samples_internal, os.W_OK)
+    )
+
+    # Export dir info
+    export_dir = os.environ.get("PEMCP_EXPORT_DIR", "/output")
+    if not os.path.isdir(export_dir):
+        # Fallback chain: /output -> /tmp
+        export_dir = "/output" if os.path.isdir("/output") else "/tmp"
+    export_host = os.environ.get("PEMCP_HOST_EXPORT")
+    export_writable = os.path.isdir(export_dir) and os.access(export_dir, os.W_OK)
+
+    # Cache dir
+    cache_dir = os.path.expanduser("~/.pemcp/cache")
+    cache_writable = os.path.isdir(cache_dir) and os.access(cache_dir, os.W_OK)
+
+    # Recommended export path
+    if export_writable:
+        recommended = export_dir
+    elif "/tmp" in writable_paths:
+        recommended = "/tmp"
+    else:
+        recommended = writable_paths[0] if writable_paths else "/tmp"
+
+    paths: Dict[str, Any] = {
+        "samples_dir": {
+            "internal": samples_internal,
+            "host": samples_host,
+            "writable": samples_writable,
+        },
+        "cache_dir": {
+            "internal": cache_dir,
+            "writable": cache_writable,
+        },
+        "export_dir": {
+            "internal": export_dir,
+            "host": export_host,
+            "writable": export_writable,
+        },
+    }
+
+    return {
+        "containerized": container_info["containerized"],
+        "container_type": container_info["container_type"],
+        "paths": paths,
+        "writable_paths": writable_paths,
+        "recommended_export_path": recommended,
+    }
 
 
 @tool_decorator
@@ -122,8 +228,12 @@ async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, 
 @tool_decorator
 async def get_config(ctx: Context) -> Dict[str, Any]:
     """
-    Retrieves the current PeMCP configuration, including stored API keys (masked)
-    and which keys are overridden by environment variables.
+    Retrieves the current PeMCP configuration, including stored API keys (masked),
+    which keys are overridden by environment variables, and runtime environment info.
+
+    Includes container detection, writable paths, host mount mappings, and a
+    recommended export path — essential for AI clients to know where they can
+    write files without trial-and-error.
 
     This tool does not depend on a PE file being loaded.
 
@@ -131,7 +241,8 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
         ctx: The MCP Context object.
 
     Returns:
-        A dictionary containing the current configuration with sensitive values masked.
+        A dictionary containing the current configuration with sensitive values masked,
+        server capabilities, and environment/path information.
     """
     await ctx.info("Retrieving current configuration.")
     config = get_masked_config()
@@ -148,5 +259,8 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
         "loaded_filepath": state.filepath,
         "samples_path": state.samples_path,
     }
+
+    # Add environment/path information
+    config["_environment"] = _get_environment_info()
 
     return config

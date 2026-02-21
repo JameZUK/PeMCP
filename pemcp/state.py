@@ -76,6 +76,11 @@ class AnalyzerState:
         # Previous session context (populated from cache on open_file)
         self.previous_session_history: List[Dict[str, Any]] = []
 
+        # Cached analysis results for progressive disclosure tools
+        self._cached_triage: Optional[Dict[str, Any]] = None
+        self._cached_function_scores: Optional[List[Dict[str, Any]]] = None
+        self.last_digest_timestamp: float = 0.0
+
         # Timestamp of last activity (for session TTL cleanup)
         self.last_active: float = time.time()
 
