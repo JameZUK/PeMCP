@@ -396,7 +396,7 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
 def get_all_session_states() -> list:
     """Return a snapshot of all active session states (for heartbeat monitoring)."""
     with _registry_lock:
-        return list(_session_registry.values()) + [_default_state]
+        return [*list(_session_registry.values()), _default_state]
 
 
 def activate_session_state(session_key: str) -> AnalyzerState:

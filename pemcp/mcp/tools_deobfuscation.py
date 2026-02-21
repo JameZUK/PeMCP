@@ -113,11 +113,11 @@ async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
         return await _check_mcp_response_size(ctx, result, "deobfuscate_base64", limit_info_str)
 
     except ValueError as e: # Handles bytes.fromhex error or other ValueErrors
-        await ctx.error(f"Invalid hex string or Base64 content for deobfuscation: {str(e)}")
+        await ctx.error(f"Invalid hex string or Base64 content for deobfuscation: {e!s}")
         logger.warning("MCP: Invalid hex/Base64 for deobfuscation: %s... - %s", hex_string[:60], e)
         return None # Return None on decoding failure before size check
     except Exception as e: # Catch other errors like binascii.Error from codecs.decode
-        await ctx.error(f"Base64 deobfuscation error: {str(e)}")
+        await ctx.error(f"Base64 deobfuscation error: {e!s}")
         logger.error("MCP: Base64 deobfuscation error for %s... - %s", hex_string[:60], e, exc_info=True)
         return None # Return None on decoding failure
 
@@ -172,13 +172,13 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
         return await _check_mcp_response_size(ctx, data_to_send, "deobfuscate_xor_single_byte", limit_info_str)
 
     except ValueError as e_val: # Handles bytes.fromhex error
-        await ctx.error(f"Invalid hex string provided for data_hex in XOR deobfuscation: {str(e_val)}")
+        await ctx.error(f"Invalid hex string provided for data_hex in XOR deobfuscation: {e_val!s}")
         logger.warning("MCP: Invalid hex string for XOR data_hex: %s... - %s", data_hex[:60], e_val)
         raise # Re-raise to be handled by MCP framework
     except Exception as e_gen:
-        await ctx.error(f"XOR deobfuscation error: {str(e_gen)}")
+        await ctx.error(f"XOR deobfuscation error: {e_gen!s}")
         logger.error("MCP: XOR deobfuscation error for data_hex %s..., key %d - %s", data_hex[:60], key, e_gen, exc_info=True)
-        raise RuntimeError(f"XOR deobfuscation failed: {str(e_gen)}") from e_gen
+        raise RuntimeError(f"XOR deobfuscation failed: {e_gen!s}") from e_gen
 
 @tool_decorator
 async def is_mostly_printable_ascii(ctx: Context, text_input: str, threshold: float = 0.8) -> bool:
