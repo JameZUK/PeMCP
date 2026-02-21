@@ -839,7 +839,9 @@ class TestDockerSecurity:
         with open(dockerfile_path) as f:
             source = f.read()
         assert "groupadd" in source, "Dockerfile should create a dedicated group"
-        assert "chgrp" in source, "Dockerfile should use chgrp for ownership"
+        # Group ownership can be set via 'chgrp' or 'chown user:group'
+        assert "chgrp" in source or ":pemcp" in source, \
+            "Dockerfile should set group ownership (chgrp or chown user:group)"
 
     def test_run_sh_uses_group_add(self):
         """run.sh should pass --group-add to give access to pemcp group."""
