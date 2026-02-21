@@ -102,7 +102,7 @@ def _print_sections_cli(sections_data: List[Dict[str, Any]], pe_obj: Optional[pe
                     data_sample = pe_sec.get_data()[:32] # Get first 32 bytes
                     safe_print(f"    Data Sample (first 32 bytes):")
                     for line in _format_hex_dump_lines(data_sample,0,16): safe_print(f"        {line}")
-            except Exception as e: logger.debug(f"Section sample error {section_dict.get('name_str')}: {e}")
+            except Exception as e: logger.debug("Section sample error %s: %s", section_dict.get('name_str'), e)
 
 def _print_imports_cli(imports_data: List[Dict[str, Any]]):
     safe_print("\n--- Import Table ---")
@@ -483,14 +483,12 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
                               analyses_to_skip_cli_arg: Optional[List[str]] = None
                               ):
 
-    VERBOSE_CLI_OUTPUT_FLAG = verbose
-
     pefile_version_str = "unknown"
     try: pefile_version_str = pefile.__version__
     except AttributeError: pass
 
     if verbose:
-        logger.info(f"Starting CLI analysis for: {filepath}. pefile version: {pefile_version_str}")
+        logger.info("Starting CLI analysis for: %s. pefile version: %s", filepath, pefile_version_str)
 
     safe_print(f"[*] Analyzing PE file: {filepath}\n")
 
@@ -499,15 +497,15 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
         pe_obj_for_cli = pefile.PE(filepath, fast_load=False)
     except pefile.PEFormatError as e_pe_format:
         safe_print(f"[!] Error: Not a valid PE file or PE format error: {e_pe_format}")
-        logger.error(f"PEFormatError for CLI file '{filepath}': {e_pe_format}", exc_info=verbose)
+        logger.error("PEFormatError for CLI file '%s': %s", filepath, e_pe_format, exc_info=verbose)
         raise
     except FileNotFoundError:
         safe_print(f"[!] Error: Input file not found: {filepath}")
-        logger.error(f"FileNotFoundError for CLI file '{filepath}'")
+        logger.error("FileNotFoundError for CLI file '%s'", filepath)
         raise
     except Exception as e_load:
         safe_print(f"[!] Error loading PE file for CLI analysis: {type(e_load).__name__} - {e_load}")
-        logger.error(f"Generic error loading PE file '{filepath}' for CLI: {e_load}", exc_info=verbose)
+        logger.error("Generic error loading PE file '%s' for CLI: %s", filepath, e_load, exc_info=verbose)
         raise
 
     effective_analyses_to_skip = analyses_to_skip_cli_arg if analyses_to_skip_cli_arg is not None else []
@@ -566,14 +564,6 @@ def _cli_analyze_and_print_pe(filepath: str, peid_db_path: Optional[str],
         safe_print("  Skipped by user request.")
 
     _print_rich_header_cli(cli_pe_info_dict.get('rich_header'))
-
-    remaining_keys_to_print_generic = [
-        ("delay_load_imports","Delay-Load Imports"), ("tls_info", "TLS Information"),
-        ("load_config", "Load Configuration"), ("com_descriptor", ".NET COM Descriptor"),
-        ("overlay_data", "Overlay Data"), ("base_relocations", "Base Relocations"),
-        ("bound_imports", "Bound Imports"), ("exception_data", "Exception Data"),
-        ("checksum_verification", "Checksum Verification")
-    ]
 
     _print_coff_symbols_cli(cli_pe_info_dict.get('coff_symbols',[]),verbose)
     _print_pefile_warnings_cli(cli_pe_info_dict.get('pefile_warnings',[]))

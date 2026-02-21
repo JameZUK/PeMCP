@@ -540,7 +540,6 @@ def _triage_section_anomalies(indicator_limit: int) -> Tuple[List[Dict[str, Any]
         chars = str(sec.get('characteristics_str', sec.get('characteristics', '')))
         vsize = sec.get('virtual_size', sec.get('Misc_VirtualSize', 0))
         rsize = sec.get('raw_size', sec.get('SizeOfRawData', 0))
-        ent = sec.get('entropy', 0.0)
 
         if 'WRITE' in chars.upper() and 'EXECUTE' in chars.upper():
             anomalies.append({"section": name, "issue": "Write+Execute (W+X)", "severity": "HIGH"})
@@ -1059,7 +1058,6 @@ def _triage_dotnet_indicators(indicator_limit: int) -> Tuple[Dict[str, Any], int
         com_desc = state.pe_data.get('com_descriptor')
         if com_desc and isinstance(com_desc, dict):
             flags_list = com_desc.get('flags_list', [])
-            com_struct = com_desc.get('struct', {})
             return {
                 "is_dotnet": True,
                 "flags": flags_list if isinstance(flags_list, list) else [],
@@ -1398,7 +1396,6 @@ def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], i
         for entry in (entries if isinstance(entries, list) else []):
             if isinstance(entry, dict):
                 prod_id = entry.get('product_id_dec', 0)
-                build_num = entry.get('build_number', 0)
                 if isinstance(prod_id, int):
                     # Delphi/C++Builder uses product IDs 1-4
                     if prod_id in (1, 2, 3, 4) and 'Delphi' not in detected["detected_languages"]:

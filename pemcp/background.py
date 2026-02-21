@@ -67,7 +67,7 @@ def _log_task_exception(task_id: str):
     """Return a done-callback that logs unhandled exceptions from background tasks."""
     def _callback(t):
         if not t.cancelled() and t.exception() is not None:
-            logger.error(f"Background task '{task_id}' failed: {t.exception()}")
+            logger.error("Background task '%s' failed: %s", task_id, t.exception())
     return _callback
 
 
@@ -108,7 +108,7 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
         print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
 
     except Exception as e:
-        logger.error(f"Background task {task_id} failed: {type(e).__name__}: {e}", exc_info=True)
+        logger.error("Background task %s failed: %s: %s", task_id, type(e).__name__, e, exc_info=True)
         state.update_task(task_id, error=str(e), status=TASK_FAILED)
         print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
 
@@ -182,11 +182,11 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         print(f"\n[*] Background Angr Analysis finished.", file=sys.stderr)
 
     except (OSError, RuntimeError, ValueError) as e:
-        logger.error(f"Background Angr analysis failed: {type(e).__name__}: {e}", exc_info=True)
+        logger.error("Background Angr analysis failed: %s: %s", type(e).__name__, e, exc_info=True)
         state.update_task(task_id, status=TASK_FAILED, error=str(e))
         _update_progress(task_id, 0, f"Failed: {e}")
     except Exception as e:
-        logger.error(f"Background Angr analysis failed unexpectedly: {type(e).__name__}: {e}", exc_info=True)
+        logger.error("Background Angr analysis failed unexpectedly: %s: %s", type(e).__name__, e, exc_info=True)
         state.update_task(task_id, status=TASK_FAILED, error=str(e))
         _update_progress(task_id, 0, f"Failed: {e}")
 
@@ -226,5 +226,5 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
         daemon=True,
     )
     angr_thread.start()
-    logger.info(f"Background Angr analysis thread started (task_id={task_id}).")
+    logger.info("Background Angr analysis thread started (task_id=%s).", task_id)
     return task_id

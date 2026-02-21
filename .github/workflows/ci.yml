@@ -79,8 +79,8 @@ jobs:
               print('All Python files passed syntax check.')
           "
 
-      - name: Lint with ruff (critical rules only)
+      - name: Lint with ruff
         run: |
           ruff check pemcp/ tests/ \
-            --select=E9,F63,F7,F82 \
+            --select=E9,F63,F7,F82,F841,W291,W292,W293 \
             --no-fix

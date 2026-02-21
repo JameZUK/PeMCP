@@ -742,7 +742,7 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
         try:
             result["clr_version"] = str(dn.clr_header.RuntimeVersion) if hasattr(dn, 'clr_header') else None
         except Exception as e:
-            logger.debug(f"Could not read CLR version: {e}")
+            logger.debug("Could not read CLR version: %s", e)
 
         # Type definitions
         types = []
@@ -755,7 +755,7 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
                 if len(types) >= limit:
                     break
         except Exception as e:
-            logger.debug(f"Error reading .NET TypeDef table: {e}")
+            logger.debug("Error reading .NET TypeDef table: %s", e)
         result["type_definitions"] = types
 
         # Method definitions
@@ -769,7 +769,7 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
                 if len(methods) >= limit:
                     break
         except Exception as e:
-            logger.debug(f"Error reading .NET MethodDef table: {e}")
+            logger.debug("Error reading .NET MethodDef table: %s", e)
         result["method_definitions"] = methods
 
         # Assembly references
@@ -783,7 +783,7 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
                 if len(refs) >= limit:
                     break
         except Exception as e:
-            logger.debug(f"Error reading .NET AssemblyRef table: {e}")
+            logger.debug("Error reading .NET AssemblyRef table: %s", e)
         result["assembly_references"] = refs
 
         # User strings
@@ -795,7 +795,7 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
                 if len(user_strings) >= limit:
                     break
         except Exception as e:
-            logger.debug(f"Error reading .NET user strings: {e}")
+            logger.debug("Error reading .NET user strings: %s", e)
         result["user_strings"] = user_strings
 
         return result

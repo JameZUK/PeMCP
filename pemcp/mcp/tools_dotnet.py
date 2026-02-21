@@ -47,12 +47,6 @@ async def dotnet_analyze(
                 and hasattr(clr, 'struct')
                 and clr.struct is not None
             )
-            has_metadata_tables = (
-                has_clr_header
-                and hasattr(clr, 'mdtables')
-                and clr.mdtables is not None
-            )
-
             if not has_clr_header:
                 dn.close()
                 return {"error": "Not a valid .NET binary or parsing failed: 'File is not a .NET assembly.'"}
