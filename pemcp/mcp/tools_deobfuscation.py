@@ -114,11 +114,11 @@ async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
 
     except ValueError as e: # Handles bytes.fromhex error or other ValueErrors
         await ctx.error(f"Invalid hex string or Base64 content for deobfuscation: {str(e)}")
-        logger.warning(f"MCP: Invalid hex/Base64 for deobfuscation: {hex_string[:60]}... - {str(e)}")
+        logger.warning("MCP: Invalid hex/Base64 for deobfuscation: %s... - %s", hex_string[:60], e)
         return None # Return None on decoding failure before size check
     except Exception as e: # Catch other errors like binascii.Error from codecs.decode
         await ctx.error(f"Base64 deobfuscation error: {str(e)}")
-        logger.error(f"MCP: Base64 deobfuscation error for {hex_string[:60]}... - {str(e)}", exc_info=True)
+        logger.error("MCP: Base64 deobfuscation error for %s... - %s", hex_string[:60], e, exc_info=True)
         return None # Return None on decoding failure
 
 @tool_decorator
@@ -145,7 +145,7 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
     await ctx.info(f"Attempting to deobfuscate hex data '{data_hex[:60]}...' with XOR key: {key:#04x} ({key})")
     if not (0 <= key <= 255):
         await ctx.error(f"XOR key must be an integer between 0 and 255. Received: {key}")
-        logger.warning(f"MCP: Invalid XOR key {key} requested.")
+        logger.warning("MCP: Invalid XOR key %d requested.", key)
         raise ValueError("XOR key must be an integer between 0 and 255.")
 
     try:
@@ -160,7 +160,7 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
                 try: printable_representation = deobfuscated_bytes.decode('latin-1')
                 except UnicodeDecodeError: printable_representation = "".join(chr(b) if 32 <= b <= 126 or b in [9,10,13] else '.' for b in deobfuscated_bytes)
         except Exception as e_decode:
-            logger.warning(f"MCP: Error creating printable string for XOR result (key {key}): {e_decode}")
+            logger.warning("MCP: Error creating printable string for XOR result (key %d): %s", key, e_decode)
             printable_representation = "[Error creating printable string]"
 
         await ctx.info("XOR deobfuscation successful.")
@@ -173,11 +173,11 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
 
     except ValueError as e_val: # Handles bytes.fromhex error
         await ctx.error(f"Invalid hex string provided for data_hex in XOR deobfuscation: {str(e_val)}")
-        logger.warning(f"MCP: Invalid hex string for XOR data_hex: {data_hex[:60]}... - {str(e_val)}")
+        logger.warning("MCP: Invalid hex string for XOR data_hex: %s... - %s", data_hex[:60], e_val)
         raise # Re-raise to be handled by MCP framework
     except Exception as e_gen:
         await ctx.error(f"XOR deobfuscation error: {str(e_gen)}")
-        logger.error(f"MCP: XOR deobfuscation error for data_hex {data_hex[:60]}..., key {key} - {str(e_gen)}", exc_info=True)
+        logger.error("MCP: XOR deobfuscation error for data_hex %s..., key %d - %s", data_hex[:60], key, e_gen, exc_info=True)
         raise RuntimeError(f"XOR deobfuscation failed: {str(e_gen)}") from e_gen
 
 @tool_decorator
@@ -206,7 +206,7 @@ async def is_mostly_printable_ascii(ctx: Context, text_input: str, threshold: fl
 
     if not (0.0 <= threshold <= 1.0):
         await ctx.error(f"Threshold for printable check must be between 0.0 and 1.0. Received: {threshold}")
-        logger.warning(f"MCP: Invalid threshold {threshold} for printable check.")
+        logger.warning("MCP: Invalid threshold %s for printable check.", threshold)
         raise ValueError("Threshold must be between 0.0 and 1.0.")
 
     printable_char_in_string_count = sum(1 for char_in_s in text_input

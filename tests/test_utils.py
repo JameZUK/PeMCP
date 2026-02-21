@@ -1,6 +1,7 @@
 """Unit tests for pemcp/utils.py — utility functions."""
 import datetime
 import math
+import re
 import pytest
 
 pefile = pytest.importorskip("pefile", reason="pefile not installed")
@@ -10,6 +11,10 @@ from pemcp.utils import (
     format_timestamp,
     get_symbol_type_str,
     get_symbol_storage_class_str,
+    validate_regex_pattern,
+    safe_regex_search,
+    _safe_slice,
+    safe_print,
 )
 
 _HAS_SYM_DTYPE = hasattr(pefile, "IMAGE_SYM_DTYPE_POINTER")
@@ -140,3 +145,138 @@ class TestGetSymbolStorageClassStr:
     def test_unknown_class(self):
         result = get_symbol_storage_class_str(999)
         assert "UNKNOWN" in result
+
+
+# ---------------------------------------------------------------------------
+# _safe_slice
+# ---------------------------------------------------------------------------
+
+class TestSafeSlice:
+    def test_list(self):
+        assert _safe_slice([1, 2, 3, 4, 5], 3) == [1, 2, 3]
+
+    def test_tuple(self):
+        assert _safe_slice((1, 2, 3, 4), 2) == (1, 2)
+
+    def test_dict(self):
+        d = {"a": 1, "b": 2, "c": 3}
+        result = _safe_slice(d, 2)
+        assert len(result) == 2
+        assert isinstance(result, dict)
+
+    def test_string(self):
+        assert _safe_slice("hello world", 5) == "hello"
+
+    def test_set(self):
+        result = _safe_slice({1, 2, 3, 4, 5}, 3)
+        assert isinstance(result, set)
+        assert len(result) == 3
+
+    def test_frozenset(self):
+        result = _safe_slice(frozenset({1, 2, 3}), 2)
+        assert isinstance(result, frozenset)
+        assert len(result) == 2
+
+    def test_n_larger_than_collection(self):
+        assert _safe_slice([1, 2], 10) == [1, 2]
+
+    def test_empty_list(self):
+        assert _safe_slice([], 5) == []
+
+    def test_non_iterable_returns_unchanged(self):
+        assert _safe_slice(42, 5) == 42
+
+    def test_generator(self):
+        gen = (x for x in range(10))
+        result = _safe_slice(gen, 3)
+        assert result == [0, 1, 2]
+
+
+# ---------------------------------------------------------------------------
+# validate_regex_pattern
+# ---------------------------------------------------------------------------
+
+class TestValidateRegexPattern:
+    def test_valid_simple_pattern(self):
+        # Should not raise
+        validate_regex_pattern(r"hello.*world")
+
+    def test_valid_complex_pattern(self):
+        validate_regex_pattern(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b")
+
+    def test_too_long_pattern(self):
+        with pytest.raises(ValueError, match="too long"):
+            validate_regex_pattern("a" * 1001)
+
+    def test_exactly_max_length(self):
+        # Should not raise at exactly 1000 chars
+        validate_regex_pattern("a" * 1000)
+
+    def test_nested_quantifiers_rejected(self):
+        with pytest.raises(ValueError, match="nested quantifiers"):
+            validate_regex_pattern(r"(a+)+")
+
+    def test_nested_quantifiers_star(self):
+        with pytest.raises(ValueError, match="nested quantifiers"):
+            validate_regex_pattern(r"(a*)*")
+
+    def test_invalid_regex_syntax(self):
+        with pytest.raises(ValueError, match="Invalid regex"):
+            validate_regex_pattern(r"[unclosed")
+
+    def test_simple_quantifiers_allowed(self):
+        # Simple (non-nested) quantifiers should be fine
+        validate_regex_pattern(r"a+b*c?d{2,5}")
+
+    def test_empty_pattern(self):
+        # Empty pattern is valid regex
+        validate_regex_pattern("")
+
+
+# ---------------------------------------------------------------------------
+# safe_regex_search
+# ---------------------------------------------------------------------------
+
+class TestSafeRegexSearch:
+    def test_basic_match(self):
+        pattern = re.compile(r"hello")
+        result = safe_regex_search(pattern, "say hello world")
+        assert result is not None
+        assert result.group() == "hello"
+
+    def test_no_match(self):
+        pattern = re.compile(r"xyz")
+        result = safe_regex_search(pattern, "hello world")
+        assert result is None
+
+    def test_group_capture(self):
+        pattern = re.compile(r"(\d+)")
+        result = safe_regex_search(pattern, "abc 123 def")
+        assert result is not None
+        assert result.group(1) == "123"
+
+    def test_empty_text(self):
+        pattern = re.compile(r"test")
+        result = safe_regex_search(pattern, "")
+        assert result is None
+
+    def test_empty_pattern_matches(self):
+        pattern = re.compile(r"")
+        result = safe_regex_search(pattern, "any text")
+        assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# safe_print
+# ---------------------------------------------------------------------------
+
+class TestSafePrint:
+    def test_basic_print(self, capsys):
+        safe_print("hello")
+        captured = capsys.readouterr()
+        assert "hello" in captured.out
+
+    def test_with_prefix(self, capsys):
+        safe_print("world", verbose_prefix="[INFO] ")
+        captured = capsys.readouterr()
+        assert "[INFO] world" in captured.out

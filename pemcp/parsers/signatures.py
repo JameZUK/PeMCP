@@ -91,24 +91,24 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
     scan_results: List[Dict[str, Any]] = []
     if not yara_available_flag:
         logger.warning("   'yara-python' library not found. Skipping YARA scan.")
-        if verbose and YARA_IMPORT_ERROR: logger.debug(f"         [VERBOSE-DEBUG] YARA import error: {YARA_IMPORT_ERROR}")
+        if verbose and YARA_IMPORT_ERROR: logger.debug("         [VERBOSE-DEBUG] YARA import error: %s", YARA_IMPORT_ERROR)
         return scan_results
     if not yara_rules_path: # yara_rules_path is expected to be absolute if provided
         logger.info("   No YARA rules path provided. Skipping YARA scan.")
         return scan_results
     try:
-        if verbose: logger.info(f"   [VERBOSE-YARA] Loading rules from: {yara_rules_path}")
+        if verbose: logger.info("   [VERBOSE-YARA] Loading rules from: %s", yara_rules_path)
         rules = None
         if os.path.isdir(yara_rules_path):
             filepaths = {f_name: os.path.join(dirname, f_name) for dirname, _, files in os.walk(yara_rules_path) for f_name in files if f_name.lower().endswith(('.yar', '.yara'))}
-            if not filepaths: logger.warning(f"   No .yar or .yara files in dir: {yara_rules_path}"); return scan_results
+            if not filepaths: logger.warning("   No .yar or .yara files in dir: %s", yara_rules_path); return scan_results
             rules = yara.compile(filepaths=filepaths)
         elif os.path.isfile(yara_rules_path): rules = yara.compile(filepath=yara_rules_path)
-        else: logger.warning(f"   YARA rules path not valid: {yara_rules_path}"); return scan_results
+        else: logger.warning("   YARA rules path not valid: %s", yara_rules_path); return scan_results
 
         matches = rules.match(data=file_data)
         if matches:
-            logger.info(f"   YARA Matches Found ({len(matches)}):")
+            logger.info("   YARA Matches Found (%d):", len(matches))
             for match in matches:
                 match_detail:Dict[str,Any]={"rule":match.rule,"namespace":match.namespace if match.namespace!='default'else None,"tags":list(match.tags)if match.tags else None,"meta":dict(match.meta)if match.meta else None,"strings":[]}
                 if match.strings:
@@ -152,6 +152,6 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                                 match_detail["strings"].append({"offset": hex(s_match_offset), "identifier": s_match_id, "data": str_data_repr})
                 scan_results.append(match_detail)
         else: logger.info("   No YARA matches found.")
-    except yara.Error as e: logger.error(f"   YARA Error: {e}"); scan_results.append({"error":f"YARA Error: {str(e)}"})
-    except Exception as e: logger.error(f"   Unexpected YARA scan error: {e}",exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {str(e)}"})
+    except yara.Error as e: logger.error("   YARA Error: %s", e); scan_results.append({"error":f"YARA Error: {str(e)}"})
+    except Exception as e: logger.error("   Unexpected YARA scan error: %s", e, exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {str(e)}"})
     return scan_results

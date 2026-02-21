@@ -5,34 +5,7 @@ from pathlib import Path
 
 from pemcp.config import state, Context
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
-
-
-def _get_magic_hint(file_path: str) -> str:
-    """Read the first 4 bytes and return a format hint."""
-    try:
-        with open(file_path, 'rb') as f:
-            magic = f.read(4)
-        if magic[:2] == b'MZ':
-            return "PE"
-        elif magic == b'\x7fELF':
-            return "ELF"
-        elif magic in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
-                       b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
-                       b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
-            return "Mach-O"
-        elif magic[:2] == b'PK':
-            return "ZIP/Archive"
-        elif magic[:3] == b'\x1f\x8b\x08':
-            return "GZIP"
-        elif magic == b'\x7fCGC':
-            return "CGC"
-        elif len(magic) >= 2 and magic[:2] == b'\xd0\xcf':
-            return "OLE/MS-CFB"
-        elif magic[:4] == b'%PDF':
-            return "PDF"
-        return "Unknown"
-    except Exception:
-        return "Unreadable"
+from pemcp.mcp._format_helpers import get_magic_hint
 
 
 def _build_file_entry(file_path: str, base_path: str) -> Dict[str, Any]:
@@ -43,7 +16,7 @@ def _build_file_entry(file_path: str, base_path: str) -> Dict[str, Any]:
         "path": file_path,
         "relative_path": os.path.relpath(file_path, base_path),
         "size_bytes": stat.st_size,
-        "format_hint": _get_magic_hint(file_path),
+        "format_hint": get_magic_hint(file_path),
     }
 
 

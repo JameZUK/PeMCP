@@ -9,7 +9,7 @@ from pemcp.config import (
     PYELFTOOLS_AVAILABLE, LIEF_AVAILABLE,
 )
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
-from pemcp.mcp._format_helpers import _get_filepath
+from pemcp.mcp._format_helpers import _get_filepath, _MACHO_MAGICS, _MACHO_FAT_MAGICS
 
 
 @tool_decorator
@@ -52,15 +52,14 @@ async def detect_binary_format(
             suggested_tools.extend(["elf_analyze", "elf_dwarf_info"])
 
         # Mach-O
-        elif header[:4] in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
-                            b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe'):
+        elif header[:4] in _MACHO_MAGICS:
             formats.append("Mach-O")
             is_64 = header[:4] in (b'\xfe\xed\xfa\xcf', b'\xcf\xfa\xed\xfe')
             result["macho_info"] = {"bits": "64-bit" if is_64 else "32-bit"}
             suggested_tools.extend(["macho_analyze"])
 
         # Mach-O Fat/Universal
-        elif header[:4] in (b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
+        elif header[:4] in _MACHO_FAT_MAGICS:
             # 0xCAFEBABE is shared between Mach-O Fat and Java class files
             # Java class files have minor_version at offset 4 and major_version at offset 6
             # with major_version typically 45-65 (Java 1.1 to Java 21)

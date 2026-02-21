@@ -540,12 +540,6 @@ async def get_function_map(
             if block_count == 0:
                 continue
 
-            # Edge count
-            try:
-                edge_count = func.graph.number_of_edges()
-            except Exception:
-                edge_count = 0
-
             # Callers (xref in count)
             try:
                 callers = list(callgraph.predecessors(addr))

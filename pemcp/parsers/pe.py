@@ -45,7 +45,7 @@ def _safe_parse(key: str, func: Callable, *args, **kwargs) -> Any:
     try:
         return func(*args, **kwargs)
     except Exception as e:
-        logger.warning(f"Parser '{key}' failed: {type(e).__name__}: {e}")
+        logger.warning("Parser '%s' failed: %s: %s", key, type(e).__name__, e)
         return {"error": f"{key} parsing failed: {type(e).__name__}: {e}"}
 
 
@@ -61,10 +61,10 @@ def _parse_file_hashes(data: bytes) -> Dict[str, Optional[str]]:
         try:
             hashes["ssdeep"] = ssdeep_hasher.hash(data)
         except Exception as e_ssdeep:
-            logger.warning(f"ssdeep hash error: {e_ssdeep}")
+            logger.warning("ssdeep hash error: %s", e_ssdeep)
             hashes["ssdeep"] = f"Error: {e_ssdeep}"
     except Exception as e_hash:
-        logger.warning(f"File hash error: {e_hash}")
+        logger.warning("File hash error: %s", e_hash)
     return hashes
 
 
@@ -148,7 +148,7 @@ def _parse_sections(pe: pefile.PE) -> List[Dict[str, Any]]:
                 except Exception as e:
                     sec_dict['ssdeep'] = f"Error: {e}"
             except Exception as e:
-                logger.warning(f"Section hash error {sec_dict['name_str']}: {e}")
+                logger.warning("Section hash error %s: %s", sec_dict['name_str'], e)
             sections_list.append(sec_dict)
     return sections_list
 
@@ -438,7 +438,7 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
     str_peid_db_path = str(peid_db_path)
 
     if not os.path.exists(str_peid_db_path):
-        logger.info(f"PEiD DB '{str_peid_db_path}' not found. Attempting download...")
+        logger.info("PEiD DB '%s' not found. Attempting download...", str_peid_db_path)
         if not ensure_peid_db_exists(PEID_USERDB_URL, str_peid_db_path, verbose):
             peid_results["status"] = f"PEiD DB '{str_peid_db_path}' not found and download failed."
             return peid_results
@@ -464,7 +464,7 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
                         if match_name:
                             peid_results["ep_matches"].append(match_name)
         except Exception as e:
-            logger.warning(f"PEiD EP scan error: {e}", exc_info=verbose)
+            logger.warning("PEiD EP scan error: %s", e, exc_info=verbose)
 
     # Full File / Heuristic Scan
     if not skip_full_peid_scan:
@@ -491,7 +491,7 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
                     section_name_cleaned_for_log = sec.Name.decode('utf-8', 'ignore').rstrip('\x00')
                 except Exception:
                     pass
-                logger.warning(f"PEiD section data error {section_name_cleaned_for_log}: {e}")
+                logger.warning("PEiD section data error %s: %s", section_name_cleaned_for_log, e)
 
         if scan_tasks_args:
             with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
@@ -502,7 +502,7 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
                         if res_name:
                             heuristic_matches_list.append(res_name)
                     except Exception as e:
-                        logger.warning(f"PEiD scan thread error: {e}", exc_info=verbose)
+                        logger.warning("PEiD scan thread error: %s", e, exc_info=verbose)
         peid_results["heuristic_matches"] = list(set(heuristic_matches_list))
 
     peid_results["ep_matches"] = list(set(peid_results["ep_matches"]))
@@ -574,7 +574,7 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
                             try:
                                 s_name = pe.get_string_at_rva(name_rva + 2).decode('utf-8', 'ignore')
                             except Exception as e_str:
-                                logger.debug(f"Delay-load import string fetch error at RVA {hex(name_rva + 2)}: {e_str}")
+                                logger.debug("Delay-load import string fetch error at RVA %s: %s", hex(name_rva + 2), e_str)
                                 s_name = "ErrorFetchingName"
 
                         delay_syms.append({
@@ -584,10 +584,10 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
                         })
                         thunk_rva += ptr_size
                     except pefile.PEFormatError as e_pe:
-                        logger.debug(f"Delay-load import table parsing error (PEFormatError): {e_pe}")
+                        logger.debug("Delay-load import table parsing error (PEFormatError): %s", e_pe)
                         break
                     except Exception as e_gen:
-                        logger.warning(f"Unexpected error parsing delay-load import entry: {e_gen}")
+                        logger.warning("Unexpected error parsing delay-load import entry: %s", e_gen)
                         break
 
             delay_imports_list.append({
@@ -631,12 +631,12 @@ def _parse_tls_info(pe: pefile.PE, magic_type_str: str) -> Optional[Dict[str, An
                 count += 1
             except AttributeError as e_pefile_va:
                 logger.debug(
-                    f"TLS callback VA {hex(cb_va)}->RVA/offset conversion error: "
-                    f"{e_pefile_va} (likely VA out of mapped range)"
+                    "TLS callback VA %s->RVA/offset conversion error: %s (likely VA out of mapped range)",
+                    hex(cb_va), e_pefile_va
                 )
                 break
             except Exception as e:
-                logger.debug(f"TLS callback parse error VA {hex(cb_va)}: {e}")
+                logger.debug("TLS callback parse error VA %s: %s", hex(cb_va), e)
                 break
 
     tls_info['callbacks'] = callbacks
@@ -914,7 +914,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
             nt_headers_info, magic_type_str = _parse_nt_headers(pe)
             pe_info_dict['nt_headers'] = nt_headers_info
         except Exception as e:
-            logger.warning(f"Parser 'nt_headers' failed: {type(e).__name__}: {e}")
+            logger.warning("Parser 'nt_headers' failed: %s: %s", type(e).__name__, e)
             pe_info_dict['nt_headers'] = {"error": f"nt_headers parsing failed: {type(e).__name__}: {e}"}
 
         pe_info_dict['dos_header'] = _safe_parse('dos_header', _parse_dos_header, pe)

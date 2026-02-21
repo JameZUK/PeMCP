@@ -274,7 +274,7 @@ async def _check_mcp_response_size(
     except Exception as e:
         # If auto-truncation fails, fallback to the hard error so we don't crash the server
         await ctx.error(f"Auto-truncation failed: {e}")
-        logger.error(f"MCP: Truncation logic failed: {e}", exc_info=True)
+        logger.error("MCP: Truncation logic failed: %s", e, exc_info=True)
         # Fallback to a safe, tiny error message
         return {
             "error": "Response too large",

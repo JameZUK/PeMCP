@@ -25,6 +25,12 @@ PROJECT_EXTENSION = ".pemcp_project.tar.gz"
 # Directory for imported binaries when no explicit path is given
 IMPORT_DIR = Path.home() / ".pemcp" / "imported"
 
+# Maximum size of a single imported binary (default 256 MB, matches PEMCP_MAX_FILE_SIZE_MB)
+_MAX_IMPORT_BINARY_SIZE = int(os.getenv("PEMCP_MAX_FILE_SIZE_MB", "256")) * 1024 * 1024
+
+# Maximum total size of all imported binaries (default 1 GB)
+_MAX_IMPORT_DIR_SIZE = int(os.getenv("PEMCP_MAX_IMPORT_DIR_SIZE_MB", "1024")) * 1024 * 1024
+
 
 @tool_decorator
 async def export_project(
@@ -173,7 +179,9 @@ async def import_project(
     with tarfile.open(abs_path, "r:gz") as tar:
         # Security: validate member names to prevent path traversal
         for member in tar.getmembers():
-            if member.name.startswith("/") or ".." in member.name:
+            norm = os.path.normpath(member.name)
+            if (member.name.startswith("/") or norm.startswith("/")
+                    or norm.startswith("..") or norm.startswith(os.sep + "..")):
                 raise RuntimeError(
                     f"[import_project] Unsafe archive member: '{member.name}'. "
                     "Archive may have been tampered with."
@@ -261,7 +269,23 @@ async def import_project(
 
     # Extract binary and load it
     if binary_data and binary_name:
+        # Enforce per-file size limit
+        if len(binary_data) > _MAX_IMPORT_BINARY_SIZE:
+            raise RuntimeError(
+                f"[import_project] Embedded binary is too large "
+                f"({len(binary_data) / (1024*1024):.1f} MB). "
+                f"Maximum allowed is {_MAX_IMPORT_BINARY_SIZE // (1024*1024)} MB. "
+                "Set PEMCP_MAX_FILE_SIZE_MB to change this limit."
+            )
+        # Enforce total import directory size limit
         IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+        existing_size = sum(f.stat().st_size for f in IMPORT_DIR.iterdir() if f.is_file())
+        if existing_size + len(binary_data) > _MAX_IMPORT_DIR_SIZE:
+            raise RuntimeError(
+                f"[import_project] Import directory would exceed size limit "
+                f"({_MAX_IMPORT_DIR_SIZE // (1024*1024)} MB). "
+                "Remove old imports or set PEMCP_MAX_IMPORT_DIR_SIZE_MB to change this limit."
+            )
         binary_path = IMPORT_DIR / binary_name
         binary_path.write_bytes(binary_data)
 
