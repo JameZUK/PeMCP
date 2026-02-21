@@ -134,6 +134,11 @@ async def open_file(
     Previously analysed files are cached in ~/.pemcp/cache/ (keyed by SHA256).
     Set use_cache=False to force a fresh analysis and ignore any cached results.
 
+    When a previously analysed file is reopened, the response includes a
+    'session_context' field with restored notes and prior tool history. If
+    session_context is present, call get_analysis_digest() FIRST to review
+    what was learned in previous sessions before repeating analysis steps.
+
     Args:
         ctx: The MCP Context object.
         file_path: (str) Absolute or relative path to the file to analyse.
@@ -143,7 +148,8 @@ async def open_file(
         use_cache: (bool) If True (default), check the disk cache for previous analysis results.
 
     Returns:
-        A dictionary with status, filepath, detected format, and summary of what was loaded.
+        A dictionary with status, filepath, detected format, summary of what was
+        loaded, and (if available) session_context with restored notes and history.
     """
     abs_path = str(Path(file_path).resolve())
 

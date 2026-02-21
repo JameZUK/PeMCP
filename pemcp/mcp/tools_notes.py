@@ -26,7 +26,10 @@ async def add_note(
     cache and are restored when the same file is reopened later.
 
     Use notes to record observations, findings, or analysis context that
-    should be preserved across sessions.
+    should be preserved across sessions. Notes are the primary mechanism
+    for managing context in long-running binary analysis — they feed into
+    get_analysis_digest() which aggregates all findings into a single
+    context-efficient summary.
 
     Args:
         ctx: The MCP Context object.
