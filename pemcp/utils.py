@@ -1,4 +1,5 @@
 """Utility functions for PE analysis output and formatting."""
+import concurrent.futures
 import datetime
 import math
 import re
@@ -65,6 +66,42 @@ def validate_regex_pattern(pattern: str) -> None:
         re.compile(pattern)
     except re.error as e:
         raise ValueError(f"Invalid regex pattern: {e}") from e
+
+
+# --- Regex Execution Timeout ---
+_REGEX_TIMEOUT_SECONDS = 5
+
+
+def safe_regex_search(compiled_re: re.Pattern, text: str,
+                      timeout: float = _REGEX_TIMEOUT_SECONDS) -> Optional[re.Match]:
+    """Execute a regex search with timeout protection against ReDoS.
+
+    Even with ``validate_regex_pattern()`` catching common nested-quantifier
+    patterns, some ReDoS constructs (e.g. alternation-based backtracking)
+    slip through.  This function provides a hard timeout as a safety net.
+
+    Args:
+        compiled_re: A pre-compiled ``re.Pattern`` object.
+        text: The string to search.
+        timeout: Maximum seconds to allow the search to run (default 5).
+
+    Returns:
+        The ``re.Match`` object if found, or ``None``.
+
+    Raises:
+        ValueError: If the search exceeds the timeout.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(compiled_re.search, text)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            raise ValueError(
+                f"Regex execution timed out after {timeout}s. "
+                "The pattern may cause catastrophic backtracking. "
+                "Please simplify the regex."
+            )
 
 
 def shannon_entropy(data: bytes) -> float:

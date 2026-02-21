@@ -200,6 +200,14 @@ class AnalyzerState:
                     return True
         return False
 
+    def clear_notes(self) -> int:
+        """Thread-safe clear of all notes. Returns count of notes removed."""
+        with self._notes_lock:
+            count = len(self.notes)
+            self.notes = []
+            self._notes_counter = 0
+            return count
+
     def get_all_notes_snapshot(self) -> List[Dict[str, Any]]:
         """Thread-safe snapshot of all notes for cache persistence."""
         with self._notes_lock:
