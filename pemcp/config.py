@@ -154,7 +154,7 @@ except ImportError as e:
     CAPA_AVAILABLE = False
     logger.warning("Failed to import necessary capa modules: %s. Capa analysis will be skipped.", CAPA_IMPORT_ERROR)
 except Exception as e_generic:
-    CAPA_IMPORT_ERROR = f"An unexpected error occurred during capa import attempts: {str(e_generic)}"
+    CAPA_IMPORT_ERROR = f"An unexpected error occurred during capa import attempts: {e_generic}"
     CAPA_AVAILABLE = False
     logger.error(CAPA_IMPORT_ERROR, exc_info=True)
 # --- END MODIFIED CAPA IMPORT SECTION ---
@@ -205,7 +205,7 @@ except ImportError as e_floss_setup:
     logger.warning("Warning: Error importing basic FLOSS components (logging, main, const): %s", e_floss_setup)
     logger.warning("Using fallback values for FLOSS script setup. Full FLOSS functionality may be impaired.")
 except Exception as e_floss_setup_generic:
-    FLOSS_IMPORT_ERROR_SETUP = f"Generic error during FLOSS setup import: {str(e_floss_setup_generic)}"
+    FLOSS_IMPORT_ERROR_SETUP = f"Generic error during FLOSS setup import: {e_floss_setup_generic}"
     logger.error("FLOSS setup import failed unexpectedly: %s", e_floss_setup_generic, exc_info=True)
 
 if FLOSS_SETUP_OK:
@@ -228,7 +228,7 @@ if FLOSS_SETUP_OK:
         logger.error("Error importing FLOSS analysis functions (or their dependencies like vivisect): %s", e_floss_analysis)
         FLOSS_ANALYSIS_OK = False
     except Exception as e_floss_analysis_generic:
-        FLOSS_IMPORT_ERROR_ANALYSIS = f"Generic error during FLOSS analysis import: {str(e_floss_analysis_generic)}"
+        FLOSS_IMPORT_ERROR_ANALYSIS = f"Generic error during FLOSS analysis import: {e_floss_analysis_generic}"
         logger.error("FLOSS analysis import failed unexpectedly: %s", e_floss_analysis_generic, exc_info=True)
         FLOSS_ANALYSIS_OK = False
 else:

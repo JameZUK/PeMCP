@@ -343,7 +343,7 @@ async def qiling_dump_unpacked_binary(
 @tool_decorator
 async def qiling_resolve_api_hashes(
     ctx: Context,
-    hash_values: List[str] = [],
+    hash_values: List[str] = None,
     hash_algorithm: str = "ror13",
 ) -> Dict[str, Any]:
     """
@@ -368,6 +368,8 @@ async def qiling_resolve_api_hashes(
         hash_values: List of hash values to resolve (hex strings, e.g. ['0x6A4ABC5B']).
         hash_algorithm: Hash algorithm to use ('ror13', 'crc32', 'djb2', 'fnv1a').
     """
+    if hash_values is None:
+        hash_values = []
     await ctx.info(f"Resolving {len(hash_values)} API hashes ({hash_algorithm})")
     _check_qiling("qiling_resolve_api_hashes")
 

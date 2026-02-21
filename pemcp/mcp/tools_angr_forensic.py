@@ -175,7 +175,7 @@ async def detect_self_modifying_code(
         findings = []
 
         # Scan all functions for memory writes to executable regions
-        for addr, func in state.angr_cfg.functions.items():
+        for _addr, func in state.angr_cfg.functions.items():
             if func.is_simprocedure or func.is_syscall:
                 continue
             for block in func.blocks:
@@ -952,7 +952,7 @@ async def identify_cpp_classes(
             main_obj = loader.main_object
             # CLE's PE backend exposes the import directory
             if hasattr(main_obj, 'imports'):
-                for sym_name, sym in main_obj.imports.items():
+                for _sym_name, sym in main_obj.imports.items():
                     if hasattr(sym, 'rebased_addr'):
                         iat_ranges.add(sym.rebased_addr)
         except Exception:

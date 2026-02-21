@@ -93,7 +93,7 @@ class SSDeep:
                     if len(hash_string2) < (self.SPAMSUM_LENGTH // 2):
                         hash_string2 += self.B64[block_hash2 % 64]
                 break
-        return '{0}:{1}:{2}'.format(block_size, hash_string1, hash_string2)
+        return f'{block_size}:{hash_string1}:{hash_string2}'
 
     def hash(self, buf_data_input):
         buf_data_bytes = None

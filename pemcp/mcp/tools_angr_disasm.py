@@ -147,7 +147,7 @@ async def get_calling_conventions(
                     return {"error": f"CompleteCallingConventionsAnalysis failed: {type(e).__name__}: {e}"}
 
         results = []
-        for addr, func in state.angr_cfg.functions.items():
+        for _addr, func in state.angr_cfg.functions.items():
             if func.is_simprocedure or func.is_syscall:
                 continue
             info = _format_cc_info(func)
