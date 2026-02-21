@@ -1,7 +1,7 @@
 """MCP tools for configuration, task status, and utility functions."""
 import datetime
 import os
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from pemcp.config import (
     state, Context,
     ANGR_AVAILABLE, CAPA_AVAILABLE, FLOSS_AVAILABLE,
@@ -9,6 +9,114 @@ from pemcp.config import (
 )
 from pemcp.user_config import get_config_value, set_config_value, get_masked_config
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
+
+
+def _build_mount_mappings() -> List[Dict[str, str]]:
+    """Build a list of known container-to-host path mappings from environment variables.
+
+    Each mapping is a dict with 'internal' (container path) and 'external' (host path).
+    Mappings are sourced from PEMCP_PATH_MAP (semicolon-separated internal=external pairs)
+    and the legacy PEMCP_HOST_SAMPLES / PEMCP_HOST_EXPORT variables.
+
+    Returns a list sorted by internal path length (longest first) so that
+    more-specific mounts match before less-specific ones.
+    """
+    mappings: List[Dict[str, str]] = []
+
+    # Primary: PEMCP_PATH_MAP supports arbitrary mount pairs
+    # Format: "/container/path1=/host/path1;/container/path2=/host/path2"
+    path_map = os.environ.get("PEMCP_PATH_MAP", "")
+    if path_map:
+        for pair in path_map.split(";"):
+            pair = pair.strip()
+            if "=" in pair:
+                internal, external = pair.split("=", 1)
+                internal = internal.strip()
+                external = external.strip()
+                if internal and external:
+                    mappings.append({"internal": internal, "external": external})
+
+    # Legacy: PEMCP_HOST_SAMPLES maps to the configured samples path
+    samples_host = os.environ.get("PEMCP_HOST_SAMPLES")
+    samples_internal = state.samples_path
+    if samples_host and samples_internal:
+        # Avoid duplicates from PEMCP_PATH_MAP
+        if not any(m["internal"] == samples_internal for m in mappings):
+            mappings.append({"internal": samples_internal, "external": samples_host})
+
+    # Legacy: PEMCP_HOST_EXPORT maps to the export directory
+    export_host = os.environ.get("PEMCP_HOST_EXPORT")
+    export_dir = os.environ.get("PEMCP_EXPORT_DIR", "/output")
+    if not os.path.isdir(export_dir):
+        export_dir = "/output" if os.path.isdir("/output") else None
+    if export_host and export_dir:
+        if not any(m["internal"] == export_dir for m in mappings):
+            mappings.append({"internal": export_dir, "external": export_host})
+
+    # Sort longest internal path first for correct prefix matching
+    mappings.sort(key=lambda m: len(m["internal"]), reverse=True)
+    return mappings
+
+
+def translate_to_host_path(container_path: str) -> Optional[str]:
+    """Translate a container-internal path to the corresponding host path.
+
+    Uses mount mappings from environment variables to convert a path like
+    ``/samples/malware.exe`` to ``/home/user/malware-zoo/malware.exe``.
+
+    Returns ``None`` if no mapping covers the given path (e.g. when running
+    outside a container, or for paths that are not under a known mount).
+    """
+    if not container_path:
+        return None
+
+    mappings = _build_mount_mappings()
+    if not mappings:
+        return None
+
+    for m in mappings:
+        internal = m["internal"].rstrip("/")
+        external = m["external"].rstrip("/")
+        # Exact match or prefix match with path separator
+        if container_path == internal or container_path.startswith(internal + "/"):
+            suffix = container_path[len(internal):]
+            return external + suffix
+
+    return None
+
+
+def build_path_info(container_path: str) -> Dict[str, Any]:
+    """Build a path info dict with internal/external paths for MCP client consumption.
+
+    Returns a dict like::
+
+        {
+            "internal_path": "/samples/malware.exe",
+            "external_path": "/home/user/zoo/malware.exe",  # or None
+            "path_note": "..."  # human-readable explanation
+        }
+    """
+    host_path = translate_to_host_path(container_path)
+    info: Dict[str, Any] = {
+        "internal_path": container_path,
+        "external_path": host_path,
+    }
+    if host_path:
+        info["path_note"] = (
+            f"Container path '{container_path}' corresponds to "
+            f"host path '{host_path}' outside the container."
+        )
+    else:
+        container_info = _detect_container()
+        if container_info["containerized"]:
+            info["path_note"] = (
+                f"Running inside a container but no host mapping found for '{container_path}'. "
+                "Set PEMCP_PATH_MAP or PEMCP_HOST_SAMPLES/PEMCP_HOST_EXPORT to enable path translation."
+            )
+        else:
+            info["path_note"] = "Not running inside a container; internal and host paths are the same."
+            info["external_path"] = container_path
+    return info
 
 
 def _detect_container() -> Dict[str, Any]:
@@ -107,10 +215,14 @@ def _get_environment_info() -> Dict[str, Any]:
         },
     }
 
+    # Include mount mappings for path translation
+    mount_mappings = _build_mount_mappings()
+
     return {
         "containerized": container_info["containerized"],
         "container_type": container_info["container_type"],
         "paths": paths,
+        "mount_mappings": mount_mappings,
         "writable_paths": writable_paths,
         "recommended_export_path": recommended,
     }
