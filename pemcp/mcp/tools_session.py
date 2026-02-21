@@ -1,4 +1,5 @@
 """MCP tools for session summary and analysis digest — helps the AI get up to speed."""
+import datetime
 import time
 from collections import Counter
 from typing import Dict, Any, List, Optional
@@ -180,9 +181,16 @@ async def get_analysis_digest(
     _check_pe_loaded("get_analysis_digest")
 
     now = time.time()
+    last_ts = state.last_digest_timestamp if since_last_digest else 0.0
     result: Dict[str, Any] = {}
 
-    # Binary profile from cached triage
+    if since_last_digest and last_ts > 0:
+        result["since_last_digest"] = True
+        result["last_digest_at"] = datetime.datetime.fromtimestamp(
+            last_ts, datetime.timezone.utc
+        ).isoformat()
+
+    # Binary profile from cached triage (always included — cheap context)
     triage = getattr(state, '_cached_triage', None)
     if triage:
         risk = triage.get('risk_level', 'UNKNOWN')
@@ -203,17 +211,30 @@ async def get_analysis_digest(
     else:
         result["binary_profile"] = "Triage not yet run — call get_triage_report() first"
 
+    # Helper to filter notes by timestamp when since_last_digest is active
+    def _note_is_new(note: Dict[str, Any]) -> bool:
+        if last_ts <= 0:
+            return True
+        created = note.get("created_at") or note.get("updated_at", "")
+        if not created:
+            return True
+        try:
+            dt = datetime.datetime.fromisoformat(created)
+            return dt.timestamp() > last_ts
+        except (ValueError, TypeError):
+            return True
+
     # Key findings from notes (tool_result category)
     all_notes = state.get_notes()
     key_findings = []
     for note in all_notes:
-        if note.get("category") == "tool_result":
+        if note.get("category") == "tool_result" and _note_is_new(note):
             key_findings.append(note.get("content", ""))
     result["key_findings"] = key_findings[:15]
 
     # Function summaries from notes (function category)
     if include_function_summaries:
-        func_notes = [n for n in all_notes if n.get("category") == "function"]
+        func_notes = [n for n in all_notes if n.get("category") == "function" and _note_is_new(n)]
         result["functions_explored"] = [
             {
                 "addr": n.get("address", "?"),
@@ -222,7 +243,7 @@ async def get_analysis_digest(
             for n in func_notes[:30]
         ]
 
-    # IOCs from cached triage
+    # IOCs from cached triage (always included — small and context-critical)
     if include_iocs and triage:
         net_iocs = triage.get("network_iocs", {})
         if isinstance(net_iocs, dict):
@@ -269,7 +290,10 @@ async def get_analysis_digest(
         ]
 
     # Analyst notes (general category)
-    general_notes = [n.get("content", "") for n in all_notes if n.get("category") == "general"]
+    general_notes = [
+        n.get("content", "") for n in all_notes
+        if n.get("category") == "general" and _note_is_new(n)
+    ]
     if general_notes:
         result["analyst_notes"] = general_notes[:10]
 
@@ -280,3 +304,80 @@ async def get_analysis_digest(
     state.last_digest_timestamp = now
 
     return await _check_mcp_response_size(ctx, result, "get_analysis_digest")
+
+
+@tool_decorator
+async def get_progress_overview(
+    ctx: Context,
+) -> Dict[str, Any]:
+    """
+    Lightweight progress snapshot — cheap enough to call at the start of every turn.
+    Returns analysis phase, note count (by category), tool history count, function
+    coverage percentage, and angr status in a single small response.
+
+    Does not require a file to be loaded (returns minimal info if no file is open).
+
+    Args:
+        ctx: The MCP Context object.
+
+    Returns:
+        A compact dictionary with progress metrics.
+    """
+    result: Dict[str, Any] = {
+        "analysis_phase": _detect_analysis_phase(),
+    }
+
+    if not state.filepath or not state.pe_data:
+        result["file_loaded"] = False
+        return result
+
+    result["file_loaded"] = True
+    hashes = (state.pe_data.get("file_hashes") or {})
+    result["sha256"] = hashes.get("sha256", "")[:16] + "..."
+
+    # Note counts by category
+    notes = state.get_notes()
+    by_cat = Counter(n.get("category", "general") for n in notes)
+    result["notes"] = {
+        "total": len(notes),
+        "general": by_cat.get("general", 0),
+        "function": by_cat.get("function", 0),
+        "tool_result": by_cat.get("tool_result", 0),
+    }
+
+    # Tool history count
+    current_history = state.get_tool_history()
+    result["tool_calls"] = len(current_history)
+
+    # Function coverage
+    total_functions = 0
+    if ANGR_AVAILABLE and state.angr_cfg:
+        try:
+            total_functions = sum(
+                1 for f in state.angr_cfg.functions.values()
+                if not f.is_simprocedure and not f.is_syscall
+            )
+        except Exception:
+            pass
+
+    func_explored = by_cat.get("function", 0)
+    if total_functions > 0:
+        pct = round(func_explored / total_functions * 100, 1)
+    else:
+        pct = 0.0
+    result["coverage_pct"] = f"{pct}%"
+    result["functions_total"] = total_functions
+
+    # Angr status (one-liner)
+    if ANGR_AVAILABLE:
+        angr_task = state.get_task("startup-angr")
+        if angr_task and angr_task.get("status") == TASK_RUNNING:
+            result["angr"] = f"loading ({angr_task.get('progress_percent', 0)}%)"
+        elif state.angr_cfg is not None:
+            result["angr"] = "ready"
+        else:
+            result["angr"] = "not_initialized"
+    else:
+        result["angr"] = "unavailable"
+
+    return result

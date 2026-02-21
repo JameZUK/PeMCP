@@ -80,6 +80,12 @@ try:
 except ImportError as e:
     SIGNIFY_IMPORT_ERROR = str(e)
     SIGNIFY_AVAILABLE = False
+except Exception as e:
+    # Signify can fail with non-ImportError exceptions (e.g. oscrypto
+    # compatibility issues).  Log the error instead of printing to stderr
+    # unconditionally — signify is genuinely optional.
+    SIGNIFY_IMPORT_ERROR = str(e)
+    SIGNIFY_AVAILABLE = False
 
 YARA_AVAILABLE = False
 YARA_IMPORT_ERROR = None

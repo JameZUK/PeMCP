@@ -156,44 +156,55 @@ class AnalysisCache:
         if pe_data is None:
             return None
 
-        # --- Validate file hasn't changed on disk (mtime / size) ---
+        # --- Validate file (mtime/size) and touch LRU in a single lock acquisition ---
         try:
             if os.path.exists(current_filepath):
                 current_mtime = os.path.getmtime(current_filepath)
                 current_size = os.path.getsize(current_filepath)
-                with self._lock:
-                    meta = self._load_meta()
-                    cached_meta = meta.get(sha256, {})
-                cached_mtime = cached_meta.get("file_mtime")
-                cached_size = cached_meta.get("file_size")
-                if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
-                    logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
-                    with self._lock:
-                        self._remove_entry_and_meta(sha256)
-                    return None
-                if cached_size is not None and current_size != cached_size:
-                    logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
-                    with self._lock:
-                        self._remove_entry_and_meta(sha256)
-                    return None
+            else:
+                current_mtime = None
+                current_size = None
         except OSError:
-            pass  # If we can't stat the file, skip this validation
+            current_mtime = None
+            current_size = None
 
-        # Patch session-specific field
-        pe_data["filepath"] = current_filepath
-
-        # --- Touch LRU timestamp under the lock (throttled) ---
         try:
             with self._lock:
                 meta = self._load_meta()
+                cached_meta = meta.get(sha256, {})
+
+                # Check mtime
+                if current_mtime is not None:
+                    cached_mtime = cached_meta.get("file_mtime")
+                    if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
+                        logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
+                        self._remove_entry(sha256)
+                        meta.pop(sha256, None)
+                        self._save_meta(meta)
+                        return None
+
+                # Check size
+                if current_size is not None:
+                    cached_size = cached_meta.get("file_size")
+                    if cached_size is not None and current_size != cached_size:
+                        logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
+                        self._remove_entry(sha256)
+                        meta.pop(sha256, None)
+                        self._save_meta(meta)
+                        return None
+
+                # Touch LRU timestamp (throttled to avoid excessive writes)
                 if sha256 in meta:
                     last = meta[sha256].get("last_accessed", 0)
                     now = time.time()
-                    if now - last > 60:  # Only write if >60s since last update
+                    if now - last > 60:
                         meta[sha256]["last_accessed"] = now
                         self._save_meta(meta)
         except OSError:
-            pass  # Stale LRU timestamp is acceptable
+            pass  # Stale metadata is acceptable
+
+        # Patch session-specific field
+        pe_data["filepath"] = current_filepath
 
         logger.info("Cache HIT for %s...", sha256[:12])
         return pe_data

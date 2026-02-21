@@ -1,9 +1,9 @@
 # --- Base Image ---
-# For reproducible production builds, pin by digest:
+# Pinned by digest for reproducible builds.  To update:
 #   docker pull python:3.11-bookworm
 #   docker inspect python:3.11-bookworm --format='{{index .RepoDigests 0}}'
-# Then replace the FROM line with: FROM python:3.11-bookworm@sha256:<digest>
-FROM python:3.11-bookworm
+# Then replace the digest below with the new one.
+FROM python:3.11-bookworm@sha256:94c2dca43c9c127e42dfd021039cc83d8399752097612b49bdc7b00716b6d826
 
 # --- Set Working Directory ---
 WORKDIR /app
@@ -147,11 +147,11 @@ for d in ["x86_windows", "x8664_windows", "x8664_linux"]:
         print(f"  rootfs MISSING or EMPTY: {d}")
 PYEOF
 
-# Make rootfs world-writable so the runtime registry-stub generator and
+# Make rootfs group-writable so the runtime registry-stub generator and
 # user-mounted rootfs volumes work when the container runs as a non-root UID.
-# 777 is required because run.sh passes --user "$(id -u):$(id -g)" with an
-# arbitrary host UID/GID that cannot be predicted at build time.
-RUN chmod -R 777 /app/qiling-rootfs
+# A dedicated 'pemcp' group (GID 1500) is used with 775 permissions instead of
+# world-writable 777.  run.sh adds --group-add 1500 to grant access.
+RUN groupadd -g 1500 pemcp && chmod -R 775 /app/qiling-rootfs && chgrp -R pemcp /app/qiling-rootfs
 
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
@@ -200,16 +200,14 @@ COPY FastPrompt.txt .
 
 # --- Create writable home directory for runtime data ---
 # run.sh passes --user "$(id -u):$(id -g)" so the container runs as the
-# host user.  HOME is set to /app/home which is world-readable/executable
-# so any UID can create ~/.pemcp/cache and config.json inside it.
-# 777 is required because the arbitrary host UID cannot be predicted at
-# build time.  This is safe because the container is single-tenant.
-RUN mkdir -p /app/home/.pemcp/cache && chmod -R 777 /app/home
+# host user.  HOME is set to /app/home which is group-writable via the
+# 'pemcp' group (GID 1500).  run.sh adds --group-add 1500.
+RUN mkdir -p /app/home/.pemcp/cache && chgrp -R pemcp /app/home && chmod -R 775 /app/home
 
 # --- Create writable output directory ---
 # Default export/output directory for project archives, patched binaries, and reports.
 # run.sh mounts a host directory here; without a mount this provides a writable fallback.
-RUN mkdir -p /output && chmod 777 /output
+RUN mkdir -p /output && chgrp pemcp /output && chmod 775 /output
 
 # --- Declare volumes ---
 # Persistent cache and configuration
