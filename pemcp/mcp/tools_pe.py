@@ -17,6 +17,7 @@ from pemcp.config import (
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from pemcp.mcp.tools_config import build_path_info
+from pemcp.mcp._format_helpers import detect_format_from_magic
 from pemcp.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from pemcp.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
 
@@ -166,15 +167,8 @@ async def open_file(
     if mode == "auto":
         with open(abs_path, 'rb') as f:
             magic = f.read(4)
-        if magic[:2] == b'MZ':
-            mode = "pe"
-        elif magic == b'\x7fELF':
-            mode = "elf"
-        elif magic in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
-                       b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
-                       b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
-            mode = "macho"
-        else:
+        mode = detect_format_from_magic(magic)
+        if mode == "unknown":
             mode = "pe"  # fallback to PE, pefile will report errors if invalid
             await ctx.warning(
                 f"Unrecognized file format (magic: {magic.hex()}). Falling back to PE mode. "
@@ -453,7 +447,7 @@ async def open_file(
         state.filepath = None
         state.pe_data = None
         state.close_pe()
-        logger.error(f"open_file failed for '{abs_path}': {e}", exc_info=True)
+        logger.error("open_file failed for '%s': %s", abs_path, e, exc_info=True)
         raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e
     finally:
         if acquired:
@@ -670,7 +664,7 @@ async def reanalyze_loaded_pe_file(
         except Exception as e_thread:
             if temp_pe_obj:
                 temp_pe_obj.close()
-            logger.error(f"Error during threaded re-analysis of {state.filepath}: {e_thread}", exc_info=verbose_mcp_output)
+            logger.error("Error during threaded re-analysis of %s: %s", state.filepath, e_thread, exc_info=verbose_mcp_output)
             raise
 
     try:
@@ -701,11 +695,11 @@ async def reanalyze_loaded_pe_file(
 
     except asyncio.CancelledError:
         await ctx.warning(f"Re-analysis task for {state.filepath} was cancelled by MCP framework.")
-        logger.info(f"Re-analysis of {state.filepath} cancelled. Global PE data remains from previous successful load/analysis.")
+        logger.info("Re-analysis of %s cancelled. Global PE data remains from previous successful load/analysis.", state.filepath)
         raise
     except Exception as e_outer:
         await ctx.error(f"Error re-analyzing PE '{state.filepath}': {str(e_outer)}");
-        logger.error(f"MCP: Error re-analyzing PE '{state.filepath}': {str(e_outer)}", exc_info=verbose_mcp_output)
+        logger.error("MCP: Error re-analyzing PE '%s': %s", state.filepath, e_outer, exc_info=verbose_mcp_output)
         raise RuntimeError(f"Failed to re-analyze PE file '{state.filepath}': {str(e_outer)}") from e_outer
 
 

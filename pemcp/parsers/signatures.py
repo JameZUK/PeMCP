@@ -91,17 +91,17 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
     scan_results: List[Dict[str, Any]] = []
     if not yara_available_flag:
         logger.warning("   'yara-python' library not found. Skipping YARA scan.")
-        if verbose and YARA_IMPORT_ERROR: logger.debug(f"         [VERBOSE-DEBUG] YARA import error: {YARA_IMPORT_ERROR}")
+        if verbose and YARA_IMPORT_ERROR: logger.debug("         [VERBOSE-DEBUG] YARA import error: %s", YARA_IMPORT_ERROR)
         return scan_results
     if not yara_rules_path: # yara_rules_path is expected to be absolute if provided
         logger.info("   No YARA rules path provided. Skipping YARA scan.")
         return scan_results
     try:
-        if verbose: logger.info(f"   [VERBOSE-YARA] Loading rules from: {yara_rules_path}")
+        if verbose: logger.info("   [VERBOSE-YARA] Loading rules from: %s", yara_rules_path)
         rules = None
         if os.path.isdir(yara_rules_path):
             filepaths = {f_name: os.path.join(dirname, f_name) for dirname, _, files in os.walk(yara_rules_path) for f_name in files if f_name.lower().endswith(('.yar', '.yara'))}
-            if not filepaths: logger.warning(f"   No .yar or .yara files in dir: {yara_rules_path}"); return scan_results
+            if not filepaths: logger.warning("   No .yar or .yara files in dir: %s", yara_rules_path); return scan_results
             rules = yara.compile(filepaths=filepaths)
         elif os.path.isfile(yara_rules_path): rules = yara.compile(filepath=yara_rules_path)
         else: logger.warning(f"   YARA rules path not valid: {yara_rules_path}"); return scan_results

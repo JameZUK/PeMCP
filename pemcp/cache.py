@@ -85,7 +85,7 @@ class AnalysisCache:
             with open(META_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
         except (json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Cache meta read error: {e}")
+            logger.warning("Cache meta read error: %s", e)
             return {}
 
     def _save_meta(self, meta: Dict[str, Any]) -> None:
@@ -100,7 +100,7 @@ class AnalysisCache:
             # may see rare cache metadata corruption under high concurrency.
             tmp.replace(META_FILE)
         except OSError as e:
-            logger.error(f"Cache meta write error: {e}")
+            logger.error("Cache meta write error: %s", e)
 
     # ------------------------------------------------------------------
     #  Core operations
@@ -131,7 +131,7 @@ class AnalysisCache:
             with gzip.open(entry_path, "rt", encoding="utf-8") as f:
                 wrapper = json.load(f)
         except (gzip.BadGzipFile, json.JSONDecodeError, OSError, KeyError) as e:
-            logger.warning(f"Cache read error for {sha256[:12]}...: {e}")
+            logger.warning("Cache read error for %s...: %s", sha256[:12], e)
             with self._lock:
                 self._remove_entry_and_meta(sha256)
             return None
@@ -140,14 +140,13 @@ class AnalysisCache:
         cmeta = wrapper.get("_cache_meta", {})
 
         if cmeta.get("cache_format_version") != CACHE_FORMAT_VERSION:
-            logger.info(f"Cache format mismatch for {sha256[:12]}..., ignoring.")
+            logger.info("Cache format mismatch for %s..., ignoring.", sha256[:12])
             return None
 
         if cmeta.get("pemcp_version") != _get_pemcp_version():
             logger.info(
-                f"Cache version mismatch for {sha256[:12]}... "
-                f"(cached={cmeta.get('pemcp_version')}, "
-                f"current={_get_pemcp_version()}). Invalidating."
+                "Cache version mismatch for %s... (cached=%s, current=%s). Invalidating.",
+                sha256[:12], cmeta.get('pemcp_version'), _get_pemcp_version()
             )
             with self._lock:
                 self._remove_entry_and_meta(sha256)
@@ -168,12 +167,12 @@ class AnalysisCache:
                 cached_mtime = cached_meta.get("file_mtime")
                 cached_size = cached_meta.get("file_size")
                 if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
-                    logger.info(f"Cache mtime mismatch for {sha256[:12]}..., invalidating.")
+                    logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
                     with self._lock:
                         self._remove_entry_and_meta(sha256)
                     return None
                 if cached_size is not None and current_size != cached_size:
-                    logger.info(f"Cache file size mismatch for {sha256[:12]}..., invalidating.")
+                    logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
                     with self._lock:
                         self._remove_entry_and_meta(sha256)
                     return None
@@ -196,7 +195,7 @@ class AnalysisCache:
         except OSError:
             pass  # Stale LRU timestamp is acceptable
 
-        logger.info(f"Cache HIT for {sha256[:12]}...")
+        logger.info("Cache HIT for %s...", sha256[:12])
         return pe_data
 
     def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str,
@@ -266,15 +265,15 @@ class AnalysisCache:
                 self._save_meta(meta)
 
                 logger.info(
-                    f"Cache STORE {sha256[:12]}... "
-                    f"({file_size / 1024:.1f} KB compressed)"
+                    "Cache STORE %s... (%.1f KB compressed)",
+                    sha256[:12], file_size / 1024
                 )
 
                 self._evict_if_needed(meta)
                 return True
 
             except (OSError, TypeError, ValueError) as e:
-                logger.error(f"Cache write error for {sha256[:12]}...: {e}")
+                logger.error("Cache write error for %s...: %s", sha256[:12], e)
                 return False
 
     # ------------------------------------------------------------------
@@ -312,7 +311,7 @@ class AnalysisCache:
 
         if evicted:
             self._save_meta(meta)
-            logger.info(f"Cache eviction: removed {evicted} entries.")
+            logger.info("Cache eviction: removed %d entries.", evicted)
 
     def _remove_entry(self, sha256: str) -> None:
         entry_path = self._entry_path(sha256)
@@ -322,7 +321,7 @@ class AnalysisCache:
             if parent != CACHE_DIR and parent.exists() and not any(parent.iterdir()):
                 parent.rmdir()
         except OSError as e:
-            logger.warning(f"Cache removal error for {sha256[:12]}...: {e}")
+            logger.warning("Cache removal error for %s...: %s", sha256[:12], e)
 
     def _remove_entry_and_meta(self, sha256: str) -> None:
         """Remove both the on-disk entry and its metadata index record."""
@@ -354,7 +353,7 @@ class AnalysisCache:
             with gzip.open(entry_path, "rt", encoding="utf-8") as f:
                 wrapper = json.load(f)
         except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
-            logger.warning(f"Cache session metadata read error for {sha256[:12]}...: {e}")
+            logger.warning("Cache session metadata read error for %s...: %s", sha256[:12], e)
             return None
 
         return {
@@ -392,7 +391,7 @@ class AnalysisCache:
                 tmp.replace(entry_path)
                 return True
             except Exception as e:
-                logger.error(f"Failed to update session data for {sha256[:12]}...: {e}")
+                logger.error("Failed to update session data for %s...: %s", sha256[:12], e)
                 return False
 
     # ------------------------------------------------------------------

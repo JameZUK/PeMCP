@@ -493,7 +493,6 @@ async def save_patched_binary(
 
             # Apply all in-memory patches by comparing loader memory to original
             main_obj = loader.main_object
-            base_addr = main_obj.min_addr
             patches_applied = 0
 
             for section in getattr(main_obj, 'sections', []):
@@ -827,7 +826,6 @@ async def emulate_with_watchpoints(
 
         simgr = proj.factory.simulation_manager(call_state)
         steps_taken = 0
-        chunk_size = 50
         while steps_taken < max_steps:
             if not simgr.active:
                 break

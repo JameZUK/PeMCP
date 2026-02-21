@@ -80,7 +80,6 @@ try:
 except ImportError as e:
     SIGNIFY_IMPORT_ERROR = str(e)
     SIGNIFY_AVAILABLE = False
-    print(f"[!] Signify Import Error: {e}", file=sys.stderr)
 
 YARA_AVAILABLE = False
 YARA_IMPORT_ERROR = None
@@ -147,7 +146,7 @@ try:
 except ImportError as e:
     CAPA_IMPORT_ERROR = str(e)
     CAPA_AVAILABLE = False
-    logger.warning(f"Failed to import necessary capa modules: {CAPA_IMPORT_ERROR}. Capa analysis will be skipped.")
+    logger.warning("Failed to import necessary capa modules: %s. Capa analysis will be skipped.", CAPA_IMPORT_ERROR)
 except Exception as e_generic:
     CAPA_IMPORT_ERROR = f"An unexpected error occurred during capa import attempts: {str(e_generic)}"
     CAPA_AVAILABLE = False
@@ -197,11 +196,11 @@ try:
     logger.info("Successfully imported basic FLOSS components (logging, main, const).")
 except ImportError as e_floss_setup:
     FLOSS_IMPORT_ERROR_SETUP = str(e_floss_setup)
-    logger.warning(f"Warning: Error importing basic FLOSS components (logging, main, const): {e_floss_setup}")
+    logger.warning("Warning: Error importing basic FLOSS components (logging, main, const): %s", e_floss_setup)
     logger.warning("Using fallback values for FLOSS script setup. Full FLOSS functionality may be impaired.")
 except Exception as e_floss_setup_generic:
     FLOSS_IMPORT_ERROR_SETUP = f"Generic error during FLOSS setup import: {str(e_floss_setup_generic)}"
-    logger.error(f"FLOSS setup import failed unexpectedly: {e_floss_setup_generic}", exc_info=True)
+    logger.error("FLOSS setup import failed unexpectedly: %s", e_floss_setup_generic, exc_info=True)
 
 if FLOSS_SETUP_OK:
     try:
@@ -220,11 +219,11 @@ if FLOSS_SETUP_OK:
         logger.info("Successfully imported FLOSS analysis functions and vivisect/viv_utils.")
     except ImportError as e_floss_analysis:
         FLOSS_IMPORT_ERROR_ANALYSIS = str(e_floss_analysis)
-        logger.error(f"Error importing FLOSS analysis functions (or their dependencies like vivisect): {e_floss_analysis}")
+        logger.error("Error importing FLOSS analysis functions (or their dependencies like vivisect): %s", e_floss_analysis)
         FLOSS_ANALYSIS_OK = False
     except Exception as e_floss_analysis_generic:
         FLOSS_IMPORT_ERROR_ANALYSIS = f"Generic error during FLOSS analysis import: {str(e_floss_analysis_generic)}"
-        logger.error(f"FLOSS analysis import failed unexpectedly: {e_floss_analysis_generic}", exc_info=True)
+        logger.error("FLOSS analysis import failed unexpectedly: %s", e_floss_analysis_generic, exc_info=True)
         FLOSS_ANALYSIS_OK = False
 else:
     logger.warning("Skipping import of FLOSS analysis functions due to earlier FLOSS setup import errors.")
@@ -310,25 +309,25 @@ def log_library_availability():
     if CAPA_AVAILABLE:
         logger.info("Capa library found.")
     else:
-        logger.warning(f"Capa library (flare-capa) not found. Capability analysis will be skipped. Import error: {CAPA_IMPORT_ERROR}")
+        logger.warning("Capa library (flare-capa) not found. Capability analysis will be skipped. Import error: %s", CAPA_IMPORT_ERROR)
     if SIGNIFY_AVAILABLE:
         logger.info("Signify library found.")
     else:
-        logger.warning(f"Signify library not found. Authenticode validation will be skipped. Import error: {SIGNIFY_IMPORT_ERROR}")
+        logger.warning("Signify library not found. Authenticode validation will be skipped. Import error: %s", SIGNIFY_IMPORT_ERROR)
     if FLOSS_AVAILABLE:
         logger.info("FLOSS library and analysis components found.")
     elif FLOSS_SETUP_OK:
-        logger.warning(f"FLOSS basic setup OK, but analysis components (or vivisect) failed to import. FLOSS analysis will be limited/skipped. Analysis import error: {FLOSS_IMPORT_ERROR_ANALYSIS}")
+        logger.warning("FLOSS basic setup OK, but analysis components (or vivisect) failed to import. FLOSS analysis will be limited/skipped. Analysis import error: %s", FLOSS_IMPORT_ERROR_ANALYSIS)
     else:
-        logger.warning(f"FLOSS library (flare-floss) not found or basic setup failed. FLOSS analysis will be skipped. Setup import error: {FLOSS_IMPORT_ERROR_SETUP}")
+        logger.warning("FLOSS library (flare-floss) not found or basic setup failed. FLOSS analysis will be skipped. Setup import error: %s", FLOSS_IMPORT_ERROR_SETUP)
     if STRINGSIFTER_AVAILABLE:
         logger.info("StringSifter library found. String ranking will be available.")
     else:
-        logger.warning(f"StringSifter library not found. String ranking will be skipped. Import error: {STRINGSIFTER_IMPORT_ERROR}")
+        logger.warning("StringSifter library not found. String ranking will be skipped. Import error: %s", STRINGSIFTER_IMPORT_ERROR)
     if RAPIDFUZZ_AVAILABLE:
         logger.info("RapidFuzz library found. Fuzzy string search will be available.")
     else:
-        logger.warning(f"RapidFuzz library not found. Fuzzy search will be skipped. Import error: {RAPIDFUZZ_IMPORT_ERROR}")
+        logger.warning("RapidFuzz library not found. Fuzzy search will be skipped. Import error: %s", RAPIDFUZZ_IMPORT_ERROR)
     if ANGR_AVAILABLE:
         logger.info("Angr library found. Advanced binary analysis (Decompilation, Symbolic Execution) enabled.")
     else:

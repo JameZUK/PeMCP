@@ -1,4 +1,5 @@
 """Utility functions for PE analysis output and formatting."""
+import atexit
 import concurrent.futures
 import datetime
 import math
@@ -8,6 +9,11 @@ import sys
 from typing import Dict, Any, Optional, List
 
 from pemcp.config import pefile
+
+# Module-level shared executor for regex timeout protection.
+# Using a small pool avoids per-call thread creation/teardown overhead.
+_regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+atexit.register(_regex_executor.shutdown, wait=False)
 
 # --- Safe slicing ---
 
@@ -91,17 +97,16 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
     Raises:
         ValueError: If the search exceeds the timeout.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(compiled_re.search, text)
-        try:
-            return future.result(timeout=timeout)
-        except concurrent.futures.TimeoutError:
-            future.cancel()
-            raise ValueError(
-                f"Regex execution timed out after {timeout}s. "
-                "The pattern may cause catastrophic backtracking. "
-                "Please simplify the regex."
-            )
+    future = _regex_executor.submit(compiled_re.search, text)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        raise ValueError(
+            f"Regex execution timed out after {timeout}s. "
+            "The pattern may cause catastrophic backtracking. "
+            "Please simplify the regex."
+        )
 
 
 def shannon_entropy(data: bytes) -> float:

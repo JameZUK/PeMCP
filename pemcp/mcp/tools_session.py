@@ -180,8 +180,6 @@ async def get_analysis_digest(
     _check_pe_loaded("get_analysis_digest")
 
     now = time.time()
-    cutoff = state.last_digest_timestamp if since_last_digest else 0.0
-
     result: Dict[str, Any] = {}
 
     # Binary profile from cached triage

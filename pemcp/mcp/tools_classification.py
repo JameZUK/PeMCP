@@ -38,7 +38,6 @@ async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
     sections_data = pe_data.get('sections', [])
     imports_data = pe_data.get('imports', [])
     version_info = pe_data.get('version_info', {})
-    resources = pe_data.get('resources_summary', [])
     nt_headers = pe_data.get('nt_headers', {})
     com_descriptor = pe_data.get('com_descriptor', {})
 
@@ -47,7 +46,6 @@ async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
     optional_header = nt_headers.get('optional_header', {})
     characteristics = file_header.get('characteristics', file_header.get('Characteristics', 0))
     subsystem = optional_header.get('subsystem', optional_header.get('Subsystem', 0))
-    dll_characteristics = optional_header.get('dll_characteristics', optional_header.get('DllCharacteristics', 0))
 
     # Extract Value from nested dicts returned by dump_dict()
     if isinstance(characteristics, dict):
@@ -155,7 +153,6 @@ async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
         evidence.append(f"Multiple networking DLLs: {all_dll_names & net_dlls}")
 
     # ---- Crypto-Heavy Detection ----
-    crypto_dlls = {'advapi32.dll', 'bcrypt.dll', 'ncrypt.dll', 'crypt32.dll'}
     crypto_funcs = {'CryptEncrypt', 'CryptDecrypt', 'BCryptEncrypt', 'BCryptDecrypt',
                     'CryptDeriveKey', 'CryptGenKey', 'CryptAcquireContext'}
     if all_import_names & crypto_funcs:
