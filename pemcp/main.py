@@ -50,6 +50,10 @@ import pemcp.mcp.tools_config
 import pemcp.mcp.tools_classification
 import pemcp.mcp.tools_samples
 import pemcp.mcp.tools_qiling
+import pemcp.mcp.tools_notes
+import pemcp.mcp.tools_history
+import pemcp.mcp.tools_session
+import pemcp.mcp.tools_export
 
 
 def main():
