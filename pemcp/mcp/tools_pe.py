@@ -908,3 +908,107 @@ async def get_pe_data(
 
     limit_info_str = f"the 'limit' or 'offset' parameters for data key '{key}'"
     return await _check_mcp_response_size(ctx, data_to_send, "get_pe_data", limit_info_str)
+
+
+# ---- Focused Imports (AI-friendly filtered view) ----
+
+@tool_decorator
+async def get_focused_imports(
+    ctx: Context,
+    category: str = "all",
+    min_risk: str = "MEDIUM",
+    include_benign_summary: bool = True,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """
+    Returns only the security-relevant imports, categorized by threat behavior.
+    Filters out benign imports (GetLastError, HeapAlloc, etc.) that waste context.
+
+    Designed for AI analysts who need to quickly understand what suspicious
+    capabilities a binary imports without reading thousands of benign entries.
+
+    Use get_pe_data(key='imports') if you need the full raw import table.
+
+    Args:
+        ctx: The MCP Context object.
+        category: (str) Filter to a specific category: 'all' (default),
+            'process_injection', 'credential_theft', 'privilege_escalation',
+            'anti_analysis', 'networking', 'process_manipulation', 'persistence',
+            'execution', 'registry', 'crypto', 'file_io', 'memory'.
+        min_risk: (str) Minimum risk level to include: 'CRITICAL', 'HIGH', or 'MEDIUM' (default).
+        include_benign_summary: (bool) If True (default), include a one-line count of filtered-out imports.
+        limit: (int) Max suspicious imports to return. Default 100.
+
+    Returns:
+        A dictionary with filtered imports, category counts, and optional benign summary.
+    """
+    from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB, RISK_ORDER, CATEGORY_DESCRIPTIONS
+
+    _check_pe_loaded("get_focused_imports")
+    imports_data = state.pe_data.get('imports', [])
+
+    min_risk_val = RISK_ORDER.get(min_risk.upper(), 2)
+    found: List[Dict[str, str]] = []
+    total_imports = 0
+    total_dlls = 0
+    benign_dll_names: set = set()
+
+    if isinstance(imports_data, list):
+        for dll_entry in imports_data:
+            if not isinstance(dll_entry, dict):
+                continue
+            dll_name = dll_entry.get('dll_name', 'Unknown')
+            total_dlls += 1
+            dll_had_suspicious = False
+            for sym in dll_entry.get('symbols', []):
+                total_imports += 1
+                func_name = sym.get('name', '') if isinstance(sym, dict) else ''
+                if not func_name:
+                    continue
+                # Check against categorized DB (substring match like triage)
+                for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
+                    if api_name in func_name:
+                        risk_val = RISK_ORDER.get(risk, 3)
+                        if risk_val <= min_risk_val:
+                            if category == "all" or cat == category:
+                                found.append({
+                                    "dll": dll_name,
+                                    "function": func_name,
+                                    "risk": risk,
+                                    "category": cat,
+                                })
+                                dll_had_suspicious = True
+                        break
+            if not dll_had_suspicious:
+                benign_dll_names.add(dll_name)
+
+    # Sort by risk severity then category
+    found.sort(key=lambda x: (RISK_ORDER.get(x['risk'], 3), x.get('category', ''), x.get('function', '')))
+    found = found[:limit]
+
+    # Build category counts
+    by_category: Dict[str, int] = {}
+    for imp in found:
+        cat = imp['category']
+        by_category[cat] = by_category.get(cat, 0) + 1
+
+    result: Dict[str, Any] = {
+        "filtered_imports": found,
+        "by_category": by_category,
+        "total_suspicious": len(found),
+        "total_imports": total_imports,
+        "total_dlls": total_dlls,
+    }
+
+    if include_benign_summary:
+        benign_count = total_imports - len(found)
+        top_benign = sorted(benign_dll_names)[:5]
+        benign_list = ', '.join(top_benign)
+        if len(benign_dll_names) > 5:
+            benign_list += f", ... (+{len(benign_dll_names) - 5} more)"
+        result["benign_summary"] = (
+            f"Filtered out {benign_count:,} benign imports from "
+            f"{len(benign_dll_names)} DLLs ({benign_list})"
+        )
+
+    return await _check_mcp_response_size(ctx, result, "get_focused_imports")

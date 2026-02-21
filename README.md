@@ -750,6 +750,47 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `elf_dwarf_info` | Extract DWARF debug info: compilation units, functions, source files. |
 | `macho_analyze` | Mach-O analysis: headers, load commands, segments, symbols, dylibs, code signatures. |
 
+### AI-Optimised Analysis — Streamlined Tools
+
+These tools are designed for progressive, context-efficient analysis by AI clients with limited context windows. They provide summaries first, details on demand, and cross-reference data across multiple analysis dimensions.
+
+| Tool | Description |
+|---|---|
+| `get_triage_report(compact=True)` | **Compact triage** — risk level, score, top findings, and next-tool suggestions in ~2KB instead of ~20KB. Use `compact=False` for the full report. |
+| `get_focused_imports` | **Filtered import view** — returns only security-relevant imports categorised by threat behaviour (process injection, networking, crypto, anti-analysis, etc.), filtering out thousands of benign imports. |
+| `get_strings_summary` | **Categorised string intelligence** — groups strings by type (URLs, IPs, file paths, registry keys, mutex names, base64 blobs) with counts and top examples per category. |
+| `get_function_map` | **Smart function ranking** — scores every function by interestingness (complexity, suspicious API calls, string refs, xref count, entry point status) and groups by purpose. Falls back to import-based categorisation when angr is unavailable. |
+| `get_cross_reference_map` | **Multi-dimensional cross-reference** — for one or more functions, returns API calls, string refs, callers, callees, suspicious imports, and complexity in a single response. |
+| `auto_note_function` | **Auto-summarise a function** — generates a one-line behavioral summary from API call patterns and saves it as a persistent note for later aggregation. |
+| `get_analysis_digest` | **Running analysis summary** — aggregates triage findings, function notes, IOCs, coverage stats, and unexplored high-priority targets into a context-efficient digest. Call periodically to refresh understanding. |
+| `get_function_complexity_list(compact=True)` | **Compact complexity list** — returns minimal per-function data (addr, name, blocks) instead of the full structure. |
+
+#### Recommended AI Workflow
+
+1. **`get_config()`** — discover writable paths, container environment, and available libraries
+2. **`open_file(path)`** — load binary, auto-starts background angr CFG
+3. **`get_triage_report(compact=True)`** — initial risk assessment in ~2KB
+4. **`get_focused_imports()`** — understand what suspicious APIs are imported
+5. **`get_strings_summary()`** — categorised string overview
+6. **`get_function_map(limit=20)`** — find the most interesting functions to investigate
+7. **`decompile_function_with_angr(address)`** — deep-dive into each target
+8. **`auto_note_function(address)`** — record what you learned from each function
+9. **`get_analysis_digest()`** — refresh your understanding as context fills up
+
+### Session Persistence & Notes
+
+| Tool | Description |
+|---|---|
+| `add_note` | Record a finding or observation (persisted to disk cache, survives restarts). |
+| `get_notes` | Retrieve notes, filtered by category or address. |
+| `update_note` / `delete_note` | Modify or remove notes. |
+| `auto_note_function` | Auto-generate and save a one-line function summary from API patterns. |
+| `get_tool_history` | View the history of tools run during this session. |
+| `get_session_summary` | Full session state: file info, notes, tool history, angr status, analysis phase. |
+| `get_analysis_digest` | Accumulated findings digest — what was *learned*, not just what tools ran. |
+| `export_project` | Export session (analysis + notes + history + optionally the binary) as `.pemcp_project.tar.gz`. |
+| `import_project` | Import a previously exported project archive. |
+
 ---
 
 ## Architecture & Design
