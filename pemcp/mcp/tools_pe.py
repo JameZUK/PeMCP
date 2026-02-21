@@ -694,44 +694,25 @@ async def reanalyze_loaded_pe_file(
         else:
             current_capa_sigs_dir_to_use = capa_sigs_dir
 
-    # Unpack FLOSS options from the consolidated dict (defaults for all keys)
+    # Build FLOSS config from the consolidated options dict
     fo = floss_options or {}
-    mcp_floss_min_len = fo.get("min_length", FLOSS_MIN_LENGTH_DEFAULT)
-    mcp_floss_verbose_level = fo.get("verbose_level", 0)
-
-    mcp_floss_script_debug_level_enum_val = Actual_DebugLevel_Floss.NONE
-    floss_debug_level_str = fo.get("debug_level")
-    if floss_debug_level_str:
-        floss_debug_map = {
-            "NONE": Actual_DebugLevel_Floss.NONE, "DEFAULT": Actual_DebugLevel_Floss.DEFAULT,
-            "DEBUG": Actual_DebugLevel_Floss.DEFAULT,
-            "TRACE": Actual_DebugLevel_Floss.TRACE, "SUPERTRACE": Actual_DebugLevel_Floss.SUPERTRACE
-        }
-        mcp_floss_script_debug_level_enum_val = floss_debug_map.get(str(floss_debug_level_str).upper(), Actual_DebugLevel_Floss.NONE)
-
-    mcp_floss_format_hint = fo.get("format", "auto")
-
-    mcp_floss_disabled_types = []
-    if fo.get("no_static"): mcp_floss_disabled_types.append(Actual_StringType_Floss.STATIC)
-    if fo.get("no_stack"): mcp_floss_disabled_types.append(Actual_StringType_Floss.STACK)
-    if fo.get("no_tight"): mcp_floss_disabled_types.append(Actual_StringType_Floss.TIGHT)
-    if fo.get("no_decoded"): mcp_floss_disabled_types.append(Actual_StringType_Floss.DECODED)
-
-    mcp_floss_only_types = []
-    if fo.get("only_static"): mcp_floss_only_types.append(Actual_StringType_Floss.STATIC)
-    if fo.get("only_stack"): mcp_floss_only_types.append(Actual_StringType_Floss.STACK)
-    if fo.get("only_tight"): mcp_floss_only_types.append(Actual_StringType_Floss.TIGHT)
-    if fo.get("only_decoded"): mcp_floss_only_types.append(Actual_StringType_Floss.DECODED)
-
-    mcp_floss_functions_to_analyze = []
-    floss_functions = fo.get("functions")
-    if floss_functions:
-        for func_str in floss_functions:
-            try: mcp_floss_functions_to_analyze.append(int(func_str, 0))
-            except ValueError: await ctx.warning(f"Invalid FLOSS function address '{func_str}', skipping.")
-
-    floss_quiet = fo.get("quiet")
-    mcp_floss_quiet_mode = floss_quiet if floss_quiet is not None else (not verbose_mcp_output)
+    floss_cfg = _build_floss_config(
+        floss_min_length=fo.get("min_length"),
+        floss_verbose_level=fo.get("verbose_level"),
+        floss_script_debug_level=fo.get("debug_level"),
+        floss_format=fo.get("format"),
+        floss_no_static=fo.get("no_static"),
+        floss_no_stack=fo.get("no_stack"),
+        floss_no_tight=fo.get("no_tight"),
+        floss_no_decoded=fo.get("no_decoded"),
+        floss_only_static=fo.get("only_static"),
+        floss_only_stack=fo.get("only_stack"),
+        floss_only_tight=fo.get("only_tight"),
+        floss_only_decoded=fo.get("only_decoded"),
+        floss_functions=fo.get("functions"),
+        floss_quiet=fo.get("quiet"),
+        verbose_mcp_output=verbose_mcp_output,
+    )
 
     def perform_analysis_in_thread():
         temp_pe_obj = None
