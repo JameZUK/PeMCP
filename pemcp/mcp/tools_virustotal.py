@@ -153,11 +153,11 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
         await ctx.error(f"VirusTotal API request timed out for hash {main_hash_value}.")
     except requests.exceptions.RequestException as e_req:
         response_payload["status"] = "error_request"
-        response_payload["message"] = f"Error during VirusTotal API request: {str(e_req)}"
+        response_payload["message"] = f"Error during VirusTotal API request: {e_req!s}"
         await ctx.error(f"VirusTotal API request error for {main_hash_value}: {e_req}")
     except Exception as e:
         response_payload["status"] = "error_unexpected"
-        response_payload["message"] = f"An unexpected error occurred while fetching VirusTotal data: {str(e)}"
+        response_payload["message"] = f"An unexpected error occurred while fetching VirusTotal data: {e!s}"
         logger.error("MCP: Unexpected error in %s for %s: %s", tool_name, main_hash_value, e, exc_info=True)
         await ctx.error(f"Unexpected error in {tool_name}: {e}")
 

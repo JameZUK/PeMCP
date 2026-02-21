@@ -206,7 +206,7 @@ async def _check_mcp_response_size(
 
         # 3. Heuristic: Find the largest element and chop it
         # We iterate up to 5 times to try and make it fit.
-        for attempt in range(5):
+        for _attempt in range(5):
             current_json = json.dumps(modified_data, ensure_ascii=False)
             current_size = len(current_json.encode('utf-8'))
 

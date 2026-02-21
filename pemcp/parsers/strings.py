@@ -157,7 +157,7 @@ def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
         # 2. Iterate through all FLOSS strings and check for correlation
         all_strings_with_refs = []
         floss_string_types = floss_analysis.get('strings', {})
-        for str_type, str_list in floss_string_types.items():
+        for _str_type, str_list in floss_string_types.items():
             if not isinstance(str_list, list): continue
             for string_item in str_list:
                 if not isinstance(string_item, dict): continue

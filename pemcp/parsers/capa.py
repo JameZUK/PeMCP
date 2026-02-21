@@ -194,7 +194,7 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         capa_results["status"] = "Analysis complete (adapted workflow)"
 
     except (InvalidArgument, EmptyReportError, UnsupportedOSError, UnsupportedArchError, UnsupportedFormatError, UnsupportedRuntimeError) as e_specific_api:
-        error_msg = f"Capa analysis failed with specific API exception: {type(e_specific_api).__name__} - {str(e_specific_api)}"
+        error_msg = f"Capa analysis failed with specific API exception: {type(e_specific_api).__name__} - {e_specific_api!s}"
         logger.error(error_msg, exc_info=verbose)
         capa_results["status"] = "Error during analysis (API specific)"
         capa_results["error"] = error_msg

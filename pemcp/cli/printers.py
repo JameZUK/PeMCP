@@ -113,7 +113,7 @@ def _print_imports_cli(imports_data: List[Dict[str, Any]]):
         for imp_sym in entry.get('symbols', []):
             name_str = imp_sym.get('name', "N/A (Imported by Ordinal)")
             bound_str = f" (Bound to: {imp_sym.get('bound')})" if imp_sym.get('bound') else ""
-            safe_print(f"    Ordinal: {str(imp_sym.get('ordinal','N/A')):<6} Address: {imp_sym.get('address','N/A'):<12} Name: {name_str}{bound_str}")
+            safe_print(f"    Ordinal: {imp_sym.get('ordinal','N/A')!s:<6} Address: {imp_sym.get('address','N/A'):<12} Name: {name_str}{bound_str}")
 
 def _print_exports_cli(exports_data: Dict[str, Any]):
     safe_print("\n--- Export Table ---")
@@ -123,7 +123,7 @@ def _print_exports_cli(exports_data: Dict[str, Any]):
     for exp_sym in exports_data.get('symbols', []):
         name_str = exp_sym.get('name', "N/A (Exported by Ordinal)")
         forwarder_str = f" -> {exp_sym.get('forwarder')}" if exp_sym.get('forwarder') else ""
-        safe_print(f"    Ordinal: {str(exp_sym.get('ordinal','N/A')):<6} Address RVA: {exp_sym.get('address','N/A'):<12} Name: {name_str}{forwarder_str}")
+        safe_print(f"    Ordinal: {exp_sym.get('ordinal','N/A')!s:<6} Address RVA: {exp_sym.get('address','N/A'):<12} Name: {name_str}{forwarder_str}")
 
 def _print_resources_summary_cli(resources_summary: List[Dict[str, Any]]):
     safe_print("\n--- Resource Directory (Summary) ---")
@@ -430,7 +430,7 @@ def _print_floss_analysis_cli(floss_data: Dict[str, Any], verbose_flag: bool):
                 str_list_sorted = str_list
 
             limited_str_list = str_list_sorted[:20] if not verbose_flag and len(str_list_sorted) > 20 else str_list_sorted
-            for item_idx, item_dict in enumerate(limited_str_list):
+            for _item_idx, item_dict in enumerate(limited_str_list):
                 sifter_score_str = ""
                 if verbose_flag and 'sifter_score' in item_dict:
                     sifter_score_str = f" (Sifter Score: {item_dict['sifter_score']:.2f})"

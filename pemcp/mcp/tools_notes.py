@@ -205,7 +205,7 @@ async def auto_note_function(
                 for callee_addr in callgraph.successors(addr_used):
                     if callee_addr in state.angr_cfg.functions:
                         cname = state.angr_cfg.functions[callee_addr].name
-                        for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
+                        for api_name, (_risk, cat) in CATEGORIZED_IMPORTS_DB.items():
                             if api_name in cname:
                                 apis_called.append(cname)
                                 cats_seen.add(cat)

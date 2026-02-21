@@ -832,7 +832,7 @@ async def get_function_complexity_list(
         _ensure_project_and_cfg()
 
         funcs_data = []
-        for addr, func in state.angr_cfg.functions.items():
+        for _addr, func in state.angr_cfg.functions.items():
             # Filter out library/simprocedures or empty placeholders
             if func.is_simprocedure or func.is_syscall: continue
 

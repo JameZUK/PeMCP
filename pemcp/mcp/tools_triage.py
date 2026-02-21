@@ -840,7 +840,7 @@ def _triage_header_anomalies(indicator_limit: int) -> Tuple[List[Dict[str, Any]]
                 name = sec.get('name', '')
                 if name and any(ord(c) < 32 or ord(c) > 126 for c in name.replace('\x00', '')):
                     header_anomalies.append({
-                        "issue": f"Section '{repr(name)}' contains non-printable characters",
+                        "issue": f"Section '{name!r}' contains non-printable characters",
                         "severity": "MEDIUM",
                         "source": "section_names",
                     })
