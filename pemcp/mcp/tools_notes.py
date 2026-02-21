@@ -222,12 +222,24 @@ async def auto_note_function(
     else:
         summary = custom_summary or f"Function at {function_address} (no suspicious APIs detected)"
 
-    # Save as a persistent note
-    note = state.add_note(
-        content=summary,
-        category="function",
-        address=function_address,
-    )
+    # Upsert: update existing function note at this address, or create new
+    existing = state.get_notes(category="function", address=function_address)
+    if existing:
+        latest = existing[-1]
+        updated = state.update_note(latest["id"], content=summary)
+        if updated:
+            note = updated
+            was_update = True
+        else:
+            note = state.add_note(
+                content=summary, category="function", address=function_address,
+            )
+            was_update = False
+    else:
+        note = state.add_note(
+            content=summary, category="function", address=function_address,
+        )
+        was_update = False
     _persist_notes_to_cache()
 
     return {
@@ -235,6 +247,7 @@ async def auto_note_function(
         "function_name": func_name,
         "auto_summary": summary,
         "note_id": note["id"],
+        "was_update": was_update,
         "apis_called": apis_called[:10],
         "category_tags": category_tags,
     }

@@ -52,10 +52,10 @@ fi
 
 echo "[*] Using container runtime: $RUNTIME"
 
-# --- SELinux: add :z to bind mounts so the container can read files ---
-MOUNT_OPTS="ro"
+# --- SELinux: add :z to bind mounts so the container can read/write files ---
+SELINUX_SUFFIX=""
 if command -v getenforce &>/dev/null && [[ "$(getenforce 2>/dev/null)" != "Disabled" ]]; then
-    MOUNT_OPTS="ro,z"
+    SELINUX_SUFFIX=",z"
 fi
 
 # --- Build image if it doesn't exist ---
@@ -80,7 +80,7 @@ common_args() {
         -e "HOME=/app/home"
         -e "USER=${USER:-pemcp}"
         -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
-        -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:$MOUNT_OPTS"
+        -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro${SELINUX_SUFFIX}"
         -v "pemcp-data:/app/home/.pemcp"
     )
 
@@ -88,7 +88,7 @@ common_args() {
     if [[ -n "${OUTPUT_DIR:-}" ]]; then
         mkdir -p "$OUTPUT_DIR" 2>/dev/null || true
         if [[ -d "$OUTPUT_DIR" ]]; then
-            args+=(-v "$OUTPUT_DIR:/output:rw")
+            args+=(-v "$OUTPUT_DIR:/output:rw${SELINUX_SUFFIX}")
             args+=(-e "PEMCP_HOST_EXPORT=$OUTPUT_DIR")
             args+=(-e "PEMCP_EXPORT_DIR=/output")
         fi
@@ -234,9 +234,11 @@ Examples:
   PEMCP_SAMPLES=~/samples ./run.sh --stdio         # Via environment variable
 
 Notes:
-  - Files are mounted read-only; the container path mirrors the host folder name
+  - Sample files are mounted read-only; the output directory is writable
+  - The container path mirrors the host folder name
     (e.g. --samples ~/Downloads → /Downloads/yourfile.exe inside the container)
-  - Default: ./samples/ → /samples/yourfile.exe
+  - Default samples: ./samples/ → /samples/yourfile.exe
+  - Default output: ./output/ → /output/ (writable, for exports and patched binaries)
   - Analysis cache persists in a named volume (pemcp-data)
   - Auto-detects Docker or Podman
 EOF
