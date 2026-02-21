@@ -39,16 +39,16 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
     if not CAPA_AVAILABLE:
         capa_results["status"] = "Capa library components not available."
         capa_results["error"] = f"Capa import error: {CAPA_IMPORT_ERROR}"
-        logger.warning(f"Capa components not available. Error: {CAPA_IMPORT_ERROR}")
+        logger.warning("Capa components not available. Error: %s", CAPA_IMPORT_ERROR)
         return capa_results
 
     effective_rules_path_str = capa_rules_dir_path
     if not effective_rules_path_str:
         default_rules_base = str(DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
-        logger.info(f"Capa rules directory not specified, using default script-relative base: '{default_rules_base}'")
+        logger.info("Capa rules directory not specified, using default script-relative base: '%s'", default_rules_base)
         effective_rules_path_str = ensure_capa_rules_exist(default_rules_base, CAPA_RULES_ZIP_URL, verbose)
     elif not os.path.isdir(effective_rules_path_str) or not os.listdir(effective_rules_path_str):
-        logger.warning(f"Provided capa_rules_dir_path '{capa_rules_dir_path}' is invalid. Attempting script-relative default.")
+        logger.warning("Provided capa_rules_dir_path '%s' is invalid. Attempting script-relative default.", capa_rules_dir_path)
         default_rules_base = str(DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME)
         effective_rules_path_str = ensure_capa_rules_exist(default_rules_base, CAPA_RULES_ZIP_URL, verbose)
 
@@ -59,14 +59,14 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         logger.error(capa_results["error"])
         return capa_results
     else:
-        logger.info(f"Using capa rules from: {effective_rules_path_str}")
+        logger.info("Using capa rules from: %s", effective_rules_path_str)
 
 
     class MockCapaCliArgs: pass
     mock_args = MockCapaCliArgs()
     mock_args.input_file = Path(pe_filepath_original)
 
-    logger.info(f"Attempting capa analysis using capa.main workflow for: {mock_args.input_file}")
+    logger.info("Attempting capa analysis using capa.main workflow for: %s", mock_args.input_file)
 
     setattr(mock_args, 'rules', [Path(effective_rules_path_str)])
     if hasattr(mock_args, 'is_default_rules'): setattr(mock_args, 'is_default_rules', False)
@@ -74,20 +74,20 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
     effective_capa_sigs_path_str_for_mock_args = ""
     if capa_sigs_dir_path and Path(capa_sigs_dir_path).is_dir():
         effective_capa_sigs_path_str_for_mock_args = str(capa_sigs_dir_path)
-        logger.info(f"Using user-provided Capa signatures directory: {effective_capa_sigs_path_str_for_mock_args}")
+        logger.info("Using user-provided Capa signatures directory: %s", effective_capa_sigs_path_str_for_mock_args)
     else:
         if capa_sigs_dir_path:
-            logger.warning(f"User-provided capa_sigs_dir '{capa_sigs_dir_path}' is not a valid directory.")
+            logger.warning("User-provided capa_sigs_dir '%s' is not a valid directory.", capa_sigs_dir_path)
         else:
             logger.info("Capa signatures directory not explicitly provided by user.")
 
         potential_script_relative_sigs = DATA_DIR / "capa_sigs"
         if potential_script_relative_sigs.is_dir():
              effective_capa_sigs_path_str_for_mock_args = str(potential_script_relative_sigs.resolve())
-             logger.info(f"Found and using script-relative 'capa_sigs' directory: {effective_capa_sigs_path_str_for_mock_args}")
+             logger.info("Found and using script-relative 'capa_sigs' directory: %s", effective_capa_sigs_path_str_for_mock_args)
         elif (DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").is_dir():
              effective_capa_sigs_path_str_for_mock_args = str((DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").resolve())
-             logger.info(f"Found 'sigs' directory near default rules store: {effective_capa_sigs_path_str_for_mock_args}")
+             logger.info("Found 'sigs' directory near default rules store: %s", effective_capa_sigs_path_str_for_mock_args)
         else:
             logger.warning("Capa signatures directory not found locally (e.g., ./capa_sigs or next to default rules). Explicitly telling Capa to load no library function signatures to prevent potential errors if Capa's internal default path is problematic.")
             effective_capa_sigs_path_str_for_mock_args = "" # Tell capa to load no library sigs
@@ -120,7 +120,7 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
             sig_val = getattr(mock_args, 'signatures', 'N/A')
             if isinstance(sig_val, Path): sig_val = str(sig_val)
             rules_val_str_list = [str(r) for r in getattr(mock_args, 'rules', [])]
-            logger.info(f"   [VERBOSE-CAPA] Mocked CLI args for capa.main: input_file='{mock_args.input_file}', rules={rules_val_str_list}, format='{mock_args.format}', backend='{mock_args.backend}', os='{mock_args.os}', signatures='{sig_val}'")
+            logger.info("   [VERBOSE-CAPA] Mocked CLI args for capa.main: input_file='%s', rules=%s, format='%s', backend='%s', os='%s', signatures='%s'", mock_args.input_file, rules_val_str_list, mock_args.format, mock_args.backend, mock_args.os, sig_val)
 
         # Call capa's main argument handling and setup functions if they exist
         if hasattr(capa.main, 'handle_common_args'):
@@ -135,7 +135,7 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         mock_args.format = input_format # Update mock_args with potentially deduced format
 
         rules = capa.main.get_rules_from_cli(mock_args)
-        logger.info(f"Rules loaded via capa.main.get_rules_from_cli. Rule count: {len(rules.rules) if hasattr(rules, 'rules') and hasattr(rules.rules, '__len__') else 'N/A'}")
+        logger.info("Rules loaded via capa.main.get_rules_from_cli. Rule count: %s", len(rules.rules) if hasattr(rules, 'rules') and hasattr(rules.rules, '__len__') else 'N/A')
 
         backend = mock_args.backend
         if hasattr(capa.main, 'get_backend_from_cli'):
@@ -146,7 +146,7 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
             mock_args.os = capa.main.get_os_from_cli(mock_args, backend)
 
         extractor = capa.main.get_extractor_from_cli(mock_args, input_format, backend)
-        logger.info(f"Extractor obtained via capa.main.get_extractor_from_cli: {type(extractor).__name__}")
+        logger.info("Extractor obtained via capa.main.get_extractor_from_cli: %s", type(extractor).__name__)
 
         capabilities = capa.capabilities.common.find_capabilities(rules, extractor, disable_progress=True)
         logger.info("Capabilities search complete.")
@@ -159,7 +159,7 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         # Ensure actual_rule_paths_for_meta is List[Path] for collect_metadata
         if not (isinstance(actual_rule_paths_for_meta, list) and \
                 all(isinstance(p, Path) for p in actual_rule_paths_for_meta)):
-            logger.warning(f"Rules paths for capa.loader.collect_metadata ('mock_args.rules': {actual_rule_paths_for_meta}) are not List[Path] as expected. Metadata might be incomplete.")
+            logger.warning("Rules paths for capa.loader.collect_metadata ('mock_args.rules': %s) are not List[Path] as expected. Metadata might be incomplete.", actual_rule_paths_for_meta)
             # Attempt to convert if they are strings, otherwise use empty list
             temp_paths = []
             all_valid = True

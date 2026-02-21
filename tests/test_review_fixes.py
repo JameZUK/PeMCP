@@ -76,12 +76,6 @@ class TestSpeakeasyRunner:
 
     def test_emulate_shellcode_missing_input(self):
         """emulate_shellcode returns error when no input provided."""
-        # Import the function from the runner script
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "speakeasy_runner",
-            os.path.join(os.path.dirname(__file__), "..", "scripts", "speakeasy_runner.py"),
-        )
         # We can't import speakeasy itself, but we can verify the logic structure
         # by checking the source code has separate try blocks
         runner_path = os.path.join(os.path.dirname(__file__), "..", "scripts", "speakeasy_runner.py")

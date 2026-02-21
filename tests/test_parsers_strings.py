@@ -9,6 +9,8 @@ from pemcp.parsers.strings import (
     _format_hex_dump_lines,
     _get_string_category,
     _decode_single_byte_xor,
+    _perform_unified_string_sifting,
+    _correlate_strings_and_capa,
 )
 
 
@@ -219,3 +221,37 @@ class TestDecodeSingleByteXor:
         result = _decode_single_byte_xor(encoded)
         # Should find a key that produces printable output
         assert result is not None
+
+
+# ---------------------------------------------------------------------------
+# _perform_unified_string_sifting (graceful degradation)
+# ---------------------------------------------------------------------------
+
+class TestPerformUnifiedStringSifting:
+    def test_no_crash_without_stringsifter(self):
+        """Should return early without error when StringSifter is unavailable."""
+        pe_info = {"basic_ascii_strings": []}
+        _perform_unified_string_sifting(pe_info)
+        # No sifter_error should be set for a clean early exit
+        assert "sifter_error" not in pe_info
+
+    def test_empty_dict_no_crash(self):
+        """Should handle an empty dict gracefully."""
+        pe_info = {}
+        _perform_unified_string_sifting(pe_info)
+
+
+# ---------------------------------------------------------------------------
+# _correlate_strings_and_capa (graceful degradation)
+# ---------------------------------------------------------------------------
+
+class TestCorrelateStringsAndCapa:
+    def test_no_capa_data(self):
+        """Should handle missing capa data gracefully."""
+        pe_info = {}
+        _correlate_strings_and_capa(pe_info)
+
+    def test_empty_capa_data(self):
+        """Should handle empty capa analysis gracefully."""
+        pe_info = {"capa_analysis": {}}
+        _correlate_strings_and_capa(pe_info)

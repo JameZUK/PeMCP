@@ -158,7 +158,7 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
     except Exception as e:
         response_payload["status"] = "error_unexpected"
         response_payload["message"] = f"An unexpected error occurred while fetching VirusTotal data: {str(e)}"
-        logger.error(f"MCP: Unexpected error in {tool_name} for {main_hash_value}: {e}", exc_info=True)
+        logger.error("MCP: Unexpected error in %s for %s: %s", tool_name, main_hash_value, e, exc_info=True)
         await ctx.error(f"Unexpected error in {tool_name}: {e}")
 
     limit_info_str = "parameters for this tool (none currently, rely on server-side summarization)"

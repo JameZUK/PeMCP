@@ -6,6 +6,91 @@ import pytest
 
 pytest.importorskip("pefile", reason="pefile not installed")
 
+from pemcp.mcp._format_helpers import detect_format_from_magic, get_magic_hint
+
+
+# ---------------------------------------------------------------------------
+# detect_format_from_magic (shared utility)
+# ---------------------------------------------------------------------------
+
+class TestDetectFormatFromMagic:
+    def test_pe(self):
+        assert detect_format_from_magic(b'MZ\x90\x00') == "pe"
+
+    def test_elf(self):
+        assert detect_format_from_magic(b'\x7fELF') == "elf"
+
+    def test_macho_32_le(self):
+        assert detect_format_from_magic(b'\xce\xfa\xed\xfe') == "macho"
+
+    def test_macho_64_le(self):
+        assert detect_format_from_magic(b'\xcf\xfa\xed\xfe') == "macho"
+
+    def test_macho_32_be(self):
+        assert detect_format_from_magic(b'\xfe\xed\xfa\xce') == "macho"
+
+    def test_macho_64_be(self):
+        assert detect_format_from_magic(b'\xfe\xed\xfa\xcf') == "macho"
+
+    def test_macho_fat(self):
+        assert detect_format_from_magic(b'\xca\xfe\xba\xbe') == "macho"
+
+    def test_macho_fat_swapped(self):
+        assert detect_format_from_magic(b'\xbe\xba\xfe\xca') == "macho"
+
+    def test_unknown(self):
+        assert detect_format_from_magic(b'\x00\x00\x00\x00') == "unknown"
+
+    def test_short_input(self):
+        assert detect_format_from_magic(b'\x00') == "unknown"
+
+    def test_empty_input(self):
+        assert detect_format_from_magic(b'') == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# get_magic_hint (file-based format hint)
+# ---------------------------------------------------------------------------
+
+class TestGetMagicHint:
+    def test_pe_file(self, tmp_path):
+        f = tmp_path / "test.exe"
+        f.write_bytes(b'MZ' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "PE"
+
+    def test_elf_file(self, tmp_path):
+        f = tmp_path / "test.elf"
+        f.write_bytes(b'\x7fELF' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "ELF"
+
+    def test_macho_file(self, tmp_path):
+        f = tmp_path / "test.macho"
+        f.write_bytes(b'\xce\xfa\xed\xfe' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "Mach-O"
+
+    def test_zip_file(self, tmp_path):
+        f = tmp_path / "test.zip"
+        f.write_bytes(b'PK\x03\x04' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "ZIP/Archive"
+
+    def test_pdf_file(self, tmp_path):
+        f = tmp_path / "test.pdf"
+        f.write_bytes(b'%PDF-1.4' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "PDF"
+
+    def test_gzip_file(self, tmp_path):
+        f = tmp_path / "test.gz"
+        f.write_bytes(b'\x1f\x8b\x08' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "GZIP"
+
+    def test_unknown_format(self, tmp_path):
+        f = tmp_path / "test.bin"
+        f.write_bytes(b'\xde\xad\xbe\xef')
+        assert get_magic_hint(str(f)) == "Unknown"
+
+    def test_nonexistent_file(self):
+        assert get_magic_hint("/nonexistent/path/file.bin") == "Unreadable"
+
 
 class TestFormatDetectMarkers:
     """Verify that language detection markers cover Go and Rust beyond the header."""

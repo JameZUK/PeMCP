@@ -57,7 +57,7 @@ def _setup_floss_logging(script_verbose_level: int, floss_internal_verbose_level
         floss_log_level_setting = logging.INFO
 
 
-    logger.info(f"Setting FLOSS-related loggers to: {logging.getLevelName(floss_log_level_setting)}")
+    logger.info("Setting FLOSS-related loggers to: %s", logging.getLevelName(floss_log_level_setting))
     for logger_name_floss in FLOSS_LOGGERS_LIST:
         # Special handling for very verbose loggers in FLOSS if needed
         if logger_name_floss in ("floss.api_hooks", "floss.function_argument_getter") and \
@@ -74,7 +74,7 @@ def _setup_floss_logging(script_verbose_level: int, floss_internal_verbose_level
         else: # TRACE or SUPERTRACE for FLOSS
             set_vivisect_log_level(logging.DEBUG)
             logging.getLogger("viv_utils.emulator_drivers").setLevel(logging.DEBUG)
-        logger.info(f"Vivisect loggers configured based on FLOSS debug level {script_verbose_level}.")
+        logger.info("Vivisect loggers configured based on FLOSS debug level %s.", script_verbose_level)
     else:
         logger.debug("FLOSS analysis components (like floss.utils) not available, cannot set Vivisect log level via FLOSS.")
 
@@ -84,7 +84,7 @@ def _load_floss_vivisect_workspace(sample_path_obj: Path, format_hint: str) -> O
         logger.error("Vivisect utilities (viv_utils) required by FLOSS are not available. Cannot load workspace.")
         return None
 
-    logger.info(f"FLOSS: Loading Vivisect workspace for: {sample_path_obj} (format: {format_hint})")
+    logger.info("FLOSS: Loading Vivisect workspace for: %s (format: %s)", sample_path_obj, format_hint)
     vw = None
     try:
         if format_hint == "auto":
@@ -104,7 +104,7 @@ def _load_floss_vivisect_workspace(sample_path_obj: Path, format_hint: str) -> O
         else: logger.warning("FLOSS: Vivisect workspace loading returned None.")
         return vw
     except Exception as e:
-        logger.error(f"FLOSS: Error loading Vivisect workspace: {e}", exc_info=True)
+        logger.error("FLOSS: Error loading Vivisect workspace: %s", e, exc_info=True)
         return None
 
 def _parse_floss_analysis(
@@ -144,7 +144,7 @@ def _parse_floss_analysis(
     log_progress = floss_script_debug_level >= Actual_DebugLevel_Floss.DEFAULT
 
     if log_progress:
-        logger.info(f"--- Starting FLOSS Analysis for: {pe_filepath_str} ---")
+        logger.info("--- Starting FLOSS Analysis for: %s ---", pe_filepath_str)
     sample_path = Path(pe_filepath_str)
 
     analysis_conf = FlossAnalysis(
@@ -178,9 +178,9 @@ def _parse_floss_analysis(
             for s_obj in static_strings_gen:
                 static_list.append({"offset": hex(s_obj.offset), "string": s_obj.string})
             floss_results_dict["strings"]["static_strings"] = static_list
-            logger.info(f"FLOSS: Found {len(static_list)} static strings.")
+            logger.info("FLOSS: Found %d static strings.", len(static_list))
         except Exception as e:
-            logger.error(f"FLOSS: Error extracting static strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+            logger.error("FLOSS: Error extracting static strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
             floss_results_dict["strings"]["static_strings"] = [{"error": str(e)}]
 
     vw: Optional[VivWorkspace] = None
@@ -206,14 +206,14 @@ def _parse_floss_analysis(
                         if fva in all_vw_functions_vas:
                             valid_user_functions.add(fva)
                         else:
-                            logger.warning(f"FLOSS: Requested function 0x{fva_or_rva:x} (resolved to VA 0x{fva:x}) not found in Vivisect workspace.")
+                            logger.warning("FLOSS: Requested function 0x%x (resolved to VA 0x%x) not found in Vivisect workspace.", fva_or_rva, fva)
                     selected_functions_fvas_set = valid_user_functions
-                    if log_progress: logger.info(f"FLOSS: User specified {len(valid_user_functions)} valid functions for analysis.")
+                    if log_progress: logger.info("FLOSS: User specified %d valid functions for analysis.", len(valid_user_functions))
                 else:
                     selected_functions_fvas_set = all_vw_functions_vas
-                    if log_progress: logger.info(f"FLOSS: Will analyze all {len(all_vw_functions_vas)} functions found in Vivisect workspace.")
+                    if log_progress: logger.info("FLOSS: Will analyze all %d functions found in Vivisect workspace.", len(all_vw_functions_vas))
             except Exception as e_vw_setup:
-                logger.error(f"FLOSS: Error during Vivisect workspace post-processing: {e_vw_setup}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                logger.error("FLOSS: Error during Vivisect workspace post-processing: %s", e_vw_setup, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
                 vw = None
         else:
             logger.error("FLOSS: Failed to load Vivisect workspace. Deeper analysis will be skipped.")
@@ -237,7 +237,7 @@ def _parse_floss_analysis(
                         if raw_size > 0:
                             _offset_to_va_sections.append((raw_ptr, raw_size, virt_addr))
             except Exception as e_sec:
-                logger.warning(f"Could not build offset-to-VA table: {e_sec}")
+                logger.warning("Could not build offset-to-VA table: %s", e_sec)
 
             def _file_offset_to_va(file_offset):
                 """Convert a file offset to a virtual address using PE section mapping."""
@@ -249,7 +249,7 @@ def _parse_floss_analysis(
 
             static_strings_list = floss_results_dict["strings"]["static_strings"]
             total_enriched_strings = 0
-            logger.debug(f"Attempting to enrich {len(static_strings_list)} static strings.")
+            logger.debug("Attempting to enrich %d static strings.", len(static_strings_list))
             for i, string_item in enumerate(static_strings_list):
                 try:
                     string_offset = int(string_item["offset"], 16)
@@ -257,11 +257,11 @@ def _parse_floss_analysis(
                     xrefs = vw.getXrefsTo(string_va)
 
                     if i > 0 and i % 100 == 0:
-                        logger.debug(f"Processing string {i}/{len(static_strings_list)} at VA {hex(string_va)}...")
+                        logger.debug("Processing string %d/%d at VA %s...", i, len(static_strings_list), hex(string_va))
 
                     if xrefs:
                         total_enriched_strings += 1
-                        logger.debug(f"Found {len(xrefs)} cross-references for string at {hex(string_va)}")
+                        logger.debug("Found %d cross-references for string at %s", len(xrefs), hex(string_va))
                         string_item["references"] = []
                         for ref_tuple in xrefs:
                             from_va = ref_tuple[0]
@@ -281,8 +281,8 @@ def _parse_floss_analysis(
                                 "disassembly_context": context_snippet
                             })
                 except Exception as e_xref:
-                    logger.warning(f"Could not get xrefs for string at {string_item['offset']}: {e_xref}")
-            logger.info(f"FLOSS: Context enrichment complete. Enriched {total_enriched_strings} out of {len(static_strings_list)} static strings with references.")
+                    logger.warning("Could not get xrefs for string at %s: %s", string_item['offset'], e_xref)
+            logger.info("FLOSS: Context enrichment complete. Enriched %d out of %d static strings with references.", total_enriched_strings, len(static_strings_list))
         else:
             logger.warning("FLOSS: Skipping static string context enrichment because imagebase could not be determined.")
 
@@ -292,9 +292,9 @@ def _parse_floss_analysis(
             if log_progress: logger.info("FLOSS: Identifying decoding function features...")
             try:
                 decoding_features_map, _ = find_decoding_function_features(vw, list(selected_functions_fvas_set), disable_progress=quiet_mode_for_floss_progress)
-                if log_progress: logger.info(f"FLOSS: Found decoding features for {len(decoding_features_map)} functions.")
+                if log_progress: logger.info("FLOSS: Found decoding features for %d functions.", len(decoding_features_map))
             except Exception as e:
-                logger.error(f"FLOSS: Error finding decoding features: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                logger.error("FLOSS: Error finding decoding features: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
                 err_msg_feat = {"error": f"Feature identification error: {str(e)}"}
                 if analysis_conf.enable_decoded_strings: floss_results_dict["strings"]["decoded_strings"] = [err_msg_feat]
                 if analysis_conf.enable_tight_strings: floss_results_dict["strings"]["tight_strings"] = [err_msg_feat]
@@ -315,9 +315,9 @@ def _parse_floss_analysis(
                         "string": s_obj.string
                     })
                 floss_results_dict["strings"]["stack_strings"] = stack_list
-                logger.info(f"FLOSS: Found {len(stack_list)} stack strings.")
+                logger.info("FLOSS: Found %d stack strings.", len(stack_list))
             except Exception as e:
-                logger.error(f"FLOSS: Error extracting stack strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                logger.error("FLOSS: Error extracting stack strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
                 floss_results_dict["strings"]["stack_strings"] = [{"error": str(e)}]
 
         if analysis_conf.enable_tight_strings:
@@ -329,7 +329,7 @@ def _parse_floss_analysis(
                 else:
                     tightloop_fvas_dict = get_functions_with_tightloops(decoding_features_map)
 
-                    if log_progress: logger.info(f"FLOSS: Identified {len(tightloop_fvas_dict)} functions with tight loops for tight string analysis.")
+                    if log_progress: logger.info("FLOSS: Identified %d functions with tight loops for tight string analysis.", len(tightloop_fvas_dict))
 
                     if tightloop_fvas_dict:
                         tight_strings_gen = extract_tightstrings(
@@ -346,12 +346,12 @@ def _parse_floss_analysis(
                                 "string": s_obj.string
                             })
                         floss_results_dict["strings"]["tight_strings"] = tight_list
-                        logger.info(f"FLOSS: Found {len(tight_list)} tight strings.")
+                        logger.info("FLOSS: Found %d tight strings.", len(tight_list))
                     else:
                         if log_progress: logger.info("FLOSS: No functions with tight loops identified from features. Skipping tight string extraction.")
                         floss_results_dict["strings"]["tight_strings"] = []
             except Exception as e:
-                logger.error(f"FLOSS: Error extracting tight strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                logger.error("FLOSS: Error extracting tight strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
                 floss_results_dict["strings"]["tight_strings"] = [{"error": str(e)}]
 
         if analysis_conf.enable_decoded_strings:
@@ -363,7 +363,7 @@ def _parse_floss_analysis(
                 else:
                     top_candidate_funcs_features = get_top_functions(decoding_features_map, 20)
                     fvas_to_emulate_set = get_function_fvas(top_candidate_funcs_features)
-                    if log_progress: logger.info(f"FLOSS: Identified {len(fvas_to_emulate_set)} top candidate functions for decoded string emulation.")
+                    if log_progress: logger.info("FLOSS: Identified %d top candidate functions for decoded string emulation.", len(fvas_to_emulate_set))
                     if fvas_to_emulate_set:
                         decoded_strings_gen = decode_strings(
                             vw, list(fvas_to_emulate_set), min_length,
@@ -378,12 +378,12 @@ def _parse_floss_analysis(
                                 "decoding_routine_va": hex(s_obj.decoding_routine)
                             })
                         floss_results_dict["strings"]["decoded_strings"] = decoded_list
-                        logger.info(f"FLOSS: Found {len(decoded_list)} decoded strings.")
+                        logger.info("FLOSS: Found %d decoded strings.", len(decoded_list))
                     else:
                         if log_progress: logger.info("FLOSS: No candidate functions found for decoded string emulation from features.")
                         floss_results_dict["strings"]["decoded_strings"] = []
             except Exception as e:
-                logger.error(f"FLOSS: Error extracting decoded strings: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+                logger.error("FLOSS: Error extracting decoded strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
                 floss_results_dict["strings"]["decoded_strings"] = [{"error": str(e)}]
 
         floss_results_dict["status"] = "FLOSS analysis complete."
@@ -401,14 +401,14 @@ def _parse_floss_analysis(
 
     if regex_search_pattern:
         if log_progress:
-            logger.info(f"Performing regex search with pattern: '{regex_search_pattern}'")
+            logger.info("Performing regex search with pattern: '%s'", regex_search_pattern)
 
         try:
             from pemcp.utils import validate_regex_pattern
             validate_regex_pattern(regex_search_pattern)
             pattern = re.compile(regex_search_pattern, re.IGNORECASE)
         except (re.error, ValueError) as e:
-            logger.error(f"Invalid regex pattern provided: {e}", exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
+            logger.error("Invalid regex pattern provided: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
             floss_results_dict["regex_matches"] = [{"error": f"Invalid regex pattern: {e}"}]
             return floss_results_dict
 
@@ -428,9 +428,9 @@ def _parse_floss_analysis(
 
         floss_results_dict["regex_matches"] = matched_strings
         if log_progress:
-            logger.info(f"Found {len(matched_strings)} strings matching the regex pattern.")
+            logger.info("Found %d strings matching the regex pattern.", len(matched_strings))
 
     if log_progress or "complete" not in floss_results_dict["status"].lower():
-        logger.info(f"--- FLOSS Analysis for: {pe_filepath_str} Finished (Status: {floss_results_dict['status']}) ---")
+        logger.info("--- FLOSS Analysis for: %s Finished (Status: %s) ---", pe_filepath_str, floss_results_dict['status'])
 
     return floss_results_dict

@@ -248,7 +248,7 @@ async def find_path_to_address(
                     "tip": "Check 'sections' or 'function_complexity' to find valid addresses."
                 }
         except Exception as e:
-            logger.debug(f"Address validation check failed (proceeding anyway): {e}")
+            logger.debug("Address validation check failed (proceeding anyway): %s", e)
     # -----------------------------------------
 
     # --- Internal Logic ---

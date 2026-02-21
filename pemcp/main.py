@@ -25,6 +25,7 @@ from pemcp.parsers.strings import _extract_strings_from_data, _format_hex_dump_l
 from pemcp.parsers.floss import _parse_floss_analysis
 from pemcp.cli.printers import _cli_analyze_and_print_pe
 from pemcp.mcp.server import mcp_server
+from pemcp.mcp._format_helpers import detect_format_from_magic
 
 # Import all MCP tool modules to register them with the server
 import pemcp.mcp.tools_pe
@@ -154,7 +155,7 @@ def main():
     if args.input_file:
         abs_input_file = str(Path(args.input_file).resolve())
         if not os.path.exists(abs_input_file):
-            logger.critical(f"Input file not found: {abs_input_file}")
+            logger.critical("Input file not found: %s", abs_input_file)
             print(f"[!] Error: Input file not found: {abs_input_file}", file=sys.stderr)
             sys.exit(1)
 
@@ -169,7 +170,7 @@ def main():
     if args.skip_peid: analyses_to_skip_arg_list.append("peid")
     if args.skip_yara: analyses_to_skip_arg_list.append("yara")
     if analyses_to_skip_arg_list:
-        logger.info(f"Skipping analyses: {', '.join(analyses_to_skip_arg_list)}")
+        logger.info("Skipping analyses: %s", ", ".join(analyses_to_skip_arg_list))
 
     # Validate user-supplied regex pattern early to catch ReDoS / invalid patterns
     if args.regex_pattern:
@@ -197,7 +198,7 @@ def main():
 
     if args.verbose and floss_script_debug_level_enum_val_resolved == Actual_DebugLevel_Floss.NONE:
         floss_script_debug_level_enum_val_resolved = Actual_DebugLevel_Floss.TRACE
-        logger.info(f"Verbose mode active, elevating FLOSS debug level to TRACE.")
+        logger.info("Verbose mode active, elevating FLOSS debug level to TRACE.")
 
     # Resolve FLOSS lists
     floss_disabled_types_resolved = []
@@ -216,7 +217,7 @@ def main():
     if args.floss_functions:
         for func_str in args.floss_functions:
             try: floss_functions_to_analyze_resolved.append(int(func_str, 0))
-            except ValueError: logger.warning(f"Invalid FLOSS function address '{func_str}', skipping.")
+            except ValueError: logger.warning("Invalid FLOSS function address '%s', skipping.", func_str)
 
     floss_quiet_resolved = args.floss_quiet or (not args.verbose and args.mcp_server and not (floss_script_debug_level_enum_val_resolved > Actual_DebugLevel_Floss.NONE))
 
@@ -229,7 +230,7 @@ def main():
         # Configure path sandboxing — mandatory for HTTP transports
         if args.allowed_paths:
             state.allowed_paths = [str(Path(p).resolve()) for p in args.allowed_paths]
-            logger.info(f"Path sandboxing enabled. Allowed paths: {state.allowed_paths}")
+            logger.info("Path sandboxing enabled. Allowed paths: %s", state.allowed_paths)
         elif args.mcp_transport in ("sse", "streamable-http"):
             logger.critical(
                 "Running in network mode (HTTP) requires --allowed-paths for security. "
@@ -257,18 +258,18 @@ def main():
             resolved = str(Path(samples_path).resolve())
             if os.path.isdir(resolved):
                 state.samples_path = resolved
-                logger.info(f"Samples directory configured: {resolved}")
+                logger.info("Samples directory configured: %s", resolved)
             else:
-                logger.warning(f"Samples path does not exist or is not a directory: {resolved}")
+                logger.warning("Samples path does not exist or is not a directory: %s", resolved)
         else:
             logger.info("No samples directory configured. Use --samples-path or set PEMCP_SAMPLES env var to enable the list_samples tool.")
 
         # --- Optional Pre-loading (only when --input-file is provided) ---
         if abs_input_file:
-            logger.info(f"MCP Server: Loading input file: {abs_input_file} (Mode: {args.mode})")
+            logger.info("MCP Server: Loading input file: %s (Mode: %s)", abs_input_file, args.mode)
             try:
                 if not os.path.isfile(abs_input_file):
-                    logger.critical(f"Input path for MCP server is not a file: {abs_input_file}")
+                    logger.critical("Input path for MCP server is not a file: %s", abs_input_file)
                     sys.exit(1)
 
                 # --- Auto-detect format if mode is 'auto' ---
@@ -276,21 +277,15 @@ def main():
                 if effective_mode == 'auto':
                     with open(abs_input_file, 'rb') as f:
                         magic = f.read(4)
-                    if magic[:2] == b'MZ':
-                        effective_mode = 'pe'
-                    elif magic == b'\x7fELF':
-                        effective_mode = 'elf'
-                    elif magic in (b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf',
-                                   b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
-                                   b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca'):
-                        effective_mode = 'macho'
-                    else:
+                    effective_mode = detect_format_from_magic(magic)
+                    if effective_mode == "unknown":
                         effective_mode = 'pe'  # fallback
                         logger.warning(
-                            f"Unrecognized file format (magic: {magic.hex()}). "
-                            "Falling back to PE mode. Use --mode to specify the format explicitly."
+                            "Unrecognized file format (magic: %s). "
+                            "Falling back to PE mode. Use --mode to specify the format explicitly.",
+                            magic.hex(),
                         )
-                    logger.info(f"Auto-detected format: {effective_mode}")
+                    logger.info("Auto-detected format: %s", effective_mode)
 
                 # --- Loading Logic with Mode Support ---
                 if effective_mode == 'shellcode':
@@ -332,7 +327,7 @@ def main():
                         "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
                         "note": f"{format_label} binary loaded. Use format-specific tools (elf_analyze/macho_analyze) and angr tools for analysis.",
                     }
-                    logger.info(f"Loaded {format_label} binary: {abs_input_file}")
+                    logger.info("Loaded %s binary: %s", format_label, abs_input_file)
 
                 else:
                     temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
@@ -355,7 +350,7 @@ def main():
                     )
                     _perform_unified_string_sifting(state.pe_data)
 
-                logger.info(f"MCP: Successfully loaded analysis for: {abs_input_file}.")
+                logger.info("MCP: Successfully loaded analysis for: %s.", abs_input_file)
 
                 # --- Background Angr Analysis (Mode Aware) ---
                 if ANGR_AVAILABLE:
@@ -368,7 +363,7 @@ def main():
                     )
 
             except (OSError, pefile.PEFormatError, ValueError, RuntimeError) as e:
-                logger.critical(f"MCP: Failed to pre-load file: {type(e).__name__}: {e}", exc_info=True)
+                logger.critical("MCP: Failed to pre-load file: %s: %s", type(e).__name__, e, exc_info=True)
                 if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
                     temp_pe_obj_for_preload.close()
                 state.filepath = None
@@ -377,7 +372,7 @@ def main():
                 logger.error("MCP server startup aborted due to pre-load failure.")
                 sys.exit(1)
             except Exception as e:
-                logger.critical(f"MCP: Unexpected error during pre-load: {type(e).__name__}: {e}", exc_info=True)
+                logger.critical("MCP: Unexpected error during pre-load: %s: %s", type(e).__name__, e, exc_info=True)
                 if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
                     temp_pe_obj_for_preload.close()
                 state.filepath = None
@@ -395,7 +390,7 @@ def main():
             mcp_server.settings.port = args.mcp_port
             mcp_server.settings.log_level = logging.getLevelName(log_level).lower()
             transport_label = "streamable-http" if args.mcp_transport == "streamable-http" else "SSE (deprecated)"
-            logger.info(f"Starting MCP server ({transport_label}) on http://{args.mcp_host}:{args.mcp_port}")
+            logger.info("Starting MCP server (%s) on http://%s:%d", transport_label, args.mcp_host, args.mcp_port)
         else:
             logger.info("Starting MCP server (stdio).")
 
@@ -419,14 +414,14 @@ def main():
                         log_level=logging.getLevelName(log_level).lower(),
                     )
                 except (ImportError, AttributeError) as e:
-                    logger.warning(f"Could not apply auth middleware ({e}), falling back to unauthenticated mode")
+                    logger.warning("Could not apply auth middleware (%s), falling back to unauthenticated mode", e)
                     mcp_server.run(transport=args.mcp_transport)
             else:
                 mcp_server.run(transport=args.mcp_transport)
         except KeyboardInterrupt:
             logger.info("MCP Server stopped by user (KeyboardInterrupt).")
         except Exception as e:
-            logger.critical(f"MCP Server encountered an unhandled error: {str(e)}", exc_info=True)
+            logger.critical("MCP Server encountered an unhandled error: %s", e, exc_info=True)
             server_exc=e
         finally:
             if state.pe_object:

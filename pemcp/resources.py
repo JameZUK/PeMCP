@@ -39,11 +39,12 @@ def _verify_download_checksum(filepath: str, url: str) -> bool:
     actual = sha256.hexdigest()
     if actual != expected:
         logger.error(
-            f"Checksum mismatch for {url}: expected {expected[:16]}..., "
-            f"got {actual[:16]}... — the download may be corrupt or tampered."
+            "Checksum mismatch for %s: expected %s..., "
+            "got %s... — the download may be corrupt or tampered.",
+            url, expected[:16], actual[:16]
         )
         return False
-    logger.info(f"Checksum verified for download: {os.path.basename(filepath)}")
+    logger.info("Checksum verified for download: %s", os.path.basename(filepath))
     return True
 
 
@@ -80,21 +81,21 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
     final_rules_target_path = os.path.join(rules_base_dir, CAPA_RULES_SUBDIR_NAME)
 
     if os.path.isdir(final_rules_target_path) and os.listdir(final_rules_target_path):
-        if verbose: logger.info(f"Capa rules already available at: {final_rules_target_path}")
+        if verbose: logger.info("Capa rules already available at: %s", final_rules_target_path)
         return final_rules_target_path
 
     if not REQUESTS_AVAILABLE:
         logger.error("'requests' library not found. Cannot download capa rules.")
         return None
 
-    logger.info(f"Capa rules not found at '{final_rules_target_path}'. Attempting to download and extract to '{rules_base_dir}'...")
+    logger.info("Capa rules not found at '%s'. Attempting to download and extract to '%s'...", final_rules_target_path, rules_base_dir)
 
     os.makedirs(rules_base_dir, exist_ok=True)
     zip_path = os.path.join(rules_base_dir, "capa-rules.zip")
     extracted_top_level_dir_path = None
 
     try:
-        logger.info(f"Downloading capa rules from {rules_zip_url} to {zip_path}...")
+        logger.info("Downloading capa rules from %s to %s...", rules_zip_url, zip_path)
         response = requests.get(rules_zip_url, timeout=60, stream=True)
         response.raise_for_status()
         with open(zip_path, 'wb') as f:
@@ -107,7 +108,7 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
                 os.remove(zip_path)
             return None
 
-        logger.info(f"Extracting capa rules from {zip_path} into {rules_base_dir}...")
+        logger.info("Extracting capa rules from %s into %s...", zip_path, rules_base_dir)
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             # Validate member paths to prevent zip-slip attacks
             target_dir = os.path.realpath(rules_base_dir)
@@ -145,7 +146,7 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
 
 
         if not extracted_dir_name_found:
-            logger.error(f"Could not find the main '{expected_prefix}*' directory or a directory containing '{CAPA_RULES_SUBDIR_NAME}' within '{rules_base_dir}' after extraction. Contents: {os.listdir(rules_base_dir)}")
+            logger.error("Could not find the main '%s*' directory or a directory containing '%s' within '%s' after extraction. Contents: %s", expected_prefix, CAPA_RULES_SUBDIR_NAME, rules_base_dir, os.listdir(rules_base_dir))
             if os.path.exists(zip_path):
                 try: os.remove(zip_path)
                 except OSError: pass
@@ -158,17 +159,17 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
         source_rules_content_path = extracted_top_level_dir_path
         if os.path.isdir(os.path.join(extracted_top_level_dir_path, CAPA_RULES_SUBDIR_NAME)):
             source_rules_content_path = os.path.join(extracted_top_level_dir_path, CAPA_RULES_SUBDIR_NAME)
-            logger.info(f"Found rules content within subdirectory: {source_rules_content_path}")
+            logger.info("Found rules content within subdirectory: %s", source_rules_content_path)
         else:
-             logger.info(f"Using extracted directory as rules content source: {source_rules_content_path}")
+             logger.info("Using extracted directory as rules content source: %s", source_rules_content_path)
 
 
         if os.path.exists(final_rules_target_path):
-            logger.warning(f"Target rules directory '{final_rules_target_path}' already exists. Removing it before placing newly extracted rules.")
+            logger.warning("Target rules directory '%s' already exists. Removing it before placing newly extracted rules.", final_rules_target_path)
             try:
                 shutil.rmtree(final_rules_target_path)
             except Exception as e_rm:
-                logger.error(f"Failed to remove existing target rules directory '{final_rules_target_path}': {e_rm}")
+                logger.error("Failed to remove existing target rules directory '%s': %s", final_rules_target_path, e_rm)
                 if os.path.isdir(extracted_top_level_dir_path): # Clean up the originally extracted folder
                     try: shutil.rmtree(extracted_top_level_dir_path)
                     except Exception: logger.debug("Cleanup of extracted dir failed", exc_info=True)
@@ -177,14 +178,14 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
                     except OSError: pass
                 return None
 
-        logger.info(f"Moving rules from '{source_rules_content_path}' to '{final_rules_target_path}'...")
+        logger.info("Moving rules from '%s' to '%s'...", source_rules_content_path, final_rules_target_path)
         try:
             # shutil.move might fail if src is a subdir of a dir we want to remove later.
             # It's safer to copy and then remove the original extracted structure.
             shutil.copytree(source_rules_content_path, final_rules_target_path)
-            logger.info(f"Successfully copied rules to '{final_rules_target_path}'.")
+            logger.info("Successfully copied rules to '%s'.", final_rules_target_path)
         except Exception as e_mv_cp: # Changed from move to copytree
-            logger.error(f"Failed to copy rules from '{source_rules_content_path}' to '{final_rules_target_path}': {e_mv_cp}")
+            logger.error("Failed to copy rules from '%s' to '%s': %s", source_rules_content_path, final_rules_target_path, e_mv_cp)
             # Clean up potentially partially copied target
             if os.path.isdir(final_rules_target_path):
                 try: shutil.rmtree(final_rules_target_path)
@@ -202,32 +203,32 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
             if os.path.isdir(extracted_top_level_dir_path):
                 try:
                     shutil.rmtree(extracted_top_level_dir_path)
-                    logger.info(f"Cleaned up temporary extraction directory: {extracted_top_level_dir_path}")
+                    logger.info("Cleaned up temporary extraction directory: %s", extracted_top_level_dir_path)
                 except Exception as e_rm_extracted:
-                    logger.warning(f"Could not remove temporary extraction directory {extracted_top_level_dir_path}: {e_rm_extracted}")
+                    logger.warning("Could not remove temporary extraction directory %s: %s", extracted_top_level_dir_path, e_rm_extracted)
 
 
         if os.path.isdir(final_rules_target_path) and os.listdir(final_rules_target_path):
-            logger.info(f"Capa rules now correctly organized at: {final_rules_target_path}")
+            logger.info("Capa rules now correctly organized at: %s", final_rules_target_path)
             return final_rules_target_path
         else:
-            logger.error(f"Capa rules were processed, but the final target directory '{final_rules_target_path}' is still not found or is empty.")
+            logger.error("Capa rules were processed, but the final target directory '%s' is still not found or is empty.", final_rules_target_path)
             if os.path.exists(zip_path): # Ensure zip is removed if process failed here
                 try: os.remove(zip_path)
                 except OSError: pass
             return None
 
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error downloading capa rules: {e}")
+        logger.error("Error downloading capa rules: %s", e)
     except zipfile.BadZipFile:
-        logger.error(f"Error: Downloaded capa rules file '{zip_path}' is not a valid zip file or is corrupted.")
+        logger.error("Error: Downloaded capa rules file '%s' is not a valid zip file or is corrupted.", zip_path)
     except Exception as e:
-        logger.error(f"An unexpected error occurred during capa rules download/extraction/organization: {e}", exc_info=verbose)
+        logger.error("An unexpected error occurred during capa rules download/extraction/organization: %s", e, exc_info=verbose)
         if extracted_top_level_dir_path and os.path.isdir(extracted_top_level_dir_path): # If top level was created
             try: shutil.rmtree(extracted_top_level_dir_path) # Clean it up
             except Exception: logger.debug("Cleanup of extracted dir failed", exc_info=True)
     finally:
         if os.path.exists(zip_path):
             try: os.remove(zip_path)
-            except OSError as e_rm_zip: logger.warning(f"Could not remove downloaded zip {zip_path}: {e_rm_zip}")
+            except OSError as e_rm_zip: logger.warning("Could not remove downloaded zip %s: %s", zip_path, e_rm_zip)
     return None
