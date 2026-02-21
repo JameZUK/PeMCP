@@ -156,52 +156,52 @@ class AnalysisCache:
         if pe_data is None:
             return None
 
-        # --- Validate file (mtime/size) and touch LRU in a single lock acquisition ---
+        # --- Validate file hasn't changed on disk AND touch LRU ---
+        # Single lock acquisition for both metadata validation and LRU update
+        # to reduce lock contention on the hot path.
         try:
-            if os.path.exists(current_filepath):
-                current_mtime = os.path.getmtime(current_filepath)
-                current_size = os.path.getsize(current_filepath)
-            else:
-                current_mtime = None
-                current_size = None
+            file_exists = os.path.exists(current_filepath)
+            current_mtime = os.path.getmtime(current_filepath) if file_exists else None
+            current_size = os.path.getsize(current_filepath) if file_exists else None
         except OSError:
+            file_exists = False
             current_mtime = None
             current_size = None
 
-        try:
+        if file_exists and current_mtime is not None:
             with self._lock:
                 meta = self._load_meta()
                 cached_meta = meta.get(sha256, {})
-
-                # Check mtime
-                if current_mtime is not None:
-                    cached_mtime = cached_meta.get("file_mtime")
-                    if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
-                        logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
-                        self._remove_entry(sha256)
-                        meta.pop(sha256, None)
-                        self._save_meta(meta)
-                        return None
-
-                # Check size
-                if current_size is not None:
-                    cached_size = cached_meta.get("file_size")
-                    if cached_size is not None and current_size != cached_size:
-                        logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
-                        self._remove_entry(sha256)
-                        meta.pop(sha256, None)
-                        self._save_meta(meta)
-                        return None
-
-                # Touch LRU timestamp (throttled to avoid excessive writes)
+                cached_mtime = cached_meta.get("file_mtime")
+                cached_size = cached_meta.get("file_size")
+                if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
+                    logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
+                    self._remove_entry_and_meta(sha256)
+                    return None
+                if cached_size is not None and current_size != cached_size:
+                    logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
+                    self._remove_entry_and_meta(sha256)
+                    return None
+                # Touch LRU timestamp (throttled to once per 60s)
                 if sha256 in meta:
                     last = meta[sha256].get("last_accessed", 0)
                     now = time.time()
                     if now - last > 60:
                         meta[sha256]["last_accessed"] = now
                         self._save_meta(meta)
-        except OSError:
-            pass  # Stale metadata is acceptable
+        else:
+            # No file to validate; still update LRU
+            try:
+                with self._lock:
+                    meta = self._load_meta()
+                    if sha256 in meta:
+                        last = meta[sha256].get("last_accessed", 0)
+                        now = time.time()
+                        if now - last > 60:
+                            meta[sha256]["last_accessed"] = now
+                            self._save_meta(meta)
+            except OSError:
+                pass  # Stale LRU timestamp is acceptable
 
         # Patch session-specific field
         pe_data["filepath"] = current_filepath
