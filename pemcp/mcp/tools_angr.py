@@ -424,7 +424,11 @@ async def emulate_function_execution(
                     "status": "success",
                     "return_value": ret_val,
                     "stdout": final.posix.dumps(1).decode('utf-8', 'ignore'),
-                    "steps_taken_count": len(final.history.bbl_addrs)
+                    "steps_taken_count": len(final.history.bbl_addrs),
+                    "next_step": (
+                        "Call auto_note_function(address) to save a behavioral summary, "
+                        "or add_note(content, category='tool_result') to record emulation findings."
+                    ),
                 }
             elif len(simgr.active) > 0:
                 # --- IMPROVEMENT: Explicit Hinting ---

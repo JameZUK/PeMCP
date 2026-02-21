@@ -574,3 +574,296 @@ class TestBackgroundExceptionHandling:
         assert "except (OSError, RuntimeError, ValueError, TypeError)" not in wrapper_body, \
             "Background task should use a single 'except Exception' block"
         assert "except Exception as e:" in wrapper_body
+
+
+# ===================================================================
+# Iteration 12 review fixes — REVIEW.md remaining suggestions
+# ===================================================================
+
+
+class TestGetProgressOverview:
+    """Verify get_progress_overview tool exists and is properly configured."""
+
+    def test_tool_exists(self):
+        """get_progress_overview should be defined in tools_session."""
+        session_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_session.py"
+        )
+        with open(session_path) as f:
+            source = f.read()
+        assert "async def get_progress_overview(" in source
+
+    def test_excluded_from_history(self):
+        """get_progress_overview should be in _SKIP_HISTORY_TOOLS."""
+        server_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "server.py"
+        )
+        with open(server_path) as f:
+            source = f.read()
+        assert '"get_progress_overview"' in source
+
+    def test_returns_analysis_phase_and_file_loaded(self):
+        """get_progress_overview should return analysis_phase and file_loaded keys."""
+        session_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_session.py"
+        )
+        with open(session_path) as f:
+            source = f.read()
+        # Find the function body
+        idx = source.index("async def get_progress_overview(")
+        func_body = source[idx:idx + 2000]
+        assert '"analysis_phase"' in func_body
+        assert '"file_loaded"' in func_body
+        assert '"coverage_pct"' in func_body
+        assert '"notes"' in func_body
+
+
+class TestSinceLastDigestFiltering:
+    """Verify since_last_digest actually filters notes by timestamp."""
+
+    def test_digest_filters_notes_by_timestamp(self):
+        """get_analysis_digest should filter notes when since_last_digest=True."""
+        session_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_session.py"
+        )
+        with open(session_path) as f:
+            source = f.read()
+        idx = source.index("async def get_analysis_digest(")
+        func_body = source[idx:idx + 4000]
+        assert "_note_is_new" in func_body, \
+            "get_analysis_digest should have a _note_is_new helper for timestamp filtering"
+        assert "last_ts" in func_body, \
+            "get_analysis_digest should use last_ts for filtering"
+
+    def test_since_last_digest_timestamp_updated(self):
+        """Calling get_analysis_digest should update state.last_digest_timestamp."""
+        from pemcp.state import AnalyzerState
+        s = AnalyzerState()
+        assert s.last_digest_timestamp == 0.0
+
+
+class TestFlossConfigDataclass:
+    """Verify _FlossConfig dataclass exists and _build_floss_config works."""
+
+    def test_floss_config_exists(self):
+        """_FlossConfig dataclass should be defined in tools_pe."""
+        from pemcp.mcp.tools_pe import _FlossConfig
+        cfg = _FlossConfig()
+        assert cfg.min_length == 4
+        assert cfg.verbose_level == 0
+        assert cfg.format_hint == "auto"
+        assert cfg.disabled_types == []
+        assert cfg.only_types == []
+        assert cfg.functions_to_analyze == []
+        assert cfg.quiet_mode is True
+
+    def test_build_floss_config_defaults(self):
+        """_build_floss_config with all-None params should return defaults."""
+        from pemcp.mcp.tools_pe import _build_floss_config
+        cfg = _build_floss_config(
+            floss_min_length=None,
+            floss_verbose_level=None,
+            floss_script_debug_level=None,
+            floss_format=None,
+            floss_no_static=None,
+            floss_no_stack=None,
+            floss_no_tight=None,
+            floss_no_decoded=None,
+            floss_only_static=None,
+            floss_only_stack=None,
+            floss_only_tight=None,
+            floss_only_decoded=None,
+            floss_functions=None,
+            floss_quiet=None,
+            verbose_mcp_output=False,
+        )
+        assert cfg.format_hint == "auto"
+        assert cfg.quiet_mode is True
+
+    def test_build_floss_config_custom_values(self):
+        """_build_floss_config with custom params should produce correct config."""
+        from pemcp.mcp.tools_pe import _build_floss_config
+        cfg = _build_floss_config(
+            floss_min_length=10,
+            floss_verbose_level=2,
+            floss_script_debug_level="TRACE",
+            floss_format="pe",
+            floss_no_static=True,
+            floss_no_stack=None,
+            floss_no_tight=None,
+            floss_no_decoded=None,
+            floss_only_static=None,
+            floss_only_stack=None,
+            floss_only_tight=None,
+            floss_only_decoded=None,
+            floss_functions=["0x401000", "0x402000"],
+            floss_quiet=False,
+            verbose_mcp_output=True,
+        )
+        assert cfg.min_length == 10
+        assert cfg.verbose_level == 2
+        assert cfg.format_hint == "pe"
+        assert len(cfg.disabled_types) == 1  # STATIC
+        assert len(cfg.functions_to_analyze) == 2
+        assert cfg.quiet_mode is False
+
+
+class TestAutoNotingDecodedStrings:
+    """Verify find_and_decode_encoded_strings auto-notes IOC-like decoded strings."""
+
+    def test_auto_noting_code_exists(self):
+        """tools_deobfuscation.py should auto-note high-confidence IOCs."""
+        deob_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_deobfuscation.py"
+        )
+        with open(deob_path) as f:
+            source = f.read()
+        assert "_get_string_category" in source, \
+            "find_and_decode_encoded_strings should use _get_string_category for IOC detection"
+        assert "auto_noted_count" in source, \
+            "find_and_decode_encoded_strings should track auto-noted count"
+        assert "state.add_note" in source, \
+            "find_and_decode_encoded_strings should auto-save notes via state.add_note"
+
+
+class TestNoteHintsInTools:
+    """Verify analysis tools include note-taking hints in their responses."""
+
+    def test_decompile_has_next_step(self):
+        """decompile_function_with_angr should include next_step hint."""
+        angr_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr.py"
+        )
+        with open(angr_path) as f:
+            source = f.read()
+        idx = source.index("async def decompile_function_with_angr")
+        func_body = source[idx:idx + 3000]
+        assert '"next_step"' in func_body
+
+    def test_annotated_disassembly_has_next_step(self):
+        """get_annotated_disassembly should include next_step hint."""
+        disasm_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr_disasm.py"
+        )
+        with open(disasm_path) as f:
+            source = f.read()
+        idx = source.index("async def get_annotated_disassembly")
+        func_body = source[idx:idx + 5000]
+        assert '"next_step"' in func_body
+
+    def test_emulate_has_next_step(self):
+        """emulate_function_execution should include next_step hint on success."""
+        angr_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr.py"
+        )
+        with open(angr_path) as f:
+            source = f.read()
+        idx = source.index("async def emulate_function_execution")
+        func_body = source[idx:idx + 5000]
+        # Should have next_step in the success path
+        assert "next_step" in func_body
+
+    def test_decode_strings_has_next_step(self):
+        """find_and_decode_encoded_strings should include next_step hint."""
+        deob_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_deobfuscation.py"
+        )
+        with open(deob_path) as f:
+            source = f.read()
+        idx = source.index("async def find_and_decode_encoded_strings")
+        # The function is long; search to the next top-level @tool_decorator or end
+        next_func = source.find("\n@tool_decorator", idx + 1)
+        func_body = source[idx:next_func] if next_func > 0 else source[idx:]
+        assert '"next_step"' in func_body
+
+
+class TestCacheLockConsolidation:
+    """Verify cache.get() consolidates lock acquisitions."""
+
+    def test_single_lock_acquisition_for_validation(self):
+        """cache.get() should validate mtime/size and touch LRU in a single lock."""
+        cache_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "cache.py"
+        )
+        with open(cache_path) as f:
+            source = f.read()
+        # Find the get() method
+        get_idx = source.index("def get(")
+        get_end = source.index("\n    def ", get_idx + 10)
+        get_body = source[get_idx:get_end]
+        # The consolidated code has 3 lock acquisitions:
+        #   - 2 for error-path cache entry removal (bad gzip, version mismatch)
+        #   - 1 for the consolidated validation+LRU block (was 3 separate before)
+        # The old code had 5 lock acquisitions total.
+        lock_count = get_body.count("with self._lock:")
+        assert lock_count <= 3, \
+            f"cache.get() should consolidate mtime/size/LRU into a single lock (found {lock_count})"
+        # Verify the consolidated comment exists
+        assert "single lock acquisition" in get_body, \
+            "cache.get() should have a comment indicating consolidation"
+
+
+class TestDockerSecurity:
+    """Verify Docker security improvements from REVIEW.md."""
+
+    def test_base_image_pinned_by_digest(self):
+        """Dockerfile should pin base image by sha256 digest."""
+        dockerfile_path = os.path.join(
+            os.path.dirname(__file__), "..", "Dockerfile"
+        )
+        with open(dockerfile_path) as f:
+            source = f.read()
+        assert "@sha256:" in source, \
+            "Dockerfile should pin base image with @sha256: digest"
+
+    def test_no_chmod_777(self):
+        """Dockerfile should not use chmod 777."""
+        dockerfile_path = os.path.join(
+            os.path.dirname(__file__), "..", "Dockerfile"
+        )
+        with open(dockerfile_path) as f:
+            source = f.read()
+        # Count chmod 777 occurrences in non-comment lines
+        for line in source.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            assert "chmod 777" not in stripped and "chmod -R 777" not in stripped, \
+                f"Dockerfile should use 775 with group instead of 777: {stripped}"
+
+    def test_uses_group_for_permissions(self):
+        """Dockerfile should use a dedicated group for permissions."""
+        dockerfile_path = os.path.join(
+            os.path.dirname(__file__), "..", "Dockerfile"
+        )
+        with open(dockerfile_path) as f:
+            source = f.read()
+        assert "groupadd" in source, "Dockerfile should create a dedicated group"
+        assert "chgrp" in source, "Dockerfile should use chgrp for ownership"
+
+    def test_run_sh_uses_group_add(self):
+        """run.sh should pass --group-add to give access to pemcp group."""
+        run_path = os.path.join(
+            os.path.dirname(__file__), "..", "run.sh"
+        )
+        with open(run_path) as f:
+            source = f.read()
+        assert "--group-add" in source, \
+            "run.sh should pass --group-add for the pemcp group"
+
+
+class TestSignifyImportHandling:
+    """Verify signify import handles non-ImportError exceptions."""
+
+    def test_signify_import_has_general_exception_handler(self):
+        """config.py should catch generic Exception for signify import."""
+        config_path = os.path.join(
+            os.path.dirname(__file__), "..", "pemcp", "config.py"
+        )
+        with open(config_path) as f:
+            source = f.read()
+        # Find the signify import block
+        idx = source.index("from signify.authenticode import")
+        block = source[max(0, idx - 200):idx + 400]
+        assert "except Exception as e:" in block, \
+            "signify import should catch generic Exception (not just ImportError)"

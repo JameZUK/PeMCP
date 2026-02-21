@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, List
 from pemcp.config import state, logger, Context, STRINGSIFTER_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 from pemcp.utils import safe_regex_search as _safe_regex_search
-from pemcp.parsers.strings import _decode_single_byte_xor, _format_hex_dump_lines
+from pemcp.parsers.strings import _decode_single_byte_xor, _format_hex_dump_lines, _get_string_category
 if STRINGSIFTER_AVAILABLE:
     from pemcp.mcp.tools_strings import _get_sifter_models
 
@@ -444,4 +444,42 @@ async def find_and_decode_encoded_strings(
 
         final_results.sort(key=lambda x: x.get('sifter_score', 0.0), reverse=True)
 
-    return await _check_mcp_response_size(ctx, final_results[:limit], "find_and_decode_encoded_strings", "the 'limit' parameter or by adjusting filters")
+    truncated = final_results[:limit]
+
+    # Auto-note high-confidence decoded strings that look like IOCs
+    auto_noted_count = 0
+    for entry in truncated:
+        decoded = entry.get("decoded_string", "")
+        conf = entry.get("confidence", 0)
+        if conf < 0.8 or not decoded:
+            continue
+        cat = _get_string_category(decoded.strip())
+        if cat:
+            try:
+                state.add_note(
+                    content=f"[auto] Decoded {cat}: {decoded.strip()[:200]} "
+                            f"(encoding: {', '.join(entry.get('encoding_layers', []))})",
+                    category="tool_result",
+                    tool_name="find_and_decode_encoded_strings",
+                )
+                auto_noted_count += 1
+            except Exception:
+                pass  # Don't fail the tool if note creation fails
+
+    # Wrap results with a note-taking hint when encoded strings are found
+    result_wrapper: Dict[str, Any] = {
+        "decoded_strings": truncated,
+        "count": len(truncated),
+        "total_candidates": len(found_decoded_strings),
+    }
+    if auto_noted_count:
+        result_wrapper["auto_noted"] = (
+            f"{auto_noted_count} high-confidence IOC(s) auto-saved as tool_result notes."
+        )
+    if truncated:
+        result_wrapper["next_step"] = (
+            "Review decoded strings for IOCs (IPs, URLs, domains, registry keys). "
+            "Call add_note(content, category='tool_result') to record significant findings."
+        )
+
+    return await _check_mcp_response_size(ctx, result_wrapper, "find_and_decode_encoded_strings", "the 'limit' parameter or by adjusting filters")

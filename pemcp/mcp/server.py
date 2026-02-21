@@ -21,6 +21,7 @@ _raw_tool_decorator = mcp_server.tool()
 _SKIP_HISTORY_TOOLS = frozenset({
     "get_tool_history", "clear_tool_history", "get_session_summary",
     "get_notes", "add_note", "delete_note", "update_note",
+    "get_progress_overview",
 })
 
 
