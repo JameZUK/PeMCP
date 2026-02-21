@@ -80,6 +80,16 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 - **rustbininfo** — Rust binary metadata extraction.
 - **pyelftools** — ELF and DWARF debug info parsing.
 
+### Session Continuity & AI Progress Tracking
+
+PeMCP is designed for **large binary corpus analysis** where AI clients need to maintain analytical context across long investigations and limited context windows:
+
+- **Persistent Notes** — Record findings with `add_note()`, auto-summarise functions with `auto_note_function()`, and aggregate everything with `get_analysis_digest()`. Notes survive server restarts and are restored automatically when the same file is reopened.
+- **Tool History** — Every tool invocation is recorded with parameters, result summaries, and timing. Use `get_tool_history()` to review what was done, or `get_session_summary()` for full session state.
+- **Cross-Session Restoration** — When a previously analysed file is reopened, `open_file` returns a `session_context` field containing restored notes and prior tool history, enabling the AI to resume where it left off.
+- **Analysis Digest** — `get_analysis_digest()` compiles all accumulated notes, triage findings, IOCs, coverage stats, and unexplored targets into a single context-efficient summary — what was *learned*, not just what tools ran.
+- **Project Export/Import** — Bundle analysis + notes + history + binary into a `.pemcp_project.tar.gz` for sharing or archiving with `export_project`.
+
 ### Dynamic File Loading, Caching & API Key Management
 
 - **Auto-Detection** — `open_file` automatically detects PE/ELF/Mach-O from magic bytes. No need to specify the format.
@@ -251,14 +261,16 @@ The `run.sh` helper automatically detects Docker or Podman, builds the image on 
 Once configured, you can interact with PeMCP through Claude Code naturally:
 
 1. **"What samples are available?"** — Claude calls `list_samples` to discover files in the configured samples directory
-2. **"Open this sample for analysis"** — Claude calls `open_file` with the path (auto-detects PE/ELF/Mach-O)
+2. **"Open this sample for analysis"** — Claude calls `open_file` with the path (auto-detects PE/ELF/Mach-O). If `session_context` is returned, Claude knows to call `get_analysis_digest()` to review previous findings
 3. **"What format is this?"** — Claude calls `detect_binary_format` to identify format and suggest tools
-4. **"What does this binary do?"** — Claude retrieves the triage report, imports, capabilities
-5. **"Decompile the main function"** — Claude uses Angr tools to decompile (works on PE, ELF, Mach-O)
-6. **"Is this a .NET binary?"** — Claude calls `dotnet_analyze` for CLR metadata and CIL disassembly
-7. **"Analyse this Go binary"** — Claude calls `go_analyze` for packages, functions, compiler version
-8. **"Check if it's on VirusTotal"** — Claude queries the VT API
-9. **"Close the file"** — Claude calls `close_file` to free resources
+4. **"What does this binary do?"** — Claude retrieves the triage report (key findings are auto-saved as notes)
+5. **"Decompile the main function"** — Claude uses Angr tools to decompile, then calls `auto_note_function(address)` to record a summary
+6. **"Summarise what we've found"** — Claude calls `get_analysis_digest()` for an aggregated view of all findings
+7. **"Is this a .NET binary?"** — Claude calls `dotnet_analyze` for CLR metadata and CIL disassembly
+8. **"Analyse this Go binary"** — Claude calls `go_analyze` for packages, functions, compiler version
+9. **"Check if it's on VirusTotal"** — Claude queries the VT API
+10. **"Export this analysis"** — Claude calls `export_project` to save analysis + notes + history as a portable archive
+11. **"Close the file"** — Claude calls `close_file` to free resources (notes and history are persisted to cache)
 
 API keys can be set interactively: *"Set my VirusTotal API key to abc123"* — Claude calls `set_api_key`, and the key persists across sessions.
 

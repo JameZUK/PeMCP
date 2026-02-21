@@ -151,6 +151,11 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
     """
     Decompiles a function into C-like pseudocode using Angr.
     Automatically attempts to handle RVA (offsets) if the exact VA is not found.
+
+    After reviewing the decompiled output, call auto_note_function(address) to
+    save a one-line behavioral summary, or add_note(content, category='tool_result')
+    to record specific findings. This builds the analysis digest without keeping
+    full pseudocode in context.
     """
 
     await ctx.info(f"Requesting Angr decompilation for: {function_address}")
@@ -172,7 +177,12 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
         try:
             dec = state.angr_project.analyses.Decompiler(func, cfg=state.angr_cfg.model)
             if not dec.codegen: return {"error": "Decompilation produced no code."}
-            return {"function_name": func.name, "address": hex(addr_to_use), "c_pseudocode": dec.codegen.text}
+            return {
+                "function_name": func.name,
+                "address": hex(addr_to_use),
+                "c_pseudocode": dec.codegen.text,
+                "next_step": "Call auto_note_function(address) to save a behavioral summary of this function.",
+            }
         except Exception as e: return {"error": f"Decompilation failed: {e}"}
 
     try:
