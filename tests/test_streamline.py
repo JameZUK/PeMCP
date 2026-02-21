@@ -29,7 +29,7 @@ class TestCategoryMaps:
         from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB
         assert len(CATEGORIZED_IMPORTS_DB) > 50
         # Each entry should be (risk, category) tuple
-        for api, val in CATEGORIZED_IMPORTS_DB.items():
+        for _api, val in CATEGORIZED_IMPORTS_DB.items():
             assert isinstance(val, tuple) and len(val) == 2
             risk, cat = val
             assert risk in ("CRITICAL", "HIGH", "MEDIUM", "LOW")

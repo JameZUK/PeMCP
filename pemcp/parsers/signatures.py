@@ -19,7 +19,7 @@ def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, 
     current_signature: Optional[Dict[str, Any]] = None
     try:
         with open(db_path, 'r', encoding='utf-8', errors='ignore') as f:
-            for line_num, line in enumerate(f, 1):
+            for _line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line or line.startswith(';'): continue
                 name_match = re.match(r'^\[(.*)\]$', line)
@@ -152,6 +152,6 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                                 match_detail["strings"].append({"offset": hex(s_match_offset), "identifier": s_match_id, "data": str_data_repr})
                 scan_results.append(match_detail)
         else: logger.info("   No YARA matches found.")
-    except yara.Error as e: logger.error("   YARA Error: %s", e); scan_results.append({"error":f"YARA Error: {str(e)}"})
-    except Exception as e: logger.error("   Unexpected YARA scan error: %s", e, exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {str(e)}"})
+    except yara.Error as e: logger.error("   YARA Error: %s", e); scan_results.append({"error":f"YARA Error: {e!s}"})
+    except Exception as e: logger.error("   Unexpected YARA scan error: %s", e, exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {e!s}"})
     return scan_results

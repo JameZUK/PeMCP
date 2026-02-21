@@ -772,9 +772,9 @@ async def reanalyze_loaded_pe_file(
         logger.info("Re-analysis of %s cancelled. Global PE data remains from previous successful load/analysis.", state.filepath)
         raise
     except Exception as e_outer:
-        await ctx.error(f"Error re-analyzing PE '{state.filepath}': {str(e_outer)}");
+        await ctx.error(f"Error re-analyzing PE '{state.filepath}': {e_outer!s}");
         logger.error("MCP: Error re-analyzing PE '%s': %s", state.filepath, e_outer, exc_info=verbose_mcp_output)
-        raise RuntimeError(f"Failed to re-analyze PE file '{state.filepath}': {str(e_outer)}") from e_outer
+        raise RuntimeError(f"Failed to re-analyze PE file '{state.filepath}': {e_outer!s}") from e_outer
 
 
 @tool_decorator

@@ -295,7 +295,7 @@ def _parse_floss_analysis(
                 if log_progress: logger.info("FLOSS: Found decoding features for %d functions.", len(decoding_features_map))
             except Exception as e:
                 logger.error("FLOSS: Error finding decoding features: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-                err_msg_feat = {"error": f"Feature identification error: {str(e)}"}
+                err_msg_feat = {"error": f"Feature identification error: {e!s}"}
                 if analysis_conf.enable_decoded_strings: floss_results_dict["strings"]["decoded_strings"] = [err_msg_feat]
                 if analysis_conf.enable_tight_strings: floss_results_dict["strings"]["tight_strings"] = [err_msg_feat]
 
