@@ -95,7 +95,7 @@ def _perform_unified_string_sifting(pe_info_dict: Dict[str, Any]):
             logger.info("No strings found from any source to rank.")
             return
 
-        logger.info(f"Ranking {len(all_strings_for_sifter)} total strings with StringSifter...")
+        logger.info("Ranking %d total strings with StringSifter...", len(all_strings_for_sifter))
         modeldir = os.path.join(sifter_util.package_base(), "model")
         featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
         ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
@@ -111,7 +111,7 @@ def _perform_unified_string_sifting(pe_info_dict: Dict[str, Any]):
         logger.info("Unified string sifting and categorization complete.")
 
     except Exception as e_sifter:
-        logger.error(f"Error during unified string analysis: {e_sifter}", exc_info=True)
+        logger.error("Error during unified string analysis: %s", e_sifter, exc_info=True)
         pe_info_dict["sifter_error"] = str(e_sifter)
 
 def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
@@ -192,7 +192,7 @@ def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
         logger.info("String and Capa correlation complete.")
 
     except Exception as e:
-        logger.error(f"Failed to correlate strings and Capa results: {e}", exc_info=True)
+        logger.error("Failed to correlate strings and Capa results: %s", e, exc_info=True)
         pe_info_dict['correlation_error'] = str(e)
 
 def _get_string_category(string_value: str) -> Optional[str]:
