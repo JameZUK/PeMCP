@@ -170,6 +170,7 @@ RUN pip install --no-cache-dir \
     xlrd2 \
     python-evtx \
     XLMMacroDeobfuscator \
+    "pikepdf<=9.5" \
     || true
 
 # --- Install libraries that may have complex deps (best-effort) ---

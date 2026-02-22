@@ -335,18 +335,20 @@ async def refinery_entropy_map(
     def _run():
         import os
         from refinery.units.sinks.iemap import iemap
-        # iemap uses shutil.get_terminal_size() which returns 0 columns in
-        # headless/async contexts, causing a "computed terminal width 0 is
-        # too small" error.  Set the COLUMNS env var as a fallback.
-        old_columns = os.environ.get("COLUMNS")
+        # iemap uses refinery's get_terminal_size() which checks the
+        # REFINERY_TERM_SIZE env var first, then falls back to
+        # os.get_terminal_size().  In headless/async contexts (no TTY),
+        # the fallback returns 0, causing "computed terminal width 0 is
+        # too small for heatmap".  Set REFINERY_TERM_SIZE as a workaround.
+        old_val = os.environ.get("REFINERY_TERM_SIZE")
         try:
-            os.environ["COLUMNS"] = "120"
+            os.environ["REFINERY_TERM_SIZE"] = "120"
             return data | iemap() | bytes
         finally:
-            if old_columns is None:
-                os.environ.pop("COLUMNS", None)
+            if old_val is None:
+                os.environ.pop("REFINERY_TERM_SIZE", None)
             else:
-                os.environ["COLUMNS"] = old_columns
+                os.environ["REFINERY_TERM_SIZE"] = old_val
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {

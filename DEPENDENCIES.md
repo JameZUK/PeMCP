@@ -329,6 +329,7 @@ best-effort in the Dockerfile:
 | **xlrd2** | `xlmdeobf` unit | Excel 4.0 XLM macro deobfuscation |
 | **python-evtx** | `evtx` unit | Windows Event Log (.evtx) parsing |
 | **XLMMacroDeobfuscator** | `xlmdeobf` unit | XLM macro emulation engine |
+| **pikepdf** (<=9.5) | `xtpdf` unit | PDF object/stream extraction |
 
 If any of these are missing at runtime, the corresponding refinery unit
 returns a `MissingModule` stub instead of functioning normally.  PeMCP's
@@ -368,7 +369,7 @@ tool wrappers detect this and return a clear error message.
  8. Qiling rootfs download + Windows registry hive stubs
  9. Binary Refinery sub-deps (best-effort): pypcapkit, python-registry,
     LnkParse3, olefile, msoffcrypto-tool, Pillow, xdis, xlrd2,
-    python-evtx, XLMMacroDeobfuscator
+    python-evtx, XLMMacroDeobfuscator, pikepdf
 10. dotnetfile, binwalk, pygore (best-effort, main env)
 11. oscrypto patch
 12. Assert UC_ARCH_RISCV exists                      ← build-time guard
