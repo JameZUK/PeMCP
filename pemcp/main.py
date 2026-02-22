@@ -10,7 +10,7 @@ from pathlib import Path
 
 from pemcp.config import (
     state, logger, pefile,
-    ANGR_AVAILABLE, MCP_SDK_AVAILABLE, FLOSS_AVAILABLE,
+    ANGR_AVAILABLE, MCP_SDK_AVAILABLE, FLOSS_AVAILABLE, REFINERY_AVAILABLE,
     FLOSS_MIN_LENGTH_DEFAULT,
     Actual_DebugLevel_Floss, Actual_StringType_Floss,
     DEFAULT_PEID_DB_PATH, DATA_DIR, CAPA_RULES_DEFAULT_DIR_NAME,
@@ -55,12 +55,18 @@ import pemcp.mcp.tools_notes
 import pemcp.mcp.tools_history
 import pemcp.mcp.tools_session
 import pemcp.mcp.tools_export
-import pemcp.mcp.tools_refinery
-import pemcp.mcp.tools_refinery_extract
-import pemcp.mcp.tools_refinery_forensic
-import pemcp.mcp.tools_refinery_dotnet
-import pemcp.mcp.tools_refinery_executable
-import pemcp.mcp.tools_refinery_advanced
+# Only register refinery tools when binary-refinery is installed.
+# When absent this saves ~20 tool definitions from the MCP catalog,
+# avoiding wasted context tokens for tools that would fail at runtime.
+if REFINERY_AVAILABLE:
+    import pemcp.mcp.tools_refinery
+    import pemcp.mcp.tools_refinery_extract
+    import pemcp.mcp.tools_refinery_forensic
+    import pemcp.mcp.tools_refinery_dotnet
+    import pemcp.mcp.tools_refinery_executable
+    import pemcp.mcp.tools_refinery_advanced
+else:
+    logger.info("binary-refinery not installed — skipping refinery tool registration")
 
 
 def main():
