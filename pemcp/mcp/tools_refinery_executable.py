@@ -167,14 +167,34 @@ async def refinery_file_to_virtual(
     await ctx.info(f"Converting file offset {hex(off)} to virtual address...")
 
     def _run():
-        from refinery.units.formats.exe.vaddr import vaddr
-        return data | vaddr(base=off) | bytes
+        import pefile
+        pe = pefile.PE(data=data)
+        image_base = pe.OPTIONAL_HEADER.ImageBase
+        # Search sections for the one containing this file offset
+        for section in pe.sections:
+            sec_start = section.PointerToRawData
+            sec_end = sec_start + section.SizeOfRawData
+            if sec_start <= off < sec_end:
+                rva = section.VirtualAddress + (off - sec_start)
+                va = image_base + rva
+                return {
+                    "file_offset": hex(off),
+                    "virtual_address": hex(va),
+                    "rva": hex(rva),
+                    "image_base": hex(image_base),
+                    "section": section.Name.rstrip(b'\x00').decode("utf-8", errors="replace"),
+                }
+        # Offset is in headers (before first section)
+        return {
+            "file_offset": hex(off),
+            "virtual_address": hex(image_base + off),
+            "rva": hex(off),
+            "image_base": hex(image_base),
+            "section": "(header)",
+        }
 
     result = await asyncio.to_thread(_run)
-    return {
-        "file_offset": hex(off),
-        "output": _safe_decode(result).strip(),
-    }
+    return result
 
 
 # ===================================================================
@@ -313,10 +333,20 @@ async def refinery_entropy_map(
     await ctx.info(f"Generating entropy map for {len(data)} bytes...")
 
     def _run():
+        import os
         from refinery.units.sinks.iemap import iemap
-        # iemap reads terminal width and fails if it gets 0 (headless/async
-        # contexts).  Pass an explicit width to avoid the error.
-        return data | iemap(width=120) | bytes
+        # iemap uses shutil.get_terminal_size() which returns 0 columns in
+        # headless/async contexts, causing a "computed terminal width 0 is
+        # too small" error.  Set the COLUMNS env var as a fallback.
+        old_columns = os.environ.get("COLUMNS")
+        try:
+            os.environ["COLUMNS"] = "120"
+            return data | iemap() | bytes
+        finally:
+            if old_columns is None:
+                os.environ.pop("COLUMNS", None)
+            else:
+                os.environ["COLUMNS"] = old_columns
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
