@@ -78,6 +78,10 @@ rustbininfo>=0.5
 # Rust symbol demangling
 rust-demangler>=1.0
 
+# --- Binary Data Transformation (Optional) ---
+# Composable binary transforms: encoding, crypto, compression, PE ops, deobfuscation
+binary-refinery>=0.9
+
 # --- ELF/Linux Binary Analysis (Optional) ---
 # ELF and DWARF parser (headers, symbols, debug info)
 pyelftools>=0.31
