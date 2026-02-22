@@ -47,7 +47,7 @@ async def _passthrough_app(scope, receive, send):
 class TestBearerAuthMiddleware:
     def test_valid_token_passes_through(self):
         app = BearerAuthMiddleware(_passthrough_app, api_key="secret-token-123")
-        status, body = asyncio.get_event_loop().run_until_complete(
+        status, body = asyncio.run(
             _make_request(app, headers=[(b"authorization", b"Bearer secret-token-123")])
         )
         assert status == 200
@@ -55,7 +55,7 @@ class TestBearerAuthMiddleware:
 
     def test_missing_auth_header_returns_401(self):
         app = BearerAuthMiddleware(_passthrough_app, api_key="secret-token-123")
-        status, body = asyncio.get_event_loop().run_until_complete(
+        status, body = asyncio.run(
             _make_request(app, headers=[])
         )
         assert status == 401
@@ -63,14 +63,14 @@ class TestBearerAuthMiddleware:
 
     def test_wrong_token_returns_401(self):
         app = BearerAuthMiddleware(_passthrough_app, api_key="secret-token-123")
-        status, body = asyncio.get_event_loop().run_until_complete(
+        status, body = asyncio.run(
             _make_request(app, headers=[(b"authorization", b"Bearer wrong-token")])
         )
         assert status == 401
 
     def test_missing_bearer_prefix_returns_401(self):
         app = BearerAuthMiddleware(_passthrough_app, api_key="secret-token-123")
-        status, body = asyncio.get_event_loop().run_until_complete(
+        status, body = asyncio.run(
             _make_request(app, headers=[(b"authorization", b"secret-token-123")])
         )
         assert status == 401
@@ -94,14 +94,14 @@ class TestBearerAuthMiddleware:
             except (KeyError, TypeError):
                 pass  # passthrough_app doesn't handle lifespan, that's fine
 
-        asyncio.get_event_loop().run_until_complete(_run())
+        asyncio.run(_run())
         # If auth had blocked this, we'd see a 401 response. The fact that we
         # reach the inner app (which might error on lifespan) means auth passed.
         assert all(r.get("status") != 401 for r in received)
 
     def test_empty_bearer_value_returns_401(self):
         app = BearerAuthMiddleware(_passthrough_app, api_key="secret-token-123")
-        status, body = asyncio.get_event_loop().run_until_complete(
+        status, body = asyncio.run(
             _make_request(app, headers=[(b"authorization", b"Bearer ")])
         )
         assert status == 401
