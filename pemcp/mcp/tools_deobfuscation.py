@@ -248,7 +248,7 @@ async def find_and_decode_encoded_strings(
     max_decode_layers: int = 3,
     decoded_regex_patterns: Optional[List[str]] = None,
     verbose_mcp_output: bool = False
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
     Finds, decodes (recursively), and optionally ranks encoded strings with heuristics.
 
