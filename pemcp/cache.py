@@ -177,11 +177,17 @@ class AnalysisCache:
                     cached_size = cached_meta.get("file_size")
                     if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
                         logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
-                        self._remove_entry_and_meta(sha256)
+                        # Inline removal using already-loaded meta to avoid
+                        # redundant _load_meta + _save_meta round-trip.
+                        self._remove_entry(sha256)
+                        meta.pop(sha256, None)
+                        self._save_meta(meta)
                         return None
                     if cached_size is not None and current_size != cached_size:
                         logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
-                        self._remove_entry_and_meta(sha256)
+                        self._remove_entry(sha256)
+                        meta.pop(sha256, None)
+                        self._save_meta(meta)
                         return None
                 # Touch LRU timestamp (throttled to once per 60s)
                 if sha256 in meta:

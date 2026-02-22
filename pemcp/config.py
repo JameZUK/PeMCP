@@ -303,7 +303,8 @@ DEPENDENCIES = [
     ("rapidfuzz", "rapidfuzz", "RapidFuzz (for fuzzy string matching)", False),
     ("viv_utils", "vivisect", "Vivisect & Viv-Utils (for FLOSS analysis backend)", False),
     ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True),
-    ("angr", "angr", "Angr (for binary decompilation & solving)", False)
+    ("angr", "angr", "Angr (for binary decompilation & solving)", False),
+    ("refinery", "binary-refinery", "Binary Refinery (for data transforms, crypto, deobfuscation)", False),
 ]
 
 def log_library_availability():
@@ -338,6 +339,10 @@ def log_library_availability():
         logger.info("Angr library found. Advanced binary analysis (Decompilation, Symbolic Execution) enabled.")
     else:
         logger.warning("Angr library not found. Advanced binary analysis tools will be unavailable.")
+    if REFINERY_AVAILABLE:
+        logger.info("Binary Refinery library found. Data transformation tools enabled.")
+    else:
+        logger.warning("Binary Refinery (binary-refinery) not found. Refinery-based tools will be unavailable.")
 
 # --- Extended Library Availability Flags ---
 # These flags are centralized here for a single source of truth.
@@ -537,5 +542,12 @@ RUST_DEMANGLER_AVAILABLE = False
 try:
     import rust_demangler  # noqa: F401
     RUST_DEMANGLER_AVAILABLE = True
+except ImportError:
+    pass
+
+REFINERY_AVAILABLE = False
+try:
+    import refinery  # noqa: F401
+    REFINERY_AVAILABLE = True
 except ImportError:
     pass

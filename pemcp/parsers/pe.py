@@ -55,9 +55,21 @@ def _parse_file_hashes(data: bytes) -> Dict[str, Optional[str]]:
         "md5": None, "sha1": None, "sha256": None, "ssdeep": None,
     }
     try:
-        hashes["md5"] = hashlib.md5(data).hexdigest()
-        hashes["sha1"] = hashlib.sha1(data).hexdigest()
-        hashes["sha256"] = hashlib.sha256(data).hexdigest()
+        # Feed data through all hashlib instances in a single pass over
+        # 64 KB chunks to improve CPU cache utilisation on large files.
+        h_md5 = hashlib.md5()
+        h_sha1 = hashlib.sha1()
+        h_sha256 = hashlib.sha256()
+        mv = memoryview(data)
+        chunk_size = 65536
+        for offset in range(0, len(data), chunk_size):
+            chunk = mv[offset:offset + chunk_size]
+            h_md5.update(chunk)
+            h_sha1.update(chunk)
+            h_sha256.update(chunk)
+        hashes["md5"] = h_md5.hexdigest()
+        hashes["sha1"] = h_sha1.hexdigest()
+        hashes["sha256"] = h_sha256.hexdigest()
         try:
             hashes["ssdeep"] = ssdeep_hasher.hash(data)
         except Exception as e_ssdeep:

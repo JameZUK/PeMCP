@@ -32,20 +32,18 @@ class SSDeep:
             return self.h1 + self.h2 + self.h3
 
     def _spamsum(self, stream, slen):
-        roll_win = bytearray(self.ROLL_WINDOW)
-        roll_h1 = int()
-        roll_h2 = int()
-        roll_h3_val = int()
-        roll_n = int()
-        block_size = int()
-        hash_string1 = str()
-        hash_string2 = str()
-        block_hash1 = int(self.HASH_INIT)
-        block_hash2 = int(self.HASH_INIT)
+        # Cache instance constants as locals for faster access in the tight loop.
+        ROLL_WINDOW = self.ROLL_WINDOW
+        HASH_PRIME = self.HASH_PRIME
+        HASH_INIT = self.HASH_INIT
+        SPAMSUM_LENGTH = self.SPAMSUM_LENGTH
+        STREAM_BUFF_SIZE = self.STREAM_BUFF_SIZE
+        BLOCKSIZE_MIN = self.BLOCKSIZE_MIN
+        B64 = self.B64
 
-        bs = self.BLOCKSIZE_MIN
+        bs = BLOCKSIZE_MIN
         if slen > 0:
-            while (bs * self.SPAMSUM_LENGTH) < slen:
+            while (bs * SPAMSUM_LENGTH) < slen:
                 bs = bs * 2
         block_size = bs
 
@@ -53,21 +51,25 @@ class SSDeep:
             stream.seek(0)
             roll_h1 = roll_h2 = roll_h3_val = 0
             roll_n = 0
-            roll_win = bytearray(self.ROLL_WINDOW)
-            block_hash1 = self.HASH_INIT
-            block_hash2 = self.HASH_INIT
-            hash_string1 = ""
-            hash_string2 = ""
+            roll_win = bytearray(ROLL_WINDOW)
+            block_hash1 = HASH_INIT
+            block_hash2 = HASH_INIT
+            # Use lists instead of string concatenation to avoid O(n^2)
+            # cost from repeated immutable-string rebuilding.
+            hash_chars1 = []
+            hash_chars2 = []
+            max_len1 = SPAMSUM_LENGTH - 1
+            max_len2 = (SPAMSUM_LENGTH // 2) - 1
 
-            buf = stream.read(self.STREAM_BUFF_SIZE)
+            buf = stream.read(STREAM_BUFF_SIZE)
             while buf:
                 for b_val in buf:
-                    block_hash1 = ((block_hash1 * self.HASH_PRIME) & 0xFFFFFFFF) ^ b_val
-                    block_hash2 = ((block_hash2 * self.HASH_PRIME) & 0xFFFFFFFF) ^ b_val
+                    block_hash1 = ((block_hash1 * HASH_PRIME) & 0xFFFFFFFF) ^ b_val
+                    block_hash2 = ((block_hash2 * HASH_PRIME) & 0xFFFFFFFF) ^ b_val
 
-                    roll_h2 = (roll_h2 - roll_h1 + (self.ROLL_WINDOW * b_val)) & 0xFFFFFFFF
-                    roll_h1 = (roll_h1 + b_val - roll_win[roll_n % self.ROLL_WINDOW]) & 0xFFFFFFFF
-                    roll_win[roll_n % self.ROLL_WINDOW] = b_val
+                    roll_h2 = (roll_h2 - roll_h1 + (ROLL_WINDOW * b_val)) & 0xFFFFFFFF
+                    roll_h1 = (roll_h1 + b_val - roll_win[roll_n % ROLL_WINDOW]) & 0xFFFFFFFF
+                    roll_win[roll_n % ROLL_WINDOW] = b_val
                     roll_n += 1
                     roll_h3_val = (roll_h3_val << 5) & 0xFFFFFFFF
                     roll_h3_val ^= b_val
@@ -75,25 +77,25 @@ class SSDeep:
                     rh = roll_h1 + roll_h2 + roll_h3_val
 
                     if (rh % block_size) == (block_size - 1):
-                        if len(hash_string1) < (self.SPAMSUM_LENGTH - 1):
-                            hash_string1 += self.B64[block_hash1 % 64]
-                            block_hash1 = self.HASH_INIT
+                        if len(hash_chars1) < max_len1:
+                            hash_chars1.append(B64[block_hash1 % 64])
+                            block_hash1 = HASH_INIT
                         if (rh % (block_size * 2)) == ((block_size * 2) - 1):
-                            if len(hash_string2) < ((self.SPAMSUM_LENGTH // 2) - 1):
-                                hash_string2 += self.B64[block_hash2 % 64]
-                                block_hash2 = self.HASH_INIT
-                buf = stream.read(self.STREAM_BUFF_SIZE)
+                            if len(hash_chars2) < max_len2:
+                                hash_chars2.append(B64[block_hash2 % 64])
+                                block_hash2 = HASH_INIT
+                buf = stream.read(STREAM_BUFF_SIZE)
 
-            if block_size > self.BLOCKSIZE_MIN and len(hash_string1) < (self.SPAMSUM_LENGTH // 2):
+            if block_size > BLOCKSIZE_MIN and len(hash_chars1) < (SPAMSUM_LENGTH // 2):
                 block_size = (block_size // 2)
             else:
                 if roll_n > 0:
-                    if len(hash_string1) < self.SPAMSUM_LENGTH:
-                        hash_string1 += self.B64[block_hash1 % 64]
-                    if len(hash_string2) < (self.SPAMSUM_LENGTH // 2):
-                        hash_string2 += self.B64[block_hash2 % 64]
+                    if len(hash_chars1) < SPAMSUM_LENGTH:
+                        hash_chars1.append(B64[block_hash1 % 64])
+                    if len(hash_chars2) < max_len2 + 1:
+                        hash_chars2.append(B64[block_hash2 % 64])
                 break
-        return f'{block_size}:{hash_string1}:{hash_string2}'
+        return f'{block_size}:{"".join(hash_chars1)}:{"".join(hash_chars2)}'
 
     def hash(self, buf_data_input):
         buf_data_bytes = None
@@ -114,40 +116,50 @@ class SSDeep:
 
     def _levenshtein(self, s, t):
         if s == t: return 0
-        elif len(s) == 0: return len(t)
-        elif len(t) == 0: return len(s)
-        v0 = [None] * (len(t) + 1)
-        v1 = [None] * (len(t) + 1)
-        for i in range(len(v0)):
-            v0[i] = i
-        for i in range(len(s)):
+        len_s = len(s)
+        len_t = len(t)
+        if len_s == 0: return len_t
+        if len_t == 0: return len_s
+        v0 = list(range(len_t + 1))
+        v1 = [0] * (len_t + 1)
+        for i in range(len_s):
             v1[0] = i + 1
-            for j in range(len(t)):
-                cost = 0 if s[i] == t[j] else 1
+            s_i = s[i]
+            for j in range(len_t):
+                cost = 0 if s_i == t[j] else 1
                 v1[j + 1] = min(v1[j] + 1, v0[j + 1] + 1, v0[j] + cost)
-            for j in range(len(v0)):
-                v0[j] = v1[j]
-        return v1[len(t)]
+            # Swap references instead of copying element by element.
+            v0, v1 = v1, v0
+        return v0[len_t]
 
     def _common_substring(self, s1, s2):
-        hashes = list()
+        ROLL_WINDOW = self.ROLL_WINDOW
+        hashes = []
         roll = self._RollState()
-        for i in range(len(s1)):
-            b = ord(s1[i])
-            hashes.append(roll.roll_hash(b))
+        for ch in s1:
+            hashes.append(roll.roll_hash(ord(ch)))
+
+        # Build a dict mapping hash -> list of indices for O(1) lookups
+        # instead of scanning the full hashes list for every s2 position.
+        hash_index = {}
+        for j, h in enumerate(hashes):
+            if j >= ROLL_WINDOW - 1 and h != 0:
+                hash_index.setdefault(h, []).append(j)
 
         roll = self._RollState()
-        for i in range(len(s2)):
-            b = ord(s2[i])
-            rh = roll.roll_hash(b)
-            if i < (self.ROLL_WINDOW - 1):
+        for i, ch in enumerate(s2):
+            rh = roll.roll_hash(ord(ch))
+            if i < ROLL_WINDOW - 1:
                 continue
-            for j in range(self.ROLL_WINDOW - 1, len(hashes)):
-                if hashes[j] != 0 and hashes[j] == rh:
-                    ir = i - (self.ROLL_WINDOW - 1)
-                    jr = j - (self.ROLL_WINDOW - 1)
-                    if (len(s2[ir:]) >= self.ROLL_WINDOW and
-                            s2[ir:ir + self.ROLL_WINDOW] == s1[jr:jr + self.ROLL_WINDOW]):
+            candidates = hash_index.get(rh)
+            if candidates:
+                ir = i - (ROLL_WINDOW - 1)
+                s2_window = s2[ir:ir + ROLL_WINDOW]
+                if len(s2_window) < ROLL_WINDOW:
+                    continue
+                for j in candidates:
+                    jr = j - (ROLL_WINDOW - 1)
+                    if s2_window == s1[jr:jr + ROLL_WINDOW]:
                         return True
         return False
 
@@ -178,12 +190,14 @@ class SSDeep:
         return score
 
     def _strip_sequences(self, s):
-        if len(s) <= 3: return s
-        r = s[:3]
+        if len(s) <= 3:
+            return s
+        # Use list accumulation instead of repeated string concatenation.
+        parts = [s[0], s[1], s[2]]
         for i in range(3, len(s)):
-            if (s[i] != s[i-1] or s[i] != s[i-2] or s[i] != s[i-3]):
-                r += s[i]
-        return r
+            if s[i] != s[i-1] or s[i] != s[i-2] or s[i] != s[i-3]:
+                parts.append(s[i])
+        return ''.join(parts)
 
     def compare(self, hash1_str, hash2_str):
         if not (isinstance(hash1_str, str) and isinstance(hash2_str, str)):
