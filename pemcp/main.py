@@ -55,6 +55,7 @@ import pemcp.mcp.tools_notes
 import pemcp.mcp.tools_history
 import pemcp.mcp.tools_session
 import pemcp.mcp.tools_export
+import pemcp.mcp.tools_refinery
 
 
 def main():
