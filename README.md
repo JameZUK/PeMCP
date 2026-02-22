@@ -1,6 +1,6 @@
 # PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **184 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **151 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -79,7 +79,7 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 - **pygore** — Go binary reverse engineering.
 - **rustbininfo** — Rust binary metadata extraction.
 - **pyelftools** — ELF and DWARF debug info parsing.
-- **Binary Refinery** — 56 tools for composable binary data transforms: encoding/decoding, crypto, compression, IOC extraction, PE/ELF/Mach-O section operations, .NET metadata, archive extraction, Office documents, PCAP/EVTX forensics, steganography, and multi-step pipelines.
+- **Binary Refinery** — 23 context-efficient tools (consolidated from 56 via dispatch pattern) for composable binary data transforms: encoding/decoding, crypto, compression, IOC extraction, PE/ELF/Mach-O section operations, .NET metadata, archive extraction, Office documents, PCAP/EVTX forensics, steganography, and multi-step pipelines. Only registered when binary-refinery is installed.
 
 ### Session Continuity & AI Progress Tracking
 
@@ -576,7 +576,7 @@ docker run --rm -i \
 
 ## MCP Tools Reference
 
-PeMCP exposes **184 tools** organised into the following categories.
+PeMCP exposes **151 tools** organised into the following categories.
 
 ### File Management & Sample Discovery
 
@@ -766,95 +766,64 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `elf_dwarf_info` | Extract DWARF debug info: compilation units, functions, source files. |
 | `macho_analyze` | Mach-O analysis: headers, load commands, segments, symbols, dylibs, code signatures. |
 
-### Binary Refinery — Data Transforms (56 tools)
+### Binary Refinery — Data Transforms (23 tools)
 
-Composable binary data transformation tools powered by the [Binary Refinery](https://github.com/binref/refinery) library. All tools accept data as hex input or operate on the currently loaded file.
+Composable binary data transformation tools powered by the [Binary Refinery](https://github.com/binref/refinery) library. All tools accept data as hex input or operate on the currently loaded file. **Only registered when binary-refinery is installed** (lazy registration saves context tokens when absent).
 
-#### Core Transforms (14 tools)
+> **Context efficiency:** 56 individual tools were consolidated into 23 using the dispatch pattern (`operation=...` parameter), saving ~33 tool definitions (~15-20K tokens) from the MCP catalog.
+
+#### Core Transforms (11 tools)
 
 | Tool | Description |
 |---|---|
-| `refinery_decode` | Decode data using Binary Refinery encoding units (base64, hex, base32, base58, etc.). |
-| `refinery_encode` | Encode data using Binary Refinery encoding units (reverse mode). |
-| `refinery_decrypt` | Decrypt data using Binary Refinery cipher units (AES, DES, RC4, Blowfish, etc.). |
-| `refinery_xor` | Apply XOR with a single-byte or multi-byte key. |
-| `refinery_xor_guess_key` | Automatically guess the XOR key used to encrypt data. |
-| `refinery_decompress` | Decompress data (zlib, gzip, LZMA, bzip2, aplib, etc.). |
-| `refinery_extract_iocs` | Extract indicators of compromise (URLs, IPs, domains, emails, hashes) from data. |
-| `refinery_carve` | Carve and optionally decode embedded patterns from data. |
-| `refinery_carve_files` | Carve embedded files from data. |
-| `refinery_pe_operations` | Perform PE-specific operations (overlay extraction, resource carving, etc.). |
-| `refinery_deobfuscate_script` | Deobfuscate scripts using specialised deobfuscation units. |
-| `refinery_hash` | Compute hashes (MD5, SHA1, SHA256, CRC32, imphash, etc.). |
-| `refinery_pipeline` | Execute a multi-step transformation pipeline. |
+| `refinery_codec` | Encode or decode data (b64, hex, b32, b58, b62, b85, a85, b92, url, esc, u16, uuenc, etc.). Use `direction='decode'` (default) or `direction='encode'`. |
+| `refinery_decrypt` | Decrypt data using 35+ ciphers (AES, DES, RC4, Blowfish, ChaCha, Serpent, etc.). |
+| `refinery_xor` | XOR operations: `operation='apply'` with key, or `operation='guess_key'` for auto-detection. |
+| `refinery_decompress` | Decompress data (auto, zlib, bz2, lzma, lz4, brotli, zstd, aplib, lznt1, etc.). |
+| `refinery_extract_iocs` | Extract IOCs (URLs, IPs, domains, emails, hashes) from data. |
+| `refinery_carve` | Carve embedded data: `operation='pattern'` (b64, hex, b32, etc.) or `operation='files'` (PE, ZIP, 7z, etc.). |
+| `refinery_pe_operations` | PE-specific operations: overlay, meta, resources, strip, debloat, signature. |
+| `refinery_deobfuscate_script` | Deobfuscate scripts: ps1 (PowerShell), vba (VBA), js (JavaScript). |
+| `refinery_hash` | Compute hashes: md5, sha1, sha256, sha384, sha512, crc32, adler32. |
+| `refinery_pipeline` | Execute multi-step transformation pipelines (e.g. `['b64', 'xor:41', 'zl']`). |
 | `refinery_list_units` | List all available Binary Refinery unit categories and units. |
 
-#### Advanced Transforms (9 tools)
+#### Advanced Transforms (8 tools)
 
 | Tool | Description |
 |---|---|
-| `refinery_regex_extract` | Extract data matching a regular expression from binary data. |
+| `refinery_regex_extract` | Extract regex matches from binary data. |
 | `refinery_regex_replace` | Find and replace using regex in binary data. |
-| `refinery_auto_decrypt` | Automatically detect and decrypt XOR/SUB encrypted data. |
-| `refinery_key_derive` | Derive cryptographic keys from passwords (PBKDF2, etc.). |
-| `refinery_string_operations` | Perform string/binary operations on data. |
-| `refinery_pretty_print` | Pretty-print structured data. |
-| `refinery_decompile_python` | Decompile Python bytecode (.pyc) files. |
-| `refinery_decompile_autoit` | Decompile AutoIt scripts (.a3x). |
+| `refinery_auto_decrypt` | Auto-detect and decrypt XOR/SUB encrypted data. |
+| `refinery_key_derive` | Derive cryptographic keys (PBKDF2, HKDF, HMAC). |
+| `refinery_string_operations` | String/binary operations: snip, trim, replace, lower, upper, swapcase. |
+| `refinery_pretty_print` | Pretty-print structured data (JSON, XML, JavaScript). |
+| `refinery_decompile` | Decompile bytecode: `language='python'` (.pyc) or `language='autoit'` (.a3x). |
 | `refinery_extract_domains` | Extract DNS domain names from binary data. |
 
-#### .NET Analysis (10 tools)
+#### .NET Analysis (1 dispatched tool)
 
 | Tool | Description |
 |---|---|
-| `refinery_dotnet_headers` | Extract .NET CLR metadata headers from a PE file. |
-| `refinery_dotnet_resources` | Extract .NET managed resources. |
-| `refinery_dotnet_managed_resources` | Extract sub-files from .NET managed resource containers. |
-| `refinery_dotnet_strings` | Extract strings from .NET metadata streams. |
-| `refinery_dotnet_blobs` | Extract blobs from the .NET #Blob metadata stream. |
-| `refinery_dotnet_disassemble` | Disassemble .NET CIL/MSIL bytecode. |
-| `refinery_dotnet_fields` | Extract constant field values from .NET assemblies. |
-| `refinery_dotnet_arrays` | Extract .NET array initialiser data. |
-| `refinery_dotnet_sfx` | Extract files from .NET single-file applications. |
-| `refinery_dotnet_deserialize` | Deserialise .NET BinaryFormatter data to JSON. |
+| `refinery_dotnet` | .NET assembly analysis. `operation`: headers, resources, managed_resources, strings, blobs, disassemble, fields, arrays, sfx, deserialize. |
 
-#### Executable Operations (7 tools)
+#### Executable Operations (1 dispatched tool)
 
 | Tool | Description |
 |---|---|
-| `refinery_extract_sections` | Extract individual sections/segments from PE, ELF, or Mach-O binaries. |
-| `refinery_virtual_read` | Read data at a virtual address from the loaded binary. |
-| `refinery_file_to_virtual` | Convert a file offset to a virtual address. |
-| `refinery_disassemble` | Disassemble binary code (x86, x64, ARM). |
-| `refinery_disassemble_cil` | Disassemble .NET CIL/MSIL bytecode to readable assembly. |
-| `refinery_entropy_map` | Generate an entropy distribution map of binary data. |
-| `refinery_stego_extract` | Extract hidden data from images using steganography analysis. |
+| `refinery_executable` | Low-level binary analysis. `operation`: sections, virtual_read, file_to_virtual, disassemble, disassemble_cil, entropy_map, stego. |
 
-#### Archive & Document Extraction (7 tools)
+#### Archive & Document Extraction (1 dispatched tool)
 
 | Tool | Description |
 |---|---|
-| `refinery_extract_archive` | Extract files from archives (ZIP, 7z, RAR, tar, etc.). |
-| `refinery_extract_installer` | Extract files from software installers and packed executables. |
-| `refinery_extract_office` | Extract content from Microsoft Office documents. |
-| `refinery_office_decrypt` | Decrypt password-protected Microsoft Office documents. |
-| `refinery_deobfuscate_xlm` | Deobfuscate Excel 4.0 (XLM) macros. |
-| `refinery_extract_pdf` | Extract objects and streams from PDF files, optionally decrypting them. |
-| `refinery_extract_embedded` | Automatically detect and extract all embedded files from data. |
+| `refinery_extract` | File extraction. `operation`: archive, installer, office, office_decrypt, xlm_deobfuscate, pdf, embedded. Use `sub_operation` for format-specific options. |
 
-#### Forensic Parsing (9 tools)
+#### Forensic Parsing (1 dispatched tool)
 
 | Tool | Description |
 |---|---|
-| `refinery_parse_pcap` | Parse PCAP files and reassemble TCP streams. |
-| `refinery_parse_pcap_http` | Extract HTTP requests and responses from PCAP files. |
-| `refinery_parse_evtx` | Parse Windows Event Log (.evtx) files. |
-| `refinery_parse_registry` | Parse Windows Registry hive files. |
-| `refinery_parse_lnk` | Parse Windows shortcut (.lnk) files. |
-| `refinery_defang_iocs` | Defang indicators of compromise for safe sharing. |
-| `refinery_strip_url_guards` | Remove URL protection/rewriting wrappers from URLs. |
-| `refinery_parse_protobuf` | Decode Protocol Buffer (protobuf) messages to JSON. |
-| `refinery_parse_msgpack` | Decode MessagePack binary data to JSON. |
+| `refinery_forensic` | Forensic analysis. `operation`: pcap, pcap_http, evtx, registry, lnk, defang, url_guards, protobuf, msgpack. |
 
 ### AI-Optimised Analysis — Streamlined Tools
 
@@ -1091,7 +1060,7 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 PeMCP has two layers of testing, with automated CI via **GitHub Actions**:
 
 - **Unit tests** (`tests/`) — 398 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrized edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
-- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 184 MCP tools against a running server, organised into 20 test categories with pytest markers.
+- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 151 MCP tools against a running server, organised into 20 test categories with pytest markers.
 - **CI/CD** (`.github/workflows/ci.yml`) — Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (60% floor), and syntax checking on every push and PR.
 
 ```bash
