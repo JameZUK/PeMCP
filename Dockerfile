@@ -61,7 +61,8 @@ RUN pip install --no-cache-dir \
     dnfile \
     dncil \
     rustbininfo \
-    rust-demangler
+    rust-demangler \
+    binary-refinery
 
 # --- Install speakeasy in an isolated venv (requires unicorn 1.x) ---
 # speakeasy-emulator requires unicorn 1.x (uses internal _uc API removed
