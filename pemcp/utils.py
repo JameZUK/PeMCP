@@ -118,14 +118,13 @@ def shannon_entropy(data: bytes) -> float:
     length = len(data)
     if length == 0:
         return 0.0
-    byte_counts = [0] * 256
-    for b in data:
-        byte_counts[b] += 1
+    # collections.Counter uses optimised C internals for counting, which is
+    # significantly faster than a manual loop for large byte sequences.
+    from collections import Counter
     entropy = 0.0
-    for count in byte_counts:
-        if count > 0:
-            p = count / length
-            entropy -= p * math.log2(p)
+    for count in Counter(data).values():
+        p = count / length
+        entropy -= p * math.log2(p)
     return entropy
 
 
@@ -176,9 +175,16 @@ def get_section_characteristics(flags: int) -> List[str]:
     return characteristics if characteristics else ["NONE"]
 
 
+# Reverse-lookup table for relocation types — built once instead of
+# reconstructing the dict on every call to get_relocation_type_str.
+_RELOCATION_TYPE_REVERSE: Optional[Dict[int, str]] = None
+
+
 def get_relocation_type_str(reloc_type: int) -> str:
-    reloc_types = {val: name for name, val in pefile.RELOCATION_TYPE.items()}
-    return reloc_types.get(reloc_type, f"UNKNOWN_TYPE_{reloc_type}")
+    global _RELOCATION_TYPE_REVERSE
+    if _RELOCATION_TYPE_REVERSE is None:
+        _RELOCATION_TYPE_REVERSE = {val: name for name, val in pefile.RELOCATION_TYPE.items()}
+    return _RELOCATION_TYPE_REVERSE.get(reloc_type, f"UNKNOWN_TYPE_{reloc_type}")
 
 
 def get_symbol_type_str(sym_type: int) -> str:
