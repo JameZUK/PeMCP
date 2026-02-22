@@ -168,6 +168,8 @@ RUN pip install --no-cache-dir \
     Pillow \
     xdis \
     xlrd2 \
+    python-evtx \
+    XLMMacroDeobfuscator \
     || true
 
 # --- Install libraries that may have complex deps (best-effort) ---

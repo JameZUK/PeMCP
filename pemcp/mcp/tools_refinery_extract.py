@@ -355,16 +355,17 @@ async def refinery_deobfuscate_xlm(
 
     def _run():
         from refinery.units.formats.office.xlmdeobf import xlmdeobf
-        unit = xlmdeobf()
-        # xlmdeobf depends on the 'xlrd2' package.  If it is missing,
-        # binary-refinery replaces the unit class with a MissingModule
-        # stub that is not callable.  Detect this and raise a clear error.
-        if not callable(getattr(unit, 'process', None)):
-            raise RuntimeError(
-                "xlmdeobf requires the 'xlrd2' package which is not installed. "
-                "Install it with: pip install xlrd2"
-            )
-        return data | unit | bytes
+        # xlmdeobf uses @Unit.Requires('XLMMacroDeobfuscator') — if the
+        # package is missing, instantiation raises RefineryImportMissing.
+        try:
+            return data | xlmdeobf() | bytes
+        except Exception as e:
+            if "XLMMacroDeobfuscator" in str(e) or "Missing" in type(e).__name__:
+                raise RuntimeError(
+                    "xlmdeobf requires the 'XLMMacroDeobfuscator' package. "
+                    "Install it with: pip install XLMMacroDeobfuscator"
+                ) from e
+            raise
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
@@ -417,8 +418,8 @@ async def refinery_extract_pdf(
             from refinery.units.formats.pdfcrypt import pdfcrypt
             working_data = working_data | pdfcrypt(password.encode("utf-8")) | bytes
 
-        from refinery.units.formats.pdf.pdf import pdf
-        for chunk in working_data | pdf():
+        from refinery.units.formats.pdf import xtpdf
+        for chunk in working_data | xtpdf():
             raw = bytes(chunk)
             entry: Dict[str, Any] = {
                 "size": len(raw),

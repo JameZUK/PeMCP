@@ -306,11 +306,11 @@ async def refinery_string_operations(
 
     def _run():
         if op.startswith("snip"):
-            from refinery.units.strings.snip import snip
-            # Parse start:stop from operation or argument into a slice object
+            # Parse start:stop:step from operation or argument
             parts = (argument or op).replace("snip:", "").replace("snip", "").split(":")
             parts = [p.strip() for p in parts if p.strip()]
-            # Build a proper slice object — snip expects slice, not string
+            # Build a slice and apply directly — simpler and more reliable
+            # than going through refinery's Arg parser for slice types.
             if len(parts) == 0:
                 s = slice(None)
             elif len(parts) == 1:
@@ -324,7 +324,7 @@ async def refinery_string_operations(
                 stop = int(parts[1]) if parts[1] else None
                 step = int(parts[2]) if parts[2] else None
                 s = slice(start, stop, step)
-            return data | snip(s) | bytes
+            return bytes(data[s])
         elif op == "trim":
             from refinery.units.strings.trim import trim
             return data | trim() | bytes
