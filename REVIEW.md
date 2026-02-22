@@ -1,16 +1,20 @@
 # PeMCP Project Review
 
-**Date**: 2026-02-21
-**Scope**: Full codebase review — architecture, code quality, security, concurrency, testing, documentation
-**Tests**: 113 passed, 11 skipped (1.29s) on Python 3.11 (unit tests only, no heavy deps)
+**Date**: 2026-02-22
+**Reviewer**: Claude (Opus 4.6)
+**Scope**: Full codebase review — architecture, code quality, security, concurrency, testing, documentation, and comparison with prior review (2026-02-21)
+**Tests**: 113 passed, 11 skipped (1.03s) on Python 3.11 (unit tests only, no heavy deps)
+**Codebase Size**: ~32,600 lines of Python across 80 files
 
 ---
 
 ## Executive Summary
 
-PeMCP is a ~20,400-line Python toolkit for multi-format binary analysis (PE, ELF, Mach-O, .NET, Go, Rust, shellcode) that operates as both a CLI report generator and an MCP server exposing 113 specialized tools. The project demonstrates strong architectural decisions: per-session state isolation, graceful dependency degradation for 20+ optional libraries, smart response truncation, disk-based analysis caching, and Docker-first deployment with venv isolation for incompatible unicorn versions.
+PeMCP is a ~32,600-line Python toolkit for multi-format binary analysis (PE, ELF, Mach-O, .NET, Go, Rust, shellcode) that operates as both a CLI report generator and an MCP server exposing **184 specialized tools**. Since the last review (2026-02-21), the project has grown substantially — from ~20,400 lines / 113 tools to ~32,600 lines / 184 tools — primarily through the addition of 56 Binary Refinery tools and 7 Qiling emulation tools.
 
-**Previous review (2026-02-18)** identified 25 issues across critical/high/medium/low categories. Many have been addressed in subsequent commits. This follow-up review validates those fixes, identifies remaining issues, and re-evaluates the overall state of the project.
+The project demonstrates mature engineering: per-session state isolation via `contextvars`, graceful degradation for 20+ optional libraries, smart MCP response truncation, gzip-compressed disk caching with LRU eviction, Docker-first deployment with venv isolation for incompatible unicorn versions, and bearer token authentication for HTTP mode.
+
+**Key finding**: Most issues from the prior review have been addressed. The project is in strong shape. The remaining items are refinements rather than structural problems.
 
 ---
 
@@ -18,114 +22,101 @@ PeMCP is a ~20,400-line Python toolkit for multi-format binary analysis (PE, ELF
 
 ### Strengths
 
-- **Clean modular separation**: `pemcp/parsers/` (format-specific parsing), `pemcp/mcp/` (113 tools across 27 modules), `pemcp/cli/` (output formatting), and core modules (`state.py`, `cache.py`, `config.py`) have clear responsibilities.
-- **Per-session state isolation** (`state.py`): `StateProxy` + `contextvars` transparently routes attribute access to the correct `AnalyzerState`. Stdio mode collapses to a singleton; HTTP mode creates isolated sessions. The `_inherited_pe_object` flag prevents cross-session resource corruption.
-- **Graceful dependency degradation** (`config.py`): 20+ optional libraries are detected at startup with individual availability flags. Missing libraries produce clear error messages rather than crashes.
-- **Smart response truncation** (`server.py:170-283`): MCP responses are auto-truncated to 64KB using an iterative heuristic that finds the largest element and reduces it proportionally, preserving structural integrity.
-- **Analysis caching** (`cache.py`): SHA256-keyed, gzip-compressed disk cache with LRU eviction, version-based invalidation, and mtime/size verification. Re-opening a previously analyzed file loads from cache near-instantly.
-- **Background task management** (`background.py`): Long-running operations (angr CFG) run asynchronously with progress tracking, heartbeat monitoring, and status polling via `check_task_status`.
-- **Dependency isolation**: Docker build uses three separate venvs to resolve unicorn version conflicts between angr (2.x), speakeasy (1.x), unipacker (1.x), and qiling (1.x).
+- **Clean modular separation**: `pemcp/parsers/` (format-specific parsing), `pemcp/mcp/` (184 tools across 33 modules + 4 helper modules), `pemcp/cli/` (output formatting), and core modules (`state.py`, `cache.py`, `config.py`, `auth.py`) have clear responsibilities.
+- **Per-session state isolation** (`state.py:302-455`): `StateProxy` + `contextvars` transparently routes attribute access to the correct `AnalyzerState`. Stdio mode collapses to a singleton; HTTP mode creates isolated sessions with TTL-based cleanup (1 hour). The `_inherited_pe_object` flag prevents cross-session resource corruption when sessions share a pre-loaded PE.
+- **Graceful dependency degradation** (`config.py`): 20+ optional libraries are probed at startup with individual `*_AVAILABLE` flags. Tools that require unavailable libraries return actionable error messages. Lazy-checking with double-checked locking is used for venv-isolated tools (Speakeasy, Unipacker, Qiling).
+- **Smart response truncation** (`server.py:177-294`): MCP responses are auto-truncated to 64KB using an iterative heuristic (up to 5 attempts) that finds the largest element and reduces it proportionally, with a final fallback to string truncation. Deep-copy prevents mutation of shared state.
+- **Analysis caching** (`cache.py`): SHA256-keyed, gzip-compressed disk cache with LRU eviction, version-based invalidation (both PeMCP version and cache format version), and mtime/size verification. Cache entries use git-style two-char prefix directories to avoid flat-dir performance issues.
+- **Background task management** (`background.py`): Long-running operations (angr CFG) run in daemon threads with progress tracking, heartbeat monitoring across all sessions, and done-callback logging. Session state is properly propagated into worker threads via `set_current_state()`.
+- **Dependency isolation**: Docker build uses three separate venvs (`speakeasy-venv`, `unipacker-venv`, `qiling-venv`) to resolve unicorn version conflicts between angr (2.x) and tools requiring unicorn 1.x.
+- **Concurrency control**: `asyncio.Semaphore` limits concurrent heavy analyses (`tools_pe.py:46`) to prevent resource exhaustion in multi-tenant HTTP deployments. Configurable via `PEMCP_MAX_CONCURRENT_ANALYSES` env var.
+- **Tool history recording**: The `tool_decorator` (`server.py:62-102`) transparently records every tool invocation with parameters, result summary, and duration. Meta-tools are excluded to prevent recursion/noise.
 
 ### Observations
 
-1. **`tools_triage.py` is 1,904 lines.** This file contains the entire triage report generation logic in a single module. Splitting into sub-modules (timestamp analysis, import analysis, section analysis) would improve maintainability.
+1. **`tools_triage.py` is 1,901 lines.** This is the largest tool module by a wide margin. It contains the entire triage report generation — suspicious import database, timestamp analysis, section anomaly detection, ELF/Mach-O security features, risk scoring, and auto-note saving. While internally well-organized with section comments, splitting into focused sub-modules would improve navigability.
 
-2. **Code duplication in format detection.** The magic-byte detection logic (`MZ`, `\x7fELF`, Mach-O magic values) is duplicated in `main.py:276-292`, `tools_pe.py:166-182`, `tools_samples.py:10-35`, and `tools_format_detect.py`. This should be a single function in a shared utility module.
+2. **`config.py` at 554 lines is overloaded.** It handles library imports/probing, availability flags, constants, lazy-checking functions, exception class definitions, mock MCP classes, AND global state creation. This is a bottleneck for understanding startup behavior. Splitting into `config.py` (constants/flags) and `imports.py` (library probing) would help.
 
-3. **The `config.py` module is overloaded.** At 537 lines, it handles library imports, availability flags, constants, lazy-checking functions, exception class definitions, AND global state creation. Consider splitting into `config.py` (constants/flags), `imports.py` (library probing).
+3. **Format detection is centralized in `_format_helpers.py`** (`detect_format_from_magic()`). The previous review noted duplication — this has been partially addressed. The `tools_samples.py` module still has its own lightweight `_detect_format_hint()` function (`tools_samples.py:10-35`), but this is justified since it operates on 4-byte reads for directory listing performance rather than full binary analysis.
 
 ---
 
 ## 2. Previous Issues — Status
 
-### Fixed since last review
+### Fixed since last review (2026-02-21)
 
-- **`StateProxy.__setattr__`** now handles `_proxy_` prefixed attributes correctly (`state.py:447-449`).
-- **Session state cleanup** now marks sessions as closing inside the lock to prevent TOCTOU races (`state.py:359-360`).
-- **`open_file` state assignment** now builds complete dicts locally before atomic assignment (`tools_pe.py:247-261`).
-- **Cache eviction** now handles `_remove_entry` failures gracefully by skipping and logging (`cache.py:304-308`).
-- **`BearerAuthMiddleware`** now handles both HTTP and WebSocket scopes (`auth.py:30, 37-39`).
-- **Lazy availability checks** now use `threading.Lock` for synchronization (`config.py:366, 398, 431`).
-- **Background task injection** now inspects function signature before injecting `task_id_for_progress` (`background.py:97-102`).
-- **Task status constants** are defined as module-level constants (`state.py:28-29`).
-- **`open_file` error handler** now calls `state.close_pe()` properly (`tools_pe.py:455`).
-- **Registry hive creation** is extracted to a shared script (`scripts/create_registry_hives.py`).
+| # | Issue | Status |
+|---|-------|--------|
+| 3.5 | Signify import prints to stderr unconditionally | **Fixed** — `config.py:83-88` now catches non-ImportError exceptions and stores the error string in `SIGNIFY_IMPORT_ERROR` without printing. Uses `logger`-compatible pattern. |
+| 3.6 | `safe_regex_search` creates a new ThreadPoolExecutor per call | **Fixed** — `utils.py:15-16` now uses a module-level shared executor (`max_workers=2`) with `atexit` cleanup. |
+| Remaining #1 | Unpinned Docker base image | **Fixed** — `Dockerfile:6` now uses `python:3.11-bookworm@sha256:94c2dca...` with digest pinning. Comments explain the update procedure. |
+| Remaining #2 | `chmod -R 777` on directories | **Partially addressed** — The review notes mention 775 with a dedicated group (gid 1500). The Dockerfile now creates a `pemcp` group for runtime permissions. |
+| Remaining #4 | Ruff lint rules too narrow | **Fixed** — `ci.yml:85` now includes `F841` (unused variables), `W291-W293` (whitespace), `B006-B018` (common bugs), `UP031-UP032` (upgrade suggestions), and `RUF005/RUF010/RUF019` rules. |
 
-### Remaining from previous review
+### Still remaining from prior reviews
 
-1. **Unpinned Docker base image** (`Dockerfile:6`): Still uses `FROM python:3.11-bookworm` without digest pinning. Comments explain how to pin but the default is unpinned.
+1. **CI coverage threshold (60%) vs actual coverage (~50%)**: The CI enforces `--cov-fail-under=60` but this only passes because CI installs the full dependency set (including pefile, which makes parser modules importable). In the minimal test environment, coverage is likely below 50%.
 
-2. **`chmod -R 777` on directories** (`Dockerfile:154, 207`): World-writable directories are documented as necessary for arbitrary UID support, but could use `775` with a dedicated group.
+2. **f-strings in logging calls**: Multiple files still use `logger.warning(f"...")` instead of `logger.warning("...", arg)`. This prevents lazy evaluation of the format string when the log level is disabled. Not a functional bug, but a performance anti-pattern for high-frequency code paths.
 
-3. **CI coverage threshold at 60%**: Current measured coverage is 50% (unit tests only). The parser and utility modules remain at 0% coverage.
-
-4. **Ruff lint rules too narrow**: Only `E9,F63,F7,F82` — no unused variable detection (F841) or unreachable code checks.
-
-5. **f-strings in logging calls**: Multiple files use `logger.warning(f"...")` instead of `logger.warning("...", arg)`.
+3. **`import_project` path traversal** (`tools_export.py:176`): Still uses substring `".." in member.name` rather than `os.path.normpath()` comparison. Functional but could miss edge cases with unusual path encodings.
 
 ---
 
 ## 3. New Issues Found
 
-### 3.1 `import_project` path traversal check could be stronger
+### 3.1 [Medium] `_check_pe_loaded` reads state non-atomically
 
-**File:** `pemcp/mcp/tools_export.py:176`
-
-```python
-if member.name.startswith("/") or ".." in member.name:
-```
-
-The check uses substring matching for `..`, which is functional but could be more robust. Using `os.path.normpath()` comparison or Python 3.12's `tarfile.data_filter` would be more defensive. The current check works for common attack vectors but may miss unusual path encodings.
-
-### 3.2 Cache `get()` acquires the lock multiple times
-
-**File:** `pemcp/cache.py:135, 165, 188`
-
-On a cache miss due to corruption, the lock is acquired to remove the entry, then released. Later, the lock is acquired again for mtime/size validation, and again for the LRU timestamp update. This is correct (no deadlock) but adds unnecessary lock contention on the hot path.
-
-### 3.3 Potential data race in `open_file` shellcode loading
-
-**File:** `pemcp/mcp/tools_pe.py:260-261`
-
-Inside `_load_shellcode()` (running in a thread), `state.pe_object` and `state.filepath` are still assigned sequentially. The analysis semaphore makes this unlikely to cause issues in practice, but it's a theoretical race.
-
-### 3.4 `_check_pe_loaded` reads state non-atomically
-
-**File:** `pemcp/mcp/server.py:107`
-
-Reads `state.pe_data` and `state.filepath` in two separate attribute accesses through the proxy. A concurrent state reset between the two checks is possible (though unlikely due to semaphore).
-
-### 3.5 Signify import prints to stderr unconditionally
-
-**File:** `pemcp/config.py:83`
+**File:** `pemcp/mcp/server.py:113`
 
 ```python
-print(f"[!] Signify Import Error: {e}", file=sys.stderr)
+pe_data, filepath = state.pe_data, state.filepath
 ```
 
-This runs at import time, producing output even when signify is genuinely optional. Should use `logger.warning()` consistent with other import failures (e.g., YARA at line 91 uses the YARA_IMPORT_ERROR pattern without printing).
+The comment at line 108-112 acknowledges this: "Snapshots both `pe_data` and `filepath` in a single read to avoid a potential (though unlikely) race." However, this is still two separate `__getattr__` calls through the `StateProxy`, each independently resolving the `AnalyzerState` via `contextvars`. In theory, a concurrent `open_file` or `close_file` could reset one between the two reads.
 
-### 3.6 `safe_regex_search` creates a new ThreadPoolExecutor per call
+**Impact**: Low — the analysis semaphore makes concurrent modification extremely unlikely. The existing comment shows awareness of the issue.
 
-**File:** `pemcp/utils.py:94`
+**Recommendation**: Accept as-is or add a single `get_current_state()` call to read from the resolved state directly.
 
-```python
-with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-```
+### 3.2 [Low] Cache metadata is read/written under lock but gzip decompression is not
 
-Each regex search creates and tears down a thread pool. Under high concurrency this could spawn many OS threads. A module-level shared executor with bounded workers would be more efficient.
+**File:** `pemcp/cache.py:119-206`
 
-### 3.7 `reanalyze_loaded_pe_file` has 25 parameters
+The `get()` method intentionally reads and decompresses the gzip file *outside* the lock (documented in the docstring at line 117-118), then acquires the lock for metadata validation and LRU updates. This is correct and improves concurrency, but there's a narrow window where a concurrent `put()` could overwrite the file between the read and the metadata check.
 
-**File:** `pemcp/mcp/tools_pe.py:510-537`
+**Impact**: Minimal — the race would result in a stale cache hit being validated against updated metadata, which would fail the mtime/size check and trigger invalidation (correct behavior).
 
-This function signature is extremely wide. Consider accepting a configuration dict or dataclass to reduce parameter count and improve maintainability.
+### 3.3 [Low] `main.py` has a long function with deep nesting
 
-### 3.8 `import_project` writes to `~/.pemcp/imported/` without disk quota
+**File:** `pemcp/main.py:66-492`
 
-**File:** `pemcp/mcp/tools_export.py:264-266`
+The `main()` function is 426 lines with up to 5 levels of nesting (argument parsing -> mode detection -> MCP server -> pre-loading -> format detection -> error handling). While comprehensive, this function handles too many concerns: argument parsing, logging configuration, path resolution, FLOSS configuration, file pre-loading, MCP server startup, and CLI mode execution.
 
-In a multi-tenant HTTP scenario, users can import archives containing large binaries. There's no size limit on the extracted binary or total imported data. The `IMPORT_DIR` is hardcoded and doesn't go through `check_path_allowed()`.
+**Recommendation**: Extract helper functions for: (1) argument parsing and validation, (2) FLOSS configuration resolution, (3) MCP server startup, (4) CLI mode execution. The pre-loading logic in lines 274-387 duplicates much of what `open_file` does in `tools_pe.py`.
+
+### 3.4 [Info] Tool module sizes vary widely
+
+| Module | Lines | Tools |
+|--------|-------|-------|
+| `tools_triage.py` | 1,901 | 1 |
+| `tools_angr.py` | 1,231 | 16 |
+| `tools_refinery.py` | 1,147 | 14 |
+| `tools_strings.py` | 1,147 | 11 |
+| `tools_angr_forensic.py` | 1,163 | 9 |
+| `tools_pe.py` | 1,101 | 7 |
+| `tools_pe_extended.py` | 931 | 14 |
+| `tools_history.py` | 70 | 2 |
+| `tools_cache.py` | 75 | 3 |
+
+The triage module at 1,901 lines for a single tool is the clearest candidate for decomposition. The angr module family shows good modular splitting by concern (core, dataflow, disassembly, hooks, forensic).
+
+### 3.5 [Info] `reanalyze_loaded_pe_file` has an extremely wide parameter list
+
+**File:** `pemcp/mcp/tools_pe.py` (referenced in prior review as issue 3.7)
+
+Still present. The function accepts 25+ parameters for skip flags, FLOSS options, PEiD options, capa options, etc. Consider grouping into a `@dataclass AnalysisConfig` for cleaner signatures. The `dataclass` import is already present in the file (`tools_pe.py:7`).
 
 ---
 
@@ -133,144 +124,223 @@ In a multi-tenant HTTP scenario, users can import archives containing large bina
 
 ### Strengths
 
-1. **Path sandboxing** (`state.check_path_allowed()`) uses `os.path.realpath()` to resolve symlinks. Tests cover symlink resolution, prefix confusion, nested paths, and similar-prefix directories.
-2. **HTTP authentication** via `BearerAuthMiddleware` uses `hmac.compare_digest()` for constant-time token comparison on both HTTP and WebSocket scopes.
-3. **No `shell=True`** in any subprocess calls.
-4. **No `eval()`/`exec()` on user input.** All `.eval()` calls are angr's `solver.eval()`.
-5. **No pickle deserialization.** Cache uses gzip-compressed JSON exclusively.
-6. **ReDoS protection** with pattern validation and execution timeout.
-7. **Zip-slip protection** in archive import.
-8. **API key storage** with 0o600 file permissions.
-9. **HTTP mode requires `--allowed-paths`** (mandatory, enforced at startup).
-10. **Non-root Docker** via `--user "$(id -u):$(id -g)"`.
+1. **Path sandboxing** (`state.py:110-126`): Uses `os.path.realpath()` for symlink resolution. `is_relative_to()` for containment checking. Tests cover symlinks, prefix confusion, traversal, and nested paths.
+2. **HTTP mode requires `--allowed-paths`** (`main.py:240-246`): Enforced at startup with `sys.exit(1)` if missing. This is a hard security boundary, not a warning.
+3. **Bearer token authentication** (`auth.py`): `hmac.compare_digest()` for constant-time comparison. Handles both HTTP and WebSocket scopes. Clear 401 response with `WWW-Authenticate: Bearer` header.
+4. **No `shell=True`** in any subprocess call. Speakeasy, Unipacker, and Qiling runners use explicit argument lists.
+5. **No `eval()`/`exec()` on user input.** All `.eval()` calls are angr's `solver.eval()` for symbolic execution.
+6. **No pickle deserialization.** Cache uses gzip-compressed JSON exclusively.
+7. **ReDoS protection** (`utils.py:44-109`): Two-layer defense — pattern validation (nested quantifier detection, length limit) + execution timeout (5s via `ThreadPoolExecutor`).
+8. **Zip-slip protection** in archive import (`tools_export.py:176`).
+9. **API key storage** with `0o600` file permissions (`user_config.py`).
+10. **Non-root Docker** via `--user "$(id -u):$(id -g)"` with dedicated `pemcp` group (gid 1500).
+11. **Docker base image pinned by SHA256 digest** (`Dockerfile:6`) for reproducible builds.
+12. **Sensitive config masking** (`user_config.py`): Keys containing "api_key", "token", "secret", or "password" are masked in `get_masked_config()` (first 3 + last 3 chars + asterisks).
+13. **Analysis semaphore** (`tools_pe.py:46`): Prevents resource exhaustion from concurrent heavy analyses in HTTP mode.
+14. **Regex pattern validation** runs before any processing (`main.py:182-187`, `utils.py:52-74`).
 
 ### Observations
 
-- `PEMCP_API_KEY` is only a warning (not mandatory) for HTTP mode. Document the risk or consider requiring it.
-- `list_samples` returns full filesystem paths, which could leak server directory structure to MCP clients.
+1. **`PEMCP_API_KEY` is a warning, not mandatory, for HTTP mode** (`main.py:255-259`): Running HTTP without authentication allows any network client to use all 184 tools. The warning is clear, but consider making this mandatory or at minimum logging a more prominent security notice.
+
+2. **`list_samples` returns full filesystem paths** (`tools_samples.py`): This could leak server directory structure to MCP clients. Consider returning relative paths from the samples root.
+
+3. **`import_project` extraction directory** (`tools_export.py`): Writes to `~/.pemcp/imported/` without checking `allowed_paths`. In HTTP mode, a malicious client could use this to write files outside the sandbox. The tar member validation mitigates path traversal, but the destination itself is not sandboxed.
+
+4. **subprocess timeouts for venv tools**: Speakeasy runner, Unipacker runner, and Qiling runner all use subprocess calls with timeouts. The Qiling runner timeout is 120s (`tools_qiling.py`). Ensure these are appropriate for the expected workloads.
 
 ---
 
-## 5. Test Coverage
+## 5. Code Quality
+
+### Strengths
+
+1. **Consistent tool registration pattern**: Every MCP tool uses `@tool_decorator` which handles session activation, history recording, and last-active timestamp updates. This is a clean decorator pattern that ensures all cross-cutting concerns are handled uniformly.
+
+2. **Thread-safe state management** (`state.py`): Separate locks for PE object (`_pe_lock`), angr state (`_angr_lock`), background tasks (`_task_lock`), notes (`_notes_lock`), and tool history (`_history_lock`). No nested locking, which eliminates deadlock risk.
+
+3. **Actionable error messages**: `_check_pe_loaded()`, `_check_angr_ready()`, and `_check_data_key_available()` provide specific, actionable guidance. E.g., when angr is still loading, the error includes current progress percentage and a suggestion to use `check_task_status()`.
+
+4. **Defensive data access**: `_build_quick_indicators()` (`tools_pe.py:52-112`) uses `isinstance()` checks on every data access, handling cases where PE data structures may be malformed or unexpected types.
+
+5. **Background task lifecycle**: Clean creation -> progress updates -> completion/failure pattern. Eviction of old completed tasks prevents unbounded growth (`state.py:132-147`, max 50 completed tasks retained).
+
+6. **Tool history bounded**: `MAX_TOOL_HISTORY = 500` with FIFO eviction (`state.py:234-235`).
+
+7. **Notes system**: Clean CRUD with thread-safe accessors, timestamp tracking, and category-based filtering. Counter-based IDs prevent collisions.
+
+### Areas for improvement
+
+1. **`main.py:main()` is 426 lines**: This single function handles argument parsing, logging setup, path resolution, FLOSS configuration, file pre-loading (for 4 different format modes), MCP server startup (with auth middleware), and CLI mode. This should be decomposed.
+
+2. **Some tool modules import at module level conditionally** (`tools_triage.py:20-27`): `if PYELFTOOLS_AVAILABLE: from elftools...`. This is necessary for optional dependencies but makes the import graph harder to trace. The pattern is consistent, which is good.
+
+3. **Magic numbers in triage scoring**: `tools_triage.py` contains numerous hardcoded threshold values (entropy > 7.0, import count < 10, etc.) embedded in the scoring logic. These could be extracted as named constants for clarity and tuning.
+
+---
+
+## 6. Test Coverage
+
+### Test Inventory
+
+| Test File | Lines | Focus |
+|-----------|-------|-------|
+| `test_review_fixes.py` | 872 | Integration tests for 12+ bug fix iterations |
+| `test_streamline.py` | 409 | Analysis tools, phase detection, string categorization |
+| `test_state.py` | 321 | Session management, path sandboxing, angr state |
+| `test_utils.py` | 283 | Utility functions (entropy, timestamps) |
+| `test_parametrized.py` | 265 | Parametrized edge cases |
+| `test_parsers_strings.py` | 258 | String extraction and analysis |
+| `test_concurrency.py` | 213 | Thread safety, concurrent access |
+| `test_cache.py` | 210 | Disk-based analysis caching |
+| `test_truncation.py` | 195 | MCP response size checking |
+| `test_user_config.py` | 187 | Persistent config management |
+| `test_triage_helpers.py` | 165 | Triage helper functions |
+| `test_mcp_helpers.py` | 159 | MCP server validation functions |
+| `test_format_detect.py` | 125 | Binary format detection |
+| `test_hashing.py` | 124 | SSDeep fuzzy hashing |
+| `test_auth.py` | 114 | Bearer token authentication |
+| `test_rust_tools.py` | 96 | Rust binary analysis |
+| `test_mock.py` | 68 | MockPE class |
+| `test_go_tools.py` | 61 | Go binary analysis |
+| **Total** | **4,125** | **18 test files** |
+
+### Results: 113 passed, 11 skipped
+
+All tests pass. The 11 skips are due to optional dependencies not installed in the test environment (pefile not available for some parametrized tests).
+
+### Coverage Assessment
 
 | Module | Coverage | Notes |
 |--------|----------|-------|
-| `auth.py` | 90% | Good; WebSocket close path untested |
-| `user_config.py` | 96% | Excellent |
-| `hashing.py` | 86% | Good |
-| `cache.py` | 61% | Core paths covered; eviction/session update paths less so |
-| `state.py` | 65% | Good for basic ops; note/history accessors less covered |
-| `mock.py` | 100% | Complete |
-| `parsers/strings.py` | 0% | No unit tests; covered by integration tests only |
-| `utils.py` | 0% | No unit tests |
-| `_category_maps.py` | 0% | Data module, less critical |
-| **Overall** | **50%** | Below CI threshold of 60% (CI uses full deps) |
+| `auth.py` | ~90% | WebSocket close path untested |
+| `user_config.py` | ~96% | Excellent |
+| `hashing.py` | ~86% | Good |
+| `cache.py` | ~65% | Core paths covered; concurrent get/put, session data update less covered |
+| `state.py` | ~70% | Basic ops well covered; `close_pe` edge cases less so |
+| `mock.py` | ~100% | Complete |
+| `utils.py` | ~60% | `validate_regex_pattern`, `safe_regex_search`, `shannon_entropy` now tested |
+| `parsers/strings.py` | ~40% | String extraction covered; sifting less so |
+| `config.py` | ~30% | Import probing runs at import time; lazy checks untested |
+| `background.py` | ~0% | Background worker requires angr; hard to unit test |
+| `mcp/*.py` (tool modules) | ~0% | Covered by integration tests (`mcp_test_client.py`) only |
+
+**Overall estimated coverage**: ~50% (unit tests only). CI reports higher because it installs full dependencies.
+
+### Test Quality Highlights
+
+1. **Parametrized edge cases** (`test_parametrized.py`): 50+ variations covering timestamp boundaries, entropy thresholds, empty inputs, and Unicode handling.
+2. **Concurrent safety** (`test_concurrency.py`): 7+ threaded scenarios testing thread-isolated sessions, concurrent task updates, concurrent angr state access, and path sandbox checks in parallel.
+3. **Bug fix regression tests** (`test_review_fixes.py`): 872 lines covering 12+ iterations of specific bug fixes. This is excellent engineering practice — every fix gets a test.
+4. **Cache corruption handling** (`test_cache.py`): Tests corrupt gzip entries, version mismatches, and eviction behavior.
 
 ### Recommendations
 
-1. Add unit tests for `utils.py` — especially `validate_regex_pattern`, `safe_regex_search`, `shannon_entropy`.
-2. Add unit tests for `parsers/strings.py` — `_extract_strings_from_data`, `_perform_unified_string_sifting`.
-3. Add edge-case tests for `_check_mcp_response_size` truncation with nested dicts, lists, and strings.
-4. Gradually raise CI coverage threshold to 70%.
+1. **Add integration test for `import_project` path traversal**: The zip-slip protection should have explicit test coverage with crafted tar entries containing `../` sequences.
+2. **Add test for `BearerAuthMiddleware` WebSocket rejection**: The 4003 close code path is currently untested.
+3. **Add test for `_check_mcp_response_size` with deeply nested structures**: The truncation logic handles 5 iterations; test that it converges.
+4. **Gradually raise CI coverage threshold to 65%**: Achievable with current tests under full deps; prevents regression.
 
 ---
 
-## 6. Documentation: Excellent
+## 7. CI/CD Pipeline
 
-- **README.md** (~1000 lines): Comprehensive. Covers installation (Docker/local/minimal), Claude Code integration (CLI and JSON), all 113 tools with descriptions, architecture, security, testing, and configuration.
-- **Tool docstrings**: Consistent pattern with Args/Returns/Raises sections.
-- **"Recommended AI Workflow"** section: Thoughtful guide for MCP clients on efficient analysis progression.
-- **TESTING.md**: Detailed testing guide.
-- **Docker/run.sh documentation**: Well-documented helper with SELinux support, custom mounts, and environment variable configuration.
+### GitHub Actions (`ci.yml`)
 
----
+**Unit Tests Job:**
+- Matrix: Python 3.10, 3.11, 3.12 on Ubuntu latest
+- Coverage enforcement: 60% minimum
+- Coverage artifact upload (Python 3.11 only)
 
-## 7. Summary
+**Lint Job:**
+- Python syntax check (all `.py` files in `pemcp/` and `tests/`)
+- Ruff with comprehensive rule selection: `E9,F63,F7,F82,F841,W291-W293,B006-B018,UP031-UP032,RUF005,RUF010,RUF019,G010`
 
-| Category | Rating | Key Observations |
-|----------|--------|------------------|
-| **Architecture** | Strong | Clean modular design, smart caching, graceful degradation |
-| **Security** | Good | Path sandboxing, constant-time auth, no dangerous patterns |
-| **Code Quality** | Good | Consistent patterns, thread-safe state, actionable errors |
-| **Testing** | Adequate | Core modules covered; utility/parser gaps remain |
-| **Documentation** | Excellent | Comprehensive README, consistent docstrings, AI workflow guide |
+### Observations
 
-### Priority Improvements
+1. **No Docker build verification in CI**: The Dockerfile is complex (multi-stage, 3 isolated venvs, optional dependency installation). A build step — even without running the container — would catch broken apt packages, pip resolution failures, and missing scripts.
 
-1. **Increase test coverage** for `utils.py` and `parsers/strings.py` (currently 0%)
-2. **Consolidate duplicated magic-byte detection** into a shared utility function
-3. **Split large files** (`tools_triage.py` at 1,904 lines, `config.py` at 537 lines)
-4. **Fix signify import stderr printing** (use `logger.warning()` instead)
-5. **Consider per-call `ThreadPoolExecutor` in `safe_regex_search`** — use shared executor
-6. **Pin Docker base image** by digest for reproducible builds
-7. **Strengthen `import_project` path traversal** validation with `os.path.normpath()`
+2. **No security scanning**: Consider adding `bandit` for Python security linting and/or `safety` for known-vulnerability dependency checking.
+
+3. **No type checking**: The codebase uses type annotations extensively but `mypy` or `pyright` is not run in CI. This would catch type errors in the 18,500-line MCP tool layer.
+
+4. **Integration tests not in CI**: The `mcp_test_client.py` (109,240 lines — likely the largest file in the project) runs 184 tool tests against a running server. This isn't practical for CI without Docker, but a smoke test subset could be valuable.
 
 ---
 
-## 8. Notes, History & AI Progress Tracking — Review
+## 8. Documentation: Excellent
 
-This section evaluates how well PeMCP supports AI clients in tracking their progress during large binary corpus analysis, and whether the note and history features are sufficiently advertised to MCP clients.
+### README.md (~1,130 lines)
 
-### 8.1 Architecture Assessment: Strong
+- **Comprehensive tool reference**: All 184 tools documented with descriptions organized by category (File Management, PE Structure, Strings, Angr Core/Extended, Qiling, Refinery, etc.)
+- **Multiple installation paths**: Docker (with `run.sh` helper), Docker Compose, local pip, minimal installation
+- **Claude Code integration**: Both CLI (`claude mcp add`) and JSON configuration methods documented
+- **Typical Workflow**: 11-step guided workflow for AI clients
+- **AI-Optimised Analysis**: Progressive disclosure tools with recommended workflow
+- **Session Persistence & Notes**: Comprehensive documentation of the note system, auto-note behavior, and cross-session restoration
+- **Security section**: Path sandboxing, authentication, Docker non-root, zip-slip protection
 
-The notes/history system is well-architected:
+### Supporting Documentation
 
-- **Three-layer persistence**: In-memory (`AnalyzerState.notes`, `AnalyzerState.tool_history`) → disk cache (`analysis_cache.update_session_data`) → portable archive (`export_project`). This covers ephemeral sessions, cross-restart continuity, and cross-machine sharing.
-- **Automatic recording**: The `tool_decorator` in `server.py:61-101` records every tool invocation (except meta-tools) with parameters, result summary, and duration. The AI doesn't need to explicitly opt in.
-- **Auto-save triage notes**: `_auto_save_triage_notes()` in `tools_triage.py:1501` automatically creates `tool_result` category notes for risk assessment, critical imports, and IOCs. This means even a basic triage creates persistent context.
-- **Session context restoration**: `open_file` restores notes and history from cache (`tools_pe.py:225-229`) and includes a `session_context` field in the response (`tools_pe.py:423-439`) with a hint directing the AI to call `get_analysis_digest()`.
-- **Analysis digest vs session summary**: The distinction between `get_session_summary()` (what tools *ran*) and `get_analysis_digest()` (what was *learned*) is thoughtful and important for AI context management.
+- **TESTING.md** (17,911 bytes): Detailed testing guide covering unit tests, integration tests, environment variables, markers, and troubleshooting
+- **DEPENDENCIES.md** (15,788 bytes): Dependency documentation
+- **FastPrompt.txt** (8,385 bytes): AI analysis strategy guide
+- **docs/QILING_ROOTFS.md**: Qiling rootfs setup instructions
 
-### 8.2 Advertisement to MCP Clients: Adequate, with Gaps
+### Observation
 
-**What works well:**
+- The `mcp_test_client.py` at 109,240 lines is unusually large. It appears to be a comprehensive integration test suite. Consider whether this could be split into per-category test files mirroring the tool module structure.
 
-1. The `open_file` response includes `session_context.hint` when prior data exists — this is the most important touchpoint and it's handled correctly.
-2. The triage report includes `workflow_hints` (`tools_triage.py:34-39`) that explicitly guide note-taking.
-3. The `get_session_summary` response includes `suggested_next_tools` with note-related suggestions based on analysis phase (`tools_session.py:139-145`).
-4. The `FastPrompt.txt` analysis guide explicitly instructs the AI to call `auto_note_function()` after decompilations and `get_analysis_digest()` periodically.
+---
 
-**Gaps identified and addressed in this review:**
+## 9. Docker Configuration
 
-1. **`decompile_function_with_angr` returned no hint about note-taking.** This is the most common tool that should trigger a note. The docstring and response now include a `next_step` field reminding the AI to call `auto_note_function()`. *(Fixed in this review)*
+### Strengths
 
-2. **Key Features section in README didn't mention notes/history.** The top-of-README feature list — what most users read first — had no mention of session continuity, notes, or AI progress tracking. A new "Session Continuity & AI Progress Tracking" section has been added. *(Fixed in this review)*
+1. **Base image pinned by SHA256 digest** (`Dockerfile:6`): Prevents supply-chain issues from unpinned tags.
+2. **Multi-layer dependency caching**: Heavy deps (angr, FLOSS, capa) are installed in early layers for build cache efficiency.
+3. **Three isolated venvs**: `speakeasy-venv`, `unipacker-venv`, `qiling-venv` each with unicorn 1.x, keeping the main environment's unicorn 2.x intact for angr.
+4. **Pre-populated resources**: Capa rules (v9.3.0) and Qiling rootfs are downloaded at build time, avoiding runtime delays.
+5. **Non-root runtime**: `--user "$(id -u):$(id -g)"` with dedicated `pemcp` group (gid 1500) for file permissions.
+6. **Health check**: HTTP mode includes a health check on port 8082.
+7. **`run.sh` helper** (11,144 bytes): Comprehensive shell script with auto-detection of Docker/Podman, SELinux support, custom volume mounts, and `.env` file loading.
 
-3. **Typical Workflow section didn't show note-taking.** The quick-start workflow showed basic open→analyse→close but skipped the note-taking loop entirely. Updated to include `auto_note_function`, `get_analysis_digest`, and `export_project`. *(Fixed in this review)*
+### Docker Compose
 
-4. **`open_file` docstring didn't mention `session_context`.** The primary tool docstring (which MCP clients see when discovering tools) didn't mention that the response includes session context for previously analysed files. *(Fixed in this review)*
+Two services defined:
+- `pemcp-http`: Network-accessible MCP server with healthcheck and restart policy
+- `pemcp-stdio`: For Claude Code / MCP client integration (behind the `stdio` profile)
 
-5. **`get_tool_history` docstring was minimal.** Didn't explain its purpose for AI progress tracking or mention the `get_analysis_digest` alternative. *(Fixed in this review)*
+Both services use a named `pemcp-data` volume for persistent cache and configuration.
 
-### 8.3 Remaining Recommendations
+---
 
-1. **Other analysis tools should hint at note-taking.** Currently only `decompile_function_with_angr` includes a `next_step` hint. Consider adding similar hints to `get_annotated_disassembly`, `emulate_function_execution`, `find_and_decode_encoded_strings`, and other tools where the AI may discover significant findings.
+## 10. Summary
 
-2. **Consider an MCP resource for notes.** The MCP protocol supports `resources` — a read-only data channel that clients can subscribe to. Exposing notes as an MCP resource (e.g. `notes://current`) would allow clients to poll for updates without explicit tool calls. This is a larger architectural change but would improve discoverability.
+| Category | Rating | Change vs Prior | Key Observations |
+|----------|--------|-----------------|------------------|
+| **Architecture** | Strong | Stable | Clean modular design, smart caching, graceful degradation. Now 184 tools across 33 modules. |
+| **Security** | Good | Improved | Docker image pinned, group permissions, shared regex executor fixed. HTTP auth still optional. |
+| **Code Quality** | Good | Stable | Consistent patterns, thread-safe state, actionable errors. `main.py` and `tools_triage.py` remain long. |
+| **Testing** | Good | Improved | 18 test files, 4,125 lines, 113 passing. Prior `utils.py` gap partially addressed. Bug fix regression tests are excellent. |
+| **Documentation** | Excellent | Stable | ~1,130-line README, comprehensive tool reference, AI workflow guide, testing docs. |
+| **CI/CD** | Adequate | Improved | Ruff rules expanded. Still lacks Docker build verification, security scanning, and type checking. |
+| **Docker** | Strong | Improved | Base image pinned, group permissions, 3 isolated venvs, pre-populated resources. |
 
-3. **Add a `get_progress_overview` tool.** A lightweight tool that returns just: analysis phase, note count, tool history count, and coverage percentage — without the full session summary payload. This would be cheap enough for an AI to call at the start of every turn.
+### Priority Improvements (ranked)
 
-4. **The `since_last_digest` parameter on `get_analysis_digest` is defined but not functionally used.** The code sets `state.last_digest_timestamp` (`tools_session.py:280`) but doesn't filter the output based on it. This is dead functionality that should either be implemented or removed.
-
-5. **Consider auto-noting for decoded strings.** When `find_and_decode_encoded_strings` discovers base64/XOR-encoded IOCs, these should be auto-saved as `tool_result` notes (similar to how triage auto-saves). Currently the AI must remember to call `add_note()` manually.
-
-6. **Document the note categories more prominently.** The three categories (`general`, `function`, `tool_result`) have distinct semantic roles but this is only documented in the `add_note` parameter description. A brief explanation in the README's Session Persistence section would help.
-
-### 8.4 Documentation Reflection on Large Binary Corpus Analysis
-
-The documentation does address the challenge of large binary analysis with limited AI context windows, but it's spread across multiple locations:
-
-- **README "AI-Optimised Analysis"** section explains progressive disclosure
-- **README "Session Persistence & Notes"** section explains the note system
-- **FastPrompt.txt** provides the full analytical strategy
-- **Tool docstrings** individually explain their role
-
-**What's missing is a unified narrative.** The README explains *what* the tools do but doesn't explicitly state the *problem they solve*: "Binary analysis generates too much data for an AI context window. PeMCP's note system lets the AI work like a human analyst — investigate, record findings in shorthand, move on, and periodically review the accumulated picture."
-
-The new "Session Continuity & AI Progress Tracking" section added to Key Features addresses this gap.
+1. **Decompose `main.py:main()`** — 426 lines handling 6+ concerns. Extract into focused helpers.
+2. **Split `tools_triage.py`** — 1,901 lines for a single tool. Break into sub-modules by analysis dimension.
+3. **Add Docker build to CI** — Catch Dockerfile regressions before merge.
+4. **Make HTTP auth mandatory** (or require explicit `--no-auth` opt-out) to prevent accidental exposure.
+5. **Add `mypy` or `pyright` to CI** — The codebase uses type annotations extensively; validate them.
+6. **Strengthen `import_project` path validation** — Use `os.path.normpath()` and ensure extraction respects `allowed_paths`.
+7. **Raise CI coverage threshold to 65%** — Achievable with current tests under full deps; prevents regression.
 
 ### Overall Assessment
 
-PeMCP is a mature, production-quality binary analysis platform. The 113-tool MCP interface, multi-format support, session isolation, and Docker-first deployment model are substantial achievements. The codebase handles significant complexity (20+ optional libraries, incompatible dependency versions, concurrent multi-session access) with clean, well-documented patterns. Most critical issues from the previous review have been addressed. The remaining issues are targeted improvements rather than systemic problems.
+PeMCP is a **mature, production-quality** binary analysis platform. The 184-tool MCP interface, multi-format support, session isolation, and Docker-first deployment model are substantial achievements. The codebase handles significant complexity (20+ optional libraries, incompatible dependency versions, concurrent multi-session access, 7 different binary format modes) with clean, well-documented patterns.
 
-The notes and history system is well-designed and functionally complete. The main area for improvement is *advertisement* — making sure AI clients are consistently reminded to use notes at every relevant touchpoint, not just in the triage report and session summary. The changes made in this review address the most impactful gaps: the decompile response hint, the README Key Features and Typical Workflow sections, and the `open_file` docstring.
+The growth from 113 to 184 tools (primarily Binary Refinery and Qiling) has been well-managed — the new modules follow established patterns and are properly organized. The core architecture has scaled without degradation.
+
+Most issues from the prior review have been addressed (Docker pinning, signify import, regex executor, ruff rules). The remaining items are targeted refinements: decomposing large files, strengthening CI, and tightening HTTP security defaults. No critical or blocking issues were found.
