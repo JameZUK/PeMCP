@@ -1,6 +1,6 @@
 # Testing Guide
 
-PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 184 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
+PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 151 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
 
 ---
 
@@ -285,7 +285,7 @@ pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
 pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
 pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
 pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 184 tools exist
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 151 tools exist
 ```
 
 ### Environment Variables

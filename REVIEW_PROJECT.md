@@ -5,7 +5,7 @@
 
 ## Overview
 
-PeMCP is a PE (Portable Executable) file analysis server exposed via the MCP (Model Context Protocol), enabling LLM-powered malware triage workflows. It provides 184+ analysis tools spanning static analysis, emulation, disassembly, string extraction, signature scanning, and binary data transformation.
+PeMCP is a PE (Portable Executable) file analysis server exposed via the MCP (Model Context Protocol), enabling LLM-powered malware triage workflows. It provides 151+ analysis tools spanning static analysis, emulation, disassembly, string extraction, signature scanning, and binary data transformation.
 
 **Tech stack**: Python 3.10-3.12, MCP protocol, pefile, angr, Binary Refinery, YARA, capa, FLOSS, Speakeasy, Qiling.
 
@@ -46,7 +46,7 @@ PeMCP is a PE (Portable Executable) file analysis server exposed via the MCP (Mo
 
 ### 5. Documentation (Comprehensive)
 
-- 1,100+ line README with installation guides, tool reference (184 tools categorised), architecture docs, and security section.
+- 1,100+ line README with installation guides, tool reference (151 tools categorised), architecture docs, and security section.
 - Separate TESTING.md and DEPENDENCIES.md.
 
 ---

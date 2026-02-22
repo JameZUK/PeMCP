@@ -1,8 +1,7 @@
 """MCP tools powered by Binary Refinery for advanced transformations.
 
-Covers regex extraction, regex replacement, key derivation (PBKDF2, HKDF, HMAC),
-automatic XOR decryption, string operations (slice, trim, replace, case),
-pretty-printing (JSON, XML, JavaScript), and Python bytecode decompilation.
+Covers regex operations, automatic XOR decryption, key derivation,
+string operations, pretty-printing, decompilation, and domain extraction.
 """
 import asyncio
 
@@ -29,18 +28,13 @@ async def refinery_regex_extract(
     data_hex: Optional[str] = None,
     limit: int = 200,
 ) -> Dict[str, Any]:
-    """
-    Extract data matching a regular expression from binary data using Binary Refinery.
-
-    The rex unit supports Python regex syntax with named groups. If the pattern
-    contains capture groups, only the captured portions are returned. Useful
-    for extracting custom patterns (crypto keys, encoded strings, protocol fields).
+    """Extract regex matches from binary data via Binary Refinery.
 
     Args:
-        ctx: The MCP Context object.
+        ctx: MCP Context.
         pattern: (str) Python regex pattern. Use (?P<name>...) for named groups.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
-        limit: (int) Max matches to return. Default 200.
+        limit: (int) Max matches. Default 200.
 
     Returns:
         Dictionary with all regex matches.
@@ -63,8 +57,8 @@ async def refinery_regex_extract(
                 "match_text": _safe_decode(raw)[:500],
                 "size": len(raw),
             }
-            if hasattr(chunk, 'meta') and isinstance(chunk.meta, dict):
-                for key in ('offset', 'group', 'match'):
+            if hasattr(chunk, "meta") and isinstance(chunk.meta, dict):
+                for key in ("offset", "group", "match"):
                     if key in chunk.meta:
                         entry[key] = str(chunk.meta[key])
             results.append(entry)
@@ -92,18 +86,13 @@ async def refinery_regex_replace(
     replacement: str,
     data_hex: str,
 ) -> Dict[str, Any]:
-    """
-    Find and replace using regex in binary data using Binary Refinery.
-
-    Performs regex substitution on binary data. The replacement string
-    supports backreferences (\\1, \\g<name>). Useful for patching or
-    transforming structured binary formats.
+    """Find and replace using regex in binary data via Binary Refinery.
 
     Args:
-        ctx: The MCP Context object.
-        pattern: (str) Python regex pattern to find.
-        replacement: (str) Replacement string (supports backreferences).
-        data_hex: (str) Input data as hex string.
+        ctx: MCP Context.
+        pattern: (str) Python regex pattern.
+        replacement: (str) Replacement string (supports backreferences \\1, \\g<name>).
+        data_hex: (str) Input data as hex.
 
     Returns:
         Dictionary with transformed output.
@@ -122,7 +111,6 @@ async def refinery_regex_replace(
 
     def _run():
         from refinery.units.pattern.resub import resub
-        # resub expects replacement as bytes, not str
         repl_bytes = replacement.encode("utf-8") if isinstance(replacement, str) else replacement
         return data | resub(pattern, repl_bytes) | bytes
 
@@ -146,15 +134,13 @@ async def refinery_auto_decrypt(
     ctx: Context,
     data_hex: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Automatically detect and decrypt XOR/SUB encrypted data using Binary Refinery.
+    """Auto-detect and decrypt XOR/SUB encrypted data via Binary Refinery.
 
     Uses frequency analysis, known plaintext attacks, and file signature
-    detection (cribs) to automatically recover the encryption key and
-    decrypt the data. More powerful than xkey for complex cases.
+    detection to automatically recover the encryption key.
 
     Args:
-        ctx: The MCP Context object.
+        ctx: MCP Context.
         data_hex: (Optional[str]) Encrypted data as hex. If None, uses loaded file.
 
     Returns:
@@ -170,8 +156,7 @@ async def refinery_auto_decrypt(
 
     def _run():
         from refinery.units.misc.autoxor import autoxor
-        result = data | autoxor() | bytes
-        return result
+        return data | autoxor() | bytes
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
@@ -196,22 +181,18 @@ async def refinery_key_derive(
     iterations: int = 10000,
     hash_algorithm: str = "SHA256",
 ) -> Dict[str, Any]:
-    """
-    Derive cryptographic keys from passwords using Binary Refinery.
+    """Derive cryptographic keys from passwords via Binary Refinery.
 
-    Supports: pbkdf2, hkdf, hmac.
-
-    Useful for reproducing key derivation used by malware to generate
-    encryption keys from hardcoded passwords.
+    Methods: pbkdf2, hkdf, hmac.
 
     Args:
-        ctx: The MCP Context object.
-        method: (str) Derivation method: 'pbkdf2', 'hkdf', 'hmac'.
+        ctx: MCP Context.
+        method: (str) Derivation method.
         password_hex: (str) Password/input key material as hex.
-        salt_hex: (Optional[str]) Salt as hex. Required for PBKDF2/HKDF.
+        salt_hex: (Optional[str]) Salt as hex.
         key_length: (int) Desired key length in bytes. Default 32.
         iterations: (int) Iteration count for PBKDF2. Default 10000.
-        hash_algorithm: (str) Hash algorithm: SHA256, SHA1, SHA512, MD5. Default SHA256.
+        hash_algorithm: (str) Hash: SHA256, SHA1, SHA512, MD5. Default SHA256.
 
     Returns:
         Dictionary with the derived key.
@@ -219,7 +200,7 @@ async def refinery_key_derive(
     _require_refinery("refinery_key_derive")
 
     password = _hex_to_bytes(password_hex)
-    salt = _hex_to_bytes(salt_hex) if salt_hex else b''
+    salt = _hex_to_bytes(salt_hex) if salt_hex else b""
 
     await ctx.info(f"Deriving key via {method} (len={key_length}, hash={hash_algorithm})...")
 
@@ -247,7 +228,7 @@ async def refinery_key_derive(
             return password | unit_cls(key_length, salt, hash=hash_algorithm) | bytes
         elif method_lower == "hmac":
             return password | unit_cls(salt, hash=hash_algorithm) | bytes
-        return b''
+        return b""
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
@@ -271,22 +252,15 @@ async def refinery_string_operations(
     operation: str,
     argument: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Perform string/binary operations on data using Binary Refinery.
+    """String/binary operations via Binary Refinery.
 
-    Operations:
-    - 'snip:start:stop' — Python-style byte slice (e.g. 'snip:10:50').
-    - 'trim' — Remove leading/trailing whitespace and null bytes.
-    - 'replace:old_hex:new_hex' — Replace byte sequences.
-    - 'lower' — Convert text to lowercase.
-    - 'upper' — Convert text to uppercase.
-    - 'swapcase' — Swap character case.
+    Operations: snip (byte slice), trim, replace (old_hex:new_hex), lower, upper, swapcase.
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (str) Input data as hex string.
-        operation: (str) Operation name: 'snip', 'trim', 'replace', 'lower', 'upper', 'swapcase'.
-        argument: (Optional[str]) Operation-specific argument (see operation descriptions).
+        ctx: MCP Context.
+        data_hex: (str) Input data as hex.
+        operation: (str) Operation name.
+        argument: (Optional[str]) Operation-specific argument.
 
     Returns:
         Dictionary with transformed output.
@@ -306,11 +280,8 @@ async def refinery_string_operations(
 
     def _run():
         if op.startswith("snip"):
-            # Parse start:stop:step from operation or argument
             parts = (argument or op).replace("snip:", "").replace("snip", "").split(":")
             parts = [p.strip() for p in parts if p.strip()]
-            # Build a slice and apply directly — simpler and more reliable
-            # than going through refinery's Arg parser for slice types.
             if len(parts) == 0:
                 s = slice(None)
             elif len(parts) == 1:
@@ -334,7 +305,7 @@ async def refinery_string_operations(
                 raise ValueError("Replace requires argument as 'old_hex:new_hex'.")
             parts = argument.split(":")
             old = bytes.fromhex(parts[0])
-            new = bytes.fromhex(parts[1]) if len(parts) > 1 else b''
+            new = bytes.fromhex(parts[1]) if len(parts) > 1 else b""
             return data | repl(old, new) | bytes
         elif op == "lower":
             from refinery.units.strings.clower import clower
@@ -359,7 +330,7 @@ async def refinery_string_operations(
 
 
 # ===================================================================
-#  6. PRETTY-PRINT (JSON, XML, JavaScript)
+#  6. PRETTY-PRINT
 # ===================================================================
 
 @tool_decorator
@@ -368,19 +339,14 @@ async def refinery_pretty_print(
     data_hex: str,
     format: str = "json",
 ) -> Dict[str, Any]:
-    """
-    Pretty-print structured data using Binary Refinery.
+    """Pretty-print structured data via Binary Refinery.
 
-    Supports: json, xml, javascript/js.
-
-    Formats minified or obfuscated structured data into readable,
-    indented output. Useful for analyzing configuration files, API
-    responses, and obfuscated JavaScript found in malware.
+    Formats: json, xml, js/javascript.
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (str) Data as hex string.
-        format: (str) Format to pretty-print: 'json', 'xml', 'js'/'javascript'. Default 'json'.
+        ctx: MCP Context.
+        data_hex: (str) Data as hex.
+        format: (str) Format: 'json', 'xml', 'js'. Default 'json'.
 
     Returns:
         Dictionary with formatted output text.
@@ -425,74 +391,54 @@ async def refinery_pretty_print(
 
 
 # ===================================================================
-#  7. PYTHON BYTECODE DECOMPILATION
+#  7. DECOMPILATION (merged Python + AutoIt)
 # ===================================================================
 
 @tool_decorator
-async def refinery_decompile_python(
+async def refinery_decompile(
     ctx: Context,
+    language: str,
     data_hex: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Decompile Python bytecode (.pyc) files using Binary Refinery.
+    """Decompile bytecode/compiled scripts via Binary Refinery.
 
-    Converts compiled Python bytecode back to readable source code.
-    Useful for analyzing Python-based malware, PyInstaller bundles,
-    and obfuscated Python scripts.
-
-    Args:
-        ctx: The MCP Context object.
-        data_hex: (Optional[str]) .pyc file data as hex. If None, uses loaded file.
-
-    Returns:
-        Dictionary with decompiled Python source code.
-    """
-    _require_refinery("refinery_decompile_python")
-
-    data = _get_data_from_hex_or_file(data_hex)
-    await ctx.info(f"Decompiling Python bytecode ({len(data)} bytes)...")
-
-    def _run():
-        from refinery.units.formats.pyc import pyc
-        return data | pyc() | bytes
-
-    result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
-        "input_size": len(data),
-        "output_size": len(result),
-        "source_code": _safe_decode(result)[:8000],
-    }, "refinery_decompile_python")
-
-
-# ===================================================================
-#  8. AUTOIT DECOMPILATION
-# ===================================================================
-
-@tool_decorator
-async def refinery_decompile_autoit(
-    ctx: Context,
-    data_hex: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Decompile AutoIt scripts (.a3x) using Binary Refinery.
-
-    Extracts and decompiles AutoIt v3 compiled scripts. AutoIt is
-    frequently used by malware authors for initial access and
-    dropper functionality.
+    Languages:
+    - 'python': Decompile Python bytecode (.pyc) to source.
+    - 'autoit': Decompile AutoIt scripts (.a3x).
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (Optional[str]) AutoIt script data as hex. If None, uses loaded file.
+        ctx: MCP Context.
+        language: (str) 'python' or 'autoit'.
+        data_hex: (Optional[str]) Compiled data as hex. If None, uses loaded file.
 
     Returns:
-        Dictionary with decompiled AutoIt source code.
+        Dictionary with decompiled source code.
     """
-    _require_refinery("refinery_decompile_autoit")
+    _require_refinery("refinery_decompile")
 
     data = _get_data_from_hex_or_file(data_hex)
-    await ctx.info(f"Decompiling AutoIt script ({len(data)} bytes)...")
+    lang = language.lower()
 
-    def _run():
+    if lang not in ("python", "autoit"):
+        return {"error": f"Unknown language '{language}'.", "supported": ["python", "autoit"]}
+
+    await ctx.info(f"Decompiling {lang} ({len(data)} bytes)...")
+
+    if lang == "python":
+        def _run_python():
+            from refinery.units.formats.pyc import pyc
+            return data | pyc() | bytes
+
+        result = await asyncio.to_thread(_run_python)
+        return await _check_mcp_response_size(ctx, {
+            "language": lang,
+            "input_size": len(data),
+            "output_size": len(result),
+            "source_code": _safe_decode(result)[:8000],
+        }, "refinery_decompile")
+
+    # lang == "autoit"
+    def _run_autoit():
         from refinery.units.formats.a3x import a3x
         results = []
         for chunk in data | a3x():
@@ -501,23 +447,24 @@ async def refinery_decompile_autoit(
                 "size": len(raw),
                 "text": _safe_decode(raw)[:4000],
             }
-            if hasattr(chunk, 'meta') and isinstance(chunk.meta, dict):
-                for key in ('name', 'path', 'type'):
+            if hasattr(chunk, "meta") and isinstance(chunk.meta, dict):
+                for key in ("name", "path", "type"):
                     if key in chunk.meta:
                         entry[key] = str(chunk.meta[key])
             results.append(entry)
         return results
 
-    results = await asyncio.to_thread(_run)
+    results = await asyncio.to_thread(_run_autoit)
     return await _check_mcp_response_size(ctx, {
+        "language": lang,
         "input_size": len(data),
         "items_found": len(results),
         "results": results,
-    }, "refinery_decompile_autoit")
+    }, "refinery_decompile")
 
 
 # ===================================================================
-#  9. DNS DOMAIN EXTRACTION
+#  8. DNS DOMAIN EXTRACTION
 # ===================================================================
 
 @tool_decorator
@@ -526,17 +473,14 @@ async def refinery_extract_domains(
     data_hex: Optional[str] = None,
     limit: int = 200,
 ) -> Dict[str, Any]:
-    """
-    Extract DNS domain names from binary data using Binary Refinery.
+    """Extract DNS domain names from binary data via Binary Refinery.
 
-    Uses DNS wire format parsing to find domain names embedded in binary
-    data. More accurate than regex-based extraction for DNS protocol data,
-    DNS caches, and raw packet payloads.
+    Uses DNS wire format parsing (more accurate than regex for DNS data).
 
     Args:
-        ctx: The MCP Context object.
+        ctx: MCP Context.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
-        limit: (int) Max domains to extract. Default 200.
+        limit: (int) Max domains. Default 200.
 
     Returns:
         Dictionary with extracted domain names.
