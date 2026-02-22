@@ -156,6 +156,20 @@ RUN groupadd -g 1500 pemcp && \
     chown -R root:pemcp /app/qiling-rootfs && \
     chmod -R 775 /app/qiling-rootfs
 
+# --- Install Binary Refinery optional sub-dependencies ---
+# These are optional packages that specific refinery units need at runtime.
+# Installed best-effort so a single failure doesn't block the build.
+RUN pip install --no-cache-dir \
+    "pypcapkit[scapy]" \
+    python-registry \
+    "LnkParse3>=1.4.0" \
+    olefile \
+    msoffcrypto-tool \
+    Pillow \
+    xdis \
+    xlrd2 \
+    || true
+
 # --- Install libraries that may have complex deps (best-effort) ---
 # Each installed separately so a failure in one doesn't block the others,
 # but combined into a single layer to reduce image layer count.

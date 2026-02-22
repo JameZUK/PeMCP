@@ -310,6 +310,30 @@ only available from GitHub, install it in the Dockerfile via
 
 ---
 
+## 9. Binary Refinery sub-dependencies
+
+Binary Refinery is a large framework with 200+ units.  Many units are
+self-contained, but some require optional packages that are **not** pulled
+in automatically by `pip install binary-refinery`.  These are installed
+best-effort in the Dockerfile:
+
+| Package | Required by | Purpose |
+|---------|-------------|---------|
+| **pypcapkit[scapy]** | `pcap` unit | PCAP network capture parsing |
+| **python-registry** | `winreg` unit | Windows registry hive parsing |
+| **LnkParse3** | `lnk` unit | Windows .lnk shortcut parsing |
+| **olefile** | OLE units | OLE/CFB document extraction |
+| **msoffcrypto-tool** | `officecrypt` unit | Office document decryption |
+| **Pillow** | `stego` unit | Image steganography extraction |
+| **xdis** | `pyc` unit | Python bytecode decompilation |
+| **xlrd2** | `xlmdeobf` unit | Excel 4.0 XLM macro deobfuscation |
+
+If any of these are missing at runtime, the corresponding refinery unit
+returns a `MissingModule` stub instead of functioning normally.  PeMCP's
+tool wrappers detect this and return a clear error message.
+
+---
+
 ## Debugging a broken build
 
 1. **Read the build log carefully.** Look for packages that install into
@@ -340,9 +364,11 @@ only available from GitHub, install it in the Dockerfile via
  6. unipacker             → isolated in /app/unipacker-venv (unicorn 1.x)
  7. qiling                → isolated in /app/qiling-venv (unicorn 1.x)
  8. Qiling rootfs download + Windows registry hive stubs
- 9. dotnetfile, binwalk, pygore (best-effort, main env)
-10. oscrypto patch
-11. Assert UC_ARCH_RISCV exists                      ← build-time guard
+ 9. Binary Refinery sub-deps (best-effort): pypcapkit, python-registry,
+    LnkParse3, olefile, msoffcrypto-tool, Pillow, xdis, xlrd2
+10. dotnetfile, binwalk, pygore (best-effort, main env)
+11. oscrypto patch
+12. Assert UC_ARCH_RISCV exists                      ← build-time guard
 ```
 
 Since speakeasy, unipacker, and qiling are all in isolated venvs,
