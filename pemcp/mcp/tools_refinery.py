@@ -7,61 +7,16 @@ expose the most useful refinery capabilities for malware triage and binary
 analysis workflows.
 """
 import asyncio
-import os
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import state, logger, Context, REFINERY_AVAILABLE
+from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
-from pemcp.mcp._format_helpers import _check_lib
-
-# ---------------------------------------------------------------------------
-#  Lazy imports — only pulled in when a tool is actually called.
-# ---------------------------------------------------------------------------
-
-_MAX_INPUT_SIZE = 10 * 1024 * 1024  # 10 MB safety limit for in-memory transforms
-_MAX_OUTPUT_ITEMS = 500  # Cap list results to stay within MCP response limits
-
-
-def _require_refinery(tool_name: str):
-    """Raise a clear error if binary-refinery is not installed."""
-    _check_lib("binary-refinery", REFINERY_AVAILABLE, tool_name, pip_name="binary-refinery")
-
-
-def _hex_to_bytes(hex_string: str) -> bytes:
-    """Convert a hex string (with optional spaces/0x prefix) to bytes."""
-    cleaned = hex_string.replace(" ", "").replace("0x", "").replace("\\x", "")
-    return bytes.fromhex(cleaned)
-
-
-def _bytes_to_hex(data: bytes, max_len: int = 4096) -> str:
-    """Convert bytes to a hex string, truncating if needed."""
-    if len(data) > max_len:
-        return data[:max_len].hex() + f"...[truncated, {len(data)} bytes total]"
-    return data.hex()
-
-
-def _safe_decode(data: bytes) -> str:
-    """Attempt to decode bytes as UTF-8 text, falling back to latin-1."""
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="replace")
-
-
-def _get_file_data() -> bytes:
-    """Get the raw bytes of the currently loaded file."""
-    if not state.pe_object:
-        raise RuntimeError("No file is loaded. Use open_file() first.")
-    raw = getattr(state.pe_object, "__data__", None)
-    if raw is None:
-        raw = getattr(state.pe_object, "get_data", lambda: None)()
-    if raw is None and state.filepath and os.path.isfile(state.filepath):
-        with open(state.filepath, "rb") as f:
-            raw = f.read()
-    if raw is None:
-        raise RuntimeError("Cannot access raw file data.")
-    return bytes(raw)
+from pemcp.mcp._refinery_helpers import (
+    _require_refinery, _hex_to_bytes, _bytes_to_hex, _safe_decode,
+    _get_file_data, _MAX_INPUT_SIZE_SMALL as _MAX_INPUT_SIZE,
+    _MAX_OUTPUT_ITEMS,
+)
 
 
 # ===================================================================
@@ -79,6 +34,9 @@ async def refinery_decode(
 
     Supports: b64, hex, b32, b58, b62, b85, a85, b92, url, esc, u16,
     uuenc, netbios, cp1252, wshenc, morse, htmlesc, z85.
+
+    See also: deobfuscate_base64() for pefile-based base64 decoding,
+    find_and_decode_encoded_strings() for automatic multi-layer decoding.
 
     Args:
         ctx: The MCP Context object.
@@ -203,13 +161,13 @@ async def refinery_encode(
         return input_data | -unit_cls() | bytes
 
     result = await asyncio.to_thread(_run)
-    return {
+    return await _check_mcp_response_size(ctx, {
         "encoding": encoding,
         "input_size": len(input_data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }
+    }, "refinery_encode")
 
 
 # ===================================================================
@@ -335,6 +293,9 @@ async def refinery_xor(
 
     Handles repeating-key XOR automatically. For single-byte, pass a 1-byte key.
 
+    See also: deobfuscate_xor_single_byte() for pefile-based single-byte XOR,
+    deobfuscate_xor_multi_byte() for multi-byte XOR with key rotation.
+
     Args:
         ctx: The MCP Context object.
         data_hex: (str) Data as hex string.
@@ -357,14 +318,14 @@ async def refinery_xor(
         return data | xor(key) | bytes
 
     result = await asyncio.to_thread(_run)
-    return {
+    return await _check_mcp_response_size(ctx, {
         "key_hex": key.hex(),
         "key_length": len(key),
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }
+    }, "refinery_xor")
 
 
 @tool_decorator
@@ -377,6 +338,8 @@ async def refinery_xor_guess_key(
 
     Can operate on provided hex data or on the currently loaded file's raw bytes.
     Uses statistical analysis to find the most likely XOR key.
+
+    See also: bruteforce_xor_key() for pefile-based brute-force key guessing.
 
     Args:
         ctx: The MCP Context object.
@@ -419,14 +382,14 @@ async def refinery_xor_guess_key(
 
     preview = await asyncio.to_thread(_decrypt)
 
-    return {
+    return await _check_mcp_response_size(ctx, {
         "guessed_key_hex": best_key.hex(),
         "guessed_key_length": len(best_key),
         "guessed_key_ascii": _safe_decode(best_key),
         "decrypted_preview_hex": preview.hex(),
         "decrypted_preview_text": _safe_decode(preview)[:500],
         "total_candidates": len(keys),
-    }
+    }, "refinery_xor_guess_key")
 
 
 # ===================================================================
@@ -947,6 +910,8 @@ async def refinery_hash(
     plus specialized hashes: crc32, adler32, imphash, fnv32, fnv64,
     murmur3-32, murmur3-128, xxhash32, xxhash64, xxhash128.
 
+    See also: get_pe_info() for built-in PE file hashing (md5/sha1/sha256/imphash).
+
     Args:
         ctx: The MCP Context object.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
@@ -991,7 +956,9 @@ async def refinery_hash(
         return results
 
     results = await asyncio.to_thread(_run)
-    return {"data_size": len(data), "hashes": results}
+    return await _check_mcp_response_size(ctx, {
+        "data_size": len(data), "hashes": results,
+    }, "refinery_hash")
 
 
 # ===================================================================
