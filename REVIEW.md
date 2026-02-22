@@ -10,7 +10,7 @@
 
 ## Executive Summary
 
-PeMCP is a substantial Python toolkit for multi-format binary analysis (PE, ELF, Mach-O, .NET, Go, Rust, shellcode) that operates as both a CLI report generator and a Model Context Protocol (MCP) server exposing **184 specialized tools** across 33 tool modules. The project is designed for AI-assisted malware analysis, enabling Claude and other MCP clients to interactively explore binaries.
+PeMCP is a substantial Python toolkit for multi-format binary analysis (PE, ELF, Mach-O, .NET, Go, Rust, shellcode) that operates as both a CLI report generator and a Model Context Protocol (MCP) server exposing **151 specialized tools** across 33 tool modules. The project is designed for AI-assisted malware analysis, enabling Claude and other MCP clients to interactively explore binaries.
 
 The codebase demonstrates mature engineering practices: per-session state isolation via `contextvars`, graceful degradation for 20+ optional libraries, smart MCP response truncation, gzip-compressed disk caching with LRU eviction, Docker-first deployment with venv isolation, and bearer token authentication. The architecture is well-modularized with clear separation between parsers, MCP tools, CLI output, and core infrastructure.
 
@@ -24,7 +24,7 @@ The codebase demonstrates mature engineering practices: per-session state isolat
 
 ### Strengths
 
-- **Clean modular structure**: `pemcp/parsers/` (format parsing), `pemcp/mcp/` (184 tools across 33 modules + 4 helpers), `pemcp/cli/` (output formatting), and core modules (`state.py`, `cache.py`, `config.py`, `auth.py`) have well-defined responsibilities. The entry point `PeMCP.py` is a thin wrapper delegating to `pemcp/main.py`.
+- **Clean modular structure**: `pemcp/parsers/` (format parsing), `pemcp/mcp/` (151 tools across 33 modules + 4 helpers), `pemcp/cli/` (output formatting), and core modules (`state.py`, `cache.py`, `config.py`, `auth.py`) have well-defined responsibilities. The entry point `PeMCP.py` is a thin wrapper delegating to `pemcp/main.py`.
 
 - **Per-session state isolation** (`state.py`): `StateProxy` + `contextvars` transparently routes attribute access to the correct `AnalyzerState`. Stdio mode uses a singleton; HTTP mode creates isolated sessions with 1-hour TTL and automatic cleanup. The `_inherited_pe_object` flag prevents cross-session resource corruption when sessions share a pre-loaded PE object.
 
@@ -114,7 +114,7 @@ The codebase demonstrates mature engineering practices: per-session state isolat
 
 ### Strengths
 
-- **Dual-layer testing strategy**: 113 fast unit tests (1.48s) for core modules, plus comprehensive integration tests (`mcp_test_client.py`, 2,409 lines) covering all 184 MCP tools.
+- **Dual-layer testing strategy**: 113 fast unit tests (1.48s) for core modules, plus comprehensive integration tests (`mcp_test_client.py`, 2,409 lines) covering all 151 MCP tools.
 
 - **CI/CD pipeline** (`.github/workflows/ci.yml`): GitHub Actions with Python 3.10/3.11/3.12 matrix, 60% coverage floor, syntax checking, and ruff linting with a focused rule selection.
 
@@ -164,7 +164,7 @@ The codebase demonstrates mature engineering practices: per-session state isolat
 
 ### Strengths
 
-- **Comprehensive README** (1,133 lines): Covers installation (Docker, local, minimal), both operation modes, full MCP tools reference for all 184 tools organized by category, AI workflow recommendations, session persistence, configuration, security, and architecture.
+- **Comprehensive README** (1,133 lines): Covers installation (Docker, local, minimal), both operation modes, full MCP tools reference for all 151 tools organized by category, AI workflow recommendations, session persistence, configuration, security, and architecture.
 
 - **Practical quick-start**: Multiple Claude Code integration methods (CLI, JSON config, Docker) with copy-paste examples.
 
@@ -174,7 +174,7 @@ The codebase demonstrates mature engineering practices: per-session state isolat
 
 ### Areas for Improvement
 
-1. **No CHANGELOG**: Version history and breaking changes aren't tracked. Given the rapid development (184 tools, many integrations), a changelog would help users understand what changed between versions.
+1. **No CHANGELOG**: Version history and breaking changes aren't tracked. Given the rapid development (151 tools, many integrations), a changelog would help users understand what changed between versions.
 
 2. **No API versioning documentation**: The MCP tools don't have versioned schemas. If tool parameters or return types change, clients may break silently.
 
