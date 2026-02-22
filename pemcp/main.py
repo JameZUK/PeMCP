@@ -56,6 +56,11 @@ import pemcp.mcp.tools_history
 import pemcp.mcp.tools_session
 import pemcp.mcp.tools_export
 import pemcp.mcp.tools_refinery
+import pemcp.mcp.tools_refinery_extract
+import pemcp.mcp.tools_refinery_forensic
+import pemcp.mcp.tools_refinery_dotnet
+import pemcp.mcp.tools_refinery_executable
+import pemcp.mcp.tools_refinery_advanced
 
 
 def main():
