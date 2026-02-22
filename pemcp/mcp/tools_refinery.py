@@ -256,11 +256,18 @@ async def refinery_decrypt(
     if len(ciphertext) > _MAX_INPUT_SIZE:
         raise RuntimeError(f"Input too large ({len(ciphertext)} bytes).")
 
-    # Some ciphers (e.g. rot, vigenere) don't accept a 'key' kwarg —
-    # they use positional args or different parameter names.
-    _NO_KEY_KWARG = {"rot", "vigenere", "codebook"}
     kwargs: Dict[str, Any] = {}
-    if algo not in _NO_KEY_KWARG:
+    if algo == "rot":
+        # rot takes an integer 'amount' (rotation count), not a bytes key.
+        # Interpret the key as a decimal integer or as a single-byte value.
+        try:
+            kwargs["amount"] = int(key_hex, 10)
+        except ValueError:
+            kwargs["amount"] = key[0] if len(key) == 1 else int.from_bytes(key, "big")
+    elif algo in ("vigenere", "codebook"):
+        # These ciphers take key as a positional argument.
+        kwargs["key"] = key
+    else:
         kwargs["key"] = key
     if iv_hex:
         kwargs["iv"] = _hex_to_bytes(iv_hex)
@@ -271,8 +278,6 @@ async def refinery_decrypt(
         import importlib
         mod = importlib.import_module(mod_path)
         unit_cls = getattr(mod, cls_name)
-        if algo in _NO_KEY_KWARG:
-            return ciphertext | unit_cls(key, **kwargs) | bytes
         return ciphertext | unit_cls(**kwargs) | bytes
 
     result = await asyncio.to_thread(_run)

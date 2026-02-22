@@ -327,6 +327,8 @@ best-effort in the Dockerfile:
 | **Pillow** | `stego` unit | Image steganography extraction |
 | **xdis** | `pyc` unit | Python bytecode decompilation |
 | **xlrd2** | `xlmdeobf` unit | Excel 4.0 XLM macro deobfuscation |
+| **python-evtx** | `evtx` unit | Windows Event Log (.evtx) parsing |
+| **XLMMacroDeobfuscator** | `xlmdeobf` unit | XLM macro emulation engine |
 
 If any of these are missing at runtime, the corresponding refinery unit
 returns a `MissingModule` stub instead of functioning normally.  PeMCP's
@@ -365,7 +367,8 @@ tool wrappers detect this and return a clear error message.
  7. qiling                → isolated in /app/qiling-venv (unicorn 1.x)
  8. Qiling rootfs download + Windows registry hive stubs
  9. Binary Refinery sub-deps (best-effort): pypcapkit, python-registry,
-    LnkParse3, olefile, msoffcrypto-tool, Pillow, xdis, xlrd2
+    LnkParse3, olefile, msoffcrypto-tool, Pillow, xdis, xlrd2,
+    python-evtx, XLMMacroDeobfuscator
 10. dotnetfile, binwalk, pygore (best-effort, main env)
 11. oscrypto patch
 12. Assert UC_ARCH_RISCV exists                      ← build-time guard

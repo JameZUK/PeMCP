@@ -171,8 +171,19 @@ async def refinery_parse_evtx(
 
     def _run():
         from refinery.units.formats.evtx import evtx
+        # evtx uses @Unit.Requires('python-evtx') — if the package is
+        # missing, instantiation raises RefineryImportMissing.
+        try:
+            unit = evtx()
+        except Exception as e:
+            if "python-evtx" in str(e) or "Missing" in type(e).__name__:
+                raise RuntimeError(
+                    "evtx parsing requires the 'python-evtx' package. "
+                    "Install it with: pip install python-evtx"
+                ) from e
+            raise
         results = []
-        for chunk in data | evtx():
+        for chunk in data | unit:
             raw = bytes(chunk)
             text = _safe_decode(raw)
             entry: Dict[str, Any] = {
