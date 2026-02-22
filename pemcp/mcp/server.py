@@ -187,7 +187,7 @@ async def _check_mcp_response_size(
     """
     data_size_bytes = 0  # Safe default for error fallback
     try:
-        # 1. Check initial size
+        # 1. Check initial size — encode once and measure byte length
         serialized_data = json.dumps(data_to_return, ensure_ascii=False)
         data_size_bytes = len(serialized_data.encode('utf-8'))
 
@@ -204,12 +204,13 @@ async def _check_mcp_response_size(
         # Deep copy to avoid mutating shared state (e.g. state.pe_data dicts)
         modified_data = copy.deepcopy(data_to_return)
 
+        # Track current size from the initial measurement to avoid
+        # re-serialising on every loop iteration (expensive for large dicts).
+        current_size = data_size_bytes
+
         # 3. Heuristic: Find the largest element and chop it
         # We iterate up to 5 times to try and make it fit.
         for _attempt in range(5):
-            current_json = json.dumps(modified_data, ensure_ascii=False)
-            current_size = len(current_json.encode('utf-8'))
-
             if current_size <= TARGET_SIZE:
                 break # It fits now!
 
@@ -265,6 +266,9 @@ async def _check_mcp_response_size(
             elif isinstance(modified_data, str):
                 new_len = int(len(modified_data) * reduction_ratio)
                 modified_data = modified_data[:new_len] + "...[TRUNCATED]"
+
+            # Re-measure after this iteration's modification
+            current_size = len(json.dumps(modified_data, ensure_ascii=False).encode('utf-8'))
 
         # Final safety check: if still oversized, convert to string and truncate
         final_json = json.dumps(modified_data, ensure_ascii=False)
