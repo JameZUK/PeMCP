@@ -122,7 +122,9 @@ async def refinery_regex_replace(
 
     def _run():
         from refinery.units.pattern.resub import resub
-        return data | resub(pattern, replacement) | bytes
+        # resub expects replacement as bytes, not str
+        repl_bytes = replacement.encode("utf-8") if isinstance(replacement, str) else replacement
+        return data | resub(pattern, repl_bytes) | bytes
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
@@ -305,11 +307,24 @@ async def refinery_string_operations(
     def _run():
         if op.startswith("snip"):
             from refinery.units.strings.snip import snip
-            # Parse start:stop from operation or argument
+            # Parse start:stop from operation or argument into a slice object
             parts = (argument or op).replace("snip:", "").replace("snip", "").split(":")
             parts = [p.strip() for p in parts if p.strip()]
-            slice_str = ":".join(parts) if parts else ":"
-            return data | snip(slice_str) | bytes
+            # Build a proper slice object — snip expects slice, not string
+            if len(parts) == 0:
+                s = slice(None)
+            elif len(parts) == 1:
+                s = slice(int(parts[0]))
+            elif len(parts) == 2:
+                start = int(parts[0]) if parts[0] else None
+                stop = int(parts[1]) if parts[1] else None
+                s = slice(start, stop)
+            else:
+                start = int(parts[0]) if parts[0] else None
+                stop = int(parts[1]) if parts[1] else None
+                step = int(parts[2]) if parts[2] else None
+                s = slice(start, stop, step)
+            return data | snip(s) | bytes
         elif op == "trim":
             from refinery.units.strings.trim import trim
             return data | trim() | bytes
