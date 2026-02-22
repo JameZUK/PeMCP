@@ -5,58 +5,17 @@ automatic XOR decryption, string operations (slice, trim, replace, case),
 pretty-printing (JSON, XML, JavaScript), and Python bytecode decompilation.
 """
 import asyncio
-import os
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import state, logger, Context, REFINERY_AVAILABLE
+from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
-from pemcp.mcp._format_helpers import _check_lib
-
-_MAX_INPUT_SIZE = 10 * 1024 * 1024  # 10 MB
-_MAX_OUTPUT_ITEMS = 500
-
-
-def _require_refinery(tool_name: str):
-    _check_lib("binary-refinery", REFINERY_AVAILABLE, tool_name, pip_name="binary-refinery")
-
-
-def _safe_decode(data: bytes) -> str:
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="replace")
-
-
-def _bytes_to_hex(data: bytes, max_len: int = 4096) -> str:
-    if len(data) > max_len:
-        return data[:max_len].hex() + f"...[truncated, {len(data)} bytes total]"
-    return data.hex()
-
-
-def _hex_to_bytes(hex_string: str) -> bytes:
-    cleaned = hex_string.replace(" ", "").replace("0x", "").replace("\\x", "")
-    return bytes.fromhex(cleaned)
-
-
-def _get_file_data() -> bytes:
-    if not state.pe_object:
-        raise RuntimeError("No file is loaded. Use open_file() first.")
-    raw = getattr(state.pe_object, "__data__", None)
-    if raw is None:
-        raw = getattr(state.pe_object, "get_data", lambda: None)()
-    if raw is None and state.filepath and os.path.isfile(state.filepath):
-        with open(state.filepath, "rb") as f:
-            raw = f.read()
-    if raw is None:
-        raise RuntimeError("Cannot access raw file data.")
-    return bytes(raw)
-
-
-def _get_data_from_hex_or_file(data_hex: Optional[str]) -> bytes:
-    if data_hex:
-        return _hex_to_bytes(data_hex)
-    return _get_file_data()
+from pemcp.mcp._refinery_helpers import (
+    _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
+    _get_file_data, _get_data_from_hex_or_file,
+    _MAX_INPUT_SIZE_SMALL as _MAX_INPUT_SIZE,
+    _MAX_OUTPUT_ITEMS,
+)
 
 
 # ===================================================================
@@ -166,14 +125,14 @@ async def refinery_regex_replace(
         return data | resub(pattern, replacement) | bytes
 
     result = await asyncio.to_thread(_run)
-    return {
+    return await _check_mcp_response_size(ctx, {
         "pattern": pattern,
         "replacement": replacement,
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }
+    }, "refinery_regex_replace")
 
 
 # ===================================================================
@@ -289,14 +248,14 @@ async def refinery_key_derive(
         return b''
 
     result = await asyncio.to_thread(_run)
-    return {
+    return await _check_mcp_response_size(ctx, {
         "method": method,
         "hash_algorithm": hash_algorithm,
         "key_length": key_length,
         "iterations": iterations if method_lower == "pbkdf2" else None,
         "derived_key_hex": result.hex(),
         "derived_key_length": len(result),
-    }
+    }, "refinery_key_derive")
 
 
 # ===================================================================
@@ -375,13 +334,13 @@ async def refinery_string_operations(
             raise ValueError(f"Unknown operation '{op}'. Supported: snip, trim, replace, lower, upper, swapcase.")
 
     result = await asyncio.to_thread(_run)
-    return {
+    return await _check_mcp_response_size(ctx, {
         "operation": op,
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }
+    }, "refinery_string_operations")
 
 
 # ===================================================================
