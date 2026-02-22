@@ -16,22 +16,15 @@ if STRINGSIFTER_AVAILABLE:
 
 def _extract_strings_from_data(data_bytes: bytes, min_length: int = 5) -> List[Tuple[int, str]]:
     # Ensure we have a concrete bytes/bytearray (not memoryview, mmap, etc.)
-    # so that iteration yields ints, not single-byte bytes objects.
     if not isinstance(data_bytes, (bytes, bytearray)):
         data_bytes = bytes(data_bytes)
-    strings_found = []
-    current_string = ""
-    current_offset = -1
-    for i, byte_val in enumerate(data_bytes):
-        char = chr(byte_val)
-        if ' ' <= char <= '~': # Printable ASCII range
-            if not current_string: current_offset = i
-            current_string += char
-        else:
-            if len(current_string) >= min_length: strings_found.append((current_offset, current_string))
-            current_string = ""; current_offset = -1
-    if len(current_string) >= min_length: strings_found.append((current_offset, current_string)) # Catch trailing string
-    return strings_found
+    # Use regex to find runs of printable ASCII — orders of magnitude faster
+    # than byte-by-byte Python iteration on large binaries.
+    pattern = re.compile(b'[ -~]{' + str(min_length).encode() + b',}')
+    return [
+        (m.start(), m.group().decode('ascii'))
+        for m in pattern.finditer(data_bytes)
+    ]
 
 def _search_specific_strings_in_data(data_bytes: bytes, search_terms: List[str]) -> Dict[str, List[int]]:
     results: Dict[str, List[int]] = {term: [] for term in search_terms}
@@ -95,18 +88,26 @@ def _perform_unified_string_sifting(pe_info_dict: Dict[str, Any]):
             logger.info("No strings found from any source to rank.")
             return
 
-        logger.info("Ranking %d total strings with StringSifter...", len(all_strings_for_sifter))
+        # Deduplicate strings before sending to the ML model — StringSifter's
+        # featurizer + ranker is the expensive part, so scoring each unique
+        # string only once can cut work dramatically (binaries often have
+        # thousands of duplicate strings across sources).
+        unique_strings = list(dict.fromkeys(all_strings_for_sifter))
+        logger.info(
+            "Ranking %d unique strings with StringSifter (from %d total)...",
+            len(unique_strings), len(all_strings_for_sifter),
+        )
         modeldir = os.path.join(sifter_util.package_base(), "model")
         featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
         ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
 
-        X_test = featurizer.transform(all_strings_for_sifter)
+        X_test = featurizer.transform(unique_strings)
         y_scores = ranker.predict(X_test)
 
-        string_score_map = {s: score for s, score in zip(all_strings_for_sifter, y_scores)}
+        string_score_map = {s: round(float(score), 4) for s, score in zip(unique_strings, y_scores)}
         for str_val, score in string_score_map.items():
             for original_item_dict in string_object_map.get(str_val, []):
-                original_item_dict['sifter_score'] = round(float(score), 4)
+                original_item_dict['sifter_score'] = score
 
         logger.info("Unified string sifting and categorization complete.")
 
@@ -195,6 +196,18 @@ def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
         logger.error("Failed to correlate strings and Capa results: %s", e, exc_info=True)
         pe_info_dict['correlation_error'] = str(e)
 
+# Pre-compiled IOC category regexes — compiled once at module level instead of
+# on every call to _get_string_category.
+_IOC_CATEGORY_PATTERNS = (
+    ("ipv4", re.compile(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")),
+    ("url", re.compile(r"^(https?|ftp)://[^\s/$.?#].[^\s]*$")),
+    ("domain", re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,6}$")),
+    ("filepath_windows", re.compile(r"^[a-zA-Z]:\\[\\\S|*\S].*")),
+    ("registry_key", re.compile(r"^(HKLM|HKCU|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKCR|HKEY_CLASSES_ROOT|HKU|HKEY_USERS)\\[\w\\\s\-. ]+")),
+    ("email", re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")),
+)
+
+
 def _get_string_category(string_value: str) -> Optional[str]:
     """
     Categorizes a string based on a set of regular expressions for common
@@ -206,18 +219,7 @@ def _get_string_category(string_value: str) -> Optional[str]:
     Returns:
         A string representing the category (e.g., 'ipv4', 'url') or None if no category matches.
     """
-    # Note: These regexes are examples and can be refined for better accuracy.
-    # The order matters, as it will return the first category that matches.
-    REGEX_CATEGORIES = {
-        "ipv4": re.compile(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"),
-        "url": re.compile(r"^(https?|ftp)://[^\s/$.?#].[^\s]*$"),
-        "domain": re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,6}$"),
-        "filepath_windows": re.compile(r"^[a-zA-Z]:\\[\\\S|*\S].*"),
-        "registry_key": re.compile(r"^(HKLM|HKCU|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKCR|HKEY_CLASSES_ROOT|HKU|HKEY_USERS)\\[\w\\\s\-. ]+"),
-        "email": re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
-    }
-
-    for category, pattern in REGEX_CATEGORIES.items():
+    for category, pattern in _IOC_CATEGORY_PATTERNS:
         if pattern.match(string_value):
             return category
     return None
@@ -238,27 +240,39 @@ def _decode_single_byte_xor(data: bytes) -> Optional[Tuple[bytes, int]]:
         A tuple containing the decoded bytes and the key used, or None if no
         key produces a sufficiently printable result.
     """
+    if not data:
+        return None
+
     best_result = None
-    max_printable_score = 0
+    max_printable_score = 0.0
     best_key = 0
+    data_len = len(data)
 
     # A successful XOR decode should be mostly ASCII text
     required_printable_ratio = 0.85
 
+    # Pre-build a lookup table of printable bytes (space-tilde + tab/LF/CR)
+    _printable = bytearray(256)
+    for b in range(32, 127):
+        _printable[b] = 1
+    _printable[9] = _printable[10] = _printable[13] = 1
+
+    # Use a mutable bytearray for fast in-place XOR instead of
+    # rebuilding a new bytes object per key.
+    buf = bytearray(data)
+
     for key in range(1, 256):
-        decoded_bytes = bytes([b ^ key for b in data])
+        # XOR each byte in-place
+        for i in range(data_len):
+            buf[i] = data[i] ^ key
 
-        # Score the result based on how many characters are printable
-        printable_chars = sum(1 for b in decoded_bytes if 32 <= b <= 126 or b in [9, 10, 13])
-
-        try:
-            printable_score = printable_chars / len(decoded_bytes)
-        except ZeroDivisionError:
-            printable_score = 0
+        # Count printable bytes via lookup table (avoids per-byte branching)
+        printable_chars = sum(_printable[b] for b in buf)
+        printable_score = printable_chars / data_len
 
         if printable_score > max_printable_score:
             max_printable_score = printable_score
-            best_result = decoded_bytes
+            best_result = bytes(buf)
             best_key = key
 
     # Only return a result if it's highly likely to be text
