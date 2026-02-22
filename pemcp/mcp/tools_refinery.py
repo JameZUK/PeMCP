@@ -7,6 +7,7 @@ expose the most useful refinery capabilities for malware triage and binary
 analysis workflows.
 """
 import asyncio
+import os
 
 from typing import Dict, Any, Optional, List
 
@@ -255,7 +256,12 @@ async def refinery_decrypt(
     if len(ciphertext) > _MAX_INPUT_SIZE:
         raise RuntimeError(f"Input too large ({len(ciphertext)} bytes).")
 
-    kwargs: Dict[str, Any] = {"key": key}
+    # Some ciphers (e.g. rot, vigenere) don't accept a 'key' kwarg —
+    # they use positional args or different parameter names.
+    _NO_KEY_KWARG = {"rot", "vigenere", "codebook"}
+    kwargs: Dict[str, Any] = {}
+    if algo not in _NO_KEY_KWARG:
+        kwargs["key"] = key
     if iv_hex:
         kwargs["iv"] = _hex_to_bytes(iv_hex)
     if mode:
@@ -265,6 +271,8 @@ async def refinery_decrypt(
         import importlib
         mod = importlib.import_module(mod_path)
         unit_cls = getattr(mod, cls_name)
+        if algo in _NO_KEY_KWARG:
+            return ciphertext | unit_cls(key, **kwargs) | bytes
         return ciphertext | unit_cls(**kwargs) | bytes
 
     result = await asyncio.to_thread(_run)
@@ -778,22 +786,29 @@ async def refinery_pe_operations(
         unit_cls = getattr(mod, cls_name)
 
         results = []
-        for chunk in data | unit_cls():
-            raw = bytes(chunk)
-            entry: Dict[str, Any] = {
-                "size": len(raw),
-                "sha256": hashlib.sha256(raw).hexdigest(),
-            }
-            if op == "meta":
-                entry["text"] = _safe_decode(raw)[:2000]
-            elif op in ("overlay", "signature"):
-                entry["preview_hex"] = raw[:128].hex()
-                entry["preview_text"] = _safe_decode(raw[:128])
-            elif op == "resources":
-                entry["preview_hex"] = raw[:64].hex()
-            elif op in ("strip", "debloat"):
-                entry["preview_hex"] = raw[:32].hex()
-            results.append(entry)
+        try:
+            for chunk in data | unit_cls():
+                raw = bytes(chunk)
+                if not raw:
+                    continue
+                entry: Dict[str, Any] = {
+                    "size": len(raw),
+                    "sha256": hashlib.sha256(raw).hexdigest(),
+                }
+                if op == "meta":
+                    entry["text"] = _safe_decode(raw)[:2000]
+                elif op in ("overlay", "signature"):
+                    entry["preview_hex"] = raw[:128].hex()
+                    entry["preview_text"] = _safe_decode(raw[:128])
+                elif op == "resources":
+                    entry["preview_hex"] = raw[:64].hex()
+                elif op in ("strip", "debloat"):
+                    entry["preview_hex"] = raw[:32].hex()
+                results.append(entry)
+        except Exception as e:
+            if op == "signature":
+                return [{"error": f"No valid Authenticode signature found: {e}"}]
+            raise
         return results
 
     results = await asyncio.to_thread(_run)

@@ -123,7 +123,7 @@ async def refinery_virtual_read(
 
     def _run():
         from refinery.units.formats.exe.vsnip import vsnip
-        return data | vsnip(addr, size) | bytes
+        return data | vsnip(slice(addr, addr + size)) | bytes
 
     result = await asyncio.to_thread(_run)
     return {
@@ -168,7 +168,7 @@ async def refinery_file_to_virtual(
 
     def _run():
         from refinery.units.formats.exe.vaddr import vaddr
-        return data | vaddr(off) | bytes
+        return data | vaddr(base=off) | bytes
 
     result = await asyncio.to_thread(_run)
     return {
@@ -314,7 +314,9 @@ async def refinery_entropy_map(
 
     def _run():
         from refinery.units.sinks.iemap import iemap
-        return data | iemap() | bytes
+        # iemap reads terminal width and fails if it gets 0 (headless/async
+        # contexts).  Pass an explicit width to avoid the error.
+        return data | iemap(width=120) | bytes
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
