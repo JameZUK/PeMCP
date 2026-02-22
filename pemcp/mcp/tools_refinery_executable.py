@@ -224,17 +224,18 @@ async def refinery_executable(
         await ctx.info(f"Generating entropy map for {len(data)} bytes...")
 
         def _run_entropy():
-            import os
+            from refinery.lib.environment import environment
             from refinery.units.sinks.iemap import iemap
-            old_val = os.environ.get("REFINERY_TERM_SIZE")
+            # Directly set the cached terminal width value.  Setting the
+            # REFINERY_TERM_SIZE env var is insufficient because the EVInt
+            # descriptor reads it once at import time and caches the result;
+            # later os.environ changes are never picked up.
+            old_val = environment.term_size.value
             try:
-                os.environ["REFINERY_TERM_SIZE"] = "120"
+                environment.term_size.value = 120
                 return data | iemap() | bytes
             finally:
-                if old_val is None:
-                    os.environ.pop("REFINERY_TERM_SIZE", None)
-                else:
-                    os.environ["REFINERY_TERM_SIZE"] = old_val
+                environment.term_size.value = old_val
 
         result = await asyncio.to_thread(_run_entropy)
         return await _check_mcp_response_size(ctx, {
