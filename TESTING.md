@@ -219,7 +219,7 @@ When adding new unit tests, follow these conventions:
 
 ## Integration Tests
 
-The integration test suite (`mcp_test_client.py`) covers all **113 MCP tools** across 20 test categories. Tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
+The integration test suite (`mcp_test_client.py`) covers all **184 MCP tools** across 20 test categories. Tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
 
 ### Prerequisites
 
@@ -285,7 +285,7 @@ pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
 pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
 pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
 pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 113 tools exist
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 184 tools exist
 ```
 
 ### Environment Variables
