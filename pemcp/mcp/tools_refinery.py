@@ -1,10 +1,8 @@
 """MCP tools powered by Binary Refinery for data transformation and analysis.
 
 Binary Refinery (https://github.com/binref/refinery) provides 200+ composable
-units for binary data transformation — encryption, encoding, compression,
-pattern extraction, PE operations, and script deobfuscation.  These MCP tools
-expose the most useful refinery capabilities for malware triage and binary
-analysis workflows.
+units for binary data transformation.  These MCP tools expose the most useful
+refinery capabilities for malware triage and binary analysis workflows.
 """
 import asyncio
 import os
@@ -21,36 +19,32 @@ from pemcp.mcp._refinery_helpers import (
 
 
 # ===================================================================
-#  1. ENCODING / DECODING
+#  1. ENCODING / DECODING (merged encode + decode)
 # ===================================================================
 
 @tool_decorator
-async def refinery_decode(
+async def refinery_codec(
     ctx: Context,
     data_hex: str,
     encoding: str = "b64",
+    direction: str = "decode",
 ) -> Dict[str, Any]:
-    """
-    Decode data using Binary Refinery encoding units.
+    """Encode or decode data using Binary Refinery encoding units.
 
-    Supports: b64, hex, b32, b58, b62, b85, a85, b92, url, esc, u16,
+    Encodings: b64, hex, b32, b58, b62, b85, a85, b92, url, esc, u16,
     uuenc, netbios, cp1252, wshenc, morse, htmlesc, z85.
 
-    See also: deobfuscate_base64() for pefile-based base64 decoding,
-    find_and_decode_encoded_strings() for automatic multi-layer decoding.
-
     Args:
-        ctx: The MCP Context object.
-        data_hex: (str) Input data as hex string, or raw text for text-based encodings.
-        encoding: (str) Encoding to decode. Default 'b64'.
+        ctx: MCP Context.
+        data_hex: (str) Input data as hex string (or raw text for text-based encodings).
+        encoding: (str) Encoding name. Default 'b64'.
+        direction: (str) 'decode' (default) or 'encode'.
 
     Returns:
-        Dictionary with decoded output (hex + text preview).
+        Dictionary with transformed output (hex + text preview).
     """
-    _require_refinery("refinery_decode")
-    await ctx.info(f"Decoding with refinery: {encoding}")
+    _require_refinery("refinery_codec")
 
-    # Map encoding names to refinery unit imports
     _ENCODING_MAP = {
         "b64": "refinery.units.encoding.b64:b64",
         "hex": "refinery.units.encoding.hex:hex",
@@ -74,11 +68,13 @@ async def refinery_decode(
 
     encoding_lower = encoding.lower()
     if encoding_lower not in _ENCODING_MAP:
-        return {
-            "error": f"Unknown encoding '{encoding}'.",
-            "supported": sorted(_ENCODING_MAP.keys()),
-        }
+        return {"error": f"Unknown encoding '{encoding}'.", "supported": sorted(_ENCODING_MAP.keys())}
 
+    d = direction.lower()
+    if d not in ("encode", "decode"):
+        return {"error": f"Unknown direction '{direction}'.", "supported": ["decode", "encode"]}
+
+    await ctx.info(f"{'Encoding' if d == 'encode' else 'Decoding'} with {encoding}")
     mod_path, cls_name = _ENCODING_MAP[encoding_lower].rsplit(":", 1)
 
     try:
@@ -93,82 +89,19 @@ async def refinery_decode(
         import importlib
         mod = importlib.import_module(mod_path)
         unit_cls = getattr(mod, cls_name)
+        if d == "encode":
+            return input_data | -unit_cls() | bytes
         return input_data | unit_cls() | bytes
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
         "encoding": encoding,
+        "direction": d,
         "input_size": len(input_data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }, "refinery_decode")
-
-
-@tool_decorator
-async def refinery_encode(
-    ctx: Context,
-    data_hex: str,
-    encoding: str = "b64",
-) -> Dict[str, Any]:
-    """
-    Encode data using Binary Refinery encoding units (reverse mode).
-
-    Same encodings as refinery_decode but applies the reverse transform.
-
-    Args:
-        ctx: The MCP Context object.
-        data_hex: (str) Input data as hex string.
-        encoding: (str) Encoding to apply. Default 'b64'.
-
-    Returns:
-        Dictionary with encoded output.
-    """
-    _require_refinery("refinery_encode")
-    await ctx.info(f"Encoding with refinery: {encoding}")
-
-    _ENCODING_MAP = {
-        "b64": "refinery.units.encoding.b64:b64",
-        "hex": "refinery.units.encoding.hex:hex",
-        "b32": "refinery.units.encoding.b32:b32",
-        "b58": "refinery.units.encoding.b58:b58",
-        "b62": "refinery.units.encoding.b62:b62",
-        "b85": "refinery.units.encoding.b85:b85",
-        "a85": "refinery.units.encoding.a85:a85",
-        "url": "refinery.units.encoding.url:url",
-        "u16": "refinery.units.encoding.u16:u16",
-        "uuenc": "refinery.units.encoding.uuenc:uuenc",
-    }
-
-    encoding_lower = encoding.lower()
-    if encoding_lower not in _ENCODING_MAP:
-        return {"error": f"Unknown encoding '{encoding}'.", "supported": sorted(_ENCODING_MAP.keys())}
-
-    mod_path, cls_name = _ENCODING_MAP[encoding_lower].rsplit(":", 1)
-
-    try:
-        input_data = _hex_to_bytes(data_hex)
-    except (ValueError, TypeError):
-        input_data = data_hex.encode("utf-8")
-
-    if len(input_data) > _MAX_INPUT_SIZE:
-        raise RuntimeError(f"Input too large ({len(input_data)} bytes).")
-
-    def _run():
-        import importlib
-        mod = importlib.import_module(mod_path)
-        unit_cls = getattr(mod, cls_name)
-        # Negate the unit for reverse (encoding) mode
-        return input_data | -unit_cls() | bytes
-
-    result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
-        "encoding": encoding,
-        "input_size": len(input_data),
-        "output_size": len(result),
-        "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
-    }, "refinery_encode")
+    }, "refinery_codec")
 
 
 # ===================================================================
@@ -184,21 +117,20 @@ async def refinery_decrypt(
     iv_hex: Optional[str] = None,
     mode: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Decrypt data using Binary Refinery cipher units.
+    """Decrypt data using Binary Refinery cipher units.
 
-    Supports 37 ciphers: aes, des, des3, rc4, blowfish, camellia, cast,
-    chacha, salsa, serpent, tea, xtea, xxtea, rc2, rc5, rc6, sm4, rabbit,
-    seal, gost, fernet, speck, hc128, hc256, isaac, sosemanuk, vigenere,
-    rot, rijndael, chaskey, blabla, rncrypt, codebook, rc4mod, secstr.
+    Ciphers: aes, des, des3, rc4, blowfish, camellia, cast, chacha, salsa,
+    serpent, tea, xtea, xxtea, rc2, rc5, rc6, sm4, rabbit, seal, gost,
+    fernet, speck, hc128, hc256, isaac, sosemanuk, vigenere, rot, rijndael,
+    chaskey, blabla, rncrypt, codebook, rc4mod, secstr.
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (str) Ciphertext as hex string.
-        algorithm: (str) Cipher name (e.g. 'aes', 'rc4', 'des').
-        key_hex: (str) Key as hex string.
-        iv_hex: (Optional[str]) IV/nonce as hex string. Required for CBC/CTR modes.
-        mode: (Optional[str]) Block cipher mode: ECB, CBC, CTR, CFB, OFB, GCM. Default varies by cipher.
+        ctx: MCP Context.
+        data_hex: (str) Ciphertext as hex.
+        algorithm: (str) Cipher name (e.g. 'aes', 'rc4').
+        key_hex: (str) Key as hex.
+        iv_hex: (Optional[str]) IV/nonce as hex (for CBC/CTR modes).
+        mode: (Optional[str]) Block cipher mode: ECB, CBC, CTR, CFB, OFB, GCM.
 
     Returns:
         Dictionary with decrypted plaintext (hex + text preview).
@@ -258,14 +190,11 @@ async def refinery_decrypt(
 
     kwargs: Dict[str, Any] = {}
     if algo == "rot":
-        # rot takes an integer 'amount' (rotation count), not a bytes key.
-        # Interpret the key as a decimal integer or as a single-byte value.
         try:
             kwargs["amount"] = int(key_hex, 10)
         except ValueError:
             kwargs["amount"] = key[0] if len(key) == 1 else int.from_bytes(key, "big")
     elif algo in ("vigenere", "codebook"):
-        # These ciphers take key as a positional argument.
         kwargs["key"] = key
     else:
         kwargs["key"] = key
@@ -292,77 +221,63 @@ async def refinery_decrypt(
 
 
 # ===================================================================
-#  3. XOR OPERATIONS
+#  3. XOR OPERATIONS (merged xor + xor_guess_key)
 # ===================================================================
 
 @tool_decorator
 async def refinery_xor(
     ctx: Context,
-    data_hex: str,
-    key_hex: str,
+    operation: str = "apply",
+    data_hex: Optional[str] = None,
+    key_hex: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Apply XOR with a single-byte or multi-byte key using Binary Refinery.
+    """XOR operations via Binary Refinery.
 
-    Handles repeating-key XOR automatically. For single-byte, pass a 1-byte key.
-
-    See also: deobfuscate_xor_single_byte() for pefile-based single-byte XOR,
-    deobfuscate_xor_multi_byte() for multi-byte XOR with key rotation.
+    Operations:
+    - 'apply': XOR data with a key (requires data_hex and key_hex).
+    - 'guess_key': Auto-guess the XOR key using statistical analysis.
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (str) Data as hex string.
-        key_hex: (str) XOR key as hex string (e.g. '41' for single-byte, '4d414c57' for multi-byte).
+        ctx: MCP Context.
+        operation: (str) 'apply' or 'guess_key'. Default 'apply'.
+        data_hex: (Optional[str]) Data as hex. For guess_key, if None uses loaded file.
+        key_hex: (Optional[str]) XOR key as hex (required for 'apply').
 
     Returns:
-        Dictionary with XOR result (hex + text preview).
+        Dictionary with XOR result or guessed key + preview.
     """
     _require_refinery("refinery_xor")
 
-    data = _hex_to_bytes(data_hex)
-    key = _hex_to_bytes(key_hex)
-    if len(data) > _MAX_INPUT_SIZE:
-        raise RuntimeError(f"Input too large ({len(data)} bytes).")
+    op = operation.lower()
+    if op not in ("apply", "guess_key"):
+        return {"error": f"Unknown operation '{operation}'.", "supported": ["apply", "guess_key"]}
 
-    await ctx.info(f"XOR with {len(key)}-byte key: {key.hex()}")
+    if op == "apply":
+        if not data_hex or not key_hex:
+            return {"error": "'apply' requires both data_hex and key_hex parameters."}
+        data = _hex_to_bytes(data_hex)
+        key = _hex_to_bytes(key_hex)
+        if len(data) > _MAX_INPUT_SIZE:
+            raise RuntimeError(f"Input too large ({len(data)} bytes).")
 
-    def _run():
-        from refinery.units.blockwise.xor import xor
-        return data | xor(key) | bytes
+        await ctx.info(f"XOR with {len(key)}-byte key: {key.hex()}")
 
-    result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
-        "key_hex": key.hex(),
-        "key_length": len(key),
-        "input_size": len(data),
-        "output_size": len(result),
-        "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
-    }, "refinery_xor")
+        def _run_apply():
+            from refinery.units.blockwise.xor import xor
+            return data | xor(key) | bytes
 
+        result = await asyncio.to_thread(_run_apply)
+        return await _check_mcp_response_size(ctx, {
+            "operation": op,
+            "key_hex": key.hex(),
+            "key_length": len(key),
+            "input_size": len(data),
+            "output_size": len(result),
+            "output_hex": _bytes_to_hex(result),
+            "output_text": _safe_decode(result)[:2000],
+        }, "refinery_xor")
 
-@tool_decorator
-async def refinery_xor_guess_key(
-    ctx: Context,
-    data_hex: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Automatically guess the XOR key used to encrypt data using Binary Refinery's xkey unit.
-
-    Can operate on provided hex data or on the currently loaded file's raw bytes.
-    Uses statistical analysis to find the most likely XOR key.
-
-    See also: bruteforce_xor_key() for pefile-based brute-force key guessing.
-
-    Args:
-        ctx: The MCP Context object.
-        data_hex: (Optional[str]) Data as hex string. If None, uses the loaded file.
-
-    Returns:
-        Dictionary with the guessed key and a preview of decrypted data.
-    """
-    _require_refinery("refinery_xor_guess_key")
-
+    # op == "guess_key"
     if data_hex:
         data = _hex_to_bytes(data_hex)
     else:
@@ -374,19 +289,18 @@ async def refinery_xor_guess_key(
 
     await ctx.info(f"Guessing XOR key for {len(data)} bytes of data...")
 
-    def _run():
+    def _run_guess():
         from refinery.units.misc.xkey import xkey
         keys = []
         for chunk in data | xkey():
             keys.append(bytes(chunk))
         return keys
 
-    keys = await asyncio.to_thread(_run)
+    keys = await asyncio.to_thread(_run_guess)
 
     if not keys:
-        return {"status": "no_key_found", "message": "Could not determine XOR key."}
+        return {"operation": op, "status": "no_key_found", "message": "Could not determine XOR key."}
 
-    # Decrypt with the first (best) key
     best_key = keys[0]
 
     def _decrypt():
@@ -396,13 +310,14 @@ async def refinery_xor_guess_key(
     preview = await asyncio.to_thread(_decrypt)
 
     return await _check_mcp_response_size(ctx, {
+        "operation": op,
         "guessed_key_hex": best_key.hex(),
         "guessed_key_length": len(best_key),
         "guessed_key_ascii": _safe_decode(best_key),
         "decrypted_preview_hex": preview.hex(),
         "decrypted_preview_text": _safe_decode(preview)[:500],
         "total_candidates": len(keys),
-    }, "refinery_xor_guess_key")
+    }, "refinery_xor")
 
 
 # ===================================================================
@@ -415,17 +330,14 @@ async def refinery_decompress(
     data_hex: Optional[str] = None,
     algorithm: str = "auto",
 ) -> Dict[str, Any]:
-    """
-    Decompress data using Binary Refinery.
+    """Decompress data using Binary Refinery.
 
-    The 'auto' mode tries all known compression algorithms automatically.
-    Specific algorithms: zl (zlib/deflate), bz2, lzma, lz4, brotli, zstd,
-    lznt1, lzo, ap (aPlib), blz, lzf, lzg, lzip, lzjb, lzw, lzx,
-    mscf (CAB), nrv (NRV/UCL), pkw, qlz, szdd, flz, jcalg.
+    Algorithms: auto, zl, bz2, lzma, lz4, brotli, zstd, lznt1, lzo, ap,
+    blz, lzf, lzg, lzip, lzjb, lzw, lzx, mscf, nrv, pkw, qlz, szdd, flz, jcalg.
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (Optional[str]) Compressed data as hex. If None, uses loaded file data.
+        ctx: MCP Context.
+        data_hex: (Optional[str]) Compressed data as hex. If None, uses loaded file.
         algorithm: (str) Compression algorithm or 'auto'. Default 'auto'.
 
     Returns:
@@ -494,7 +406,7 @@ async def refinery_decompress(
 
 
 # ===================================================================
-#  5. PATTERN EXTRACTION (IOCs, URLs, IPs, emails, etc.)
+#  5. PATTERN EXTRACTION (IOCs)
 # ===================================================================
 
 @tool_decorator
@@ -504,19 +416,15 @@ async def refinery_extract_iocs(
     indicator_type: str = "all",
     limit: int = 200,
 ) -> Dict[str, Any]:
-    """
-    Extract indicators of compromise (IOCs) from data using Binary Refinery's xtp unit.
+    """Extract IOCs from data using Binary Refinery's xtp unit.
 
-    The xtp unit is a powerful regex-based indicator extractor that supports:
-    url, ipv4, ipv6, email, domain, path, hostname, md5, sha1, sha256, guid,
-    and more. Use 'all' to extract all indicator types at once.
+    Types: all, url, ipv4, ipv6, email, domain, path, hostname, md5, sha1, sha256, guid.
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (Optional[str]) Data as hex string. If None, uses loaded file's strings.
-        indicator_type: (str) Type of indicator: 'all', 'url', 'ipv4', 'ipv6',
-            'email', 'domain', 'path', 'hostname', 'md5', 'sha1', 'sha256', 'guid'.
-        limit: (int) Maximum number of results. Default 200.
+        ctx: MCP Context.
+        data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
+        indicator_type: (str) Type of indicator or 'all'. Default 'all'.
+        limit: (int) Max results. Default 200.
 
     Returns:
         Dictionary with extracted indicators grouped by type.
@@ -526,7 +434,6 @@ async def refinery_extract_iocs(
     if data_hex:
         data = _hex_to_bytes(data_hex)
     else:
-        # Use loaded file data
         data = _get_file_data()
 
     if len(data) > _MAX_INPUT_SIZE:
@@ -570,117 +477,42 @@ async def refinery_extract_iocs(
 
 
 # ===================================================================
-#  6. PATTERN CARVING (embedded files, encoded blobs)
+#  6. PATTERN CARVING (merged carve + carve_files)
 # ===================================================================
 
 @tool_decorator
 async def refinery_carve(
     ctx: Context,
+    operation: str = "pattern",
     pattern: str = "b64",
+    file_type: str = "pe",
     data_hex: Optional[str] = None,
     decode: bool = True,
     limit: int = 50,
 ) -> Dict[str, Any]:
-    """
-    Carve and optionally decode embedded patterns from data using Binary Refinery.
+    """Carve embedded patterns or files from data via Binary Refinery.
 
-    The carve unit extracts data matching common encoding patterns.
-    Supported patterns: b64, hex, b32, b85, url, intarray, string.
-
-    For file carving (extracting embedded PE, ZIP, etc.), use refinery_carve_files.
+    Operations:
+    - 'pattern': Carve encoded blobs. pattern: b64/hex/b32/b85/url/intarray/string.
+    - 'files': Carve embedded files. file_type: pe/zip/7z/rtf/json/xml/lnk/der.
 
     Args:
-        ctx: The MCP Context object.
-        pattern: (str) Pattern to carve: 'b64', 'hex', 'b32', 'b85', 'url', 'intarray', 'string'.
+        ctx: MCP Context.
+        operation: (str) 'pattern' or 'files'. Default 'pattern'.
+        pattern: (str) Pattern to carve (for operation='pattern'). Default 'b64'.
+        file_type: (str) File type to carve (for operation='files'). Default 'pe'.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
-        decode: (bool) Automatically decode carved data. Default True.
-        limit: (int) Max items to return. Default 50.
+        decode: (bool) Auto-decode carved patterns. Default True.
+        limit: (int) Max items. Default 50.
 
     Returns:
-        Dictionary with carved (and optionally decoded) data blobs.
+        Dictionary with carved data blobs or file metadata.
     """
     _require_refinery("refinery_carve")
 
-    if data_hex:
-        data = _hex_to_bytes(data_hex)
-    else:
-        data = _get_file_data()
-
-    if len(data) > _MAX_INPUT_SIZE:
-        data = data[:_MAX_INPUT_SIZE]
-
-    await ctx.info(f"Carving pattern '{pattern}' from {len(data)} bytes...")
-
-    def _run():
-        from refinery.units.pattern.carve import carve
-        results = []
-        for chunk in data | carve(pattern):
-            raw = bytes(chunk)
-            entry: Dict[str, Any] = {
-                "raw_hex": _bytes_to_hex(raw, 512),
-                "raw_text": _safe_decode(raw)[:200],
-                "size": len(raw),
-            }
-            if decode:
-                try:
-                    # Decode the carved pattern
-                    _ENC_MAP = {
-                        "b64": "refinery.units.encoding.b64:b64",
-                        "hex": "refinery.units.encoding.hex:hex",
-                        "b32": "refinery.units.encoding.b32:b32",
-                        "b85": "refinery.units.encoding.b85:b85",
-                        "url": "refinery.units.encoding.url:url",
-                    }
-                    if pattern in _ENC_MAP:
-                        import importlib
-                        mod_path, cls_name = _ENC_MAP[pattern].rsplit(":", 1)
-                        mod = importlib.import_module(mod_path)
-                        unit_cls = getattr(mod, cls_name)
-                        decoded = raw | unit_cls() | bytes
-                        entry["decoded_hex"] = _bytes_to_hex(decoded, 512)
-                        entry["decoded_text"] = _safe_decode(decoded)[:200]
-                        entry["decoded_size"] = len(decoded)
-                except Exception as e:
-                    entry["decode_error"] = str(e)
-            results.append(entry)
-            if len(results) >= limit:
-                break
-        return results
-
-    results = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
-        "pattern": pattern,
-        "items_found": len(results),
-        "decode_applied": decode,
-        "results": results,
-    }, "refinery_carve")
-
-
-@tool_decorator
-async def refinery_carve_files(
-    ctx: Context,
-    file_type: str = "pe",
-    data_hex: Optional[str] = None,
-    limit: int = 20,
-) -> Dict[str, Any]:
-    """
-    Carve embedded files from data using Binary Refinery.
-
-    Extracts complete embedded files (PE executables, ZIP archives, etc.)
-    from binary data — useful for finding packed/embedded payloads.
-
-    Supported types: pe, zip, 7z, rtf, json, xml, lnk, der (certificates).
-
-    Args:
-        ctx: The MCP Context object.
-        file_type: (str) File type to carve: 'pe', 'zip', '7z', 'rtf', 'json', 'xml', 'lnk', 'der'.
-        data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
-        limit: (int) Max files to extract. Default 20.
-
-    Returns:
-        Dictionary with carved file metadata (offsets, sizes, hashes).
-    """
-    _require_refinery("refinery_carve_files")
+    op = operation.lower()
+    if op not in ("pattern", "files"):
+        return {"error": f"Unknown operation '{operation}'.", "supported": ["pattern", "files"]}
 
     if data_hex:
         data = _hex_to_bytes(data_hex)
@@ -690,6 +522,54 @@ async def refinery_carve_files(
     if len(data) > _MAX_INPUT_SIZE:
         data = data[:_MAX_INPUT_SIZE]
 
+    if op == "pattern":
+        await ctx.info(f"Carving pattern '{pattern}' from {len(data)} bytes...")
+
+        def _run_pattern():
+            from refinery.units.pattern.carve import carve
+            results = []
+            for chunk in data | carve(pattern):
+                raw = bytes(chunk)
+                entry: Dict[str, Any] = {
+                    "raw_hex": _bytes_to_hex(raw, 512),
+                    "raw_text": _safe_decode(raw)[:200],
+                    "size": len(raw),
+                }
+                if decode:
+                    try:
+                        _ENC_MAP = {
+                            "b64": "refinery.units.encoding.b64:b64",
+                            "hex": "refinery.units.encoding.hex:hex",
+                            "b32": "refinery.units.encoding.b32:b32",
+                            "b85": "refinery.units.encoding.b85:b85",
+                            "url": "refinery.units.encoding.url:url",
+                        }
+                        if pattern in _ENC_MAP:
+                            import importlib
+                            mod_path, cls_name = _ENC_MAP[pattern].rsplit(":", 1)
+                            mod = importlib.import_module(mod_path)
+                            unit_cls = getattr(mod, cls_name)
+                            decoded = raw | unit_cls() | bytes
+                            entry["decoded_hex"] = _bytes_to_hex(decoded, 512)
+                            entry["decoded_text"] = _safe_decode(decoded)[:200]
+                            entry["decoded_size"] = len(decoded)
+                    except Exception as e:
+                        entry["decode_error"] = str(e)
+                results.append(entry)
+                if len(results) >= limit:
+                    break
+            return results
+
+        results = await asyncio.to_thread(_run_pattern)
+        return await _check_mcp_response_size(ctx, {
+            "operation": op,
+            "pattern": pattern,
+            "items_found": len(results),
+            "decode_applied": decode,
+            "results": results,
+        }, "refinery_carve")
+
+    # op == "files"
     _CARVE_MAP = {
         "pe": "refinery.units.pattern.carve_pe:carve_pe",
         "zip": "refinery.units.pattern.carve_zip:carve_zip",
@@ -703,12 +583,12 @@ async def refinery_carve_files(
 
     ftype = file_type.lower()
     if ftype not in _CARVE_MAP:
-        return {"error": f"Unknown type '{file_type}'.", "supported": sorted(_CARVE_MAP.keys())}
+        return {"error": f"Unknown file_type '{file_type}'.", "supported": sorted(_CARVE_MAP.keys())}
 
     await ctx.info(f"Carving embedded {ftype.upper()} files from {len(data)} bytes...")
     mod_path, cls_name = _CARVE_MAP[ftype].rsplit(":", 1)
 
-    def _run():
+    def _run_files():
         import importlib
         import hashlib
         mod = importlib.import_module(mod_path)
@@ -726,13 +606,14 @@ async def refinery_carve_files(
                 break
         return results
 
-    results = await asyncio.to_thread(_run)
+    results = await asyncio.to_thread(_run_files)
     return await _check_mcp_response_size(ctx, {
+        "operation": op,
         "file_type": ftype,
         "files_found": len(results),
         "data_size": len(data),
         "results": results,
-    }, "refinery_carve_files")
+    }, "refinery_carve")
 
 
 # ===================================================================
@@ -744,21 +625,13 @@ async def refinery_pe_operations(
     ctx: Context,
     operation: str,
 ) -> Dict[str, Any]:
-    """
-    Perform PE-specific operations using Binary Refinery's PE units.
+    """PE-specific operations via Binary Refinery.
 
-    Operations:
-    - 'overlay': Extract PE overlay data (appended after the last section).
-    - 'meta': Extract PE metadata (version info, timestamps, etc.).
-    - 'resources': Extract PE resources as separate items.
-    - 'strip': Remove overlay and debug data to get a minimal PE.
-    - 'debloat': Remove bloated sections (large zero-filled regions packers add).
-    - 'signature': Extract Authenticode signature data.
+    Operations: overlay, meta, resources, strip, debloat, signature.
 
     Args:
-        ctx: The MCP Context object.
-        operation: (str) Operation to perform: 'overlay', 'meta', 'resources',
-            'strip', 'debloat', 'signature'.
+        ctx: MCP Context.
+        operation: (str) PE operation to perform.
 
     Returns:
         Dictionary with operation results.
@@ -845,17 +718,13 @@ async def refinery_deobfuscate_script(
     data_hex: str,
     script_type: str,
 ) -> Dict[str, Any]:
-    """
-    Deobfuscate scripts using Binary Refinery's specialized deobfuscation units.
+    """Deobfuscate scripts using Binary Refinery.
 
-    These units apply multiple heuristic passes to simplify obfuscated code:
-    - 'ps1': PowerShell deobfuscation (string concat, encoding, invoke expansion, etc.)
-    - 'vba': VBA macro deobfuscation (string manipulation, char codes, etc.)
-    - 'js': JavaScript deobfuscation (array unpacking, string concat, etc.)
+    Types: ps1 (PowerShell), vba (VBA macros), js (JavaScript).
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (str) Obfuscated script as hex string.
+        ctx: MCP Context.
+        data_hex: (str) Obfuscated script as hex.
         script_type: (str) Script type: 'ps1', 'vba', 'js'.
 
     Returns:
@@ -873,7 +742,6 @@ async def refinery_deobfuscate_script(
         "vba": "refinery.units.obfuscation.vba.all:deob_vba",
     }
 
-    # JS doesn't have an 'all' module — we chain individual units
     if stype == "js":
         await ctx.info("Deobfuscating JavaScript...")
 
@@ -923,19 +791,14 @@ async def refinery_hash(
     data_hex: Optional[str] = None,
     algorithms: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """
-    Compute hashes using Binary Refinery's hash units.
+    """Compute hashes using Binary Refinery.
 
-    Supports standard cryptographic hashes (md5, sha1, sha256, sha384, sha512)
-    plus specialized hashes: crc32, adler32, imphash, fnv32, fnv64,
-    murmur3-32, murmur3-128, xxhash32, xxhash64, xxhash128.
-
-    See also: get_pe_info() for built-in PE file hashing (md5/sha1/sha256/imphash).
+    Supports: md5, sha1, sha256, sha384, sha512, crc32, adler32.
 
     Args:
-        ctx: The MCP Context object.
+        ctx: MCP Context.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
-        algorithms: (Optional[List[str]]) List of algorithms. Default: common set.
+        algorithms: (Optional[List[str]]) Hash algorithms. Default: md5, sha1, sha256, crc32.
 
     Returns:
         Dictionary with computed hashes.
@@ -991,26 +854,14 @@ async def refinery_pipeline(
     data_hex: str,
     steps: List[str],
 ) -> Dict[str, Any]:
-    """
-    Execute a multi-step Binary Refinery transformation pipeline.
+    """Execute a multi-step Binary Refinery transformation pipeline.
 
-    Each step is a string like 'unit_name:arg1:arg2'. This is the most
-    powerful tool — it chains multiple refinery operations sequentially.
-
-    Supported step formats:
-    - 'b64' — decode base64
-    - 'xor:41' — XOR with key 0x41
-    - 'xor:4d414c57' — XOR with multi-byte key
-    - 'aes:key_hex:mode' — AES decrypt
-    - 'rc4:key_hex' — RC4 decrypt
-    - 'zl' — zlib decompress
-    - 'hex' — hex decode
-    - 'decompress' — auto-decompress
-    - 'b32', 'b85', 'url', 'esc' — various decodings
+    Each step is 'unit_name:arg1:arg2'. Examples: 'b64', 'xor:41',
+    'aes:key_hex:mode', 'rc4:key_hex', 'zl', 'decompress'.
 
     Args:
-        ctx: The MCP Context object.
-        data_hex: (str) Input data as hex string.
+        ctx: MCP Context.
+        data_hex: (str) Input data as hex.
         steps: (List[str]) Ordered list of transformation steps.
 
     Returns:
@@ -1024,7 +875,6 @@ async def refinery_pipeline(
 
     await ctx.info(f"Running {len(steps)}-step pipeline: {' | '.join(steps)}")
 
-    # Map of simple unit names to their import paths
     _UNIT_MAP = {
         "b64": ("refinery.units.encoding.b64", "b64", {}),
         "hex": ("refinery.units.encoding.hex", "hex", {}),
@@ -1097,18 +947,14 @@ async def refinery_list_units(
     ctx: Context,
     category: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    List all available Binary Refinery unit categories and units.
+    """List available Binary Refinery unit categories and units.
 
-    Use this to discover what transformations are available before calling
-    other refinery tools. Each unit is a composable transformation that
-    can be used in refinery_pipeline.
+    Categories: blockwise, compression, crypto, encoding, formats,
+    malware, meta, misc, obfuscation, pattern, sinks, strings.
 
     Args:
-        ctx: The MCP Context object.
+        ctx: MCP Context.
         category: (Optional[str]) Filter to a specific category.
-            Categories: blockwise, compression, crypto, encoding, formats,
-            malware, meta, misc, obfuscation, pattern, sinks, strings.
 
     Returns:
         Dictionary with available units organized by category.
