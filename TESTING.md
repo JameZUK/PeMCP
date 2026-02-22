@@ -219,7 +219,7 @@ When adding new unit tests, follow these conventions:
 
 ## Integration Tests
 
-The integration test suite (`mcp_test_client.py`) covers all **184 MCP tools** across 20 test categories. Tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
+The integration test suite (`mcp_test_client.py`) covers all **151 MCP tools** across 20 test categories. Tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
 
 ### Prerequisites
 

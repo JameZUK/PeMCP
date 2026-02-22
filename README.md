@@ -8,7 +8,10 @@ PeMCP bridges the gap between high-level AI reasoning and low-level binary instr
 
 ## Table of Contents
 
+- [Why PeMCP](#why-pemcp)
 - [Key Features](#key-features)
+- [Real-World Analysis Scenarios](#real-world-analysis-scenarios)
+- [PeMCP vs Traditional Tools](#pemcp-vs-traditional-tools)
 - [Quick Start with Claude Code](#quick-start-with-claude-code)
   - [Adding PeMCP via the CLI](#adding-pemcp-via-the-cli)
   - [Adding PeMCP via JSON Configuration](#adding-pemcp-via-json-configuration)
@@ -22,6 +25,40 @@ PeMCP bridges the gap between high-level AI reasoning and low-level binary instr
 - [Contributing](#contributing)
 - [Licence](#licence)
 - [Disclaimer](#disclaimer)
+
+---
+
+## Why PeMCP
+
+### The Problem with Traditional Binary Analysis
+
+Malware analysis has traditionally required analysts to master a complex toolchain — Ghidra for decompilation, IDA Pro for disassembly, CyberChef for data transforms, pestudio for PE triage, CFF Explorer for header inspection, YARA for signatures, and dozens more. Each tool has its own interface, scripting language, and learning curve. An analyst investigating a single sample might switch between 5-10 tools, manually correlating findings across disconnected workflows.
+
+This creates three critical bottlenecks:
+
+1. **Skill barrier** — Junior analysts spend months learning each tool before becoming productive. Even experienced analysts must memorise hundreds of commands, keyboard shortcuts, and scripting APIs across different tools.
+2. **Context fragmentation** — Findings from one tool don't automatically inform analysis in another. The analyst becomes the integration layer, manually cross-referencing decompilation output with string analysis, import tables, and network IOCs.
+3. **Repetitive drudgery** — The initial triage of every sample follows a predictable pattern (check hashes, scan signatures, extract strings, review imports, check entropy), yet analysts must manually execute these same steps every time.
+
+### How PeMCP Changes the Game
+
+PeMCP eliminates these bottlenecks by putting **151 specialised analysis tools behind a single AI-driven interface**. Instead of learning 10 different tools, you describe what you want to know in natural language and the AI orchestrates the right tools automatically.
+
+**What makes PeMCP unique is the combination of three capabilities that no other single tool provides:**
+
+1. **Breadth** — 151 tools spanning PE/ELF/Mach-O parsing, Angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/Capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration. This is the equivalent of an entire malware lab in one MCP server.
+
+2. **AI reasoning over results** — Unlike tools that just produce output, PeMCP feeds results back to an AI that can reason about them. When the AI decompiles a function and sees `VirtualAlloc` followed by `memcpy` and an indirect call, it doesn't just report the disassembly — it recognises the shellcode injection pattern, notes it as a finding, and suggests investigating the source buffer.
+
+3. **Session continuity** — Analysis findings persist across the entire investigation. Notes, function summaries, and tool history survive context window limits and server restarts. The AI can call `get_analysis_digest()` at any point to recall everything learned so far, enabling investigations that span hours or days without losing context.
+
+### Who Benefits
+
+- **SOC analysts** triaging alerts — Ask "Is this file malicious?" and get an automated risk assessment with specific evidence in seconds instead of minutes.
+- **Malware analysts** doing deep-dive reverse engineering — Use natural language to drive decompilation, symbolic execution, and data transformation without switching tools.
+- **Incident responders** under time pressure — Rapidly extract IOCs, C2 configurations, and behavioural indicators from multiple samples in parallel.
+- **Junior analysts** building skills — Learn by watching the AI explain its analysis choices, building intuition for which tools to use and why.
+- **Threat intelligence teams** processing sample batches — Automate extraction of configs, hashes, and network indicators across malware families.
 
 ---
 
@@ -107,6 +144,165 @@ PeMCP is designed for **large binary corpus analysis** where AI clients need to 
 - **Background Tasks** — Long-running operations (symbolic execution, Angr CFG) run asynchronously with heartbeat monitoring.
 - **Smart Truncation** — MCP responses are automatically truncated to fit within 64KB limits whilst preserving structural integrity.
 - **Graceful Degradation** — All 20+ optional libraries are detected at startup. Tools that require unavailable libraries return clear error messages instead of crashing.
+
+---
+
+## Real-World Analysis Scenarios
+
+These scenarios demonstrate PeMCP's combined power across its tool categories. Each represents a common malware analysis task that traditionally requires multiple disconnected tools.
+
+### Scenario 1: Triaging a Suspicious Email Attachment (2 minutes vs 30+ minutes)
+
+**The situation:** A SOC analyst receives an alert about a suspicious `.doc` attachment. They need to determine if it's malicious and extract any IOCs.
+
+**Traditional workflow:** Open in a sandbox VM, use `olevba` to extract macros, manually read VBA code, use CyberChef to decode Base64 payloads, use `strings` to find URLs, check hashes on VirusTotal — switching between 5+ tools.
+
+**With PeMCP:**
+```
+Analyst: "Open this Office document and tell me if it's malicious"
+```
+PeMCP automatically:
+1. `open_file("attachment.doc")` — detects OLE format
+2. `get_triage_report(compact=True)` — instant risk assessment
+3. `refinery_extract(operation='office', sub_operation='vba')` — extracts VBA macros
+4. `refinery_deobfuscate_script(script_type='vba')` — deobfuscates the macro code
+5. `refinery_extract_iocs()` — pulls URLs, IPs, domains from the deobfuscated script
+6. `refinery_carve(operation='pattern', pattern='b64')` — finds and decodes Base64 payloads
+7. `get_virustotal_report_for_loaded_file()` — checks community detection
+
+The AI cross-references all findings: *"This document contains an obfuscated VBA macro that downloads a second-stage payload from hxxps://evil[.]com/payload.exe using PowerShell. The macro uses string concatenation and Chr() calls to evade static detection. Three unique C2 URLs were extracted."*
+
+### Scenario 2: Extracting C2 Configuration from a Packed .NET RAT
+
+**The situation:** A malware analyst has a .NET sample suspected to be AsyncRAT. The binary is packed and the C2 configuration is encrypted in string constants.
+
+**Traditional workflow:** Use `de4dot` to deobfuscate, load in `dnSpy` to find the config class, manually identify the decryption routine, write a Python script to replicate the decryption, extract the C2 address — a process that can take 1-2 hours.
+
+**With PeMCP:**
+```
+Analyst: "Analyse this .NET binary and extract the C2 configuration"
+```
+PeMCP orchestrates:
+1. `open_file("sample.exe")` — detects .NET assembly
+2. `dotnet_analyze()` — extracts CLR metadata, type/method definitions
+3. `refinery_dotnet(operation='strings')` — extracts all .NET metadata strings
+4. `refinery_dotnet(operation='fields')` — extracts constant field values (where RATs store encrypted configs)
+5. `refinery_dotnet(operation='arrays')` — extracts byte array initialisers (AES keys, encrypted blobs)
+6. `refinery_dotnet(operation='resources')` — checks for config stored in resources
+7. `refinery_decrypt(algorithm='aes', key_hex='...', iv_hex='...')` — decrypts the config using extracted key material
+8. `refinery_extract_iocs()` — extracts C2 URLs, ports, and mutex names from decrypted config
+
+The AI correlates field names with known AsyncRAT config patterns: *"This is AsyncRAT v0.5.7B. The C2 server is 192.168.1[.]100:8808, with a backup at evil-c2[.]com:443. The mutex is 'AsyncMutex_6SI8OkPnk'. The AES-256 key was found in the Settings.Key field and the encrypted config was stored in Settings.Host, Settings.Port, and Settings.Pastebin fields."*
+
+### Scenario 3: Analysing a Multi-Stage Dropper with Shellcode
+
+**The situation:** A threat intel analyst has a PE dropper that unpacks multiple stages. Stage 1 is a packed PE, Stage 2 is XOR-encrypted shellcode in the overlay, and Stage 3 is a DLL downloaded to memory.
+
+**With PeMCP:**
+```
+Analyst: "This looks like a multi-stage dropper. Help me unpack each stage."
+```
+PeMCP chains operations:
+1. `open_file("dropper.exe")` — parses PE, background CFG starts
+2. `get_triage_report()` — identifies high entropy sections, overlay data, suspicious imports (`VirtualAlloc`, `WriteProcessMemory`)
+3. `detect_packing()` — confirms UPX packing on Stage 1
+4. `auto_unpack_pe()` — unpacks Stage 1 via Un{i}packer
+5. `refinery_pe_operations(operation='overlay')` — extracts Stage 2 from overlay
+6. `refinery_xor(operation='guess_key')` — auto-detects the XOR key used on Stage 2
+7. `refinery_xor(operation='apply', key_hex='...')` — decrypts Stage 2 shellcode
+8. `refinery_executable(operation='disassemble')` — disassembles the decrypted shellcode
+9. `emulate_shellcode_with_speakeasy()` — emulates the shellcode to capture API calls and network activity
+10. `refinery_extract_iocs()` — extracts the Stage 3 download URL from emulation output
+
+Each stage's findings are recorded with `auto_note_function()` and `add_note()`, so `get_analysis_digest()` provides a complete picture at any time.
+
+### Scenario 4: Investigating a Go Binary on Linux
+
+**The situation:** An IR team recovers a suspicious ELF binary from a compromised Linux server. It's a stripped Go binary with no symbols.
+
+**With PeMCP:**
+```
+Analyst: "Analyse this Linux binary — it might be a backdoor"
+```
+1. `open_file("suspicious_elf")` — auto-detects ELF format
+2. `elf_analyze()` — ELF headers, sections, segments, dynamic deps
+3. `go_analyze()` — recovers Go compiler version, packages, and function names from `pclntab` (works on stripped binaries)
+4. `get_triage_report()` — ELF-specific security checks (PIE, NX, RELRO, stack canaries)
+5. `decompile_function_with_angr(address)` — decompile suspicious functions identified by package names
+6. `refinery_extract_iocs()` — extract hardcoded IPs, domains, URLs
+7. `get_capa_analysis_info()` — map capabilities to MITRE ATT&CK (file manipulation, process injection, network communication)
+
+The AI recognises Go package names like `net/http`, `os/exec`, `crypto/tls` and correlates them with the decompiled functions: *"This is a Go-based reverse shell (compiled with Go 1.21.4). It establishes a TLS connection to C2 at 10.0.0[.]50:4443, receives commands via HTTP POST, and executes them via os/exec. It also has file exfiltration capabilities via the archive/zip package."*
+
+### Scenario 5: Bulk IOC Extraction from a Forensic PCAP
+
+**The situation:** An incident responder has a PCAP capture from a compromised network segment and needs to extract all malicious indicators.
+
+**With PeMCP:**
+```
+Analyst: "Extract all IOCs and embedded files from this PCAP"
+```
+1. `refinery_forensic(operation='pcap')` — reassembles TCP streams, identifies protocols
+2. `refinery_forensic(operation='pcap_http')` — extracts HTTP transactions with URLs, methods, and response bodies
+3. `refinery_extract(operation='embedded')` — auto-detects embedded PE files, ZIPs, scripts in the extracted streams
+4. `refinery_extract_iocs()` — extracts all URLs, IPs, domains, email addresses, hashes
+5. `refinery_forensic(operation='defang')` — defangs all IOCs for safe sharing in reports
+
+For each carved PE file, the analyst can immediately:
+```
+Analyst: "Open this carved PE and analyse it"
+```
+6. `open_file(carved_pe)` → `get_triage_report()` → `get_focused_imports()` → full analysis chain
+
+---
+
+## PeMCP vs Traditional Tools
+
+### Comparison Matrix
+
+| Capability | PeMCP | Ghidra | IDA Pro | pestudio | CyberChef | Binary Refinery CLI |
+|---|---|---|---|---|---|---|
+| **PE/ELF/Mach-O parsing** | 151 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
+| **Decompilation** | Angr (auto, all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No | No | No |
+| **Symbolic execution** | Angr (automated) | Limited (Ghidra scripts) | No | No | No | No |
+| **Data transforms** | 200+ via Binary Refinery | Manual scripting | Manual scripting | No | 300+ (manual) | 200+ (CLI) |
+| **String analysis** | FLOSS + StringSifter ML ranking | Built-in (basic) | Built-in (basic) | Basic | No | Basic |
+| **Signature scanning** | YARA + Capa + PEiD | YARA (plugin) | FLIRT signatures | Signatures | No | No |
+| **Emulation** | Speakeasy + Qiling + Angr | Emulator (limited) | No | No | No | No |
+| **AI reasoning** | Native (MCP protocol) | No | No | No | No | No |
+| **Session persistence** | Notes + history + cache | Project files | IDB files | No | No | No |
+| **Learning curve** | Natural language | Months | Months | Low | Moderate | Moderate |
+| **Cost** | Free & open source | Free | $1,800+/year | Free | Free | Free |
+
+### How PeMCP Complements (Not Replaces) Existing Tools
+
+PeMCP is not meant to fully replace Ghidra or IDA Pro — those tools remain essential for deep interactive reverse engineering sessions where you need to manually rename variables, annotate code, and navigate complex control flow graphs in a visual GUI. Instead, PeMCP excels in different parts of the analysis lifecycle:
+
+**Where PeMCP excels over Ghidra/IDA:**
+- **Speed of initial triage** — PeMCP produces a comprehensive risk assessment in seconds. Ghidra takes 30+ seconds just to load and auto-analyse a binary, and IDA's auto-analysis can take minutes on large files.
+- **Automated IOC extraction** — PeMCP extracts URLs, IPs, domains, hashes, and file paths automatically. In Ghidra/IDA, this requires custom scripts or manual searching.
+- **Data transformation chains** — Decoding nested Base64 → XOR → zlib payloads is a single `refinery_pipeline` call. In Ghidra, you'd write a Jython script. In IDA, an IDAPython script. In CyberChef, you'd manually build a recipe.
+- **Cross-tool correlation** — PeMCP's AI automatically connects findings: "The XOR key found in the .rdata section matches the key used to decrypt the config extracted from the .NET resources." No other tool does this automatically.
+- **Multi-format support in one interface** — Analyse PE, ELF, Mach-O, .NET, Go, and Rust binaries without switching tools or learning different workflows.
+- **Accessibility** — A junior analyst can ask "What does this function do?" and get an explanation. In Ghidra, they'd need to understand the decompiler output themselves.
+
+**Where Ghidra/IDA still excel:**
+- **Interactive visual navigation** — Ghidra's graph view, cross-reference browser, and function call trees are unmatched for manual code exploration.
+- **Type reconstruction** — IDA's Hex-Rays decompiler produces higher-fidelity C pseudocode with better type propagation than Angr's decompiler.
+- **Plugin ecosystems** — Ghidra has GhidraScript/Pyhidra, IDA has IDAPython — mature scripting for custom analysis workflows.
+- **Debugging** — Both support live debugging. PeMCP is static/emulation-only.
+
+**The ideal workflow combines both:**
+1. **PeMCP for triage and automated analysis** — Get the risk assessment, extract IOCs, identify interesting functions, decode obfuscated data.
+2. **Ghidra/IDA for targeted deep-dives** — When PeMCP identifies a critical function (e.g., "the decryption routine at 0x00401230"), open the binary in Ghidra to manually trace the algorithm and reconstruct data structures.
+
+### PeMCP vs CyberChef / Binary Refinery CLI
+
+CyberChef and Binary Refinery's command-line interface are powerful data transformation tools, but they require the analyst to know *which* transforms to apply and in *what order*. PeMCP wraps Binary Refinery's 200+ units behind an AI that can reason about the data:
+
+- **CyberChef** — Browser-based, visual recipe builder. Great for known transform chains but requires manual operation selection. No binary analysis, no PE parsing, no decompilation.
+- **Binary Refinery CLI** — Powerful pipe-based transforms (`data | b64 | xor[0x41] | zl`). Requires command-line expertise and knowledge of unit names. No AI reasoning.
+- **PeMCP** — Wraps Binary Refinery into 23 context-efficient MCP tools, adds AI reasoning, and combines with PE parsing, decompilation, emulation, and signature scanning. The AI can look at encrypted data, hypothesise the encryption scheme, try `refinery_xor(operation='guess_key')`, and if that fails, try `refinery_auto_decrypt()`, all without the analyst knowing which specific refinery units to use.
 
 ---
 
@@ -274,6 +470,40 @@ Once configured, you can interact with PeMCP through Claude Code naturally:
 11. **"Close the file"** — Claude calls `close_file` to free resources (notes and history are persisted to cache)
 
 API keys can be set interactively: *"Set my VirusTotal API key to abc123"* — Claude calls `set_api_key`, and the key persists across sessions.
+
+### Example Natural Language Queries
+
+PeMCP understands analytical intent, not just tool commands. Here are examples of what you can ask:
+
+**Triage & Classification:**
+- *"Is this file malicious? Give me a quick assessment."*
+- *"What kind of binary is this — is it a service, a DLL, an installer?"*
+- *"Show me the most suspicious imports — skip the boring Windows API stuff."*
+- *"What capabilities does MITRE ATT&CK map to this sample?"*
+
+**Data Decoding & Decryption:**
+- *"There's a Base64 blob at offset 0x1000 — decode it."*
+- *"This data looks XOR encrypted. Can you figure out the key?"*
+- *"Decode this: first Base64, then XOR with key 0x41, then decompress."* → uses `refinery_pipeline`
+- *"Decrypt this AES-CBC ciphertext. The key is in the .rdata section."*
+
+**Reverse Engineering:**
+- *"Decompile the function at 0x00401230 and explain what it does."*
+- *"What functions call VirtualAlloc? Which ones look suspicious?"*
+- *"Find all the string references in the main function."*
+- *"Is there shellcode injection happening? Check for VirtualAlloc → WriteProcessMemory patterns."*
+
+**Forensics & IOC Extraction:**
+- *"Extract all URLs, IPs, and domain names from this binary."*
+- *"Parse this PCAP file and show me the HTTP transactions."*
+- *"Extract the VBA macros from this Word document and deobfuscate them."*
+- *"What's in this Windows Event Log? Show me the security events."*
+
+**Multi-Stage Analysis:**
+- *"This binary has overlay data — extract and analyse it."*
+- *"Unpack this UPX-packed binary and re-analyse."*
+- *"The .NET resources contain an encrypted payload — extract and decrypt it."*
+- *"Emulate this shellcode and tell me what APIs it calls."*
 
 ---
 
@@ -768,7 +998,9 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 
 ### Binary Refinery — Data Transforms (23 tools)
 
-Composable binary data transformation tools powered by the [Binary Refinery](https://github.com/binref/refinery) library. All tools accept data as hex input or operate on the currently loaded file. **Only registered when binary-refinery is installed** (lazy registration saves context tokens when absent).
+PeMCP integrates the full power of [Binary Refinery](https://github.com/binref/refinery) — a library of **200+ composable binary transformation units** — through 23 context-efficient MCP tools. Binary Refinery is used extensively by professional malware analysts for tasks like decrypting multi-layer obfuscation, extracting payloads from documents, unpacking installers, and parsing forensic artifacts. PeMCP makes these capabilities accessible through natural language, with the AI selecting the right units automatically.
+
+All tools accept data as hex input or operate on the currently loaded file. **Only registered when binary-refinery is installed** (lazy registration saves context tokens when absent).
 
 > **Context efficiency:** 56 individual tools were consolidated into 23 using the dispatch pattern (`operation=...` parameter), saving ~33 tool definitions (~15-20K tokens) from the MCP catalog.
 
@@ -776,54 +1008,74 @@ Composable binary data transformation tools powered by the [Binary Refinery](htt
 
 | Tool | Description |
 |---|---|
-| `refinery_codec` | Encode or decode data (b64, hex, b32, b58, b62, b85, a85, b92, url, esc, u16, uuenc, etc.). Use `direction='decode'` (default) or `direction='encode'`. |
-| `refinery_decrypt` | Decrypt data using 35+ ciphers (AES, DES, RC4, Blowfish, ChaCha, Serpent, etc.). |
-| `refinery_xor` | XOR operations: `operation='apply'` with key, or `operation='guess_key'` for auto-detection. |
-| `refinery_decompress` | Decompress data (auto, zlib, bz2, lzma, lz4, brotli, zstd, aplib, lznt1, etc.). |
-| `refinery_extract_iocs` | Extract IOCs (URLs, IPs, domains, emails, hashes) from data. |
-| `refinery_carve` | Carve embedded data: `operation='pattern'` (b64, hex, b32, etc.) or `operation='files'` (PE, ZIP, 7z, etc.). |
-| `refinery_pe_operations` | PE-specific operations: overlay, meta, resources, strip, debloat, signature. |
-| `refinery_deobfuscate_script` | Deobfuscate scripts: ps1 (PowerShell), vba (VBA), js (JavaScript). |
-| `refinery_hash` | Compute hashes: md5, sha1, sha256, sha384, sha512, crc32, adler32. |
-| `refinery_pipeline` | Execute multi-step transformation pipelines (e.g. `['b64', 'xor:41', 'zl']`). |
-| `refinery_list_units` | List all available Binary Refinery unit categories and units. |
+| `refinery_codec` | Encode or decode data using 18 encodings (b64, hex, b32, b58, b62, b85, a85, b92, url, esc, u16, uuenc, netbios, cp1252, wshenc, morse, htmlesc, z85). Use `direction='decode'` (default) or `direction='encode'`. Covers the encoding schemes most commonly encountered in malware obfuscation. |
+| `refinery_decrypt` | Decrypt data using **35 cipher algorithms**: AES, DES, 3DES, RC4, Blowfish, Camellia, CAST, ChaCha20, Salsa20, Serpent, TEA/XTEA/XXTEA, RC2/RC5/RC6, SM4, Rabbit, SEAL, GOST, Fernet, Speck, HC-128/HC-256, ISAAC, Sosemanuk, Vigenere, ROT, Rijndael, Chaskey, and more. Supports ECB/CBC/CTR/CFB/OFB/GCM block modes. This covers virtually every encryption scheme found in real-world malware. |
+| `refinery_xor` | XOR operations — the single most common obfuscation in malware. `operation='apply'` to XOR with a known key, or `operation='guess_key'` to automatically detect the XOR key using frequency analysis and known-plaintext attacks. The key guessing is effective against single-byte, multi-byte, and rolling XOR schemes. |
+| `refinery_decompress` | Decompress data with 23 algorithms including auto-detection. Supports: zlib, bz2, LZMA, LZ4, Brotli, Zstandard, aPLib, LZNT1 (Windows NTFS compression), LZO, BriefLZ, LZF, LZJB, LZW, LZX (CAB), NRV (UPX), QuickLZ, SZDD (old MS), FastLZ, JCALG. The `auto` mode probes all formats. |
+| `refinery_extract_iocs` | Extract IOCs from binary data: URLs, IPv4/IPv6 addresses, domain names, email addresses, file paths, hostnames, MD5/SHA1/SHA256 hashes, and GUIDs. Uses Binary Refinery's `xtp` pattern extractor which is more accurate than simple regex matching. |
+| `refinery_carve` | Carve embedded data from binaries. `operation='pattern'` carves encoded blobs (Base64, hex, Base32, Base85, URL-encoded, int arrays, strings). `operation='files'` carves embedded file types (PE, ZIP, 7z, RTF, JSON, XML, LNK, DER certificates). Essential for extracting dropped payloads and embedded configs. |
+| `refinery_pe_operations` | PE-specific operations: extract overlay data (common payload hiding spot), extract PE metadata, extract resources, strip debug/certificate data, debloat inflated binaries, extract Authenticode signatures. |
+| `refinery_deobfuscate_script` | Deobfuscate malicious scripts: PowerShell (ps1), VBA macros (vba), and JavaScript (js). Uses dedicated deobfuscation engines that handle string concatenation, array lookups, arithmetic obfuscation, and encoding layers commonly used by malware droppers. |
+| `refinery_hash` | Compute cryptographic hashes: MD5, SHA-1, SHA-256, SHA-384, SHA-512, CRC32, Adler32. |
+| `refinery_pipeline` | **Multi-step transformation chains** — execute an ordered sequence of transforms in a single call. Example: `['b64', 'xor:41', 'zl']` decodes Base64, XORs with key 0x41, then decompresses with zlib. Supports all encoding, compression, and cipher units. This mirrors Binary Refinery's pipe operator (`data \| b64 \| xor[0x41] \| zl`) in a single API call. |
+| `refinery_list_units` | Discovery tool — list all available Binary Refinery unit categories and units installed on the system, with counts per category. |
 
 #### Advanced Transforms (8 tools)
 
 | Tool | Description |
 |---|---|
-| `refinery_regex_extract` | Extract regex matches from binary data. |
-| `refinery_regex_replace` | Find and replace using regex in binary data. |
-| `refinery_auto_decrypt` | Auto-detect and decrypt XOR/SUB encrypted data. |
-| `refinery_key_derive` | Derive cryptographic keys (PBKDF2, HKDF, HMAC). |
-| `refinery_string_operations` | String/binary operations: snip, trim, replace, lower, upper, swapcase. |
-| `refinery_pretty_print` | Pretty-print structured data (JSON, XML, JavaScript). |
-| `refinery_decompile` | Decompile bytecode: `language='python'` (.pyc) or `language='autoit'` (.a3x). |
-| `refinery_extract_domains` | Extract DNS domain names from binary data. |
+| `refinery_regex_extract` | Extract regex matches from binary data with named group support. Useful for extracting structured data (config values, encoded strings) from decompiled code or memory dumps. |
+| `refinery_regex_replace` | Find and replace using regex in binary data with backreference support. |
+| `refinery_auto_decrypt` | **Automatic decryption** — uses frequency analysis, known plaintext attacks, and file signature detection to automatically recover XOR/SUB encryption keys and decrypt data. Particularly effective against malware that XOR-encrypts payloads with repeating keys. |
+| `refinery_key_derive` | Derive cryptographic keys from passwords using PBKDF2, HKDF, or HMAC with configurable hash algorithms (SHA-256, SHA-1, SHA-512, MD5). Essential for decrypting malware configs protected with password-derived keys. |
+| `refinery_string_operations` | Binary string operations: snip (byte slicing), trim, replace, case conversion. Useful for extracting sub-sections of decoded data. |
+| `refinery_pretty_print` | Pretty-print structured data (JSON, XML, JavaScript) for readability. Useful after decoding config files or protocol data. |
+| `refinery_decompile` | Decompile compiled scripts: Python bytecode (`.pyc` files) to source code, and AutoIt scripts (`.a3x` compiled scripts). Both are common vectors for malware distribution. |
+| `refinery_extract_domains` | Extract DNS domain names using wire-format parsing (more accurate than regex for DNS data). |
 
-#### .NET Analysis (1 dispatched tool)
+#### .NET Analysis (1 dispatched tool, 10 operations)
 
-| Tool | Description |
+The `refinery_dotnet` tool provides deep .NET/CLR analysis — critical for analysing the large volume of .NET malware (Agent Tesla, AsyncRAT, Quasar RAT, RedLine Stealer, and many more).
+
+| Tool | Operations |
 |---|---|
-| `refinery_dotnet` | .NET assembly analysis. `operation`: headers, resources, managed_resources, strings, blobs, disassemble, fields, arrays, sfx, deserialize. |
+| `refinery_dotnet` | **headers** — CLR metadata tables, assembly info, type/method definitions. **resources** — embedded .NET resources (images, configs, encrypted payloads). **managed_resources** — sub-files from ResourceManager containers. **strings** — all strings from #Strings and #US metadata streams. **blobs** — binary data from #Blob stream. **disassemble** — CIL/MSIL bytecode disassembly per method. **fields** — constant field values (where RATs store C2 URLs, encryption keys). **arrays** — byte-array initialisers (shellcode, encrypted payloads). **sfx** — unpack .NET single-file application bundles. **deserialize** — deserialize BinaryFormatter data to JSON. |
 
-#### Executable Operations (1 dispatched tool)
+#### Executable Operations (1 dispatched tool, 7 operations)
 
-| Tool | Description |
+| Tool | Operations |
 |---|---|
-| `refinery_executable` | Low-level binary analysis. `operation`: sections, virtual_read, file_to_virtual, disassemble, disassemble_cil, entropy_map, stego. |
+| `refinery_executable` | **sections** — extract sections/segments from PE, ELF, or Mach-O with entropy calculation per section. **virtual_read** — read bytes at a virtual address. **file_to_virtual** — convert file offset to virtual address (and back). **disassemble** — native disassembly (x86/x64/ARM) via Capstone. **disassemble_cil** — .NET CIL/MSIL bytecode disassembly. **entropy_map** — visual entropy heatmap of the binary (identifies packed/encrypted regions at a glance). **stego** — extract hidden data from images via LSB steganography. |
 
-#### Archive & Document Extraction (1 dispatched tool)
+#### Archive & Document Extraction (1 dispatched tool, 7 operations)
 
-| Tool | Description |
+The `refinery_extract` tool handles every container format commonly encountered in malware delivery chains.
+
+| Tool | Operations |
 |---|---|
-| `refinery_extract` | File extraction. `operation`: archive, installer, office, office_decrypt, xlm_deobfuscate, pdf, embedded. Use `sub_operation` for format-specific options. |
+| `refinery_extract` | **archive** — extract from ZIP, 7z, TAR, gzip, CAB, ISO, CPIO, CHM, ACE (with password support). **installer** — unpack NSIS, InnoSetup, PyInstaller, Nuitka, Node.js, ASAR, minidumps. **office** — extract OLE streams, VBA macros, VBA p-code, strings, text, metadata, Excel cells, RTF objects, OneNote attachments. **office_decrypt** — decrypt password-protected Office documents. **xlm_deobfuscate** — deobfuscate Excel 4.0 (XLM) macros. **pdf** — extract objects and streams from PDFs (with optional decryption). **embedded** — auto-detect and extract all embedded files (PE, ZIP, ELF, PDF, OLE). |
 
-#### Forensic Parsing (1 dispatched tool)
+#### Forensic Parsing (1 dispatched tool, 9 operations)
 
-| Tool | Description |
+| Tool | Operations |
 |---|---|
-| `refinery_forensic` | Forensic analysis. `operation`: pcap, pcap_http, evtx, registry, lnk, defang, url_guards, protobuf, msgpack. |
+| `refinery_forensic` | **pcap** — parse PCAP files and reassemble TCP streams. **pcap_http** — extract HTTP requests/responses with URLs, methods, and bodies. **evtx** — parse Windows Event Log files. **registry** — parse Windows Registry hives (SAM, SYSTEM, NTUSER.DAT). **lnk** — parse Windows shortcut files (common malware delivery vector). **defang** — defang IOCs for safe sharing in reports. **url_guards** — strip URL protection wrappers (Microsoft SafeLinks, ProofPoint, etc.). **protobuf** — decode Protocol Buffer messages without a schema. **msgpack** — decode MessagePack binary data to JSON. |
+
+#### Binary Refinery Power Combinations
+
+The real power of PeMCP's Binary Refinery integration emerges when tools are chained together. Here are patterns the AI uses automatically:
+
+**Decode multi-layer obfuscation:**
+`refinery_carve(pattern='b64')` → `refinery_xor(operation='guess_key')` → `refinery_decompress(algorithm='auto')` → `refinery_extract_iocs()`
+
+**Extract and analyse Office malware:**
+`refinery_extract(operation='office', sub_operation='vba')` → `refinery_deobfuscate_script(script_type='vba')` → `refinery_carve(pattern='b64')` → `refinery_extract_iocs()`
+
+**Decrypt .NET RAT configuration:**
+`refinery_dotnet(operation='fields')` → `refinery_dotnet(operation='arrays')` → `refinery_decrypt(algorithm='aes')` → `refinery_extract_iocs()`
+
+**Parse forensic artifacts:**
+`refinery_forensic(operation='pcap_http')` → `refinery_extract(operation='embedded')` → per-file: `open_file()` → `get_triage_report()`
 
 ### AI-Optimised Analysis — Streamlined Tools
 
@@ -941,12 +1193,12 @@ pemcp/
     ├── tools_history.py         — Tool invocation history (2 tools)
     ├── tools_session.py         — Session summary & analysis digest (3 tools)
     ├── tools_export.py          — Project export/import (2 tools)
-    ├── tools_refinery.py        — Binary Refinery core transforms (14 tools)
-    ├── tools_refinery_advanced.py — Refinery advanced transforms (9 tools)
-    ├── tools_refinery_dotnet.py — Refinery .NET analysis (10 tools)
-    ├── tools_refinery_executable.py — Refinery executable operations (7 tools)
-    ├── tools_refinery_extract.py — Refinery archive/document extraction (7 tools)
-    └── tools_refinery_forensic.py — Refinery forensic parsing (9 tools)
+    ├── tools_refinery.py        — Binary Refinery core transforms (11 tools)
+    ├── tools_refinery_advanced.py — Refinery advanced transforms (8 tools)
+    ├── tools_refinery_dotnet.py — Refinery .NET analysis (1 dispatched tool)
+    ├── tools_refinery_executable.py — Refinery executable operations (1 dispatched tool)
+    ├── tools_refinery_extract.py — Refinery archive/document extraction (1 dispatched tool)
+    └── tools_refinery_forensic.py — Refinery forensic parsing (1 dispatched tool)
 ```
 
 ### Design Principles
