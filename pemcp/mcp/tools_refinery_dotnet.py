@@ -6,46 +6,16 @@ deserialization, and single-file app unpacking.
 """
 import asyncio
 import hashlib
-import os
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import state, logger, Context, REFINERY_AVAILABLE
+from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
-from pemcp.mcp._format_helpers import _check_lib
-
-_MAX_OUTPUT_ITEMS = 500
-
-
-def _require_refinery(tool_name: str):
-    _check_lib("binary-refinery", REFINERY_AVAILABLE, tool_name, pip_name="binary-refinery")
-
-
-def _safe_decode(data: bytes) -> str:
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="replace")
-
-
-def _bytes_to_hex(data: bytes, max_len: int = 4096) -> str:
-    if len(data) > max_len:
-        return data[:max_len].hex() + f"...[truncated, {len(data)} bytes total]"
-    return data.hex()
-
-
-def _get_file_data() -> bytes:
-    if not state.pe_object:
-        raise RuntimeError("No file is loaded. Use open_file() first.")
-    raw = getattr(state.pe_object, "__data__", None)
-    if raw is None:
-        raw = getattr(state.pe_object, "get_data", lambda: None)()
-    if raw is None and state.filepath and os.path.isfile(state.filepath):
-        with open(state.filepath, "rb") as f:
-            raw = f.read()
-    if raw is None:
-        raise RuntimeError("Cannot access raw file data.")
-    return bytes(raw)
+from pemcp.mcp._refinery_helpers import (
+    _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
+    _get_file_data, _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
+    _MAX_OUTPUT_ITEMS,
+)
 
 
 # ===================================================================
@@ -62,6 +32,8 @@ async def refinery_dotnet_headers(
     Parses the CLR header, metadata tables, assembly info, type definitions,
     method definitions, and other .NET-specific structures. Works with both
     .NET Framework and .NET Core assemblies.
+
+    See also: dotnet_analyze() for pefile/dnfile-based .NET analysis.
 
     Args:
         ctx: The MCP Context object.
@@ -332,6 +304,8 @@ async def refinery_dotnet_disassemble(
     (CIL) instructions in a .NET assembly. Useful for understanding .NET
     malware behavior without a full decompiler.
 
+    See also: dotnet_disassemble_method() for pefile/dnfile-based per-method disassembly.
+
     Args:
         ctx: The MCP Context object.
 
@@ -566,10 +540,12 @@ async def refinery_dotnet_deserialize(
     _require_refinery("refinery_dotnet_deserialize")
 
     if data_hex:
-        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
-        data = bytes.fromhex(cleaned)
+        data = _hex_to_bytes(data_hex)
     else:
         data = _get_file_data()
+
+    if len(data) > _MAX_INPUT_SIZE:
+        raise RuntimeError(f"Input too large ({len(data)} bytes). Max {_MAX_INPUT_SIZE}.")
 
     await ctx.info(f"Deserializing .NET object ({len(data)} bytes)...")
 

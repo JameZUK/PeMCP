@@ -6,55 +6,18 @@ XLM deobfuscation, encrypted docs), and PDF operations.
 """
 import asyncio
 import hashlib
-import os
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import state, logger, Context, REFINERY_AVAILABLE
+from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
-from pemcp.mcp._format_helpers import _check_lib
+from pemcp.mcp._refinery_helpers import (
+    _require_refinery, _bytes_to_hex, _safe_decode,
+    _get_file_data, _get_data_from_hex_or_file,
+    _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
+)
 
-_MAX_INPUT_SIZE = 50 * 1024 * 1024  # 50 MB for archive operations
 _MAX_OUTPUT_ITEMS = 200
-
-
-def _require_refinery(tool_name: str):
-    _check_lib("binary-refinery", REFINERY_AVAILABLE, tool_name, pip_name="binary-refinery")
-
-
-def _bytes_to_hex(data: bytes, max_len: int = 4096) -> str:
-    if len(data) > max_len:
-        return data[:max_len].hex() + f"...[truncated, {len(data)} bytes total]"
-    return data.hex()
-
-
-def _safe_decode(data: bytes) -> str:
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="replace")
-
-
-def _get_file_data() -> bytes:
-    if not state.pe_object:
-        raise RuntimeError("No file is loaded. Use open_file() first.")
-    raw = getattr(state.pe_object, "__data__", None)
-    if raw is None:
-        raw = getattr(state.pe_object, "get_data", lambda: None)()
-    if raw is None and state.filepath and os.path.isfile(state.filepath):
-        with open(state.filepath, "rb") as f:
-            raw = f.read()
-    if raw is None:
-        raise RuntimeError("Cannot access raw file data.")
-    return bytes(raw)
-
-
-def _get_data_from_hex_or_file(data_hex: Optional[str]) -> bytes:
-    """Get data from a hex string or the currently loaded file."""
-    if data_hex:
-        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
-        return bytes.fromhex(cleaned)
-    return _get_file_data()
 
 
 # ===================================================================

@@ -1,113 +1,84 @@
 """MCP tools powered by Binary Refinery for low-level executable analysis.
 
-Covers section/segment extraction from PE/ELF/Mach-O, virtual address data
-reads, native disassembly, .NET CIL disassembly, entropy visualization,
-and image steganography extraction.
+Covers section/segment extraction, virtual address reading, native
+disassembly (x86/x64/ARM), CIL disassembly, entropy visualization,
+steganography detection, and image analysis.
 """
 import asyncio
 import hashlib
-import os
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import state, logger, Context, REFINERY_AVAILABLE
+from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
-from pemcp.mcp._format_helpers import _check_lib
-
-_MAX_OUTPUT_ITEMS = 200
-
-
-def _require_refinery(tool_name: str):
-    _check_lib("binary-refinery", REFINERY_AVAILABLE, tool_name, pip_name="binary-refinery")
-
-
-def _safe_decode(data: bytes) -> str:
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="replace")
-
-
-def _bytes_to_hex(data: bytes, max_len: int = 4096) -> str:
-    if len(data) > max_len:
-        return data[:max_len].hex() + f"...[truncated, {len(data)} bytes total]"
-    return data.hex()
-
-
-def _get_file_data() -> bytes:
-    if not state.pe_object:
-        raise RuntimeError("No file is loaded. Use open_file() first.")
-    raw = getattr(state.pe_object, "__data__", None)
-    if raw is None:
-        raw = getattr(state.pe_object, "get_data", lambda: None)()
-    if raw is None and state.filepath and os.path.isfile(state.filepath):
-        with open(state.filepath, "rb") as f:
-            raw = f.read()
-    if raw is None:
-        raise RuntimeError("Cannot access raw file data.")
-    return bytes(raw)
-
-
-def _get_data_from_hex_or_file(data_hex: Optional[str]) -> bytes:
-    if data_hex:
-        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
-        return bytes.fromhex(cleaned)
-    return _get_file_data()
+from pemcp.mcp._refinery_helpers import (
+    _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
+    _get_file_data, _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
+)
 
 
 # ===================================================================
-#  1. SECTION/SEGMENT EXTRACTION
+#  1. SECTION / SEGMENT EXTRACTION
 # ===================================================================
 
 @tool_decorator
 async def refinery_extract_sections(
     ctx: Context,
-    data_hex: Optional[str] = None,
+    limit: int = 50,
 ) -> Dict[str, Any]:
     """
-    Extract all sections/segments from a PE, ELF, or Mach-O binary using Binary Refinery.
+    Extract individual sections/segments from PE, ELF, or Mach-O binaries using Binary Refinery.
 
-    Returns each section as a separate item with name, virtual address,
-    size, entropy, and raw data hash. Works across all major executable formats.
+    Works across all major executable formats. Each extracted section includes
+    its name, virtual address, raw size, and entropy. This is format-agnostic
+    unlike pefile-based section extraction.
+
+    See also: get_section_permissions() for PE-specific section analysis with anomaly detection,
+    analyze_entropy_by_offset() for PE-specific entropy analysis.
 
     Args:
         ctx: The MCP Context object.
-        data_hex: (Optional[str]) Binary data as hex. If None, uses loaded file.
+        limit: (int) Max sections to extract. Default 50.
 
     Returns:
-        Dictionary with extracted sections and their metadata.
+        Dictionary with extracted section metadata and content previews.
     """
     _require_refinery("refinery_extract_sections")
+    _check_pe_loaded("refinery_extract_sections")
 
-    data = _get_data_from_hex_or_file(data_hex)
+    data = _get_file_data()
     await ctx.info(f"Extracting sections from binary ({len(data)} bytes)...")
 
     def _run():
         from refinery.units.formats.exe.vsect import vsect
         import math
+        from collections import Counter
+
         results = []
         for chunk in data | vsect():
             raw = bytes(chunk)
-            # Compute entropy
-            if raw:
-                from collections import Counter
-                counts = Counter(raw)
-                length = len(raw)
-                entropy = -sum((c / length) * math.log2(c / length) for c in counts.values())
-            else:
-                entropy = 0.0
-
             entry: Dict[str, Any] = {
                 "size": len(raw),
                 "sha256": hashlib.sha256(raw).hexdigest(),
-                "entropy": round(entropy, 3),
             }
             if hasattr(chunk, 'meta') and isinstance(chunk.meta, dict):
-                for key in ('name', 'vaddr', 'offset', 'type', 'flags'):
+                for key in ('name', 'vaddr', 'offset', 'type', 'flags', 'path'):
                     if key in chunk.meta:
                         entry[key] = str(chunk.meta[key])
+
+            # Compute entropy
+            if raw:
+                length = len(raw)
+                entropy = 0.0
+                for count in Counter(raw).values():
+                    p = count / length
+                    entropy -= p * math.log2(p)
+                entry["entropy"] = round(entropy, 4)
+
             entry["preview_hex"] = raw[:64].hex()
             results.append(entry)
+            if len(results) >= limit:
+                break
         return results
 
     results = await asyncio.to_thread(_run)
@@ -119,7 +90,7 @@ async def refinery_extract_sections(
 
 
 # ===================================================================
-#  2. VIRTUAL ADDRESS DATA READ
+#  2. VIRTUAL ADDRESS READ
 # ===================================================================
 
 @tool_decorator
@@ -131,12 +102,12 @@ async def refinery_virtual_read(
     """
     Read data at a virtual address from the loaded binary using Binary Refinery.
 
-    Resolves a virtual address (VA) in the binary and extracts the raw data
-    at that location. Works with PE, ELF, and Mach-O formats.
+    Reads raw bytes at a specified virtual memory address from a PE/ELF/MachO
+    binary. The address is resolved from the binary's section layout.
 
     Args:
         ctx: The MCP Context object.
-        address: (str) Virtual address as hex string (e.g. '0x401000').
+        address: (str) Virtual address as hex string (e.g. '0x00401000').
         size: (int) Number of bytes to read. Default 256.
 
     Returns:
@@ -146,139 +117,150 @@ async def refinery_virtual_read(
     _check_pe_loaded("refinery_virtual_read")
 
     data = _get_file_data()
-    addr_int = int(address, 0)
-    await ctx.info(f"Reading {size} bytes at VA {hex(addr_int)}...")
+    addr = int(address, 16) if isinstance(address, str) else address
+
+    await ctx.info(f"Reading {size} bytes at VA {hex(addr)}...")
 
     def _run():
         from refinery.units.formats.exe.vsnip import vsnip
-        return data | vsnip(addr_int, size) | bytes
+        return data | vsnip(addr, size) | bytes
 
     result = await asyncio.to_thread(_run)
     return {
-        "virtual_address": hex(addr_int),
+        "address": hex(addr),
         "requested_size": size,
         "actual_size": len(result),
-        "data_hex": _bytes_to_hex(result),
-        "data_text": _safe_decode(result)[:500],
+        "hex": _bytes_to_hex(result),
+        "text": _safe_decode(result)[:1000],
     }
 
 
 # ===================================================================
-#  3. VIRTUAL ADDRESS RESOLUTION
+#  3. FILE OFFSET TO VIRTUAL ADDRESS
 # ===================================================================
 
 @tool_decorator
-async def refinery_resolve_address(
+async def refinery_file_to_virtual(
     ctx: Context,
     offset: str,
 ) -> Dict[str, Any]:
     """
-    Convert a file offset to a virtual address (or vice versa) using Binary Refinery.
+    Convert a file offset to a virtual address using Binary Refinery.
 
-    Useful for correlating file offsets with runtime addresses when analyzing
-    disassembly output or debugging information.
+    Maps a raw file offset to its corresponding virtual address in the
+    loaded binary's memory layout. Useful for cross-referencing between
+    static analysis (file offsets) and dynamic analysis (virtual addresses).
 
     Args:
         ctx: The MCP Context object.
-        offset: (str) File offset or virtual address as hex (e.g. '0x1000').
+        offset: (str) File offset as hex string (e.g. '0x400').
 
     Returns:
-        Dictionary with resolved address information.
+        Dictionary with the corresponding virtual address.
     """
-    _require_refinery("refinery_resolve_address")
-    _check_pe_loaded("refinery_resolve_address")
+    _require_refinery("refinery_file_to_virtual")
+    _check_pe_loaded("refinery_file_to_virtual")
 
     data = _get_file_data()
-    offset_int = int(offset, 0)
-    await ctx.info(f"Resolving address {hex(offset_int)}...")
+    off = int(offset, 16) if isinstance(offset, str) else offset
+
+    await ctx.info(f"Converting file offset {hex(off)} to virtual address...")
 
     def _run():
         from refinery.units.formats.exe.vaddr import vaddr
-        return data | vaddr(offset_int) | bytes
+        return data | vaddr(off) | bytes
 
     result = await asyncio.to_thread(_run)
     return {
-        "input_offset": hex(offset_int),
-        "result_size": len(result),
-        "result_text": _safe_decode(result)[:500],
+        "file_offset": hex(off),
+        "output": _safe_decode(result).strip(),
     }
 
 
 # ===================================================================
-#  4. NATIVE DISASSEMBLY
+#  4. NATIVE DISASSEMBLY (x86/x64/ARM)
 # ===================================================================
 
 @tool_decorator
 async def refinery_disassemble(
     ctx: Context,
     data_hex: Optional[str] = None,
-    architecture: str = "x86",
-    count: int = 100,
+    count: int = 50,
 ) -> Dict[str, Any]:
     """
-    Disassemble binary code using Binary Refinery's asm sink (Capstone backend).
+    Disassemble binary code (x86, x64, ARM) using Binary Refinery.
 
-    Supports x86, x86_64, ARM, ARM64, MIPS, and PowerPC architectures.
-    Returns human-readable assembly listing.
+    Uses Capstone disassembly engine under the hood. Can disassemble raw
+    shellcode or code from the loaded binary. Auto-detects architecture
+    from PE/ELF headers when possible.
 
     Args:
         ctx: The MCP Context object.
-        data_hex: (Optional[str]) Machine code as hex. If None, uses loaded file data.
-        architecture: (str) Architecture: 'x86', 'x64', 'arm', 'arm64', 'mips', 'ppc'. Default 'x86'.
-        count: (int) Max instructions to disassemble. Default 100.
+        data_hex: (Optional[str]) Raw code as hex. If None, uses loaded file entry point.
+        count: (int) Max instructions to disassemble. Default 50.
 
     Returns:
         Dictionary with disassembly listing.
     """
     _require_refinery("refinery_disassemble")
 
-    data = _get_data_from_hex_or_file(data_hex)
-    if len(data) > 1024 * 1024:
-        data = data[:1024 * 1024]  # Cap at 1MB
+    if data_hex:
+        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
+        data = bytes.fromhex(cleaned)
+    else:
+        _check_pe_loaded("refinery_disassemble")
+        data = _get_file_data()
 
-    await ctx.info(f"Disassembling {len(data)} bytes ({architecture})...")
+    if len(data) > _MAX_INPUT_SIZE:
+        data = data[:_MAX_INPUT_SIZE]
+
+    await ctx.info(f"Disassembling {len(data)} bytes...")
 
     def _run():
         from refinery.units.sinks.asm import asm
-        # The asm unit auto-detects from PE headers if possible
         result = data | asm(count=count) | bytes
         return result
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
-        "architecture": architecture,
         "input_size": len(data),
-        "output_size": len(result),
         "disassembly": _safe_decode(result)[:8000],
     }, "refinery_disassemble")
 
 
 # ===================================================================
-#  5. .NET CIL DISASSEMBLY (VISUAL)
+#  5. .NET CIL DISASSEMBLY (DNASM)
 # ===================================================================
 
 @tool_decorator
-async def refinery_dotnet_disasm_visual(
+async def refinery_disassemble_cil(
     ctx: Context,
+    data_hex: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Produce a visual .NET CIL/MSIL disassembly listing using Binary Refinery.
+    Disassemble .NET CIL/MSIL bytecode to readable assembly using Binary Refinery's dnasm sink.
 
-    Uses the dnasm sink unit to produce a formatted, syntax-highlighted
-    disassembly of .NET Intermediate Language instructions. More visual
-    than the raw dnopc output.
+    Produces formatted CIL disassembly output with instruction offsets,
+    opcodes, and operands. Different from refinery_dotnet_disassemble
+    (dnopc) which extracts per-method; this produces a full listing.
 
     Args:
         ctx: The MCP Context object.
+        data_hex: (Optional[str]) .NET assembly as hex. If None, uses loaded file.
 
     Returns:
-        Dictionary with formatted CIL disassembly.
+        Dictionary with CIL disassembly text.
     """
-    _require_refinery("refinery_dotnet_disasm_visual")
-    _check_pe_loaded("refinery_dotnet_disasm_visual")
+    _require_refinery("refinery_disassemble_cil")
 
-    data = _get_file_data()
-    await ctx.info("Generating visual .NET CIL disassembly...")
+    if data_hex:
+        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
+        data = bytes.fromhex(cleaned)
+    else:
+        _check_pe_loaded("refinery_disassemble_cil")
+        data = _get_file_data()
+
+    await ctx.info("Disassembling .NET CIL bytecode...")
 
     def _run():
         from refinery.units.sinks.dnasm import dnasm
@@ -286,14 +268,14 @@ async def refinery_dotnet_disasm_visual(
 
     result = await asyncio.to_thread(_run)
     return await _check_mcp_response_size(ctx, {
-        "filepath": state.filepath,
+        "input_size": len(data),
         "output_size": len(result),
         "disassembly": _safe_decode(result)[:8000],
-    }, "refinery_dotnet_disasm_visual")
+    }, "refinery_disassemble_cil")
 
 
 # ===================================================================
-#  6. ENTROPY VISUALIZATION
+#  6. ENTROPY MAP
 # ===================================================================
 
 @tool_decorator
@@ -302,22 +284,32 @@ async def refinery_entropy_map(
     data_hex: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Generate a byte distribution / entropy heat map using Binary Refinery.
+    Generate an entropy distribution map of binary data using Binary Refinery.
 
-    Produces a visual entropy map showing the distribution of byte values
-    across the binary. High-entropy regions suggest encryption, compression,
-    or random data. Low-entropy regions suggest code or structured data.
+    Produces a visual entropy map showing byte distribution and entropy
+    per region. High-entropy regions suggest encrypted or compressed data.
+    Low-entropy regions suggest padding, null bytes, or structured data.
+
+    See also: analyze_entropy_by_offset() for PE-specific section-by-section entropy analysis.
 
     Args:
         ctx: The MCP Context object.
-        data_hex: (Optional[str]) Binary data as hex. If None, uses loaded file.
+        data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
 
     Returns:
         Dictionary with entropy map visualization.
     """
     _require_refinery("refinery_entropy_map")
 
-    data = _get_data_from_hex_or_file(data_hex)
+    if data_hex:
+        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
+        data = bytes.fromhex(cleaned)
+    else:
+        data = _get_file_data()
+
+    if len(data) > _MAX_INPUT_SIZE:
+        data = data[:_MAX_INPUT_SIZE]
+
     await ctx.info(f"Generating entropy map for {len(data)} bytes...")
 
     def _run():
@@ -333,7 +325,7 @@ async def refinery_entropy_map(
 
 
 # ===================================================================
-#  7. IMAGE STEGANOGRAPHY
+#  7. STEGANOGRAPHY
 # ===================================================================
 
 @tool_decorator
@@ -342,11 +334,11 @@ async def refinery_stego_extract(
     data_hex: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Extract steganographically hidden data from images using Binary Refinery.
+    Extract hidden data from images using Binary Refinery's steganography unit.
 
-    Extracts data hidden in the least significant bits (LSB) of RGBA
-    image channels. Supports PNG and BMP images commonly used in
-    steganographic malware delivery.
+    Attempts to extract data hidden in image pixels using common steganographic
+    techniques (LSB embedding in RGBA channels). Supports PNG and BMP images.
+    Malware campaigns sometimes use image steganography to hide payloads.
 
     Args:
         ctx: The MCP Context object.
@@ -357,7 +349,12 @@ async def refinery_stego_extract(
     """
     _require_refinery("refinery_stego_extract")
 
-    data = _get_data_from_hex_or_file(data_hex)
+    if data_hex:
+        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
+        data = bytes.fromhex(cleaned)
+    else:
+        data = _get_file_data()
+
     await ctx.info(f"Extracting steganographic data from image ({len(data)} bytes)...")
 
     def _run():

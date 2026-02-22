@@ -6,54 +6,17 @@ URL guard removal, and protocol buffer decoding.
 """
 import asyncio
 import hashlib
-import os
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import state, logger, Context, REFINERY_AVAILABLE
+from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
-from pemcp.mcp._format_helpers import _check_lib
-
-_MAX_INPUT_SIZE = 50 * 1024 * 1024  # 50 MB
-_MAX_OUTPUT_ITEMS = 500
-
-
-def _require_refinery(tool_name: str):
-    _check_lib("binary-refinery", REFINERY_AVAILABLE, tool_name, pip_name="binary-refinery")
-
-
-def _safe_decode(data: bytes) -> str:
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode("latin-1", errors="replace")
-
-
-def _bytes_to_hex(data: bytes, max_len: int = 4096) -> str:
-    if len(data) > max_len:
-        return data[:max_len].hex() + f"...[truncated, {len(data)} bytes total]"
-    return data.hex()
-
-
-def _get_file_data() -> bytes:
-    if not state.pe_object:
-        raise RuntimeError("No file is loaded. Use open_file() first.")
-    raw = getattr(state.pe_object, "__data__", None)
-    if raw is None:
-        raw = getattr(state.pe_object, "get_data", lambda: None)()
-    if raw is None and state.filepath and os.path.isfile(state.filepath):
-        with open(state.filepath, "rb") as f:
-            raw = f.read()
-    if raw is None:
-        raise RuntimeError("Cannot access raw file data.")
-    return bytes(raw)
-
-
-def _get_data_from_hex_or_file(data_hex: Optional[str]) -> bytes:
-    if data_hex:
-        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
-        return bytes.fromhex(cleaned)
-    return _get_file_data()
+from pemcp.mcp._refinery_helpers import (
+    _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
+    _get_file_data, _get_data_from_hex_or_file,
+    _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
+    _MAX_OUTPUT_ITEMS,
+)
 
 
 # ===================================================================
@@ -376,8 +339,7 @@ async def refinery_defang_iocs(
     _require_refinery("refinery_defang_iocs")
 
     try:
-        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
-        data = bytes.fromhex(cleaned)
+        data = _hex_to_bytes(data_hex)
     except (ValueError, TypeError):
         data = data_hex.encode("utf-8")
 
@@ -388,11 +350,11 @@ async def refinery_defang_iocs(
         return data | defang() | bytes
 
     result = await asyncio.to_thread(_run)
-    return {
+    return await _check_mcp_response_size(ctx, {
         "input_size": len(data),
         "output_size": len(result),
         "defanged_text": _safe_decode(result)[:8000],
-    }
+    }, "refinery_defang_iocs")
 
 
 @tool_decorator
@@ -417,8 +379,7 @@ async def refinery_strip_url_guards(
     _require_refinery("refinery_strip_url_guards")
 
     try:
-        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
-        data = bytes.fromhex(cleaned)
+        data = _hex_to_bytes(data_hex)
     except (ValueError, TypeError):
         data = data_hex.encode("utf-8")
 
@@ -429,11 +390,11 @@ async def refinery_strip_url_guards(
         return data | urlguards() | bytes
 
     result = await asyncio.to_thread(_run)
-    return {
+    return await _check_mcp_response_size(ctx, {
         "input_size": len(data),
         "output_size": len(result),
         "cleaned_text": _safe_decode(result)[:4000],
-    }
+    }, "refinery_strip_url_guards")
 
 
 # ===================================================================
