@@ -1,6 +1,6 @@
 # PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **113 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **184 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -41,7 +41,7 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 
 ### Advanced Binary Analysis (Powered by Angr)
 
-36 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
+39 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
 
 - **Decompilation** — Convert assembly into human-readable C-like pseudocode on the fly.
 - **Control Flow Graph (CFG)** — Generate and traverse function blocks and edges.
@@ -79,6 +79,7 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 - **pygore** — Go binary reverse engineering.
 - **rustbininfo** — Rust binary metadata extraction.
 - **pyelftools** — ELF and DWARF debug info parsing.
+- **Binary Refinery** — 56 tools for composable binary data transforms: encoding/decoding, crypto, compression, IOC extraction, PE/ELF/Mach-O section operations, .NET metadata, archive extraction, Office documents, PCAP/EVTX forensics, steganography, and multi-step pipelines.
 
 ### Session Continuity & AI Progress Tracking
 
@@ -100,7 +101,7 @@ PeMCP is designed for **large binary corpus analysis** where AI clients need to 
 
 ### Robust Architecture
 
-- **Modular Package** — Clean `pemcp/` package structure with 9 tool modules, separated concerns (parsers, MCP tools, CLI, configuration).
+- **Modular Package** — Clean `pemcp/` package structure with 33 tool modules, separated concerns (parsers, MCP tools, CLI, configuration).
 - **Docker-First Design** — No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Thread-Safe State** — Centralised `AnalyzerState` class with locking for concurrent access.
 - **Background Tasks** — Long-running operations (symbolic execution, Angr CFG) run asynchronously with heartbeat monitoring.
@@ -417,7 +418,7 @@ Optional packages can be added individually:
 - `pip install rapidfuzz` — Fuzzy string search
 - `pip install flare-capa` — Capability detection
 - `pip install flare-floss vivisect` — Advanced string extraction
-- `pip install flare-stringsifter joblib numpy` — ML-based string ranking
+- `pip install stringsifter joblib numpy` — ML-based string ranking
 - `pip install "angr[unicorn]"` — Decompilation, CFG, symbolic execution
 - `pip install lief` — Multi-format binary parsing (PE/ELF/Mach-O)
 - `pip install capstone` — Multi-architecture disassembly
@@ -432,6 +433,7 @@ Optional packages can be added individually:
 - `pip install unipacker` — Automatic PE unpacking
 - `pip install qiling` — Cross-platform binary emulation (requires isolated venv with unicorn 1.x)
 - `pip install dotnetfile` — .NET PE metadata
+- `pip install binary-refinery` — Composable binary data transforms (encoding, crypto, compression, IOC extraction)
 
 ---
 
@@ -574,7 +576,7 @@ docker run --rm -i \
 
 ## MCP Tools Reference
 
-PeMCP exposes **113 tools** organised into the following categories.
+PeMCP exposes **184 tools** organised into the following categories.
 
 ### File Management & Sample Discovery
 
@@ -599,7 +601,7 @@ PeMCP exposes **113 tools** organised into the following categories.
 | `clear_analysis_cache` | Clear the entire disk-based analysis cache. |
 | `remove_cached_analysis` | Remove a specific cached analysis by SHA256 hash. |
 
-### PE Structure Analysis (5 tools)
+### PE Structure Analysis (3 tools)
 
 | Tool | Description |
 |---|---|
@@ -637,7 +639,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 
 > **Note:** PEiD matches and YARA matches are now accessed via `get_pe_data(key='peid_matches')` and `get_pe_data(key='yara_matches')`.
 
-### String Analysis (10 tools)
+### String Analysis (11 tools)
 
 | Tool | Description |
 |---|---|
@@ -650,7 +652,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `get_string_usage_context` | Disassembly context showing where a string is used. |
 | `fuzzy_search_strings` | Fuzzy matching to find similar strings. |
 | `find_and_decode_encoded_strings` | Multi-layer Base64/Hex/XOR decoding with heuristics. |
-| `search_binary_content` | Search for byte patterns, regex, or strings across the raw binary. |
+| `get_strings_summary` | Categorised string intelligence — groups strings by type (URLs, IPs, file paths, registry keys, mutex names, base64 blobs) with counts and top examples. |
 
 ### Triage & Forensics
 
@@ -669,7 +671,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `is_mostly_printable_ascii` | Check if a string is mostly printable. |
 | `get_hex_dump` | Hex dump of a file region. |
 
-### Binary Analysis — Core Angr (15 tools)
+### Binary Analysis — Core Angr (16 tools)
 
 | Tool | Description |
 |---|---|
@@ -688,8 +690,9 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `get_global_data_refs` | Global memory addresses read/written by a function. |
 | `scan_for_indirect_jumps` | Indirect jumps/calls (dynamic control flow) in a function. |
 | `patch_binary_memory` | Patch the loaded binary in memory with new bytes. |
+| `get_cross_reference_map` | Multi-dimensional cross-reference — for one or more functions, returns API calls, string refs, callers, callees, suspicious imports, and complexity in a single response. |
 
-### Binary Analysis — Extended Angr (22 tools)
+### Binary Analysis — Extended Angr (23 tools)
 
 | Tool | Description |
 |---|---|
@@ -715,6 +718,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `detect_packing` | Heuristic packing/encryption detection. |
 | `save_patched_binary` | Save a patched binary to disk. |
 | `identify_cpp_classes` | Recover C++ vtables and class hierarchies. |
+| `get_function_map` | Smart function ranking — scores every function by interestingness (complexity, suspicious API calls, string refs, xref count) and groups by purpose. |
 
 ### Extended Library Tools (13 tools)
 
@@ -734,7 +738,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `scan_for_embedded_files` | Detect embedded files/firmware with Binwalk. |
 | `get_extended_capabilities` | List all available tools and library versions. |
 
-### Qiling Cross-Platform Emulation (8 tools)
+### Qiling Cross-Platform Emulation (7 tools)
 
 | Tool | Description |
 |---|---|
@@ -761,6 +765,96 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `elf_analyze` | Comprehensive ELF analysis: headers, sections, segments, symbols, dynamic deps. |
 | `elf_dwarf_info` | Extract DWARF debug info: compilation units, functions, source files. |
 | `macho_analyze` | Mach-O analysis: headers, load commands, segments, symbols, dylibs, code signatures. |
+
+### Binary Refinery — Data Transforms (56 tools)
+
+Composable binary data transformation tools powered by the [Binary Refinery](https://github.com/binref/refinery) library. All tools accept data as hex input or operate on the currently loaded file.
+
+#### Core Transforms (14 tools)
+
+| Tool | Description |
+|---|---|
+| `refinery_decode` | Decode data using Binary Refinery encoding units (base64, hex, base32, base58, etc.). |
+| `refinery_encode` | Encode data using Binary Refinery encoding units (reverse mode). |
+| `refinery_decrypt` | Decrypt data using Binary Refinery cipher units (AES, DES, RC4, Blowfish, etc.). |
+| `refinery_xor` | Apply XOR with a single-byte or multi-byte key. |
+| `refinery_xor_guess_key` | Automatically guess the XOR key used to encrypt data. |
+| `refinery_decompress` | Decompress data (zlib, gzip, LZMA, bzip2, aplib, etc.). |
+| `refinery_extract_iocs` | Extract indicators of compromise (URLs, IPs, domains, emails, hashes) from data. |
+| `refinery_carve` | Carve and optionally decode embedded patterns from data. |
+| `refinery_carve_files` | Carve embedded files from data. |
+| `refinery_pe_operations` | Perform PE-specific operations (overlay extraction, resource carving, etc.). |
+| `refinery_deobfuscate_script` | Deobfuscate scripts using specialised deobfuscation units. |
+| `refinery_hash` | Compute hashes (MD5, SHA1, SHA256, CRC32, imphash, etc.). |
+| `refinery_pipeline` | Execute a multi-step transformation pipeline. |
+| `refinery_list_units` | List all available Binary Refinery unit categories and units. |
+
+#### Advanced Transforms (9 tools)
+
+| Tool | Description |
+|---|---|
+| `refinery_regex_extract` | Extract data matching a regular expression from binary data. |
+| `refinery_regex_replace` | Find and replace using regex in binary data. |
+| `refinery_auto_decrypt` | Automatically detect and decrypt XOR/SUB encrypted data. |
+| `refinery_key_derive` | Derive cryptographic keys from passwords (PBKDF2, etc.). |
+| `refinery_string_operations` | Perform string/binary operations on data. |
+| `refinery_pretty_print` | Pretty-print structured data. |
+| `refinery_decompile_python` | Decompile Python bytecode (.pyc) files. |
+| `refinery_decompile_autoit` | Decompile AutoIt scripts (.a3x). |
+| `refinery_extract_domains` | Extract DNS domain names from binary data. |
+
+#### .NET Analysis (10 tools)
+
+| Tool | Description |
+|---|---|
+| `refinery_dotnet_headers` | Extract .NET CLR metadata headers from a PE file. |
+| `refinery_dotnet_resources` | Extract .NET managed resources. |
+| `refinery_dotnet_managed_resources` | Extract sub-files from .NET managed resource containers. |
+| `refinery_dotnet_strings` | Extract strings from .NET metadata streams. |
+| `refinery_dotnet_blobs` | Extract blobs from the .NET #Blob metadata stream. |
+| `refinery_dotnet_disassemble` | Disassemble .NET CIL/MSIL bytecode. |
+| `refinery_dotnet_fields` | Extract constant field values from .NET assemblies. |
+| `refinery_dotnet_arrays` | Extract .NET array initialiser data. |
+| `refinery_dotnet_sfx` | Extract files from .NET single-file applications. |
+| `refinery_dotnet_deserialize` | Deserialise .NET BinaryFormatter data to JSON. |
+
+#### Executable Operations (7 tools)
+
+| Tool | Description |
+|---|---|
+| `refinery_extract_sections` | Extract individual sections/segments from PE, ELF, or Mach-O binaries. |
+| `refinery_virtual_read` | Read data at a virtual address from the loaded binary. |
+| `refinery_file_to_virtual` | Convert a file offset to a virtual address. |
+| `refinery_disassemble` | Disassemble binary code (x86, x64, ARM). |
+| `refinery_disassemble_cil` | Disassemble .NET CIL/MSIL bytecode to readable assembly. |
+| `refinery_entropy_map` | Generate an entropy distribution map of binary data. |
+| `refinery_stego_extract` | Extract hidden data from images using steganography analysis. |
+
+#### Archive & Document Extraction (7 tools)
+
+| Tool | Description |
+|---|---|
+| `refinery_extract_archive` | Extract files from archives (ZIP, 7z, RAR, tar, etc.). |
+| `refinery_extract_installer` | Extract files from software installers and packed executables. |
+| `refinery_extract_office` | Extract content from Microsoft Office documents. |
+| `refinery_office_decrypt` | Decrypt password-protected Microsoft Office documents. |
+| `refinery_deobfuscate_xlm` | Deobfuscate Excel 4.0 (XLM) macros. |
+| `refinery_extract_pdf` | Extract objects and streams from PDF files, optionally decrypting them. |
+| `refinery_extract_embedded` | Automatically detect and extract all embedded files from data. |
+
+#### Forensic Parsing (9 tools)
+
+| Tool | Description |
+|---|---|
+| `refinery_parse_pcap` | Parse PCAP files and reassemble TCP streams. |
+| `refinery_parse_pcap_http` | Extract HTTP requests and responses from PCAP files. |
+| `refinery_parse_evtx` | Parse Windows Event Log (.evtx) files. |
+| `refinery_parse_registry` | Parse Windows Registry hive files. |
+| `refinery_parse_lnk` | Parse Windows shortcut (.lnk) files. |
+| `refinery_defang_iocs` | Defang indicators of compromise for safe sharing. |
+| `refinery_strip_url_guards` | Remove URL protection/rewriting wrappers from URLs. |
+| `refinery_parse_protobuf` | Decode Protocol Buffer (protobuf) messages to JSON. |
+| `refinery_parse_msgpack` | Decode MessagePack binary data to JSON. |
 
 ### AI-Optimised Analysis — Streamlined Tools
 
@@ -809,8 +903,10 @@ Notes and tool history are the primary mechanism for preserving analysis context
 | `update_note` / `delete_note` | Modify or remove notes. |
 | `auto_note_function` | Auto-generate and save a one-line function summary from API patterns. |
 | `get_tool_history` | View the history of tools run during this session. |
+| `clear_tool_history` | Clear the tool invocation history for the current session. |
 | `get_session_summary` | Full session state: file info, notes, tool history, angr status, analysis phase. |
 | `get_analysis_digest` | Accumulated findings digest — what was *learned*, not just what tools ran. |
+| `get_progress_overview` | Lightweight progress snapshot — analysis phase, note count, tool history count, and coverage percentage. |
 | `export_project` | Export session (analysis + notes + history + optionally the binary) as `.pemcp_project.tar.gz`. |
 | `import_project` | Import a previously exported project archive. |
 
@@ -847,29 +943,41 @@ pemcp/
     ├── server.py                — MCP server setup & validation helpers
     ├── _angr_helpers.py         — Shared angr utilities (project/CFG init, address resolution)
     ├── _format_helpers.py       — Shared binary format helpers
-    ├── tools_pe.py              — File management & PE data retrieval
-    ├── tools_pe_extended.py     — Extended PE analysis (resources, manifests)
-    ├── tools_strings.py         — String analysis & fuzzy search
-    ├── tools_angr.py            — Core angr tools (decompile, CFG, symbolic exec)
-    ├── tools_angr_disasm.py     — Angr disassembly & function recovery
-    ├── tools_angr_dataflow.py   — Angr data flow analysis
-    ├── tools_angr_hooks.py      — Angr function hooking
-    ├── tools_angr_forensic.py   — Angr forensic & advanced analysis
-    ├── tools_new_libs.py        — LIEF/Capstone/Keystone/Speakeasy
-    ├── tools_qiling.py          — Qiling cross-platform emulation (8 tools)
-    ├── tools_dotnet.py          — .NET analysis (dnfile/dncil)
-    ├── tools_go.py              — Go binary analysis (pygore)
-    ├── tools_rust.py            — Rust binary analysis
-    ├── tools_elf.py             — ELF analysis (pyelftools)
-    ├── tools_macho.py           — Mach-O analysis (LIEF)
-    ├── tools_format_detect.py   — Auto binary format detection
-    ├── tools_virustotal.py      — VirusTotal API integration
-    ├── tools_deobfuscation.py   — Hex dump & deobfuscation tools
-    ├── tools_triage.py          — Comprehensive triage report
-    ├── tools_cache.py           — Analysis cache management
-    ├── tools_config.py          — Configuration & utility tools
-    ├── tools_classification.py  — Binary purpose classification
-    └── tools_samples.py         — Sample directory listing & discovery
+    ├── _refinery_helpers.py     — Shared Binary Refinery utilities (hex conversion, safety limits)
+    ├── _category_maps.py        — Category mappings for tool organisation
+    ├── tools_pe.py              — File management & PE data retrieval (7 tools)
+    ├── tools_pe_extended.py     — Extended PE analysis (14 tools)
+    ├── tools_strings.py         — String analysis, capa & fuzzy search (11 tools)
+    ├── tools_angr.py            — Core angr tools (16 tools)
+    ├── tools_angr_disasm.py     — Angr disassembly & function recovery (6 tools)
+    ├── tools_angr_dataflow.py   — Angr data flow analysis (5 tools)
+    ├── tools_angr_hooks.py      — Angr function hooking (3 tools)
+    ├── tools_angr_forensic.py   — Angr forensic & advanced analysis (9 tools)
+    ├── tools_new_libs.py        — LIEF/Capstone/Keystone/Speakeasy (13 tools)
+    ├── tools_qiling.py          — Qiling cross-platform emulation (7 tools)
+    ├── tools_dotnet.py          — .NET analysis (dnfile/dncil, 2 tools)
+    ├── tools_go.py              — Go binary analysis (pygore, 1 tool)
+    ├── tools_rust.py            — Rust binary analysis (2 tools)
+    ├── tools_elf.py             — ELF analysis (pyelftools, 2 tools)
+    ├── tools_macho.py           — Mach-O analysis (LIEF, 1 tool)
+    ├── tools_format_detect.py   — Auto binary format detection (1 tool)
+    ├── tools_virustotal.py      — VirusTotal API integration (1 tool)
+    ├── tools_deobfuscation.py   — Hex dump & deobfuscation tools (5 tools)
+    ├── tools_triage.py          — Comprehensive triage report (1 tool)
+    ├── tools_cache.py           — Analysis cache management (3 tools)
+    ├── tools_config.py          — Configuration & utility tools (4 tools)
+    ├── tools_classification.py  — Binary purpose classification (1 tool)
+    ├── tools_samples.py         — Sample directory listing & discovery (1 tool)
+    ├── tools_notes.py           — Persistent notes management (5 tools)
+    ├── tools_history.py         — Tool invocation history (2 tools)
+    ├── tools_session.py         — Session summary & analysis digest (3 tools)
+    ├── tools_export.py          — Project export/import (2 tools)
+    ├── tools_refinery.py        — Binary Refinery core transforms (14 tools)
+    ├── tools_refinery_advanced.py — Refinery advanced transforms (9 tools)
+    ├── tools_refinery_dotnet.py — Refinery .NET analysis (10 tools)
+    ├── tools_refinery_executable.py — Refinery executable operations (7 tools)
+    ├── tools_refinery_extract.py — Refinery archive/document extraction (7 tools)
+    └── tools_refinery_forensic.py — Refinery forensic parsing (9 tools)
 ```
 
 ### Design Principles
@@ -982,7 +1090,7 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 
 PeMCP has two layers of testing, with automated CI via **GitHub Actions**:
 
-- **Unit tests** (`tests/`) — 276 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrized edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
+- **Unit tests** (`tests/`) — 398 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrized edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
 - **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 113 MCP tools against a running server, organised into 20 test categories with pytest markers.
 - **CI/CD** (`.github/workflows/ci.yml`) — Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (60% floor), and syntax checking on every push and PR.
 

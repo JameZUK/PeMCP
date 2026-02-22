@@ -1,6 +1,6 @@
 # Testing Guide
 
-PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 113 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
+PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 184 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
 
 ---
 
@@ -66,7 +66,7 @@ pytest tests/ -v --cov=pemcp --cov-report=term-missing --cov-fail-under=60
 
 ## Unit Tests
 
-Unit tests live in the `tests/` directory and test individual functions and classes in isolation. They do **not** require a running MCP server, binary samples, or heavy optional dependencies like Angr, Capa, or FLOSS.
+Unit tests live in the `tests/` directory (398 tests across 18 files) and test individual functions and classes in isolation. They do **not** require a running MCP server, binary samples, or heavy optional dependencies like Angr, Capa, or FLOSS.
 
 ### Running Unit Tests
 
@@ -161,7 +161,15 @@ exclude_lines =
 | `test_parsers_strings.py` | `pemcp/parsers/strings.py` | 23 | `_extract_strings_from_data` (basic, min_length, offsets, empty, trailing, memoryview), `_search_specific_strings_in_data` (present/missing terms, offsets), `_format_hex_dump_lines` (format, address, ASCII, dots, multi-line), `_get_string_category` (IPv4, URL, domain, filepath, registry, email, none), `_decode_single_byte_xor` (known key, empty, random data) |
 | `test_mcp_helpers.py` | `pemcp/mcp/` helpers | 17 | `_parse_addr` (hex, decimal, invalid, empty, negative, zero), `_raise_on_error_dict` (passthrough, error dict, hint, non-dict, many-key dict), `_check_lib` (available, unavailable, custom pip name), `_check_pe_loaded` (no file, partial load, loaded), `_check_data_key_available` (present, missing, skipped analysis hint) |
 | `test_parametrized.py` | Multiple modules | 95+ | Parametrized tests for broader coverage: `shannon_entropy` (6 known values, 5 bounds checks), `format_timestamp` (4 valid, 7 invalid), `get_symbol_storage_class_str` (11 known + 4 unknown), `_get_string_category` (20 categorisation + 3 invalid IPs), `SSDeep` (5 format, 3 determinism), Levenshtein (8 known distances), string extraction (6 min_length variations), hex dump (6 line counts), path sandboxing (7 allow/deny combinations) |
-| `test_concurrency.py` | `pemcp/state.py` | 6 | Thread isolation (4 threads, barrier sync), concurrent task updates (200 tasks across 4 threads), concurrent angr state set/get consistency, path sandboxing under concurrent load (20 threads), `StateProxy` per-thread delegation (8 threads) |
+| `test_concurrency.py` | `pemcp/state.py` | 5 | Thread isolation (4 threads, barrier sync), concurrent task updates (200 tasks across 4 threads), concurrent angr state set/get consistency, path sandboxing under concurrent load (20 threads), `StateProxy` per-thread delegation (8 threads) |
+| `test_format_detect.py` | `pemcp/mcp/_format_helpers.py`, `tools_format_detect.py` | 22 | Binary format detection (PE, ELF, Mach-O, ZIP, PDF, GZIP) and language-specific marker comprehensiveness for Go and Rust |
+| `test_rust_tools.py` | `pemcp/mcp/tools_rust.py` | 7 | Rust binary analysis via string scanning on stripped binaries, including panic handlers, allocators, and version detection |
+| `test_streamline.py` | `pemcp/mcp/` (multiple) | 25 | Streamlined analysis tools: category maps, container detection, focused imports, strings summary, auto-notes, analysis digest, session phase detection |
+| `test_go_tools.py` | `pemcp/mcp/tools_go.py` | 14 | Go binary analysis helper functions for safe type conversions (`_safe_str`, `_safe_int`) |
+| `test_review_fixes.py` | Multiple modules | 65 | Comprehensive fixes: env var parsing, subprocess handling, regex validation, hook state, dataflow counters, safe dict access, regex timeouts, cache validation, IP filtering |
+| `test_triage_helpers.py` | `pemcp/mcp/tools_triage.py` | 14 | Triage helper functions for compiler/language detection (Go, Rust, .NET, MSVC, Delphi) and mode normalisation for PE parser output |
+| `test_truncation.py` | `pemcp/mcp/server.py` | 14 | MCP response size checking and smart truncation logic for large lists, strings, dicts, and deeply nested structures |
+| `test_auth.py` | `pemcp/auth.py` | 7 | Bearer token authentication middleware for ASGI with constant-time token comparison |
 
 ### Writing New Unit Tests
 

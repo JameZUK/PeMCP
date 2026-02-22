@@ -335,7 +335,7 @@ only available from GitHub, install it in the Dockerfile via
  1. angr[unicorn], nampa  → installs unicorn 2.x + archinfo, pyvex, cle, FLIRT parser
  2. flare-floss, capa, vivisect
  3. Core deps (pefile, requests, mcp, etc.)
- 4. Extended libs (lief, capstone, dnfile, dncil, etc.)
+ 4. Extended libs (lief, capstone, dnfile, dncil, binary-refinery, etc.)
  5. speakeasy-emulator    → isolated in /app/speakeasy-venv (unicorn 1.x)
  6. unipacker             → isolated in /app/unipacker-venv (unicorn 1.x)
  7. qiling                → isolated in /app/qiling-venv (unicorn 1.x)
