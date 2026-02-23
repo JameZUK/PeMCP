@@ -220,20 +220,66 @@ async def auto_name_sample(
 
     parts = []
 
-    # --- Binary type ---
+    # --- Binary type from PE headers (lightweight classification) ---
     mode = pe_data.get("mode", "unknown")
+    binary_class = None
     if "dll" in mode.lower():
         file_ext = ".dll"
         parts.append("dll")
-    elif "exe" in mode.lower():
-        file_ext = ".exe"
+        binary_class = "dll"
     elif "elf" in mode.lower():
         file_ext = ".elf"
-    else:
+        binary_class = "elf"
+    elif "shellcode" in mode.lower():
         file_ext = ".bin"
+        binary_class = "shellcode"
+    else:
+        file_ext = ".exe"
+        # Determine binary class from PE headers
+        nt_headers = pe_data.get("nt_headers", {})
+        file_header = nt_headers.get("file_header", {}) if isinstance(nt_headers, dict) else {}
+        optional_header = nt_headers.get("optional_header", {}) if isinstance(nt_headers, dict) else {}
+        characteristics = file_header.get("characteristics", file_header.get("Characteristics", 0))
+        subsystem = optional_header.get("subsystem", optional_header.get("Subsystem", 0))
+        if isinstance(characteristics, dict):
+            characteristics = characteristics.get("Value", 0)
+        if isinstance(subsystem, dict):
+            subsystem = subsystem.get("Value", 0)
+        # Check DLL flag
+        if isinstance(characteristics, int) and characteristics & 0x2000:
+            file_ext = ".dll"
+            binary_class = "dll"
+            parts.append("dll")
+        elif subsystem == 1:
+            binary_class = "driver"
+            parts.append("driver")
+            file_ext = ".sys"
+        elif subsystem == 2:
+            binary_class = "gui"
+            parts.append("gui")
+        elif subsystem == 3:
+            binary_class = "console"
+            parts.append("console")
+        # Check for service imports
+        imports_data = pe_data.get("imports", [])
+        if isinstance(imports_data, list):
+            for dll_entry in imports_data:
+                if isinstance(dll_entry, dict):
+                    for sym in dll_entry.get("symbols", []):
+                        name = sym.get("name", "") if isinstance(sym, dict) else ""
+                        if name in ("StartServiceCtrlDispatcherA", "StartServiceCtrlDispatcherW",
+                                    "RegisterServiceCtrlHandlerA", "RegisterServiceCtrlHandlerW"):
+                            binary_class = "service"
+                            # Replace gui/console with service
+                            if parts and parts[0] in ("gui", "console"):
+                                parts[0] = "service"
+                            elif not parts:
+                                parts.append("service")
+                            break
+                    if binary_class == "service":
+                        break
 
-    # --- Classification ---
-    # Check notes for classification hints
+    # --- Malware classification from notes ---
     notes = state.get_notes()
     classification_keywords = {
         "ransomware": "ransom", "keylogger": "keylog", "backdoor": "backdoor",
@@ -252,22 +298,76 @@ async def auto_name_sample(
         if found_type:
             break
 
-    # Check suspicious imports for capability hints
+    # --- Behavioral capabilities from suspicious imports ---
+    # Broad mapping from import function substrings to capability labels
+    _IMPORT_CAPABILITY_MAP = {
+        # Anti-debug / anti-analysis
+        "isdebuggerpresent": "antidbg",
+        "checkremotedebugger": "antidbg",
+        "ntqueryinformationprocess": "antidbg",
+        "queryperformancecounter": "antidbg",
+        "gettickcount": "antidbg",
+        # Process manipulation
+        "terminateprocess": "procmgmt",
+        "openprocess": "procmgmt",
+        "createprocess": "procmgmt",
+        # Code injection
+        "createremotethread": "inject",
+        "writeprocessmemory": "inject",
+        "virtualallocex": "inject",
+        "ntunmapviewofsection": "inject",
+        # IPC / named pipes
+        "createnamedpipe": "namedpipe",
+        "connectnamedpipe": "namedpipe",
+        "callnamedpipe": "namedpipe",
+        # Keylogging / input hooking
+        "setwindowshookex": "keylog",
+        "getasynckeystate": "keylog",
+        "getkeystate": "keylog",
+        # Crypto
+        "cryptencrypt": "crypto",
+        "cryptdecrypt": "crypto",
+        "bcryptencrypt": "crypto",
+        "bcryptdecrypt": "crypto",
+        "cryptderivekey": "crypto",
+        # Networking
+        "internetopen": "net",
+        "httpsendrequest": "net",
+        "httpopen": "net",
+        "urldownloadtofile": "net",
+        "wsastartup": "net",
+        # Persistence
+        "createservice": "persist",
+        "regsetvalue": "persist",
+        "regcreatekey": "persist",
+        # Execution
+        "winexec": "exec",
+        "shellexecute": "exec",
+    }
+
     sus_imports = triage.get("suspicious_imports", [])
     capabilities = set()
     for imp in sus_imports:
         if isinstance(imp, dict):
             func = imp.get("function", "").lower()
-            if "key" in func and ("log" in func or "hook" in func or "input" in func):
-                capabilities.add("keylog")
-            if "crypt" in func:
-                capabilities.add("crypto")
-            if "internet" in func or "http" in func or "url" in func:
-                capabilities.add("net")
-            if "createservice" in func or "regset" in func:
-                capabilities.add("persist")
-            if "createremotethread" in func or "writeprocessmemory" in func:
-                capabilities.add("inject")
+            for pattern, label in _IMPORT_CAPABILITY_MAP.items():
+                if pattern in func:
+                    capabilities.add(label)
+                    break
+
+    # Also scan all imports directly (not just suspicious ones) for key behaviors
+    # This catches APIs like CreateNamedPipe that may not be in the suspicious DB
+    imports_data = pe_data.get("imports", [])
+    if isinstance(imports_data, list):
+        for dll_entry in imports_data:
+            if isinstance(dll_entry, dict):
+                for sym in dll_entry.get("symbols", []):
+                    func = sym.get("name", "") if isinstance(sym, dict) else ""
+                    func_lower = func.lower()
+                    for pattern, label in _IMPORT_CAPABILITY_MAP.items():
+                        if pattern in func_lower:
+                            capabilities.add(label)
+                            break
 
     # Scan capa capabilities for additional labels
     _CAPA_NAMESPACE_LABELS = {
@@ -294,10 +394,14 @@ async def auto_name_sample(
             if label:
                 capabilities.add(label)
 
+    # Add malware type or top capabilities to name
     if found_type:
         parts.append(found_type)
-    elif capabilities:
-        parts.append("_".join(sorted(capabilities)[:2]))
+    if capabilities:
+        # Add up to 3 capabilities (after type, if any)
+        for cap in sorted(capabilities)[:3]:
+            if cap not in parts:
+                parts.append(cap)
 
     # --- Risk level hint ---
     risk_level = triage.get("risk_level", "")
@@ -355,9 +459,11 @@ async def auto_name_sample(
     return {
         "suggested_name": suggested_name,
         "parts": {
-            "type": found_type or "unknown",
+            "binary_class": binary_class or "unknown",
+            "malware_type": found_type or "unknown",
             "capabilities": sorted(capabilities),
             "c2": bool(net_iocs and (net_iocs.get("ip_addresses") or net_iocs.get("domains"))),
             "packed": bool(packing and isinstance(packing, dict) and packing.get("likely_packed")),
+            "risk_level": risk_level or "unknown",
         },
     }
