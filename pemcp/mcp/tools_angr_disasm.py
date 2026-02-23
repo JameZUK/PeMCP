@@ -486,7 +486,33 @@ async def get_annotated_disassembly(
             if len(instructions) >= limit:
                 break
 
-        return {
+        # Fallback: when CFG function boundaries are wrong (common on packed
+        # code), lift a raw block at the address instead of returning <=1 insn.
+        warning = None
+        if len(instructions) <= 1:
+            try:
+                raw_block = state.angr_project.factory.block(addr_used)
+                fallback_insns = []
+                for insn in raw_block.capstone.insns:
+                    fallback_insns.append({
+                        "address": hex(insn.address),
+                        "bytes": insn.bytes.hex(),
+                        "mnemonic": insn.mnemonic,
+                        "op_str": insn.op_str,
+                    })
+                    if len(fallback_insns) >= limit:
+                        break
+                if len(fallback_insns) > len(instructions):
+                    instructions = fallback_insns
+                    warning = (
+                        "angr's CFG detected only 1 instruction for this function "
+                        "(common on packed/obfuscated code). Fell back to raw block "
+                        "disassembly. Use disassemble_at_address() for more control."
+                    )
+            except Exception:
+                pass
+
+        result = {
             "function_name": func.name,
             "address": hex(addr_used),
             "instruction_count": len(instructions),
@@ -496,6 +522,9 @@ async def get_annotated_disassembly(
                 "or add_note(content, category='tool_result') to record specific findings."
             ),
         }
+        if warning:
+            result["warning"] = warning
+        return result
 
     result = await asyncio.to_thread(_annotate)
     _raise_on_error_dict(result)

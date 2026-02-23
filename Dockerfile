@@ -177,7 +177,7 @@ RUN pip install --no-cache-dir \
 # Each installed separately so a failure in one doesn't block the others,
 # but combined into a single layer to reduce image layer count.
 RUN pip install --no-cache-dir dotnetfile || true && \
-    pip install --no-cache-dir binwalk || true && \
+    pip install --no-cache-dir binwalk3 || true && \
     pip install --no-cache-dir pygore || true
 
 # --- Patch oscrypto for OpenSSL 3.x compatibility (bookworm ships OpenSSL 3) ---

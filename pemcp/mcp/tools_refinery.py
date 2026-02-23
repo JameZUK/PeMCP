@@ -627,7 +627,7 @@ async def refinery_pe_operations(
 ) -> Dict[str, Any]:
     """PE-specific operations via Binary Refinery.
 
-    Operations: overlay, meta, resources, strip, debloat, signature.
+    Operations: overlay, meta, resources, strip, debloat, signature, fix.
 
     Args:
         ctx: MCP Context.
@@ -649,6 +649,7 @@ async def refinery_pe_operations(
         "strip": "refinery.units.formats.pe.pestrip:pestrip",
         "debloat": "refinery.units.formats.pe.pedebloat:pedebloat",
         "signature": "refinery.units.formats.pe.pesig:pesig",
+        "fix": "refinery.units.formats.pe.pefix:pefix",
     }
 
     if op not in _OP_MAP:

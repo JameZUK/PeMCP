@@ -59,8 +59,8 @@ dotnetfile>=0.2
 ppdeep>=20200401
 # Locality-sensitive hashing
 py-tlsh>=4.7
-# Embedded file/firmware detection (PyPI only has 2.1.0; 2.3+ is GitHub-only)
-binwalk>=2.1
+# Embedded file/firmware detection (v3 Rust rewrite, drop-in Python API via binwalk3)
+binwalk3>=3.1
 
 # --- .NET Binary Analysis (Optional) ---
 # .NET PE metadata parser (CLR headers, metadata tables, streams)
