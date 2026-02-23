@@ -536,6 +536,7 @@ async def get_function_map(
 
     Returns:
         A dictionary with scored, grouped functions and a suggested starting point.
+        Scores are normalized to 0-100 (min-max). Original values are in ``score_raw``.
     """
     from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB, RISK_ORDER, CATEGORY_DESCRIPTIONS
     from pemcp.mcp.server import _check_pe_loaded
@@ -669,6 +670,22 @@ async def get_function_map(
 
         # Sort by score descending
         scored_funcs.sort(key=lambda x: x['score'], reverse=True)
+
+        # Normalize scores to 0-100 (min-max), preserve originals as score_raw
+        if scored_funcs:
+            max_score = scored_funcs[0]['score']
+            min_score = scored_funcs[-1]['score']
+            for f in scored_funcs:
+                f['score_raw'] = f['score']
+            if len(scored_funcs) == 1:
+                scored_funcs[0]['score'] = 100
+            elif max_score == min_score:
+                for f in scored_funcs:
+                    f['score'] = 50
+            else:
+                span = max_score - min_score
+                for f in scored_funcs:
+                    f['score'] = round((f['score_raw'] - min_score) / span * 100)
 
         return scored_funcs
 

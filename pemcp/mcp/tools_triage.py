@@ -425,10 +425,17 @@ def _triage_suspicious_imports(indicator_limit: int) -> Tuple[Dict[str, Any], in
 #  Section 4 — Capa Capabilities (severity-mapped)
 # ===================================================================
 
-def _triage_capa_capabilities(indicator_limit: int) -> Tuple[List[Dict[str, Any]], int]:
-    """Extract capa MITRE ATT&CK capability matches."""
+def _triage_capa_capabilities(indicator_limit: int) -> Tuple[List[Dict[str, Any]], int, Optional[Dict[str, str]]]:
+    """Extract capa MITRE ATT&CK capability matches.
+
+    Returns:
+        (capabilities, risk_score, capa_status_info)
+        capa_status_info is None when capa succeeded, or a dict with
+        'status'/'error'/'hint' keys when capa failed or was unavailable.
+    """
     risk_score = 0
     capabilities: List[Dict[str, Any]] = []
+    capa_status_info: Optional[Dict[str, str]] = None
 
     CAPA_SEVERITY_MAP = {
         "anti-analysis": "High", "collection": "High",
@@ -461,8 +468,19 @@ def _triage_capa_capabilities(indicator_limit: int) -> Tuple[List[Dict[str, Any]
 
             capabilities.sort(key=lambda x: (x['severity'], x.get('capability', '')))
             capabilities = capabilities[:indicator_limit]
+        else:
+            # capa ran but failed — surface diagnostics
+            capa_status_info = {
+                "status": str(capa_analysis.get("status", "failed")),
+            }
+            if capa_analysis.get("error"):
+                capa_status_info["error"] = str(capa_analysis["error"])
+            if capa_analysis.get("hint"):
+                capa_status_info["hint"] = str(capa_analysis["hint"])
+    else:
+        capa_status_info = {"status": "not_available"}
 
-    return capabilities, risk_score
+    return capabilities, risk_score, capa_status_info
 
 
 # ===================================================================
@@ -1444,7 +1462,9 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
             suggested.append("detect_packing — run angr-based multi-heuristic packing analysis")
             suggested.append("get_pe_data(key='peid_matches') — review packer signatures")
         else:
-            if not triage_report["suspicious_capabilities"]:
+            if triage_report.get("capa_status"):
+                suggested.append("get_capa_analysis_info — capa failed during triage, re-run or check setup")
+            elif not triage_report["suspicious_capabilities"]:
                 suggested.append("get_capa_analysis_info — run capa for capability detection")
             suggested.append("find_and_decode_encoded_strings — hunt for obfuscated IOCs")
         if not found_ips and not found_urls:
@@ -1715,9 +1735,11 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 4. Capa Capabilities
     # ---------------------------------------------------------------
-    capa_data, delta = _triage_capa_capabilities(indicator_limit)
+    capa_data, delta, capa_status_info = _triage_capa_capabilities(indicator_limit)
     triage_report["suspicious_capabilities"] = capa_data
     risk_score += delta
+    if capa_status_info is not None:
+        triage_report["capa_status"] = capa_status_info
 
     # ---------------------------------------------------------------
     # 5. Network IOC Extraction
@@ -1880,6 +1902,11 @@ async def get_triage_report(
                 ioc_list = net.get(ioc_type, [])
                 if isinstance(ioc_list, list) and ioc_list:
                     findings.append(f"{ioc_type}: {', '.join(str(x) for x in ioc_list[:3])}")
+        # capa status — surface failures before capabilities
+        capa_st = triage_report.get("capa_status")
+        if isinstance(capa_st, dict):
+            err = capa_st.get("error", "")
+            findings.append(f"capa {capa_st.get('status', 'failed')}{': ' + err if err else ''}")
         # suspicious_capabilities is a list of dicts with 'capability', 'namespace', 'severity'
         caps = triage_report.get("suspicious_capabilities", [])
         if isinstance(caps, list):
