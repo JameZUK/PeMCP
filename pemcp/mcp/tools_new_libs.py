@@ -99,9 +99,12 @@ from pemcp.utils import _safe_slice  # noqa: E402 — canonical implementation i
 @tool_decorator
 async def parse_binary_with_lief(ctx: Context, file_path: Optional[str] = None) -> Dict[str, Any]:
     """
-    Parses a PE/ELF/Mach-O binary using LIEF for cross-format analysis.
+    [Phase: explore] Parses a PE/ELF/Mach-O binary using LIEF for cross-format analysis.
     Returns headers, sections, imports, exports, and format-specific metadata.
     Falls back to the currently loaded file if no path is given.
+
+    When to use: When you need cross-format binary parsing or an alternative view to pefile-based get_pe_data().
+    Next steps: Compare results with get_pe_data(), use decompile_function_with_angr() on interesting functions, add_note() for findings.
 
     Args:
         file_path: Optional path to any binary. If None, uses the loaded file.

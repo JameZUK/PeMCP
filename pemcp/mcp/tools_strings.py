@@ -56,7 +56,15 @@ async def search_floss_strings(
     case_sensitive: bool = False
 ) -> Dict[str, Any]:
     """
-    Performs a regex search against FLOSS strings, with advanced score filtering and sorting.
+    [Phase: explore] Performs a regex search against FLOSS strings with advanced
+    score filtering and sorting.
+
+    When to use: When looking for specific patterns in strings — network indicators
+    (IPs, URLs, domains), file paths, registry keys, or suspicious API references.
+    More targeted than get_strings_summary() or get_top_sifted_strings().
+
+    Next steps: If IOCs found → add_note(content, category='tool_result') to record them.
+    Use get_string_usage_context(string_offset) to find code that references a string.
 
     Args:
         ctx: The MCP Context object.
@@ -157,7 +165,15 @@ async def get_floss_analysis_info(ctx: Context,
                                   offset: Optional[int] = 0
                                  ) -> Dict[str, Any]:
     """
-    Retrieves FLOSS analysis results, with new option to filter for strings with code context.
+    [Phase: explore] Retrieves FLOSS analysis results with option to filter for
+    strings that have code cross-references.
+
+    When to use: When you need raw FLOSS string data (static, stack, tight, decoded)
+    or metadata about the FLOSS analysis. Use only_with_references=True to find
+    strings actually used in code (reduces noise significantly).
+
+    Next steps: Use get_string_usage_context(string_offset) for disassembly context
+    around a specific string, or search_floss_strings() for regex-based filtering.
 
     Args:
         ctx: The MCP Context object.
@@ -239,9 +255,14 @@ async def get_capa_analysis_info(ctx: Context,
                                  source_string_limit: Optional[int] = None
                                  ) -> Dict[str, Any]:
     """
-    Retrieves an overview of Capa capability rules, with filtering and pagination.
-    For each rule, 'matches' are summarized by a count of unique addresses found.
-    Use 'get_capa_rule_match_details' to fetch detailed match information for a specific rule.
+    [Phase: explore] Retrieves an overview of Capa capability rules with filtering
+    and pagination. Each rule's matches are summarized by unique address count.
+
+    When to use: After triage to explore detected capabilities (MITRE ATT&CK,
+    MBC). Filter by namespace (e.g. 'anti-analysis'), ATT&CK ID, or rule name.
+
+    Next steps: Use get_capa_rule_match_details(rule_id) to inspect specific match
+    locations, then decompile_function_with_angr() at those addresses.
 
     Args:
         ctx: The MCP Context object.
@@ -418,8 +439,13 @@ async def get_capa_rule_match_details(ctx: Context,
                                       feature_value_string_limit: Optional[int] = None
                                       ) -> Dict[str, Any]:
     """
-    Retrieves detailed match information for a single, specified Capa rule, with pagination and content control.
-    Handles cases where 'matches' in Capa output is a dictionary OR a list of match instances.
+    [Phase: deep-dive] Retrieves detailed match locations for a specific Capa rule.
+
+    When to use: After get_capa_analysis_info() identified interesting rules — use
+    this to find the exact code addresses where the capability was detected.
+
+    Next steps: decompile_function_with_angr() at match addresses to understand the
+    implementation, then auto_note_function() to record findings.
 
     Args:
         ctx: The MCP Context object.
@@ -589,7 +615,14 @@ async def extract_strings_from_binary(
     sort_by_score: bool = False
 ) -> List[Dict[str, Any]]:
     """
-    Extracts printable ASCII strings and can optionally rank them with StringSifter.
+    [Phase: explore] Extracts printable ASCII strings directly from the binary,
+    optionally ranking them with StringSifter for relevance.
+
+    When to use: When FLOSS data is unavailable or you need raw ASCII extraction
+    with ML scoring. Prefer get_floss_analysis_info() when FLOSS ran successfully.
+
+    Next steps: Use get_strings_summary() for categorized overview, or
+    search_for_specific_strings() to look for known IOC patterns.
 
     Prerequisites:
     - A PE file must have been successfully pre-loaded at server startup.
@@ -678,8 +711,14 @@ async def extract_strings_from_binary(
 @tool_decorator
 async def search_for_specific_strings(ctx: Context, search_terms: List[str], limit_per_term: Optional[int] = 100) -> Dict[str, List[str]]:
     """
-    Searches for occurrences of specific ASCII strings within the pre-loaded PE file's binary data.
-    'limit_per_term' controls occurrences per search term.
+    [Phase: explore] Searches for exact ASCII string occurrences in the binary data,
+    returning file offsets for each match.
+
+    When to use: When you have specific strings to locate (e.g. known C2 domains,
+    config markers, known malware strings). Case-sensitive exact matching.
+
+    Next steps: Use get_hex_dump(start_offset=<offset>) to inspect surrounding
+    data, or get_string_usage_context(string_offset) for code references.
 
     Prerequisites:
     - A PE file must have been successfully pre-loaded at server startup.
@@ -741,7 +780,14 @@ async def get_top_sifted_strings(
     filter_by_category: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Returns top-ranked strings from all sources with advanced, granular filtering.
+    [Phase: explore] Returns ML-ranked strings from all sources (FLOSS + basic ASCII)
+    with advanced filtering by score, length, regex, and category.
+
+    When to use: When you want the most relevant strings ranked by StringSifter ML
+    scoring. More powerful than get_strings_summary() for targeted filtering.
+
+    Next steps: Record IOCs with add_note(content, category='tool_result'). Use
+    get_string_usage_context() to trace how interesting strings are used in code.
 
     Args:
         ctx: The MCP Context object.
@@ -838,7 +884,14 @@ async def get_strings_for_function(
     limit: int = 100
 ) -> List[Dict[str, Any]]:
     """
-    Finds and returns all strings that are referenced by a specific function.
+    [Phase: deep-dive] Finds all strings referenced by a specific function via
+    FLOSS cross-reference data.
+
+    When to use: After decompiling a function, to understand what strings it uses
+    (config values, error messages, API names, URLs).
+
+    Next steps: auto_note_function(address) to record behavioral summary,
+    add_note() to record specific string-based IOCs found.
 
     Args:
         ctx: The MCP Context object.
@@ -888,8 +941,14 @@ async def get_string_usage_context(
     limit: int = 20
 ) -> List[Dict[str, Any]]:
     """
-    Finds a static string by its file offset and returns the disassembly
-    context for each location where it is referenced in code.
+    [Phase: deep-dive] Finds a static string by file offset and returns disassembly
+    context for each code location that references it.
+
+    When to use: After finding an interesting string (via search_floss_strings,
+    get_top_sifted_strings, etc.) to understand HOW it's used in code.
+
+    Next steps: decompile_function_with_angr() at the referencing function VA,
+    then auto_note_function() to record findings.
 
     **IMPORTANT PREREQUISITES FOR THIS FUNCTION TO RETURN RESULTS:**
     1.  The `string_offset` MUST correspond to a **static string**. This tool does not work for stack, tight, or decoded strings.
@@ -933,9 +992,14 @@ async def fuzzy_search_strings(
     min_similarity_ratio: int = 85
 ) -> List[Dict[str, Any]]:
     """
-    Performs a fuzzy search to find strings similar to the query string across
-    all specified sources. Results are sorted by similarity.
-    ... (rest of docstring is fine) ...
+    [Phase: explore] Fuzzy search for strings similar to a query across all sources.
+    Results sorted by similarity ratio.
+
+    When to use: When you have an approximate string (e.g. partial IOC, typo'd
+    domain, obfuscated variant) and want to find near-matches in the binary.
+
+    Next steps: Use get_string_usage_context() for code references to matched
+    strings, add_note() to record interesting fuzzy matches found.
     """
     await ctx.info(f"Fuzzy search request for '{query_string}'. Min Ratio: {min_similarity_ratio}, Limit: {limit}")
 
@@ -1019,11 +1083,18 @@ async def get_strings_summary(
     categories: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """
-    Categorizes all extracted strings by type and returns counts with top examples.
-    Far more context-efficient than dumping thousands of raw strings.
+    [Phase: triage] Categorizes all extracted strings by type and returns counts
+    with top examples. Far more context-efficient than dumping raw strings.
+
+    When to use: As a first look at strings after triage — gives a structured
+    overview of IOC categories without overwhelming context. Call this before
+    diving into search_floss_strings() or get_top_sifted_strings().
 
     Categories: urls, ip_addresses, domains, file_paths, registry_keys,
     mutex_names, email_addresses, base64_blobs, high_value (ML-scored).
+
+    Next steps: If IOCs found → add_note(content, category='tool_result').
+    Use search_floss_strings() to regex-search for related patterns.
 
     Args:
         ctx: The MCP Context object.

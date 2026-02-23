@@ -20,8 +20,14 @@ async def hook_function(
     nop: bool = False,
 ) -> Dict[str, Any]:
     """
-    Hooks a function so future emulation/symbolic execution uses the hook instead of real code.
-    Provide either a hex address or an imported symbol name.
+    [Phase: advanced] Hooks a function so future emulation/symbolic execution uses
+    the hook instead of real code. Provide a hex address or imported symbol name.
+
+    When to use: Before emulate_function_execution() or find_path_to_address() when
+    a callee causes issues (infinite loops, missing APIs, crashes). Stub it out.
+
+    Next steps: emulate_function_execution() or find_path_to_address() with the
+    hook active. Use list_hooks() to verify, unhook_function() to remove.
 
     Args:
         address_or_name: Hex address (e.g. '0x401000') or symbol name (e.g. 'malloc').
@@ -105,7 +111,12 @@ async def hook_function(
 
 @tool_decorator
 async def list_hooks(ctx: Context) -> Dict[str, Any]:
-    """Lists all currently installed function hooks."""
+    """
+    [Phase: utility] Lists all currently installed function hooks.
+
+    When to use: Before emulation to verify which hooks are active, or to
+    audit the current hook state during debugging.
+    """
     await ctx.info("Listing hooks")
     _check_angr_ready("list_hooks")
 
@@ -126,7 +137,10 @@ async def list_hooks(ctx: Context) -> Dict[str, Any]:
 @tool_decorator
 async def unhook_function(ctx: Context, address_or_name: str) -> Dict[str, Any]:
     """
-    Removes a previously installed hook.
+    [Phase: utility] Removes a previously installed hook to restore original code.
+
+    When to use: After emulation is complete and you want to restore the original
+    function behavior for subsequent analysis.
 
     Args:
         address_or_name: The same address or name used when hooking.

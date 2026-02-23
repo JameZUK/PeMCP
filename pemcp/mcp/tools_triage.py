@@ -1581,8 +1581,8 @@ async def get_triage_report(
     compact: bool = False,
 ) -> Dict[str, Any]:
     """
-    Comprehensive automated triage of the loaded binary. Works across PE, ELF,
-    Mach-O, and shellcode formats with format-specific analysis sections.
+    [Phase: triage] START HERE after opening a file. Comprehensive automated triage
+    of the loaded binary with risk scoring and format-aware next-tool recommendations.
 
     Analyses 25+ dimensions including entropy, packing, digital signatures,
     suspicious imports, capa capabilities, network IOCs, section anomalies,
@@ -1592,7 +1592,8 @@ async def get_triage_report(
     security features (ELF: PIE/NX/RELRO/canaries, Mach-O: code signing/PIE).
 
     Designed to give an AI analyst a complete first-look assessment without needing
-    to call multiple individual tools.
+    to call multiple individual tools. The response includes 'suggested_next_tools'
+    with context-aware recommendations based on what the triage found.
 
     Args:
         ctx: The MCP Context object.

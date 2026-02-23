@@ -7,11 +7,20 @@ from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_respon
 @tool_decorator
 async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
     """
-    Classifies the loaded binary by purpose and type using PE header analysis,
-    import patterns, section characteristics, and resource presence.
+    [Phase: triage] Classifies the loaded binary by purpose and type using PE header
+    analysis, import patterns, section characteristics, and resource presence.
+
+    When to use: After get_triage_report() to understand what kind of binary you
+    are dealing with before deep-dive analysis.
 
     Categories: GUI Application, Console Application, DLL/Library, System Service,
     Device Driver, Installer/SFX, .NET Assembly, and more.
+
+    Typical next steps based on classification:
+      - DLL/Library → get_focused_imports(), get_pe_data(key='exports')
+      - .NET Assembly → dotnet_analyze(), dotnet_disassemble_method()
+      - Installer/SFX → scan_for_embedded_files(), extract_resources()
+      - Device Driver → get_load_config_details(), get_section_permissions()
 
     Returns:
         A dictionary with the primary classification, confidence indicators,

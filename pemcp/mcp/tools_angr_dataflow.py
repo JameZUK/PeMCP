@@ -82,8 +82,15 @@ async def get_reaching_definitions(
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Computes reaching definitions for a function — which register/memory definitions
-    reach each program point. Foundation for taint tracking and vulnerability hunting.
+    [Phase: advanced] Computes reaching definitions for a function — which register
+    and memory definitions reach each program point.
+
+    When to use: For taint tracking, vulnerability hunting, or understanding how
+    values propagate through a function. Foundation for data-flow analysis.
+
+    Next steps: get_data_dependencies() for definition-use chains,
+    propagate_constants() for simpler constant resolution, or
+    get_control_dependencies() for branch-based analysis.
 
     Args:
         function_address: Hex address of the function to analyse.
@@ -226,10 +233,14 @@ async def get_data_dependencies(
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Analyses data dependencies showing how values flow between instructions.
-    Uses ReachingDefinitionsAnalysis to build definition-use chains and a
-    dependency graph. Unlike control-flow slicing, this traces actual value
-    producers and consumers.
+    [Phase: advanced] Analyses data dependencies — how values flow between
+    instructions via definition-use chains and dependency graphs.
+
+    When to use: When you need to trace where a value comes from (backward) or
+    what consumes it (forward). More precise than control-flow slicing.
+
+    Next steps: decompile_function_with_angr() to see the high-level flow,
+    propagate_constants() to resolve computed values at dependency points.
 
     Args:
         function_address: Hex address of the function to analyse.
@@ -403,8 +414,14 @@ async def get_control_dependencies(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """
-    Builds the Control Dependence Graph (CDG) for a function — shows which conditional
-    branches control whether each block executes.
+    [Phase: advanced] Builds the Control Dependence Graph (CDG) — shows which
+    conditional branches control whether each block executes.
+
+    When to use: When investigating conditional logic, anti-analysis checks,
+    or understanding which branches guard specific behavior.
+
+    Next steps: decompile_function_with_angr() to see the branch conditions,
+    find_path_to_address() to find inputs that reach a controlled block.
 
     Args:
         function_address: Hex address of the function.
@@ -506,8 +523,14 @@ async def propagate_constants(
     limit: int = 80,
 ) -> Dict[str, Any]:
     """
-    Runs constant propagation on a function to resolve computed values, simplify
-    expressions, and de-obfuscate indirect call targets.
+    [Phase: advanced] Resolves computed values via constant propagation — simplifies
+    expressions and de-obfuscates indirect call targets.
+
+    When to use: When decompilation shows computed/opaque values, indirect calls,
+    or obfuscated expressions that need simplification.
+
+    Next steps: decompile_function_with_angr() with resolved constants for clearer
+    pseudocode. If indirect calls resolved → follow them with get_function_xrefs().
 
     Args:
         function_address: Hex address of the function.
@@ -585,13 +608,15 @@ async def get_value_set_analysis(
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Runs Value-Set Analysis (VFG) on a function to compute possible value ranges
-    for registers and memory at each program point. Helps reason about pointer
-    aliasing and buffer bounds.
+    [Phase: advanced] Computes possible value ranges for registers and memory at
+    each program point via Value-Set Analysis (VFG).
 
-    WARNING: Computationally expensive. Best used on individual functions.
-    If VFG fails, get_reaching_definitions or propagate_constants are
-    lighter-weight alternatives for data-flow analysis.
+    When to use: When you need precise pointer aliasing or buffer bounds analysis.
+    WARNING: Computationally expensive. Try get_reaching_definitions() or
+    propagate_constants() first as lighter-weight alternatives.
+
+    Next steps: Use results to understand memory access patterns, then
+    decompile_function_with_angr() with the value context.
 
     Args:
         function_address: Hex address of the function.

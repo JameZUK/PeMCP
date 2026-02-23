@@ -128,7 +128,7 @@ async def open_file(
     use_cache: bool = True,
 ) -> Dict[str, Any]:
     """
-    Opens and analyses a binary file, making it available for all other tools.
+    [Phase: load] Opens and analyses a binary file, making it available for all other tools.
     Supports PE, ELF, Mach-O, and raw shellcode. Auto-detection is the default.
     This replaces any previously loaded file. Progress is reported during analysis.
 
@@ -139,6 +139,11 @@ async def open_file(
     'session_context' field with restored notes and prior tool history. If
     session_context is present, call get_analysis_digest() FIRST to review
     what was learned in previous sessions before repeating analysis steps.
+
+    Typical next steps after opening a file:
+      1. get_triage_report(compact=True) — automated first assessment with risk scoring
+      2. classify_binary_purpose() — determine binary type (GUI app, service, DLL, etc.)
+      3. get_session_summary() — review session state and get tool suggestions
 
     Args:
         ctx: The MCP Context object.

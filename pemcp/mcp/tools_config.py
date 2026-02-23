@@ -248,8 +248,11 @@ def _get_environment_info() -> Dict[str, Any]:
 @tool_decorator
 async def get_current_datetime(ctx: Context) -> Dict[str,str]:
     """
-    Retrieves the current date and time in UTC and the server's local timezone.
-    This tool does not depend on a PE file being loaded.
+    [Phase: utility] Retrieves the current date and time in UTC and the server's
+    local timezone. Does not require a file to be loaded.
+
+    When to use: When analyzing PE timestamps to check if compilation dates are
+    in the future or suspiciously old.
 
     Args:
         ctx: The MCP Context object.
@@ -272,7 +275,10 @@ async def get_current_datetime(ctx: Context) -> Dict[str,str]:
 @tool_decorator
 async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
     """
-    Checks the status and progress of a background analysis task.
+    [Phase: utility] Checks the status and progress of a background analysis task.
+
+    When to use: After launching a background task (e.g. get_reaching_definitions,
+    diff_binaries) to check if it has completed.
 
     Args:
         task_id: The ID returned by a tool running in background mode.
@@ -309,9 +315,11 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
 @tool_decorator
 async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, str]:
     """
-    Stores an API key in the user's persistent configuration (~/.pemcp/config.json).
-    The key is saved securely (file permissions restricted to owner only) and will
-    be recalled automatically in future sessions.
+    [Phase: utility] Stores an API key in the user's persistent configuration
+    (~/.pemcp/config.json). Saved securely (owner-only permissions) and
+    recalled automatically in future sessions.
+
+    When to use: When setting up VirusTotal integration or other API-dependent tools.
 
     Supported key names:
     - 'vt_api_key': VirusTotal API key (used by get_virustotal_report_for_loaded_file)
@@ -357,12 +365,12 @@ async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, 
 @tool_decorator
 async def get_config(ctx: Context) -> Dict[str, Any]:
     """
-    Retrieves the current PeMCP configuration, including stored API keys (masked),
-    which keys are overridden by environment variables, and runtime environment info.
+    [Phase: utility] Retrieves PeMCP configuration: stored API keys (masked),
+    environment overrides, container detection, writable paths, host mount
+    mappings, and recommended export path.
 
-    Includes container detection, writable paths, host mount mappings, and a
-    recommended export path — essential for AI clients to know where they can
-    write files without trial-and-error.
+    When to use: At session start to understand the server environment, available
+    capabilities, and where files can be safely written.
 
     This tool does not depend on a PE file being loaded.
 
