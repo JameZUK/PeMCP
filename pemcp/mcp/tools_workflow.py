@@ -343,6 +343,9 @@ async def auto_name_sample(
         # Execution
         "winexec": "exec",
         "shellexecute": "exec",
+        # Anti-VM / VM detection
+        "getsystemfirmwaretable": "antivm",
+        "enumservicesstatusex": "antivm",
     }
 
     sus_imports = triage.get("suspicious_imports", [])
@@ -370,6 +373,14 @@ async def auto_name_sample(
                             break
 
     # Scan capa capabilities for additional labels
+    # Sub-namespace map checked first (most specific wins)
+    _CAPA_SUB_NAMESPACE_LABELS = {
+        "anti-analysis/anti-vm": "antivm",
+        "anti-analysis/anti-debugging": "antidbg",
+        "anti-analysis/obfuscation": "obfusc",
+        "data-manipulation/encryption": "crypto",
+        "data-manipulation/hashing": "crypto",
+    }
     _CAPA_NAMESPACE_LABELS = {
         "anti-analysis": "antidbg",
         "persistence": "persist",
@@ -381,25 +392,43 @@ async def auto_name_sample(
         "c2": "c2",
         "exfiltration": "exfil",
         "lateral-movement": "lateral",
+        "data-manipulation": "crypto",
+        "discovery": "recon",
+        "communication": "comms",
+        "privilege-escalation": "privesc",
     }
     sus_caps = triage.get("suspicious_capabilities", [])
     if isinstance(sus_caps, list):
         for cap in sus_caps:
-            ns = ""
+            full_ns = ""
             if isinstance(cap, dict):
-                ns = cap.get("namespace", "").split("/")[0].lower()
+                full_ns = cap.get("namespace", "").lower()
             elif isinstance(cap, str):
-                ns = cap.split("/")[0].lower()
-            label = _CAPA_NAMESPACE_LABELS.get(ns)
+                full_ns = cap.lower()
+            # Check sub-namespaces first for precise categorization
+            label = None
+            for prefix, sub_label in _CAPA_SUB_NAMESPACE_LABELS.items():
+                if full_ns.startswith(prefix):
+                    label = sub_label
+                    break
+            if not label:
+                ns_top = full_ns.split("/")[0]
+                label = _CAPA_NAMESPACE_LABELS.get(ns_top)
             if label:
                 capabilities.add(label)
+
+    # --- Packer indicator (early, right after binary class) ---
+    packing = triage.get("packing_assessment", {})
+    is_packed = isinstance(packing, dict) and packing.get("likely_packed")
+    if is_packed:
+        parts.append("packed")
 
     # Add malware type or top capabilities to name
     if found_type:
         parts.append(found_type)
     if capabilities:
-        # Add up to 3 capabilities (after type, if any)
-        for cap in sorted(capabilities)[:3]:
+        # Add up to 5 capabilities (after type, if any)
+        for cap in sorted(capabilities)[:5]:
             if cap not in parts:
                 parts.append(cap)
 
@@ -437,13 +466,6 @@ async def auto_name_sample(
                 domain = domain[:17] + "..."
             parts.append(f"c2_{domain.replace('.', '_')}")
 
-    # --- Packer info ---
-    packing = triage.get("packing_assessment", {})
-    if isinstance(packing, dict) and packing.get("likely_packed"):
-        packer = packing.get("packer_name", "")
-        if packer:
-            parts.append(f"packed_{packer.lower().replace(' ', '_')[:10]}")
-
     # Build the name
     if not parts:
         # Fallback: use hash prefix
@@ -463,7 +485,7 @@ async def auto_name_sample(
             "malware_type": found_type or "unknown",
             "capabilities": sorted(capabilities),
             "c2": bool(net_iocs and (net_iocs.get("ip_addresses") or net_iocs.get("domains"))),
-            "packed": bool(packing and isinstance(packing, dict) and packing.get("likely_packed")),
+            "packed": bool(is_packed),
             "risk_level": risk_level or "unknown",
         },
     }
