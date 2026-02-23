@@ -456,7 +456,7 @@ open_file("/samples/malware.exe")
 
 If `--samples` is omitted, the `./samples/` directory next to `run.sh` is mounted by default (at `/samples`). You can also set the `PEMCP_SAMPLES` environment variable instead of using the flag.
 
-The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, runs as your host UID (not root), and persists the analysis cache and configuration in a named `pemcp-data` volume.
+The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, runs as your host UID (not root), and persists the analysis cache and configuration in `~/.pemcp` on the host (bind-mounted into the container). Use `--cache <dir>` or `PEMCP_CACHE` to override the location.
 
 ### Typical Workflow
 
@@ -570,7 +570,7 @@ The `docker-compose.yml` defines two services:
 - **`pemcp-http`** — Network-accessible MCP server with healthcheck and restart policy
 - **`pemcp-stdio`** — For Claude Code / MCP client integration (behind the `stdio` profile)
 
-Both services use a named `pemcp-data` volume for persistent cache and configuration.
+Both services bind-mount `~/.pemcp` from the host for persistent cache and configuration (override with `PEMCP_CACHE`).
 
 #### Manual Docker Commands
 
@@ -605,7 +605,7 @@ docker run --rm -it \
   -e HOME=/app/home \
   -p 8082:8082 \
   -v "$(pwd)/samples:/samples:ro" \
-  -v pemcp-data:/app/home/.pemcp \
+  -v "$HOME/.pemcp:/app/home/.pemcp:rw" \
   -e VT_API_KEY="your_key" \
   pemcp-toolkit \
   --mcp-server \
@@ -618,13 +618,13 @@ docker run --rm -i \
   --user "$(id -u):$(id -g)" \
   -e HOME=/app/home \
   -v "$(pwd)/samples:/samples:ro" \
-  -v pemcp-data:/app/home/.pemcp \
+  -v "$HOME/.pemcp:/app/home/.pemcp:rw" \
   pemcp-toolkit \
   --mcp-server \
   --samples-path /samples
 ```
 
-> **Note:** The `-v pemcp-data:/app/home/.pemcp` mount persists the analysis cache and API key configuration across container restarts. Without it, cached results and stored keys are lost when the container is removed. The `run.sh` helper configures this volume automatically.
+> **Note:** The `-v $HOME/.pemcp:/app/home/.pemcp:rw` mount persists the analysis cache, notes, and API key configuration in your home directory. Without it, cached results and stored keys are lost when the container is removed. The `run.sh` helper configures this bind mount automatically (creating `~/.pemcp` if needed).
 
 ### Option B: Local Installation
 
@@ -774,17 +774,20 @@ open_file("/path/to/binary", use_cache=False)  # Force fresh analysis
 
 **Docker persistence:**
 
-In Docker, the cache lives at `/app/home/.pemcp/cache/` inside the container. The `run.sh` helper automatically mounts a named `pemcp-data` volume to persist the cache and configuration across container restarts:
+In Docker, the cache lives at `/app/home/.pemcp/cache/` inside the container, which is bind-mounted to `~/.pemcp` on the host. The `run.sh` helper sets this up automatically (creating the directory if needed):
 
 ```bash
-# run.sh handles volume mounting automatically
+# run.sh handles the bind mount automatically
 ./run.sh --stdio
+
+# Override cache location
+./run.sh --cache /path/to/cache --stdio
 
 # Equivalent manual docker command (if not using run.sh)
 docker run --rm -i \
   --user "$(id -u):$(id -g)" \
   -e HOME=/app/home \
-  -v pemcp-data:/app/home/.pemcp \
+  -v "$HOME/.pemcp:/app/home/.pemcp:rw" \
   -v "$(pwd)/samples:/samples:ro" \
   pemcp-toolkit --mcp-server --samples-path /samples
 ```

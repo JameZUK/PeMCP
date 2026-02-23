@@ -146,7 +146,7 @@ The codebase demonstrates mature engineering practices: per-session state isolat
 
 - **Multi-environment support**: `run.sh` auto-detects Docker/Podman, handles SELinux labels, supports `--stdio`, `--shell`, `--build`, and `--analyze` modes. Docker Compose provides both HTTP and stdio services.
 
-- **Persistence**: Named `pemcp-data` volume for cache and config. Resource limits (8GB memory, 4 CPUs) prevent runaway containers.
+- **Persistence**: Host bind mount (`~/.pemcp`) for cache and config, visible and portable. Resource limits (8GB memory, 4 CPUs) prevent runaway containers.
 
 - **Health checks**: Built into both Dockerfile and docker-compose for HTTP mode.
 
