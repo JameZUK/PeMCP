@@ -20,8 +20,12 @@ if ANGR_AVAILABLE:
 @tool_decorator
 async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, Any]:
     """
-    Discovery tool: lists all available angr-based analysis capabilities with descriptions.
+    [Phase: context] Discovery tool: lists all available angr-based analysis capabilities with descriptions.
     Use this to understand what angr analyses are available before calling specific tools.
+
+    When to use: At the start of analysis to discover available tools, or when unsure which tool to call next.
+    Next steps: get_function_map() to find interesting functions, get_function_complexity_list() to rank by complexity,
+    or decompile_function_with_angr() if you already have a target address.
 
     Args:
         ctx: The MCP Context object.
@@ -149,8 +153,12 @@ async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, A
 @tool_decorator
 async def decompile_function_with_angr(ctx: Context, function_address: str) -> Dict[str, Any]:
     """
-    Decompiles a function into C-like pseudocode using Angr.
+    [Phase: deep-dive] Decompiles a function into C-like pseudocode using Angr.
     Automatically attempts to handle RVA (offsets) if the exact VA is not found.
+
+    When to use: After identifying a function of interest via get_function_map() or get_function_complexity_list().
+    Next steps: auto_note_function(address) to save a behavioral summary, get_function_cfg() for control flow,
+    or get_cross_reference_map() to understand callers/callees.
 
     After reviewing the decompiled output, call auto_note_function(address) to
     save a one-line behavioral summary, or add_note(content, category='tool_result')
@@ -195,8 +203,12 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
 @tool_decorator
 async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any]:
     """
-    Retrieves the Control Flow Graph (CFG) for a function (Nodes/Blocks and Edges/Jumps).
+    [Phase: deep-dive] Retrieves the Control Flow Graph (CFG) for a function (Nodes/Blocks and Edges/Jumps).
     Automatically attempts to handle RVA (offsets) if the exact VA is not found.
+
+    When to use: After decompilation shows complex control flow (many branches, loops, or obfuscation).
+    Next steps: get_annotated_disassembly() for instruction-level detail, get_dominators() for dominator tree,
+    or analyze_binary_loops() to identify loop structures.
     """
 
     await ctx.info(f"Requesting CFG for: {function_address}")
@@ -233,7 +245,11 @@ async def find_path_to_address(
     run_in_background: bool = True
 ) -> Dict[str, Any]:
     """
-    Uses Symbolic Execution to find an input (stdin) that causes execution to reach 'target_address'.
+    [Phase: advanced] Uses Symbolic Execution to find an input (stdin) that causes execution to reach 'target_address'.
+
+    When to use: When you need to find concrete input that triggers a specific code path (e.g., reaching a vulnerability or a hidden branch).
+    Next steps: emulate_function_execution() to test with found input, add_note() to record the solution,
+    or find_path_with_custom_input() for more control over symbolic inputs.
     """
 
     _check_angr_ready("find_path_to_address")
@@ -371,7 +387,11 @@ async def emulate_function_execution(
     run_in_background: bool = True
 ) -> Dict[str, Any]:
     """
-    Emulates a function with specific concrete arguments.
+    [Phase: advanced] Emulates a function with specific concrete arguments.
+
+    When to use: When you want to observe a function's runtime behavior (return value, stdout) with known inputs.
+    Next steps: auto_note_function(address) to save a behavioral summary, emulate_with_watchpoints() to trace
+    memory/register access, or hook_function() to stub out problematic callees before re-emulating.
     """
 
     if args_hex is None:
@@ -477,7 +497,11 @@ async def analyze_binary_loops(
     run_in_background: bool = True
 ) -> Dict[str, Any]:
     """
-    Scans the binary for loops. Uses existing analysis if available to save time.
+    [Phase: deep-dive] Scans the binary for loops. Uses existing analysis if available to save time.
+
+    When to use: After CFG analysis reveals complex functions, or to find crypto/encoding routines that rely on loops.
+    Next steps: decompile_function_with_angr() on functions with many loops, get_function_cfg() for loop structure,
+    or extract_function_constants() to find crypto constants in loop bodies.
     """
 
     _check_angr_ready("analyze_binary_loops")
