@@ -20,6 +20,7 @@ PeMCP bridges the gap between high-level AI reasoning and low-level binary instr
 - [Configuration](#configuration)
 - [MCP Tools Reference](#mcp-tools-reference)
 - [Architecture & Design](#architecture--design)
+  - [Pagination & Result Limits](#pagination--result-limits)
 - [Multi-Format Analysis](#multi-format-analysis)
 - [Testing](#testing)
 - [Contributing](#contributing)
@@ -147,6 +148,7 @@ PeMCP is designed for **large binary corpus analysis** where AI clients need to 
 - **Docker-First Design** — No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Thread-Safe State** — Centralised `AnalyzerState` class with locking for concurrent access.
 - **Background Tasks** — Long-running operations (symbolic execution, Angr CFG) run asynchronously with heartbeat monitoring.
+- **Pagination** — Tools that return lists support `limit` and `offset` parameters with LRU result caching, preventing response truncation and giving AI clients control over data volume per call (default limit 20 for most tools).
 - **Smart Truncation** — MCP responses are automatically truncated to fit within 64KB limits whilst preserving structural integrity.
 - **Graceful Degradation** — All 20+ optional libraries are detected at startup. Tools that require unavailable libraries return clear error messages instead of crashing.
 
@@ -824,7 +826,7 @@ PeMCP exposes **171 tools** organised into the following categories.
 | `close_file` | Close the loaded file and clear analysis data from memory. |
 | `reanalyze_loaded_pe_file` | Re-run PE analysis with different options (skip/enable specific analyses). |
 | `detect_binary_format` | Auto-detect binary format and suggest appropriate analysis tools. |
-| `list_samples` | List files in the configured samples directory. Supports flat (top-level only) and recursive listing, glob pattern filtering (e.g. `*.exe`), and returns file metadata including size and magic-byte format hints (PE/ELF/Mach-O/ZIP/etc.). Configured via `--samples-path` or `PEMCP_SAMPLES`. |
+| `list_samples` | List files in the configured samples directory. Supports flat (top-level only) and recursive listing, glob pattern filtering (e.g. `*.exe`), and returns file metadata including size and magic-byte format hints (PE/ELF/Mach-O/ZIP/etc.). Paginated with `limit` and `offset`. Configured via `--samples-path` or `PEMCP_SAMPLES`. |
 
 ### Configuration & Utilities
 
@@ -843,62 +845,66 @@ PeMCP exposes **171 tools** organised into the following categories.
 
 | Tool | Description |
 |---|---|
-| `get_analyzed_file_summary` | High-level summary with counts of sections, imports, matches. |
-| `get_full_analysis_results` | Complete analysis data (all keys, with size guard). |
-| `get_pe_data` | **Unified data retrieval** — retrieve any PE analysis key by name (e.g., `get_pe_data(key='imports')`). Use `key='list'` to discover all 25 available keys with descriptions and sizes. Supports `limit` and `offset` for pagination. Replaces 25 individual `get_*_info` tools. |
+| `get_analyzed_file_summary` | High-level summary with counts of sections, imports, matches. Paginated (default limit 20). |
+| `get_full_analysis_results` | Complete analysis data (all keys, with size guard). Requires explicit `limit`. |
+| `get_pe_data` | **Unified data retrieval** — retrieve any PE analysis key by name (e.g., `get_pe_data(key='imports')`). Use `key='list'` to discover all 25 available keys with descriptions and sizes. Supports `limit` (default 20) and `offset` (default 0) for pagination. Replaces 25 individual `get_*_info` tools. |
 
 Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_directories`, `sections`, `imports`, `exports`, `resources_summary`, `version_info`, `debug_info`, `digital_signature`, `peid_matches`, `yara_matches`, `rich_header`, `delay_load_imports`, `tls_info`, `load_config`, `com_descriptor`, `overlay_data`, `base_relocations`, `bound_imports`, `exception_data`, `coff_symbols`, `checksum_verification`, `pefile_warnings`.
 
 ### PE Extended Analysis (14 tools)
 
+Many PE extended analysis tools support pagination via `limit` and `offset` parameters.
+
 | Tool | Description |
 |---|---|
-| `get_section_permissions` | Human-readable section permission matrix (RWX). |
+| `get_section_permissions` | Human-readable section permission matrix (RWX). Paginated (default limit 20). |
 | `get_pe_metadata` | Compilation timestamps, linker info, subsystem, DLL characteristics. |
-| `extract_resources` | Extract and decode PE resources by type. |
+| `extract_resources` | Extract and decode PE resources by type. Paginated (default limit 20). |
 | `extract_manifest` | Extract and parse embedded application manifest XML. |
 | `get_load_config_details` | Extended load config (SEH, CFG, RFG, CET details). |
-| `extract_wide_strings` | Extract UTF-16LE wide strings from the binary. |
-| `detect_format_strings` | Detect printf/scanf format strings (format string vuln hunting). |
-| `detect_compression_headers` | Detect embedded compressed data (zlib, gzip, LZMA, etc.). |
+| `extract_wide_strings` | Extract UTF-16LE wide strings from the binary. Paginated (default limit 20). |
+| `detect_format_strings` | Detect printf/scanf format strings (format string vuln hunting). Paginated (default limit 20). |
+| `detect_compression_headers` | Detect embedded compressed data (zlib, gzip, LZMA, etc.). Paginated (default limit 30). |
 | `deobfuscate_xor_multi_byte` | Multi-byte XOR deobfuscation with known key. |
-| `bruteforce_xor_key` | Brute-force single and multi-byte XOR keys against known plaintext. |
-| `detect_crypto_constants` | Detect crypto constants (AES S-box, DES, SHA, RC4, etc.). |
-| `analyze_entropy_by_offset` | Sliding-window entropy analysis to detect packed/encrypted regions. |
-| `scan_for_api_hashes` | Detect API hashing patterns (ROR13, CRC32, DJB2, FNV). |
+| `bruteforce_xor_key` | Brute-force single and multi-byte XOR keys against known plaintext. Paginated (default limit 10). |
+| `detect_crypto_constants` | Detect crypto constants (AES S-box, DES, SHA, RC4, etc.). Paginated (default limit 20). |
+| `analyze_entropy_by_offset` | Sliding-window entropy analysis to detect packed/encrypted regions. Paginated (default limit 50). |
+| `scan_for_api_hashes` | Detect API hashing patterns (ROR13, CRC32, DJB2, FNV). Paginated (default limit 20). |
 | `get_import_hash_analysis` | Import hash (imphash) with per-DLL analysis and anomaly detection. |
 
 ### Signature & Capability Analysis
 
 | Tool | Description |
 |---|---|
-| `get_capa_analysis_info` | Capa capability rules overview with filtering. |
+| `get_capa_analysis_info` | Capa capability rules overview with filtering. Paginated (default limit 20). |
 | `get_capa_rule_match_details` | Detailed match info for a specific Capa rule. |
 
 > **Note:** PEiD matches and YARA matches are now accessed via `get_pe_data(key='peid_matches')` and `get_pe_data(key='yara_matches')`.
 
 ### String Analysis (13 tools)
 
+All string tools that return lists support pagination via `limit` (default 20) and `offset` (default 0) parameters. See [Pagination & Result Limits](#pagination--result-limits) for details.
+
 | Tool | Description |
 |---|---|
-| `get_floss_analysis_info` | FLOSS results (static, stack, tight, decoded strings). |
-| `extract_strings_from_binary` | Extract printable ASCII strings, optionally ranked. |
+| `get_floss_analysis_info` | FLOSS results (static, stack, tight, decoded strings). Paginated (default limit 20). |
+| `extract_strings_from_binary` | Extract printable ASCII strings, optionally ranked. Requires explicit `limit`. |
 | `search_for_specific_strings` | Search for specific strings within the binary. |
-| `search_floss_strings` | Regex search across FLOSS strings with score filtering. |
-| `get_top_sifted_strings` | ML-ranked strings from all sources with granular filtering. |
-| `get_strings_for_function` | All strings referenced by a specific function. |
-| `get_string_usage_context` | Disassembly context showing where a string is used. |
-| `fuzzy_search_strings` | Fuzzy matching to find similar strings. |
+| `search_floss_strings` | Regex search across FLOSS strings with score filtering. Paginated (default limit 20). |
+| `get_top_sifted_strings` | ML-ranked strings from all sources with granular filtering. Requires explicit `limit`. |
+| `get_strings_for_function` | All strings referenced by a specific function. Paginated (default limit 20). |
+| `get_string_usage_context` | Disassembly context showing where a string is used. Paginated (default limit 20). |
+| `fuzzy_search_strings` | Fuzzy matching to find similar strings. Requires explicit `limit`. |
 | `find_and_decode_encoded_strings` | Multi-layer Base64/Hex/XOR decoding with heuristics. |
 | `get_strings_summary` | Categorised string intelligence — groups strings by type (URLs, IPs, file paths, registry keys, mutex names, base64 blobs) with counts and top examples. |
-| `search_yara_custom` | Compile and run custom YARA rules (provided as a string) against the loaded binary. Returns matching rules with offsets. Useful for validating hypotheses about byte patterns or structures. |
+| `search_yara_custom` | Compile and run custom YARA rules (provided as a string) against the loaded binary. Returns matching rules with offsets. Useful for validating hypotheses about byte patterns or structures. Paginated (default limit 20). |
 | `get_string_at_va` | Extract a string at a virtual address by resolving VA to file offset. Reads bytes until null terminator with auto-encoding detection (ASCII/UTF-16LE). Useful when decompilation references a string pointer. |
 
 ### Triage & Forensics
 
 | Tool | Description |
 |---|---|
-| `get_triage_report` | **Comprehensive automated triage** (25+ dimensions) — packing assessment, digital signatures, timestamp anomalies, Rich header fingerprint, suspicious imports & delay-load evasion, capa capabilities, network IOCs, section anomalies, overlay/appended data analysis, resource anomalies (nested PE detection), YARA matches, header corruption detection, TLS callback detection, security mitigations (ASLR/DEP/CFG/CET/XFG), version info spoofing, .NET indicators, export anomalies, high-value strings, ELF security features (PIE/NX/RELRO/canaries), Mach-O security (code signing/PIE), cumulative risk score, and format-aware tool suggestions. |
+| `get_triage_report` | **Comprehensive automated triage** (25+ dimensions) — packing assessment, digital signatures, timestamp anomalies, Rich header fingerprint, suspicious imports & delay-load evasion, capa capabilities, network IOCs, section anomalies, overlay/appended data analysis, resource anomalies (nested PE detection), YARA matches, header corruption detection, TLS callback detection, security mitigations (ASLR/DEP/CFG/CET/XFG), version info spoofing, .NET indicators, export anomalies, high-value strings, ELF security features (PIE/NX/RELRO/canaries), Mach-O security (code signing/PIE), cumulative risk score, and format-aware tool suggestions. Paginated (default limit 20). |
 | `classify_binary_purpose` | Classify binary type (GUI app, console app, DLL, service, driver, installer, .NET assembly) from headers, imports, and resources. |
 | `get_virustotal_report_for_loaded_file` | Query VirusTotal for the file hash. |
 
@@ -913,6 +919,8 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 
 ### Binary Analysis — Core Angr (16 tools)
 
+All angr tools that return lists support pagination via `limit` and `offset` parameters. The default `limit` is 20 for most tools. See [Pagination & Result Limits](#pagination--result-limits) for the full default table.
+
 | Tool | Description |
 |---|---|
 | `list_angr_analyses` | **Discovery tool** — lists all available angr analysis capabilities grouped by category (decompilation, CFG, symbolic, slicing, forensic, hooks, modification) with parameter descriptions. Call this first to understand available analyses. |
@@ -920,15 +928,15 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `get_function_cfg` | Control flow graph (nodes and edges) for a function. |
 | `find_path_to_address` | Symbolic execution to find inputs reaching a target address. |
 | `emulate_function_execution` | Emulate a function with concrete arguments. |
-| `analyze_binary_loops` | Detect and characterise loops in the binary. |
-| `get_function_xrefs` | Cross-references (callers and callees) for a function. |
-| `get_backward_slice` | All code blocks that can reach a target address. |
-| `get_forward_slice` | All code reachable from a source address. |
+| `analyze_binary_loops` | Detect and characterise loops in the binary. Paginated (default limit 20). |
+| `get_function_xrefs` | Cross-references (callers and callees) for a function. Paginated (default limit 20). |
+| `get_backward_slice` | All code blocks that can reach a target address. Paginated (default limit 20). |
+| `get_forward_slice` | All code reachable from a source address. Paginated (default limit 20). |
 | `get_dominators` | Dominator blocks that must execute to reach a target. |
-| `get_function_complexity_list` | Functions ranked by complexity (block/edge count). |
-| `extract_function_constants` | Hardcoded constants and string references in a function. |
-| `get_global_data_refs` | Global memory addresses read/written by a function. |
-| `scan_for_indirect_jumps` | Indirect jumps/calls (dynamic control flow) in a function. |
+| `get_function_complexity_list` | Functions ranked by complexity (block/edge count). Paginated (default limit 20). |
+| `extract_function_constants` | Hardcoded constants and string references in a function. Paginated (default limit 20). |
+| `get_global_data_refs` | Global memory addresses read/written by a function. Paginated (default limit 20). |
+| `scan_for_indirect_jumps` | Indirect jumps/calls (dynamic control flow) in a function. Paginated (default limit 20). |
 | `patch_binary_memory` | Patch the loaded binary in memory with new bytes. |
 | `get_cross_reference_map` | Multi-dimensional cross-reference — for one or more functions, returns API calls, string refs, callers, callees, suspicious imports, and complexity in a single response. |
 
@@ -936,29 +944,29 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 
 | Tool | Description |
 |---|---|
-| `get_reaching_definitions` | Track how values propagate through registers and memory. |
-| `get_data_dependencies` | Data dependency analysis (def-use chains) for a function. |
+| `get_reaching_definitions` | Track how values propagate through registers and memory. Paginated (default limit 20). |
+| `get_data_dependencies` | Data dependency analysis (def-use chains) for a function. Paginated (default limit 20). |
 | `hook_function` | Replace a function with a custom SimProcedure. |
 | `list_hooks` | List all active function hooks. |
 | `unhook_function` | Remove a previously set hook. |
-| `get_calling_conventions` | Detect calling conventions for functions. |
-| `get_function_variables` | Recover local variables and parameters. |
-| `disassemble_at_address` | Disassemble N instructions at a given address. |
-| `identify_library_functions` | Identify standard library functions (libc, etc.). |
-| `get_control_dependencies` | Control dependency analysis for a function. |
-| `propagate_constants` | Constant propagation analysis. |
-| `diff_binaries` | Compare two binaries for added/removed/modified functions. |
-| `detect_self_modifying_code` | Detect code that writes to executable memory. |
-| `find_code_caves` | Find unused executable space for patching. |
-| `get_call_graph` | Generate full or filtered inter-procedural call graph. |
+| `get_calling_conventions` | Detect calling conventions for functions. Paginated (default limit 20). |
+| `get_function_variables` | Recover local variables and parameters. Paginated (default limit 80). |
+| `disassemble_at_address` | Disassemble N instructions at a given address (default 30 instructions). |
+| `identify_library_functions` | Identify standard library functions (libc, etc.). Paginated (default limit 20). |
+| `get_control_dependencies` | Control dependency analysis for a function. Paginated (default limit 20). |
+| `propagate_constants` | Constant propagation analysis. Paginated (default limit 80). |
+| `diff_binaries` | Compare two binaries for added/removed/modified functions. Paginated (default limit 20). |
+| `detect_self_modifying_code` | Detect code that writes to executable memory. Paginated (default limit 20). |
+| `find_code_caves` | Find unused executable space for patching. Paginated (default limit 20). |
+| `get_call_graph` | Generate full or filtered inter-procedural call graph. Paginated (default limit 50). |
 | `find_path_with_custom_input` | Symbolic execution with custom constraints. |
 | `emulate_with_watchpoints` | Emulate with memory/register watchpoints. |
-| `get_annotated_disassembly` | Rich disassembly with resolved names and comments. |
-| `get_value_set_analysis` | Determine possible values at program points. Computationally expensive; consider `get_reaching_definitions` or `propagate_constants` for lighter analysis. |
-| `detect_packing` | Heuristic packing/encryption detection. |
+| `get_annotated_disassembly` | Rich disassembly with resolved names and comments. Paginated (default limit 300). |
+| `get_value_set_analysis` | Determine possible values at program points. Computationally expensive; consider `get_reaching_definitions` or `propagate_constants` for lighter analysis. Paginated (default limit 80). |
+| `detect_packing` | Heuristic packing/encryption detection (not paginated). |
 | `save_patched_binary` | Save a patched binary to disk. |
-| `identify_cpp_classes` | Recover C++ vtables and class hierarchies. |
-| `get_function_map` | Smart function ranking — scores every function by interestingness (complexity, suspicious API calls, string refs, xref count) and groups by purpose. |
+| `identify_cpp_classes` | Recover C++ vtables and class hierarchies. Paginated (default limit 20). |
+| `get_function_map` | Smart function ranking — scores every function by interestingness (complexity, suspicious API calls, string refs, xref count) and groups by purpose. Paginated (default limit 30). |
 | `find_anti_debug_comprehensive` | Comprehensive anti-analysis and anti-debug technique detection — checks specific API patterns (IsDebuggerPresent, NtQueryInformationProcess, timing checks, PEB access), TLS callbacks, and known evasion techniques. Returns a detailed inventory with severity ratings. |
 
 ### Extended Library Tools (13 tools)
@@ -967,52 +975,54 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 |---|---|
 | `parse_binary_with_lief` | Multi-format binary parsing with LIEF (PE/ELF/Mach-O). |
 | `modify_pe_section` | Modify PE section properties (name, characteristics). |
-| `disassemble_raw_bytes` | Disassemble raw bytes with Capstone (any architecture). |
+| `disassemble_raw_bytes` | Disassemble raw bytes with Capstone (any architecture). Paginated (default limit 20). |
 | `assemble_instruction` | Assemble mnemonics to bytes with Keystone. |
 | `patch_with_assembly` | Assemble and patch instructions into the binary. |
 | `compute_similarity_hashes` | Compute ssdeep and TLSH fuzzy hashes. |
 | `compare_file_similarity` | Compare two files using fuzzy hash similarity. |
-| `emulate_pe_with_windows_apis` | Full Windows API emulation with Speakeasy. |
-| `emulate_shellcode_with_speakeasy` | Emulate shellcode with Windows API hooks. |
+| `emulate_pe_with_windows_apis` | Full Windows API emulation with Speakeasy. Paginated (default limit 20). |
+| `emulate_shellcode_with_speakeasy` | Emulate shellcode with Windows API hooks. Paginated (default limit 20). |
 | `auto_unpack_pe` | Automatically unpack packed PEs (UPX, ASPack, FSG, etc.). |
-| `parse_dotnet_metadata` | Parse .NET metadata with dotnetfile. |
-| `scan_for_embedded_files` | Detect embedded files/firmware with Binwalk. |
+| `parse_dotnet_metadata` | Parse .NET metadata with dotnetfile. Paginated (default limit 20). |
+| `scan_for_embedded_files` | Detect embedded files/firmware with Binwalk. Paginated (default limit 20). |
 | `get_extended_capabilities` | List all available tools and library versions. |
 
 ### Qiling Cross-Platform Emulation (8 tools)
 
 | Tool | Description |
 |---|---|
-| `emulate_binary_with_qiling` | Full OS emulation of PE/ELF/Mach-O binaries with behavioural report (API calls, file/registry/network activity). Cross-platform — unlike Speakeasy (Windows-only), Qiling handles Linux ELF and macOS Mach-O as well. |
-| `emulate_shellcode_with_qiling` | Multi-architecture shellcode emulation (x86, x64, ARM, ARM64, MIPS) with API/syscall capture. |
-| `qiling_trace_execution` | Instruction-level execution tracing with addresses, sizes, and raw bytes for each executed instruction. |
-| `qiling_hook_api_calls` | Hook specific APIs/syscalls to capture arguments and return values during emulation. |
+| `emulate_binary_with_qiling` | Full OS emulation of PE/ELF/Mach-O binaries with behavioural report (API calls, file/registry/network activity). Cross-platform — unlike Speakeasy (Windows-only), Qiling handles Linux ELF and macOS Mach-O as well. Paginated (default limit 20). |
+| `emulate_shellcode_with_qiling` | Multi-architecture shellcode emulation (x86, x64, ARM, ARM64, MIPS) with API/syscall capture. Paginated (default limit 20). |
+| `qiling_trace_execution` | Instruction-level execution tracing with addresses, sizes, and raw bytes for each executed instruction. Paginated (default limit 50). |
+| `qiling_hook_api_calls` | Hook specific APIs/syscalls to capture arguments and return values during emulation. Paginated (default limit 20). |
 | `qiling_dump_unpacked_binary` | Dynamic unpacking via emulation — handles custom/unknown packers that YARA-based unipacker cannot identify. |
 | `qiling_resolve_api_hashes` | Resolve API hash values (ROR13, CRC32, DJB2, FNV-1a) against known DLL exports. |
-| `qiling_memory_search` | Run a binary then search process memory for decrypted strings, C2 URLs, keys, or byte patterns. |
+| `qiling_memory_search` | Run a binary then search process memory for decrypted strings, C2 URLs, keys, or byte patterns. Paginated (default limit 20). |
 | `qiling_setup_check` | Check Qiling Framework setup status — venv availability, rootfs directory structure, and essential DLLs for each architecture. Provides specific copy commands for missing DLLs. |
 
 > **Note:** Qiling runs in an isolated venv (`/app/qiling-venv`) with unicorn 1.x, keeping the main environment's unicorn 2.x intact for angr. Linux rootfs is pre-populated at Docker build time. Windows PE emulation requires real DLL files copied from a Windows installation — see `docs/QILING_ROOTFS.md` for setup instructions. Registry hive stubs are auto-generated at runtime.
 
 ### Multi-Format Binary Analysis (9 tools)
 
+All multi-format analysis tools support pagination via `limit` (default 20) and `offset` (default 0) parameters.
+
 | Tool | Description |
 |---|---|
 | `detect_binary_format` | Auto-detect format (PE/.NET/ELF/Mach-O/Go/Rust) from magic bytes. |
-| `dotnet_analyze` | Comprehensive .NET metadata: CLR header, types, methods, assembly refs, user strings. |
-| `dotnet_disassemble_method` | Disassemble .NET CIL bytecode to human-readable opcodes. |
-| `go_analyze` | Go binary analysis: compiler version, packages, functions (works on stripped binaries). |
+| `dotnet_analyze` | Comprehensive .NET metadata: CLR header, types, methods, assembly refs, user strings. Paginated (default limit 20). |
+| `dotnet_disassemble_method` | Disassemble .NET CIL bytecode to human-readable opcodes. Paginated (default limit 20). |
+| `go_analyze` | Go binary analysis: compiler version, packages, functions (works on stripped binaries). Paginated (default limit 20). |
 | `rust_analyze` | Rust binary metadata: compiler version, crate dependencies, toolchain. |
-| `rust_demangle_symbols` | Demangle Rust symbol names to human-readable form. |
-| `elf_analyze` | Comprehensive ELF analysis: headers, sections, segments, symbols, dynamic deps. |
-| `elf_dwarf_info` | Extract DWARF debug info: compilation units, functions, source files. |
-| `macho_analyze` | Mach-O analysis: headers, load commands, segments, symbols, dylibs, code signatures. |
+| `rust_demangle_symbols` | Demangle Rust symbol names to human-readable form. Paginated (default limit 20). |
+| `elf_analyze` | Comprehensive ELF analysis: headers, sections, segments, symbols, dynamic deps. Paginated (default limit 20). |
+| `elf_dwarf_info` | Extract DWARF debug info: compilation units, functions, source files. Paginated (default limit 20). |
+| `macho_analyze` | Mach-O analysis: headers, load commands, segments, symbols, dylibs, code signatures. Paginated (default limit 20). |
 
 ### Binary Refinery — Data Transforms (23 tools)
 
 PeMCP integrates the full power of [Binary Refinery](https://github.com/binref/refinery) — a library of **200+ composable binary transformation units** — through 23 context-efficient MCP tools. Binary Refinery is used extensively by professional malware analysts for tasks like decrypting multi-layer obfuscation, extracting payloads from documents, unpacking installers, and parsing forensic artifacts. PeMCP makes these capabilities accessible through natural language, with the AI selecting the right units automatically.
 
-All tools accept data as hex input or operate on the currently loaded file. **Only registered when binary-refinery is installed** (lazy registration saves context tokens when absent).
+All tools accept data as hex input or operate on the currently loaded file. All Refinery tools support pagination via `limit` (default 20) and `offset` (default 0) parameters. **Only registered when binary-refinery is installed** (lazy registration saves context tokens when absent).
 
 > **Context efficiency:** 56 individual tools were consolidated into 23 using the dispatch pattern (`operation=...` parameter), saving ~33 tool definitions (~15-20K tokens) from the MCP catalog.
 
@@ -1093,17 +1103,17 @@ The real power of PeMCP's Binary Refinery integration emerges when tools are cha
 
 | Tool | Description |
 |---|---|
-| `identify_crypto_algorithm` | Identify cryptographic algorithms via S-box scanning, key schedule patterns, hash constants, CRC tables, and crypto API imports. Returns confidence-scored detections. |
-| `auto_extract_crypto_keys` | Search for potential cryptographic keys near identified constants using entropy-based heuristics. Returns key candidates with offset, entropy, and confidence scores. |
-| `brute_force_simple_crypto` | Brute-force XOR (single/multi-byte), RC4, ADD/SUB/ROL/ROR transforms against the loaded binary. Validates results by checking for PE headers, readable strings, and known patterns. Supports known-plaintext XOR key detection. |
+| `identify_crypto_algorithm` | Identify cryptographic algorithms via S-box scanning, key schedule patterns, hash constants, CRC tables, and crypto API imports. Returns confidence-scored detections. Paginated (default limit 20). |
+| `auto_extract_crypto_keys` | Search for potential cryptographic keys near identified constants using entropy-based heuristics. Returns key candidates with offset, entropy, and confidence scores. Paginated (default limit 20). |
+| `brute_force_simple_crypto` | Brute-force XOR (single/multi-byte), RC4, ADD/SUB/ROL/ROR transforms against the loaded binary. Validates results by checking for PE headers, readable strings, and known patterns. Supports known-plaintext XOR key detection. Paginated (default limit 10). |
 
 ### Payload Extraction (3 tools)
 
 | Tool | Description |
 |---|---|
-| `extract_steganography` | Detect data hidden after image EOF markers (PNG IEND, JPEG FFD9, GIF trailer), BMP size mismatches, and PE overlay data. Returns payload entropy, magic bytes, and extraction hints. |
-| `parse_custom_container` | Parse binary data following common malware container patterns: `delimiter_size_payload`, `size_payload`, or `fixed_chunks`. Auto-detects delimiters and chunk sizes with entropy analysis. |
-| `extract_config_automated` | Extract potential C2 configuration data using regex patterns — IPs, URLs, domains, registry keys, file paths, mutexes, and base64-encoded config blobs. Auto-saves significant findings as notes. |
+| `extract_steganography` | Detect data hidden after image EOF markers (PNG IEND, JPEG FFD9, GIF trailer), BMP size mismatches, and PE overlay data. Returns payload entropy, magic bytes, and extraction hints. Paginated (default limit 10). |
+| `parse_custom_container` | Parse binary data following common malware container patterns: `delimiter_size_payload`, `size_payload`, or `fixed_chunks`. Auto-detects delimiters and chunk sizes with entropy analysis. Paginated (default limit 20). |
+| `extract_config_automated` | Extract potential C2 configuration data using regex patterns — IPs, URLs, domains, registry keys, file paths, mutexes, and base64-encoded config blobs. Auto-saves significant findings as notes. Paginated (default limit 20). |
 
 ### IOC Export (1 tool)
 
@@ -1117,7 +1127,7 @@ The real power of PeMCP's Binary Refinery integration emerges when tools are cha
 |---|---|
 | `try_all_unpackers` | Orchestrate multiple unpacking methods (Unipacker, Binary Refinery vstack, PE overlay extraction) and return the best result with method comparison. |
 | `reconstruct_pe_from_dump` | Reconstruct a valid PE from a memory dump by fixing headers using LIEF — realigns sections, fixes SizeOfImage/SizeOfHeaders, and adjusts base address. |
-| `find_oep_heuristic` | Detect Original Entry Point of packed binaries using multiple heuristics: tail-jump detection, section-hop analysis, entropy transitions, and known packer patterns. Returns confidence-scored candidates. |
+| `find_oep_heuristic` | Detect Original Entry Point of packed binaries using multiple heuristics: tail-jump detection, section-hop analysis, entropy transitions, and known packer patterns. Returns confidence-scored candidates. Paginated (default limit 10). |
 
 ### Binary Comparison (1 tool)
 
@@ -1134,21 +1144,21 @@ The real power of PeMCP's Binary Refinery integration emerges when tools are cha
 
 ### AI-Optimised Analysis — Streamlined Tools
 
-These tools are designed for progressive, context-efficient analysis by AI clients with limited context windows. They provide summaries first, details on demand, and cross-reference data across multiple analysis dimensions.
+These tools are designed for progressive, context-efficient analysis by AI clients with limited context windows. They provide summaries first, details on demand, and cross-reference data across multiple analysis dimensions. All list-returning tools support pagination via `limit` and `offset` parameters.
 
 | Tool | Description |
 |---|---|
-| `get_triage_report(compact=True)` | **Compact triage** — risk level, score, top findings, and next-tool suggestions in ~2KB instead of ~20KB. Use `compact=False` for the full report. |
-| `get_focused_imports` | **Filtered import view** — returns only security-relevant imports categorised by threat behaviour (process injection, networking, crypto, anti-analysis, etc.), filtering out thousands of benign imports. |
+| `get_triage_report(compact=True)` | **Compact triage** — risk level, score, top findings, and next-tool suggestions in ~2KB instead of ~20KB. Use `compact=False` for the full report. Paginated (default limit 20). |
+| `get_focused_imports` | **Filtered import view** — returns only security-relevant imports categorised by threat behaviour (process injection, networking, crypto, anti-analysis, etc.), filtering out thousands of benign imports. Paginated (default limit 20). |
 | `get_strings_summary` | **Categorised string intelligence** — groups strings by type (URLs, IPs, file paths, registry keys, mutex names, base64 blobs) with counts and top examples per category. |
-| `get_function_map` | **Smart function ranking** — scores every function by interestingness (complexity, suspicious API calls, string refs, xref count, entry point status) and groups by purpose. Falls back to import-based categorisation when angr is unavailable. |
+| `get_function_map` | **Smart function ranking** — scores every function by interestingness (complexity, suspicious API calls, string refs, xref count, entry point status) and groups by purpose. Falls back to import-based categorisation when angr is unavailable. Paginated (default limit 30). |
 | `get_cross_reference_map` | **Multi-dimensional cross-reference** — for one or more functions, returns API calls, string refs, callers, callees, suspicious imports, and complexity in a single response. |
 | `auto_note_function` | **Auto-summarise a function** — generates a one-line behavioral summary from API call patterns and saves it as a persistent note for later aggregation. |
 | `get_analysis_digest` | **Running analysis summary** — aggregates triage findings, function notes, IOCs, coverage stats, and unexplored high-priority targets into a context-efficient digest. Call periodically to refresh understanding. |
-| `get_function_complexity_list(compact=True)` | **Compact complexity list** — returns minimal per-function data (addr, name, blocks) instead of the full structure. |
+| `get_function_complexity_list(compact=True)` | **Compact complexity list** — returns minimal per-function data (addr, name, blocks) instead of the full structure. Paginated (default limit 20). |
 | `list_tools_by_phase(phase)` | **Tool discovery** — browse all tools grouped by analysis phase (triage, explore, deep-dive, context, utility). Helps find the right tool for the current stage. |
 | `suggest_next_action()` | **Smart recommendations** — analyses current session state (loaded file, notes, tool history) and recommends 3-5 specific next steps. |
-| `get_analysis_timeline()` | **Investigation narrative** — merges tool history with notes into a single chronological timeline showing the full analysis story. |
+| `get_analysis_timeline()` | **Investigation narrative** — merges tool history with notes into a single chronological timeline showing the full analysis story. Paginated (default limit 20). |
 
 #### Recommended AI Workflow
 
@@ -1157,11 +1167,13 @@ These tools are designed for progressive, context-efficient analysis by AI clien
 3. **`get_triage_report(compact=True)`** — initial risk assessment in ~2KB. **Key findings are auto-saved as notes.**
 4. **`get_focused_imports()`** — understand what suspicious APIs are imported
 5. **`get_strings_summary()`** — categorised string overview
-6. **`get_function_map(limit=20)`** — find the most interesting functions to investigate
+6. **`get_function_map()`** — find the most interesting functions to investigate (default limit 30; use `limit` and `offset` to page through results)
 7. **`decompile_function_with_angr(address)`** — deep-dive into each target
 8. **`auto_note_function(address)`** — **ALWAYS call after each decompilation** to record what you learned
 9. **`add_note(content, category='tool_result')`** — record any important manual findings (decoded IOCs, anti-debug tricks, etc.)
 10. **`get_analysis_digest()`** — call every 3-5 decompilations to refresh your understanding
+
+> **Pagination tip:** Most tools default to returning 20 items per page. If results indicate `"has_more": true` in the `_pagination` block, call the same tool with an incremented `offset` to fetch the next page.
 
 ### Session Persistence & Notes
 
@@ -1178,17 +1190,17 @@ Notes and tool history are the primary mechanism for preserving analysis context
 | Tool | Description |
 |---|---|
 | `add_note` | Record a finding or observation (persisted to disk cache, survives restarts). |
-| `get_notes` | Retrieve notes, filtered by category or address. |
+| `get_notes` | Retrieve notes, filtered by category or address. Paginated (default limit 20). |
 | `update_note` / `delete_note` | Modify or remove notes. |
 | `auto_note_function` | Auto-generate and save a one-line function summary from API patterns. |
-| `get_tool_history` | View the history of tools run during this session. |
+| `get_tool_history` | View the history of tools run during this session. Paginated (default limit 20). |
 | `clear_tool_history` | Clear the tool invocation history for the current session. |
 | `get_session_summary` | Full session state: file info, notes, tool history, angr status, analysis phase. |
 | `get_analysis_digest` | Accumulated findings digest — what was *learned*, not just what tools ran. |
 | `get_progress_overview` | Lightweight progress snapshot — analysis phase, note count, tool history count, and coverage percentage. |
 | `list_tools_by_phase` | Browse available tools organised by analysis phase (triage, explore, deep-dive, context, utility). Helps discover the right tool for your current workflow stage. |
 | `suggest_next_action` | Analyse current session state and recommend 3-5 specific next steps based on what has already been done and what remains unexplored. |
-| `get_analysis_timeline` | Merge tool history with notes into a single chronological timeline — shows the full narrative of the investigation. |
+| `get_analysis_timeline` | Merge tool history with notes into a single chronological timeline. Paginated (default limit 20). |
 | `export_project` | Export session (analysis + notes + history + optionally the binary) as `.pemcp_project.tar.gz`. |
 | `import_project` | Import a previously exported project archive. |
 
@@ -1276,6 +1288,59 @@ pemcp/
 - **Lazy Loading** — Heavy analysis (Angr CFG) runs in the background. The server is usable immediately.
 - **Smart Truncation** — MCP responses exceeding 64KB are intelligently truncated (lists shortened, strings clipped) whilst preserving structure.
 - **Graceful Degradation** — Optional libraries (Angr, Capa, FLOSS, etc.) are detected at startup. Tools that require unavailable libraries return clear error messages instead of crashing.
+
+### Pagination & Result Limits
+
+Most tools that return lists of results support **pagination** via `limit` and `offset` parameters. This prevents response truncation and gives AI clients control over how much data they receive per call.
+
+#### How Pagination Works
+
+Every paginated tool response includes a `_pagination` metadata block:
+
+```json
+{
+  "results": [ ... ],
+  "count": 20,
+  "_pagination": {
+    "total": 150,
+    "offset": 0,
+    "limit": 20,
+    "returned": 20,
+    "has_more": true
+  }
+}
+```
+
+To fetch the next page, call the same tool with `offset=20` (or whatever `offset + limit` is). Continue until `has_more` is `false`.
+
+#### Default Limits
+
+The default `limit` varies by tool to balance context efficiency with completeness:
+
+| Default `limit` | Tools |
+|---|---|
+| **20** | Most tools — `get_pe_data`, `get_floss_analysis_info`, `get_capa_analysis_info`, `get_function_xrefs`, `get_backward_slice`, `get_forward_slice`, `get_function_complexity_list`, `extract_function_constants`, `get_global_data_refs`, `scan_for_indirect_jumps`, `get_reaching_definitions`, `get_data_dependencies`, `get_control_dependencies`, `identify_library_functions`, `diff_binaries`, `detect_self_modifying_code`, `find_code_caves`, `identify_cpp_classes`, `identify_crypto_algorithm`, `auto_extract_crypto_keys`, all Refinery tools, all multi-format analysis tools (`dotnet_analyze`, `elf_analyze`, `macho_analyze`, `go_analyze`), `get_notes`, `get_tool_history`, `get_triage_report`, and more |
+| **30** | `get_function_map` (function ranking), `disassemble_at_address` (instructions) |
+| **50** | `get_call_graph` (call graph edges), `analyze_entropy_by_offset`, `qiling_trace_execution` |
+| **80** | `get_value_set_analysis`, `propagate_constants`, `get_function_variables` |
+| **300** | `get_annotated_disassembly` (rich disassembly blocks) |
+| **10** | `brute_force_simple_crypto`, `extract_steganography`, `bruteforce_xor_key`, `find_oep_heuristic` |
+
+The hard upper bound on `limit` is **100,000** (enforced in `get_pe_data` and string tools) to prevent excessive memory allocation.
+
+#### Result Caching (LRU)
+
+Paginated results are cached in an **LRU cache** (5 slots per tool) so that paging through results doesn't re-compute the full dataset on each call. The cache is keyed by tool name and non-pagination parameters — changing `offset` or `limit` hits the same cache entry. The internal maximum cached items per result set is **5,000**.
+
+#### Session & State Limits
+
+| Setting | Value | Description |
+|---|---|---|
+| `MAX_COMPLETED_TASKS` | 50 | Maximum completed/failed background tasks retained per session |
+| `MAX_TOOL_HISTORY` | 500 | Maximum tool invocation history entries retained per session |
+| `SESSION_TTL_SECONDS` | 3600 | Session lifetime before cleanup (1 hour) |
+| `MAX_MCP_RESPONSE_SIZE_KB` | 64 | MCP response size limit per the protocol specification |
+| `PEMCP_MAX_CONCURRENT_ANALYSES` | 3 | Concurrent heavy analysis semaphore (configurable via environment variable) |
 
 ---
 
