@@ -16,8 +16,13 @@ if STRINGSIFTER_AVAILABLE:
 @tool_decorator
 async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_line: Optional[int]=16, limit_lines: Optional[int]=256, offset: Optional[int] = None) -> List[str]:
     """
-    Retrieves a hex dump of a specified region from the pre-loaded PE file.
-    'limit_lines' controls the number of lines in the output.
+    [Phase: explore] Retrieves a hex dump of a specified region from the loaded binary.
+
+    When to use: When you need to inspect raw bytes at a specific offset — after
+    finding interesting strings, embedded data, crypto constants, or archive headers.
+
+    Next steps: If data looks encrypted → bruteforce_xor_key() or deobfuscate_xor_single_byte().
+    If data looks like an embedded file → scan_for_embedded_files().
 
     Prerequisites:
     - A PE file must have been successfully pre-loaded at server startup.
@@ -85,10 +90,16 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
 @tool_decorator
 async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
     """
-    Deobfuscates a hex-encoded string that is presumed to represent Base64 encoded data.
+    [Phase: deep-dive] Decodes hex-encoded Base64 data back to plaintext.
+
+    When to use: After finding Base64-encoded strings in the binary via
+    find_and_decode_encoded_strings() or manual hex dump inspection.
+
+    Next steps: If decoded data is printable → add_note() to record finding.
+    If it contains further encoding → call recursively or use find_and_decode_encoded_strings().
+
     The input 'hex_string' should be the hexadecimal representation of a Base64 string.
-    Example: If original data is "test", its Base64 is "dGVzdA==", and the hex of "dGVzdA==" is "6447567a64413d3d".
-             This function expects "6447567a64413d3d" as input.
+    Example: hex of "dGVzdA==" is "6447567a64413d3d".
 
     Args:
         ctx: The MCP Context object.
@@ -124,7 +135,13 @@ async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
 @tool_decorator
 async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> Dict[str, Optional[str]]:
     """
-    Deobfuscates a hex-encoded data string using a single-byte XOR key.
+    [Phase: deep-dive] Decrypts hex-encoded data using a single-byte XOR key (0-255).
+
+    When to use: When you know the XOR key (from decompilation, bruteforce_xor_key(),
+    or pattern analysis). For unknown keys, use bruteforce_xor_key() first.
+
+    Next steps: Check is_mostly_printable_ascii() on the result. If printable →
+    add_note(). If result looks like PE header → open_file() to analyze extracted payload.
 
     Args:
         ctx: The MCP Context object.
@@ -183,8 +200,13 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
 @tool_decorator
 async def is_mostly_printable_ascii(ctx: Context, text_input: str, threshold: float = 0.8) -> bool:
     """
-    Checks if the given string 'text_input' consists mostly of printable ASCII characters.
-    Printable includes standard ASCII (space to '~') and common whitespace (newline, tab, carriage return).
+    [Phase: utility] Checks if a string consists mostly of printable ASCII characters.
+
+    When to use: After XOR/Base64 decryption to verify if the result is meaningful
+    plaintext vs. binary garbage. Helps validate decryption attempts.
+
+    Next steps: If True → add_note() to record the decoded content. If False →
+    try different XOR keys or encoding schemes.
 
     Args:
         ctx: The MCP Context object.
@@ -250,7 +272,7 @@ async def find_and_decode_encoded_strings(
     verbose_mcp_output: bool = False
 ) -> Dict[str, Any]:
     """
-    Finds, decodes (recursively), and optionally ranks encoded strings with heuristics.
+    [Phase: explore] Finds, decodes (recursively), and optionally ranks encoded strings with heuristics.
 
     This enhanced tool implements multi-layer decoding, adds a confidence score based
     on the location of the string, and includes a single-byte XOR bruteforce decoder.

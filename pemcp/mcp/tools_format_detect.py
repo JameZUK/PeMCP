@@ -56,8 +56,14 @@ async def detect_binary_format(
     file_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Auto-detects binary format from magic bytes: PE, ELF, Mach-O, .NET, Go, Rust.
-    Returns the format, suggested analysis tools, and basic metadata.
+    [Phase: load] Auto-detects binary format from magic bytes: PE, ELF, Mach-O,
+    .NET, Go, Rust. Returns the format and suggested analysis tools.
+
+    When to use: Before open_file() when you're unsure of the binary format, or
+    to determine which format-specific tools to use.
+
+    Next steps: Follow the returned suggested_tools list — e.g. elf_analyze()
+    for ELF, macho_analyze() for Mach-O, dotnet_analyze() for .NET.
 
     Args:
         file_path: Optional path to a binary. If None, uses the loaded file.

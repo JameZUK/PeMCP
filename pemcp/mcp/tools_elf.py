@@ -17,8 +17,14 @@ async def elf_analyze(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """
-    Comprehensive ELF binary analysis: file header, program headers, sections,
-    symbols, dynamic dependencies, and notes.
+    [Phase: triage] Comprehensive ELF binary analysis: file header, program
+    headers, sections, symbols, dynamic dependencies, and notes.
+
+    When to use: When detect_binary_format() or open_file() identifies an ELF
+    binary. This is the primary ELF analysis tool.
+
+    Next steps: elf_dwarf_info() if debug info is present, get_triage_report()
+    for risk assessment, decompile_function_with_angr() on interesting functions.
 
     Args:
         file_path: Optional path to an ELF binary. If None, uses the loaded file.
@@ -145,8 +151,14 @@ async def elf_dwarf_info(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """
-    Extracts DWARF debug information from an ELF binary: compilation units,
-    function names, source files, and line number mappings.
+    [Phase: explore] Extracts DWARF debug information from an ELF binary:
+    compilation units, function names, source files, and line number mappings.
+
+    When to use: After elf_analyze() when the binary is not stripped. Debug info
+    provides function names and source mappings for much richer analysis.
+
+    Next steps: Use function names from DWARF to target decompile_function_with_angr()
+    at interesting functions.
 
     Args:
         file_path: Optional path to an ELF binary. If None, uses the loaded file.

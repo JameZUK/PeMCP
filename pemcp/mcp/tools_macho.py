@@ -16,8 +16,14 @@ async def macho_analyze(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """
-    Analyses a Mach-O binary: header, load commands, segments, sections,
-    symbols, dynamic libraries, and code signature info.
+    [Phase: triage] Analyses a Mach-O binary: header, load commands, segments,
+    sections, symbols, dynamic libraries, and code signature info.
+
+    When to use: When detect_binary_format() or open_file() identifies a Mach-O
+    binary. This is the primary Mach-O analysis tool.
+
+    Next steps: get_triage_report() for risk assessment,
+    decompile_function_with_angr() on interesting functions.
 
     Args:
         file_path: Optional path to a Mach-O binary. If None, uses the loaded file.

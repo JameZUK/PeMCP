@@ -39,8 +39,14 @@ async def go_analyze(
     limit: int = 20,
 ) -> Dict[str, Any]:
     """
-    Analyses a Go binary: compiler version, packages, function names with addresses,
-    type definitions. Works on stripped binaries by parsing pclntab.
+    [Phase: triage] Analyses a Go binary: compiler version, packages, function
+    names with addresses, type definitions. Works on stripped binaries via pclntab.
+
+    When to use: When detect_binary_format() identifies a Go binary. Go binaries
+    have unique structure — this tool extracts Go-specific metadata.
+
+    Next steps: decompile_function_with_angr() on main/init functions,
+    get_triage_report() for risk assessment.
 
     Args:
         file_path: Optional path to a Go binary. If None, uses the loaded file.

@@ -7,8 +7,11 @@ from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 @tool_decorator
 async def get_cache_stats(ctx: Context) -> Dict[str, Any]:
     """
-    Returns statistics about the disk-based analysis cache (~/.pemcp/cache/).
-    Shows entry count, total size, utilization, and a list of cached files.
+    [Phase: utility] Returns statistics about the disk-based analysis cache
+    (~/.pemcp/cache/). Shows entry count, total size, and per-file details.
+
+    When to use: To check what files have been previously analyzed and are
+    cached, or to monitor disk usage before opening new files.
 
     This tool does not require a file to be loaded.
 
@@ -26,9 +29,11 @@ async def get_cache_stats(ctx: Context) -> Dict[str, Any]:
 @tool_decorator
 async def clear_analysis_cache(ctx: Context) -> Dict[str, Any]:
     """
-    Clears the entire disk-based analysis cache (~/.pemcp/cache/).
-    Removes all cached file analysis results. This frees disk space but
-    means the next file open will require a full re-analysis.
+    [Phase: utility] Clears the entire disk-based analysis cache (~/.pemcp/cache/).
+    Removes all cached analysis results. Frees disk space but means the
+    next open_file() will require a full re-analysis.
+
+    When to use: When disk space is limited or cached results are stale.
 
     This tool does not require a file to be loaded.
 
@@ -50,8 +55,11 @@ async def clear_analysis_cache(ctx: Context) -> Dict[str, Any]:
 @tool_decorator
 async def remove_cached_analysis(ctx: Context, sha256_hash: str) -> Dict[str, Any]:
     """
-    Removes a specific cached analysis result by its SHA256 file hash.
-    Use get_cache_stats to see which hashes are cached.
+    [Phase: utility] Removes a specific cached analysis result by SHA256 hash.
+    Use get_cache_stats() to see which hashes are cached.
+
+    When to use: When a specific file's cached analysis is stale and you want
+    to force re-analysis on next open_file() without clearing the entire cache.
 
     This tool does not require a file to be loaded.
 
