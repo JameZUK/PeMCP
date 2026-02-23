@@ -22,6 +22,7 @@ SAMPLES_DIR="${PEMCP_SAMPLES:-$(cd "$(dirname "$0")" && pwd)/samples}"
 CONTAINER_SAMPLES="/$(basename "$SAMPLES_DIR")"
 ROOTFS_DIR="${PEMCP_ROOTFS:-$(cd "$(dirname "$0")" && pwd)/qiling-rootfs}"
 OUTPUT_DIR="${PEMCP_OUTPUT:-$(cd "$(dirname "$0")" && pwd)/output}"
+CACHE_DIR="${PEMCP_CACHE:-$HOME/.pemcp}"
 
 # --- Detect container runtime ---
 detect_runtime() {
@@ -74,6 +75,9 @@ build_image() {
 
 # --- Common run arguments ---
 common_args() {
+    # Ensure cache directory exists on host
+    mkdir -p "$CACHE_DIR" 2>/dev/null || true
+
     local args=(
         --rm
         --user "$(id -u):$(id -g)"
@@ -82,7 +86,7 @@ common_args() {
         -e "USER=${USER:-pemcp}"
         -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro${SELINUX_SUFFIX}"
-        -v "pemcp-data:/app/home/.pemcp"
+        -v "$CACHE_DIR:/app/home/.pemcp:rw${SELINUX_SUFFIX}"
     )
 
     # Mount output directory if it exists (create it on first use)
@@ -127,11 +131,9 @@ common_args() {
 # --- Commands ---
 cmd_http() {
     ensure_image
-    local pemcp_vol_path
-    pemcp_vol_path=$($RUNTIME volume inspect pemcp-data --format '{{.Mountpoint}}' 2>/dev/null || echo "pemcp-data (named volume)")
     echo "[*] Starting PeMCP HTTP server on port $CONTAINER_PORT..."
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)"
-    echo "[*] Config/cache (.pemcp): $pemcp_vol_path"
+    echo "[*] Config/cache (.pemcp): $CACHE_DIR"
     echo "[*] MCP endpoint: http://127.0.0.1:$CONTAINER_PORT/mcp"
     echo "[*] Press Ctrl+C to stop."
     echo ""
@@ -148,11 +150,9 @@ cmd_http() {
 
 cmd_stdio() {
     ensure_image
-    local pemcp_vol_path
-    pemcp_vol_path=$($RUNTIME volume inspect pemcp-data --format '{{.Mountpoint}}' 2>/dev/null || echo "pemcp-data (named volume)")
     echo "[*] Starting PeMCP in stdio MCP mode..." >&2
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)" >&2
-    echo "[*] Config/cache (.pemcp): $pemcp_vol_path" >&2
+    echo "[*] Config/cache (.pemcp): $CACHE_DIR" >&2
     # shellcheck disable=SC2046
     $RUNTIME run -i \
         $(common_args) \
@@ -223,6 +223,9 @@ Options:
   --output <dir>    Mount a writable output directory into the container at /output.
                     Used for project exports, patched binaries, and reports.
                     Default: ./output/ next to this script.
+  --cache <dir>     Mount a cache/config directory into the container at /app/home/.pemcp.
+                    Persists analysis cache, notes, and tool history across sessions.
+                    Default: ~/.pemcp (auto-created if missing).
   --rootfs <dir>    Mount a Qiling rootfs directory into the container.
                     Place Windows DLLs, Linux libs, etc. here for emulation.
                     Default: ./qiling-rootfs/ next to this script.
@@ -233,6 +236,7 @@ Environment variables:
   PEMCP_PORT        Host port for HTTP mode (default: 8082)
   PEMCP_SAMPLES     Default samples directory (overridden by --samples)
   PEMCP_OUTPUT      Default output directory (overridden by --output)
+  PEMCP_CACHE       Default cache/config directory (overridden by --cache)
   PEMCP_ROOTFS      Default Qiling rootfs directory (overridden by --rootfs)
 
 Examples:
@@ -250,7 +254,7 @@ Notes:
     (e.g. --samples ~/Downloads → /Downloads/yourfile.exe inside the container)
   - Default samples: ./samples/ → /samples/yourfile.exe
   - Default output: ./output/ → /output/ (writable, for exports and patched binaries)
-  - Analysis cache persists in a named volume (pemcp-data)
+  - Analysis cache persists in ~/.pemcp (bind-mounted into the container)
   - Auto-detects Docker or Podman
 EOF
 }
@@ -291,6 +295,17 @@ while [[ $# -gt 0 ]]; do
             fi
             OUTPUT_DIR="$(mkdir -p "$2" 2>/dev/null; cd "$2" 2>/dev/null && pwd)" || {
                 echo "Error: Cannot create/access output directory: $2"
+                exit 1
+            }
+            shift 2
+            ;;
+        --cache)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: --cache requires a directory path."
+                exit 1
+            fi
+            CACHE_DIR="$(mkdir -p "$2" 2>/dev/null; cd "$2" 2>/dev/null && pwd)" || {
+                echo "Error: Cannot create/access cache directory: $2"
                 exit 1
             }
             shift 2
