@@ -43,13 +43,16 @@ async def get_session_summary(
     ctx: Context,
 ) -> Dict[str, Any]:
     """
-    Returns a comprehensive summary of the current session and any prior
-    session data for the loaded file. Includes file info, notes, tool history
-    (both current and previous session), angr status, analysis phase, and
-    suggested next tools.
+    [Phase: context] Returns a comprehensive summary of the current session and any
+    prior session data for the loaded file. Includes file info, notes, tool history,
+    angr status, analysis phase, and suggested next tools.
 
-    Designed to help an AI analyst quickly get up to speed on what has
-    already been done with this binary.
+    When to use: Call when resuming work on a previously analyzed binary, or when
+    you need to understand what has already been done before deciding next steps.
+
+    Designed to help an AI analyst quickly get up to speed. The response includes
+    'analysis_phase' (not_started → file_loaded → triaged → exploring → advanced)
+    and 'suggested_next_tools' based on what hasn't been run yet.
 
     This tool does not require a file to be loaded (returns minimal info
     if no file is loaded).
@@ -159,13 +162,19 @@ async def get_analysis_digest(
     since_last_digest: bool = False,
 ) -> Dict[str, Any]:
     """
-    Returns a structured digest of what has been learned about the binary so far.
-    Aggregates triage findings, function notes, IOCs, and tool history into
-    a context-efficient summary.
+    [Phase: context] Returns a structured digest of what has been LEARNED about
+    the binary so far — aggregates triage findings, function notes, IOCs, and
+    coverage stats into a single context-efficient summary.
 
-    Unlike get_session_summary (which shows what tools ran), this shows what
-    was *learned*. Call this periodically during analysis to refresh your
-    understanding without re-reading earlier tool outputs.
+    When to use: Call periodically during analysis to refresh your understanding
+    without re-reading earlier tool outputs. Essential for maintaining context in
+    long analysis sessions. Unlike get_session_summary (which shows what tools
+    ran), this shows what was *discovered*.
+
+    Typical next steps after reviewing the digest:
+      - If unexplored_high_priority functions listed → decompile_function_with_angr()
+      - If coverage is low → get_function_complexity_list() to find interesting targets
+      - If IOCs found → get_virustotal_report_for_loaded_file(), search_floss_strings()
 
     Args:
         ctx: The MCP Context object.
@@ -311,9 +320,13 @@ async def get_progress_overview(
     ctx: Context,
 ) -> Dict[str, Any]:
     """
-    Lightweight progress snapshot — cheap enough to call at the start of every turn.
-    Returns analysis phase, note count (by category), tool history count, function
-    coverage percentage, and angr status in a single small response.
+    [Phase: context] Lightweight progress snapshot — cheap enough to call at the
+    start of every turn. Returns analysis phase, note counts, tool call count,
+    function coverage percentage, and angr status in a single small response.
+
+    When to use: Call at the start of each turn to orient yourself. Use
+    get_analysis_digest() when you need full findings detail, or
+    get_session_summary() when you need tool history and suggestions.
 
     Does not require a file to be loaded (returns minimal info if no file is open).
 

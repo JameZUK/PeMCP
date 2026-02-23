@@ -56,7 +56,15 @@ async def search_floss_strings(
     case_sensitive: bool = False
 ) -> Dict[str, Any]:
     """
-    Performs a regex search against FLOSS strings, with advanced score filtering and sorting.
+    [Phase: explore] Performs a regex search against FLOSS strings with advanced
+    score filtering and sorting.
+
+    When to use: When looking for specific patterns in strings — network indicators
+    (IPs, URLs, domains), file paths, registry keys, or suspicious API references.
+    More targeted than get_strings_summary() or get_top_sifted_strings().
+
+    Next steps: If IOCs found → add_note(content, category='tool_result') to record them.
+    Use get_string_usage_context(string_offset) to find code that references a string.
 
     Args:
         ctx: The MCP Context object.
