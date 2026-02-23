@@ -17,8 +17,9 @@ nampa>=0.1
 
 # --- FLARE Tools (Capabilities & Advanced Strings) ---
 flare-floss>=3.0
-# NOTE: capa >=9.0 required — bundled capa-rules v9.x are not backwards-compatible
-flare-capa>=9.0
+# NOTE: capa version must match bundled capa-rules version (v9.3.0).
+# Rules use syntax features from their matching capa release.
+flare-capa>=9.3,<9.4
 
 # --- String Analysis & Ranking ---
 # PyPI package name is "stringsifter", NOT "flare-stringsifter"
@@ -59,8 +60,11 @@ dotnetfile>=0.2
 ppdeep>=20200401
 # Locality-sensitive hashing
 py-tlsh>=4.7
-# Embedded file/firmware detection (v3 Rust rewrite, drop-in Python API via binwalk3)
-binwalk3>=3.1
+# Embedded file/firmware detection
+# Primary: system binwalk package (apt-get install binwalk) — always works via CLI fallback.
+# Optional: binwalk3 pip package wraps the Rust v3 binary for faster Python API, but
+# requires the v3 Rust binary to be installed separately (not bundled on Linux).
+# binwalk3>=3.1
 
 # --- .NET Binary Analysis (Optional) ---
 # .NET PE metadata parser (CLR headers, metadata tables, streams)

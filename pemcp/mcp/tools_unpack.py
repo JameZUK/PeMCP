@@ -82,7 +82,7 @@ async def try_all_unpackers(
                 stderr=asyncio.subprocess.PIPE,
             )
             cmd = _json.dumps({
-                "action": "unpack",
+                "action": "unpack_pe",
                 "filepath": state.filepath,
                 "timeout_seconds": timeout_seconds,
             }).encode()

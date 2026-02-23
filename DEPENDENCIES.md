@@ -185,7 +185,8 @@ The bundled capa-rules must match the capa major version.  If you bump
 - `pemcp/config.py` → `CAPA_RULES_ZIP_URL`
 - `Dockerfile` → the `urllib.request.urlretrieve(...)` URL
 
-Current alignment: **flare-capa >=9.0** with **capa-rules v9.3.0**.
+Current alignment: **flare-capa >=9.3,<9.4** with **capa-rules v9.3.0**.
+The minor version must match — rules use syntax from their matching capa release.
 
 ---
 
