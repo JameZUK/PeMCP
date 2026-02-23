@@ -1237,6 +1237,7 @@ async def get_call_graph(
 @tool_decorator
 async def find_anti_debug_comprehensive(
     ctx: Context,
+    compact: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Comprehensive anti-analysis and anti-debug technique detection.
@@ -1252,6 +1253,8 @@ async def find_anti_debug_comprehensive(
 
     Args:
         ctx: The MCP Context object.
+        compact: (bool) If True, return a grouped summary instead of per-occurrence
+            technique listings. Saves context budget when you only need an overview.
     """
     await ctx.info("Scanning for anti-debug and anti-analysis techniques")
     _check_angr_ready("find_anti_debug_comprehensive")
@@ -1374,6 +1377,26 @@ async def find_anti_debug_comprehensive(
         severity_counts = {"high": 0, "medium": 0, "low": 0}
         for t in techniques:
             severity_counts[t["severity"]] = severity_counts.get(t["severity"], 0) + 1
+
+        if compact:
+            # Rank functions by how many anti-debug techniques they use
+            top_funcs = sorted(
+                functions_with_antidbg,
+                key=lambda f: len(f.get("techniques", [])),
+                reverse=True,
+            )[:5]
+            top_funcs_compact = [
+                {"addr": f["address"], "name": f["name"], "technique_count": len(f.get("techniques", []))}
+                for f in top_funcs
+            ]
+            return {
+                "total_techniques_found": len(techniques),
+                "severity_summary": severity_counts,
+                "categories": categories,
+                "top_functions": top_funcs_compact,
+                "has_tls_callbacks": bool(tls_callbacks),
+                "note": "Use find_anti_debug_comprehensive(compact=False) for per-occurrence technique details.",
+            }
 
         return {
             "total_techniques_found": len(techniques),
