@@ -56,18 +56,46 @@ async def _run_qiling(cmd: dict, timeout_seconds: int) -> dict:
 
 
 def _check_qiling(tool_name: str):
-    """Validate that Qiling is available, raising RuntimeError if not."""
+    """Validate that Qiling is available, raising RuntimeError with rootfs guidance if not."""
     if not _check_qiling_available():
         raise RuntimeError(
             f"[{tool_name}] Qiling Framework is not available. "
             "It requires the Qiling venv (/app/qiling-venv) to be set up. "
             "This is included in the Docker image."
         )
+    # Check rootfs exists and provide specific guidance
+    rootfs = str(_QILING_DEFAULT_ROOTFS)
+    if not os.path.isdir(rootfs):
+        raise RuntimeError(
+            f"[{tool_name}] Qiling rootfs directory not found at {rootfs}. "
+            "Create it or set QILING_ROOTFS environment variable. "
+            "Use qiling_setup_check() to diagnose the issue."
+        )
 
 
 def _rootfs_path() -> str:
     """Return the default rootfs path."""
     return str(_QILING_DEFAULT_ROOTFS)
+
+
+# Essential DLLs needed for Windows PE emulation
+_ESSENTIAL_DLLS = {
+    "x86_windows": [
+        "ntdll.dll", "kernel32.dll", "kernelbase.dll", "user32.dll",
+        "advapi32.dll", "ws2_32.dll", "msvcrt.dll", "ole32.dll",
+    ],
+    "x8664_windows": [
+        "ntdll.dll", "kernel32.dll", "kernelbase.dll", "user32.dll",
+        "advapi32.dll", "ws2_32.dll", "msvcrt.dll", "ole32.dll",
+    ],
+}
+
+_ROOTFS_ARCH_DIRS = {
+    "x86_windows": "x86_windows/Windows/System32",
+    "x8664_windows": "x8664_windows/Windows/System32",
+    "x86_linux": "x86_linux",
+    "x8664_linux": "x8664_linux",
+}
 
 
 # ===================================================================
@@ -79,7 +107,7 @@ async def emulate_binary_with_qiling(
     ctx: Context,
     timeout_seconds: int = 60,
     max_instructions: int = 0,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Emulates the loaded binary (PE, ELF, or Mach-O) using the Qiling Framework
@@ -135,7 +163,7 @@ async def emulate_shellcode_with_qiling(
     architecture: str = "x86",
     timeout_seconds: int = 30,
     max_instructions: int = 0,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Emulates shellcode using the Qiling Framework with multi-architecture support.
@@ -189,7 +217,7 @@ async def qiling_trace_execution(
     end_address: Optional[str] = None,
     max_instructions: int = 1000,
     timeout_seconds: int = 30,
-    limit: int = 500,
+    limit: int = 50,
 ) -> Dict[str, Any]:
     """
     Traces execution of the loaded binary at the instruction level using Qiling.
@@ -235,7 +263,7 @@ async def qiling_hook_api_calls(
     target_apis: Optional[List[str]] = None,
     timeout_seconds: int = 60,
     max_instructions: int = 0,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Runs the loaded binary under Qiling and hooks specific API/syscall calls
@@ -398,7 +426,7 @@ async def qiling_memory_search(
     max_instructions: int = 500000,
     timeout_seconds: int = 60,
     context_bytes: int = 32,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Runs the loaded binary under Qiling for a specified number of instructions,
@@ -442,3 +470,110 @@ async def qiling_memory_search(
         "limit": limit,
     }, timeout_seconds)
     return await _check_mcp_response_size(ctx, result, "qiling_memory_search", "the 'limit' parameter")
+
+
+# ===================================================================
+#  Tool 8: qiling_setup_check
+# ===================================================================
+
+@tool_decorator
+async def qiling_setup_check(
+    ctx: Context,
+) -> Dict[str, Any]:
+    """
+    [Phase: utility] Checks the Qiling Framework setup status: venv availability,
+    rootfs directory structure, and essential DLLs for each architecture.
+
+    When to use: When Qiling emulation fails or before first use to verify the
+    environment is properly configured. Provides specific copy commands for
+    missing DLLs.
+
+    Args:
+        ctx: The MCP Context object.
+    """
+    await ctx.info("Checking Qiling setup status")
+
+    result: Dict[str, Any] = {}
+
+    # Check venv
+    venv_available = _check_qiling_available()
+    result["venv_available"] = venv_available
+    result["venv_python"] = str(_QILING_VENV_PYTHON)
+    result["runner_script"] = str(_QILING_RUNNER)
+
+    if not venv_available:
+        result["error"] = (
+            "Qiling venv is not set up. The Docker image includes it by default. "
+            "If running locally, create a venv at /app/qiling-venv with: "
+            "python3 -m venv /app/qiling-venv && "
+            "/app/qiling-venv/bin/pip install qiling 'unicorn<2'"
+        )
+        return result
+
+    # Check rootfs
+    rootfs = str(_QILING_DEFAULT_ROOTFS)
+    result["rootfs_path"] = rootfs
+    result["rootfs_exists"] = os.path.isdir(rootfs)
+
+    if not os.path.isdir(rootfs):
+        result["error"] = f"Rootfs directory not found at {rootfs}. Create it or set QILING_ROOTFS env var."
+        return result
+
+    # Check each architecture directory
+    arch_status = {}
+    for arch_key, rel_path in _ROOTFS_ARCH_DIRS.items():
+        arch_dir = os.path.join(rootfs, rel_path)
+        exists = os.path.isdir(arch_dir)
+        entry: Dict[str, Any] = {"path": arch_dir, "exists": exists}
+
+        if exists and arch_key in _ESSENTIAL_DLLS:
+            present = []
+            missing = []
+            for dll in _ESSENTIAL_DLLS[arch_key]:
+                dll_path = os.path.join(arch_dir, dll)
+                if os.path.isfile(dll_path):
+                    present.append(dll)
+                else:
+                    missing.append(dll)
+            entry["present_dlls"] = present
+            entry["missing_dlls"] = missing
+            if missing:
+                # Generate copy commands
+                if "x86" in arch_key and "64" not in arch_key:
+                    src_dir = r"C:\Windows\SysWOW64"
+                else:
+                    src_dir = r"C:\Windows\System32"
+                entry["fix_command"] = (
+                    f"Copy from a Windows machine: "
+                    f"cp {src_dir}\\{{{','.join(missing)}}} → {arch_dir}/"
+                )
+
+        arch_status[arch_key] = entry
+
+    result["architectures"] = arch_status
+
+    # Determine loaded binary's architecture needs
+    if state.pe_data:
+        mode = state.pe_data.get("mode", "").lower()
+        if "pe32+" in mode or "pe64" in mode or "x64" in mode:
+            result["loaded_binary_arch"] = "x8664_windows"
+        elif "pe32" in mode or "pe" in mode:
+            result["loaded_binary_arch"] = "x86_windows"
+        elif "elf64" in mode:
+            result["loaded_binary_arch"] = "x8664_linux"
+        elif "elf" in mode:
+            result["loaded_binary_arch"] = "x86_linux"
+
+        needed_arch = result.get("loaded_binary_arch")
+        if needed_arch and needed_arch in arch_status:
+            arch_info = arch_status[needed_arch]
+            if not arch_info["exists"]:
+                result["warning"] = f"Directory for {needed_arch} does not exist. Emulation will fail."
+            elif arch_info.get("missing_dlls"):
+                result["warning"] = (
+                    f"Missing essential DLLs for {needed_arch}: "
+                    f"{', '.join(arch_info['missing_dlls'])}. "
+                    "Emulation may fail or produce incomplete results."
+                )
+
+    return result

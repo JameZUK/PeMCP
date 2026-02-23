@@ -261,7 +261,7 @@ async def disassemble_raw_bytes(
     hex_bytes: str,
     architecture: str = "x86_64",
     base_address: str = "0x0",
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Disassembles raw bytes (shellcode, buffer contents) without needing a loaded binary.
@@ -586,7 +586,7 @@ async def _run_speakeasy(cmd: dict, timeout_seconds: int) -> dict:
 async def emulate_pe_with_windows_apis(
     ctx: Context,
     timeout_seconds: int = 60,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Emulates the loaded PE in Speakeasy's Windows environment with full API emulation.
@@ -615,7 +615,7 @@ async def emulate_shellcode_with_speakeasy(
     shellcode_hex: Optional[str] = None,
     architecture: str = "x86",
     timeout_seconds: int = 30,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Emulates shellcode with full Windows API emulation via Speakeasy.
@@ -721,7 +721,7 @@ async def auto_unpack_pe(
 # ===================================================================
 
 @tool_decorator
-async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any]:
+async def parse_dotnet_metadata(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     """
     Parses .NET metadata from the loaded PE: CLR header, streams, type definitions,
     method definitions, assembly references, and user strings.
@@ -814,7 +814,7 @@ async def parse_dotnet_metadata(ctx: Context, limit: int = 100) -> Dict[str, Any
 @tool_decorator
 async def scan_for_embedded_files(
     ctx: Context,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Scans the binary for embedded files, archives, and file system images

@@ -783,7 +783,7 @@ async def reanalyze_loaded_pe_file(
 
 
 @tool_decorator
-async def get_analyzed_file_summary(ctx: Context, limit: int = 50) -> Dict[str, Any]:
+async def get_analyzed_file_summary(ctx: Context, limit: int = 20, compact: bool = False) -> Dict[str, Any]:
     """
     Retrieves a high-level summary of the pre-loaded and analyzed PE file.
 
@@ -826,6 +826,19 @@ async def get_analyzed_file_summary(ctx: Context, limit: int = 50) -> Dict[str, 
     if capa.get('status') == "Analysis complete (adapted workflow)":
         capa_count = len(capa.get('results', {}).get('rules', {}))
 
+    if compact:
+        hashes = state.pe_data.get("file_hashes", {})
+        await ctx.info(f"Compact summary for {state.filepath} generated.")
+        return {
+            "filepath": state.filepath,
+            "md5": hashes.get("md5"),
+            "sha256": hashes.get("sha256"),
+            "mode": state.pe_data.get("mode", "unknown"),
+            "file_size": state.pe_data.get("file_size"),
+            "section_count": len(state.pe_data.get('sections', [])),
+            "import_dll_count": len(state.pe_data.get('imports', [])),
+        }
+
     full_summary = {
         "filepath": state.filepath,
         "pefile_version_used": state.pefile_version,
@@ -858,7 +871,7 @@ async def get_analyzed_file_summary(ctx: Context, limit: int = 50) -> Dict[str, 
 
 
 @tool_decorator
-async def get_full_analysis_results(ctx: Context, limit: int) -> Dict[str, Any]:
+async def get_full_analysis_results(ctx: Context, limit: int, compact: bool = False) -> Dict[str, Any]:
     """
     Retrieves the complete analysis results for the pre-loaded PE file.
 
@@ -881,6 +894,23 @@ async def get_full_analysis_results(ctx: Context, limit: int) -> Dict[str, Any]:
     limit = min(limit, _MAX_LIMIT)
 
     _check_pe_loaded("get_full_analysis_results")
+
+    if compact:
+        # Compact: hashes, sections overview, mode, and file size only
+        hashes = state.pe_data.get("file_hashes", {})
+        sections = state.pe_data.get("sections", [])
+        compact_sections = [
+            {"name": s.get("name"), "virtual_size": s.get("virtual_size"), "entropy": s.get("entropy")}
+            for s in sections[:20] if isinstance(s, dict)
+        ]
+        return {
+            "file_hashes": hashes,
+            "mode": state.pe_data.get("mode", "unknown"),
+            "file_size": state.pe_data.get("file_size"),
+            "sections": compact_sections,
+            "import_count": len(state.pe_data.get("imports", [])),
+            "export_count": len(state.pe_data.get("exports", {}).get("symbols", [])),
+        }
 
     # Prepare the data according to the client's limit on top-level keys
     data_to_send = dict(list(state.pe_data.items())[:limit])
@@ -922,7 +952,7 @@ PE_DATA_KEYS = {
 async def get_pe_data(
     ctx: Context,
     key: str,
-    limit: int = 50,
+    limit: int = 20,
     offset: Optional[int] = 0,
 ) -> Any:
     """
@@ -1010,7 +1040,7 @@ async def get_focused_imports(
     category: str = "all",
     min_risk: str = "MEDIUM",
     include_benign_summary: bool = True,
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     Returns only the security-relevant imports, categorized by threat behavior.

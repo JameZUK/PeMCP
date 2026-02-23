@@ -24,7 +24,7 @@ async def refinery_extract(
     data_hex: Optional[str] = None,
     sub_operation: Optional[str] = None,
     password: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Extract files and content from containers via Binary Refinery.
 

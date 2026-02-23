@@ -491,7 +491,7 @@ async def emulate_function_execution(
 async def analyze_binary_loops(
     ctx: Context,
     min_loop_size: int = 0,
-    limit: int = 50,
+    limit: int = 20,
     resolve_indirect_jumps: bool = False,
     scan_data_refs: bool = False,
     run_in_background: bool = True
@@ -618,7 +618,7 @@ async def analyze_binary_loops(
 async def get_function_xrefs(
     ctx: Context,
     function_address: str,
-    limit: int = 100
+    limit: int = 20
 ) -> Dict[str, Any]:
     """
     Retrieves Cross-References (Callers/Callees) for a function.
@@ -665,7 +665,7 @@ async def get_function_xrefs(
 async def get_backward_slice(
     ctx: Context,
     target_address: str,
-    limit: int = 200
+    limit: int = 20
 ) -> Dict[str, Any]:
     """
     Finds all code (Basic Blocks) that can reach the target address (Control Flow Ancestors).
@@ -716,7 +716,7 @@ async def get_backward_slice(
 async def get_forward_slice(
     ctx: Context,
     source_address: str,
-    limit: int = 200
+    limit: int = 20
 ) -> Dict[str, Any]:
     """
     Finds all code (Basic Blocks) reachable FROM the source address (Control Flow Descendants).
@@ -906,7 +906,7 @@ async def get_function_complexity_list(
 async def extract_function_constants(
     ctx: Context,
     function_address: str,
-    limit: int = 50
+    limit: int = 20
 ) -> Dict[str, Any]:
     """
     Scans a specific function for hardcoded constants (integers) and string references.
@@ -981,7 +981,7 @@ async def extract_function_constants(
 async def get_global_data_refs(
     ctx: Context,
     function_address: str,
-    limit: int = 50
+    limit: int = 20
 ) -> Dict[str, Any]:
     """
     Identifies global memory addresses read from or written to by the target function.
@@ -1041,7 +1041,7 @@ async def get_global_data_refs(
 async def scan_for_indirect_jumps(
     ctx: Context,
     function_address: str,
-    limit: int = 50
+    limit: int = 20
 ) -> Dict[str, Any]:
     """
     Scans a function for indirect jumps or calls (dynamic control flow).
