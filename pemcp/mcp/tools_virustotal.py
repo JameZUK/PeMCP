@@ -21,8 +21,15 @@ def _safe_timestamp(ts):
 @tool_decorator
 async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
     """
-    Retrieves a summary report from VirusTotal for the pre-loaded PE file using its hash.
-    Requires the 'requests' library and a VirusTotal API key set in the VT_API_KEY environment variable.
+    [Phase: triage] Retrieves a VirusTotal report for the loaded file using its
+    hash. Requires a VT API key (set via set_api_key('vt_api_key', ...) or
+    VT_API_KEY environment variable).
+
+    When to use: After triage to check community detections, AV labels, and
+    threat intelligence. Helps confirm malware family identification.
+
+    Next steps: If detections found → add_note() to record VT findings.
+    Cross-reference AV labels with capa rules via get_capa_analysis_info().
 
     Args:
         ctx: The MCP Context object.

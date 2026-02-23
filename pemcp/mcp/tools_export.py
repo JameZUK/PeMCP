@@ -39,11 +39,12 @@ async def export_project(
     include_binary: bool = True,
 ) -> Dict[str, Any]:
     """
-    Export the current session as a portable project archive (.pemcp_project.tar.gz).
-    Includes analysis data, notes, tool history, and optionally the original binary.
+    [Phase: utility] Export the current session as a portable project archive
+    (.pemcp_project.tar.gz). Includes analysis data, notes, tool history,
+    and optionally the original binary.
 
-    The archive can be shared with others and imported with import_project to
-    restore the full analysis context.
+    When to use: When sharing analysis with others or preserving a checkpoint
+    of your work. The archive can be imported with import_project().
 
     Args:
         ctx: The MCP Context object.
@@ -148,9 +149,14 @@ async def import_project(
     load_binary: bool = True,
 ) -> Dict[str, Any]:
     """
-    Import a previously exported project archive (.pemcp_project.tar.gz).
-    Restores analysis data, notes, and tool history into the cache.
-    Optionally extracts and loads the embedded binary.
+    [Phase: load] Import a previously exported project archive
+    (.pemcp_project.tar.gz). Restores analysis data, notes, and tool history.
+
+    When to use: When resuming analysis from a shared archive or a previous
+    checkpoint. Optionally extracts and loads the embedded binary.
+
+    Next steps: open_file() to load the restored binary, then
+    get_analysis_digest() to review what was learned in the exported session.
 
     Args:
         ctx: The MCP Context object.

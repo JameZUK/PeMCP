@@ -27,12 +27,16 @@ async def list_samples(
     glob_pattern: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Lists files available in the configured samples directory.
-    Use this tool to discover what sample files are available for analysis
-    before calling open_file. This tool does not require a file to be loaded.
+    [Phase: load] Lists files available in the configured samples directory.
+    Use this to discover what samples are available before calling open_file().
+
+    When to use: At the start of a session to see what files are available,
+    or when the user asks which samples can be analyzed.
 
     The samples directory is configured at server startup via --samples-path
     or the PEMCP_SAMPLES environment variable.
+
+    Next steps: open_file(file_path) to load a sample for analysis.
 
     Args:
         ctx: The MCP Context object.

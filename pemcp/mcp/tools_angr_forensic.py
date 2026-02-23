@@ -28,8 +28,14 @@ async def diff_binaries(
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Compares the currently loaded binary against another binary to find matching,
-    differing, and unmatched functions. Useful for patch diffing and variant analysis.
+    [Phase: advanced] Compares the loaded binary against another to find matching,
+    differing, and unmatched functions. For patch diffing and variant analysis.
+
+    When to use: When comparing malware variants, analyzing patches, or identifying
+    code reuse across samples.
+
+    Next steps: decompile_function_with_angr() on differing functions to understand
+    what changed. Record findings with add_note().
 
     Args:
         file_path_b: Path to the second binary to compare against.
@@ -149,8 +155,14 @@ async def detect_self_modifying_code(
     limit: int = 50,
 ) -> Dict[str, Any]:
     """
-    Detects instructions or regions that write to executable memory, indicating
-    self-modifying code (common in packers, crypters, and obfuscated malware).
+    [Phase: advanced] Detects instructions that write to executable memory —
+    self-modifying code common in packers, crypters, and obfuscated malware.
+
+    When to use: When detect_packing() or triage suggests the binary is packed
+    or obfuscated, or when section analysis shows W+X permissions.
+
+    Next steps: get_hex_dump() at detected addresses, decompile_function_with_angr()
+    to understand the unpacking routine, or auto_unpack_pe() for automated unpacking.
     """
     await ctx.info("Scanning for self-modifying code")
     _check_angr_ready("detect_self_modifying_code")
@@ -233,8 +245,14 @@ async def find_code_caves(
     limit: int = 50,
 ) -> Dict[str, Any]:
     """
-    Finds unused/padding regions (code caves) within executable sections.
-    Useful for detecting injected code or identifying safe patching locations.
+    [Phase: advanced] Finds unused/padding regions (code caves) in executable sections.
+    Useful for detecting injected code or finding safe patching locations.
+
+    When to use: When investigating code injection, looking for places to insert
+    patches, or verifying binary integrity.
+
+    Next steps: disassemble_at_address() at cave locations to check for hidden code,
+    or patch_binary_memory() to insert patches in identified caves.
 
     Args:
         min_size: Minimum cave size in bytes (default 16).
@@ -339,8 +357,15 @@ async def find_code_caves(
 @tool_decorator
 async def detect_packing(ctx: Context) -> Dict[str, Any]:
     """
-    Uses angr heuristics to detect if the binary is packed or obfuscated.
-    Complements PEiD signatures with different detection methods (entropy, imports, sections).
+    [Phase: explore] Uses angr heuristics to detect packing or obfuscation.
+    Complements PEiD/triage with entropy, import count, and section analysis.
+
+    When to use: After triage packing_assessment for a second opinion, or when
+    triage entropy is borderline and you need more detailed analysis.
+
+    Next steps: If packed → auto_unpack_pe() for automated unpacking,
+    detect_self_modifying_code() to find the unpacking routine,
+    or analyze_entropy_by_offset() for region-level entropy detail.
     """
     await ctx.info("Detecting packing/obfuscation")
     _check_angr_ready("detect_packing")
@@ -466,8 +491,14 @@ async def save_patched_binary(
     output_path: str,
 ) -> Dict[str, Any]:
     """
-    Saves the current in-memory binary state (including any patches applied via
-    patch_binary_memory) to a new file on disk.
+    [Phase: advanced] Saves the in-memory binary state (including patches from
+    patch_binary_memory()) to a new file on disk.
+
+    When to use: After applying patches via patch_binary_memory() and you want
+    to save the modified binary for further analysis or testing.
+
+    Next steps: open_file(output_path) to analyze the patched binary,
+    or diff_binaries() to compare original vs patched.
 
     Args:
         output_path: File path to write the patched binary to.
@@ -562,7 +593,14 @@ async def find_path_with_custom_input(
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Symbolic execution with configurable symbolic inputs — not limited to stdin.
+    [Phase: advanced] Symbolic execution with configurable symbolic inputs —
+    registers, memory ranges, and concrete pre-fills. Not limited to stdin.
+
+    When to use: When find_path_to_address() (stdin-only) is insufficient and
+    you need to control specific registers or memory as symbolic inputs.
+
+    Next steps: emulate_function_execution() to test with found values,
+    add_note() to record the path constraint solution.
 
     Args:
         target_address: Hex address to reach.
@@ -715,8 +753,15 @@ async def emulate_with_watchpoints(
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Emulates a function with watchpoints (SimInspect breakpoints) that log
-    memory reads/writes and register accesses at specific addresses.
+    [Phase: advanced] Emulates a function with watchpoints that log memory
+    reads/writes and register accesses at specific addresses.
+
+    When to use: When you need to trace how specific memory locations or registers
+    are accessed during execution — useful for understanding config decryption,
+    key derivation, or data exfiltration routines.
+
+    Next steps: auto_note_function() to record behavioral findings, add_note()
+    for specific watchpoint observations.
 
     Args:
         function_address: Hex address of the function to emulate.
@@ -894,8 +939,14 @@ async def identify_cpp_classes(
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
-    Identifies C++ class hierarchies by analysing vtables.
-    Returns discovered classes with vtable addresses, virtual methods, and inheritance.
+    [Phase: advanced] Identifies C++ class hierarchies by analysing vtables.
+    Returns classes with vtable addresses, virtual methods, and inheritance.
+
+    When to use: When analyzing C++ binaries — helps understand object-oriented
+    structure, identify polymorphic dispatch, and find virtual function targets.
+
+    Next steps: decompile_function_with_angr() at virtual method addresses,
+    get_function_xrefs() to trace vtable usage.
 
     Args:
         limit: Max classes to return.
@@ -1069,7 +1120,14 @@ async def get_call_graph(
     limit: int = 500,
 ) -> Dict[str, Any]:
     """
-    Exports the full inter-procedural call graph (or a subgraph rooted at a function).
+    [Phase: explore] Exports the full inter-procedural call graph, or a subgraph
+    rooted at a specific function with optional depth limiting.
+
+    When to use: When you need to understand the global function call structure
+    or trace call chains from a specific entry point.
+
+    Next steps: decompile_function_with_angr() on key nodes, or
+    get_cross_reference_map() for a more detailed per-function view.
 
     Args:
         root_address: Optional; if set, return only the subgraph reachable from this function.

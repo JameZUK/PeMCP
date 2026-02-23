@@ -22,8 +22,14 @@ async def disassemble_at_address(
     num_bytes: int = 0,
 ) -> Dict[str, Any]:
     """
-    Disassembles raw instructions at any address — not limited to known functions.
-    Useful for inspecting shellcode, data-as-code, or arbitrary offsets.
+    [Phase: deep-dive] Disassembles raw instructions at any address — not limited
+    to known functions. Useful for shellcode, data-as-code, or arbitrary offsets.
+
+    When to use: When you need to inspect code at an address that isn't a recognized
+    function (e.g. shellcode payload, obfuscated jump target, or code cave).
+
+    Next steps: If code looks like a function → decompile_function_with_angr().
+    If it's shellcode → emulate_shellcode_with_speakeasy() or qiling_trace_execution().
 
     Args:
         address: Hex address to start disassembling (e.g. '0x401000').
@@ -87,7 +93,14 @@ async def get_calling_conventions(
     limit: int = 50,
 ) -> Dict[str, Any]:
     """
-    Recovers calling conventions, parameter counts, and return types for functions.
+    [Phase: deep-dive] Recovers calling conventions, parameter counts, and return
+    types for functions.
+
+    When to use: When decompilation shows unclear parameter usage, or to understand
+    a function's ABI before emulating or hooking it.
+
+    Next steps: emulate_function_execution() with correct args, or hook_function()
+    to stub it for downstream analysis.
 
     Args:
         function_address: Hex address of a single function to analyse.
@@ -175,8 +188,14 @@ async def get_function_variables(
     limit: int = 80,
 ) -> Dict[str, Any]:
     """
-    Recovers local variables and parameters for a function.
-    Returns variable names, sizes, stack offsets or register locations, and access counts.
+    [Phase: deep-dive] Recovers local variables and parameters for a function —
+    names, sizes, stack offsets or register locations, and access counts.
+
+    When to use: After decompilation to understand stack layout, or when
+    investigating buffer overflows and stack-based vulnerabilities.
+
+    Next steps: get_annotated_disassembly() for instruction-level variable usage,
+    or get_reaching_definitions() for data flow through variables.
 
     Args:
         function_address: Hex address of the target function.
@@ -285,12 +304,14 @@ async def identify_library_functions(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """
-    Matches functions against FLIRT signatures to identify known library code
-    (statically linked CRT, OpenSSL, zlib, etc.). Reduces analysis noise.
+    [Phase: explore] Matches functions against FLIRT signatures to identify known
+    library code (statically linked CRT, OpenSSL, zlib, etc.). Reduces noise.
 
-    Automatically loads FLIRT signatures from FLOSS's bundled sigs directory
-    if available. Custom signature files (.sig/.pat) can be provided via
-    the signature_path parameter.
+    When to use: Early in analysis to filter out library functions and focus on
+    custom code. Especially useful for statically-linked binaries with many functions.
+
+    Next steps: After identifying library functions, use get_function_map() to
+    focus on non-library functions worth decompiling.
 
     Args:
         signature_path: Path to .sig/.pat file or directory. If None, auto-discovers
@@ -377,8 +398,14 @@ async def get_annotated_disassembly(
     limit: int = 300,
 ) -> Dict[str, Any]:
     """
-    Returns disassembly annotated with variable names, cross-references, and string
-    references for a function. Richer than raw disassembly.
+    [Phase: deep-dive] Returns disassembly annotated with variable names,
+    cross-references, and string references. Richer than raw disassembly.
+
+    When to use: When decompiled pseudocode is insufficient and you need
+    instruction-level detail with variable names and xref annotations.
+
+    Next steps: auto_note_function(address) to record findings, or
+    get_function_variables() for detailed stack/register layout.
 
     Args:
         function_address: Hex address of the function.
@@ -485,14 +512,18 @@ async def get_function_map(
     include_details: bool = False,
 ) -> Dict[str, Any]:
     """
-    Ranks all functions by 'interestingness' and groups them by purpose.
+    [Phase: explore] Ranks all functions by 'interestingness' and groups by purpose.
+
+    When to use: After triage to decide which functions to decompile. This is the
+    primary entry point for function-level analysis — much more efficient than
+    listing all functions or guessing addresses.
 
     Combines complexity, suspicious API calls, string references, cross-reference
     count, and entry point status into a single score per function. Groups into
     categories like process_injection, networking, crypto, anti_analysis, etc.
 
-    Much more context-efficient than listing all 500+ functions — targets the
-    AI directly at the functions worth decompiling.
+    Next steps: decompile_function_with_angr() on the top-scored functions,
+    then auto_note_function() to record what you find.
 
     Falls back to import-based categorization when angr is not available.
 
