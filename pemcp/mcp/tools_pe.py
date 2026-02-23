@@ -240,6 +240,11 @@ async def open_file(
                         state.notes = session_meta.get("notes", [])
                         state.previous_session_history = session_meta.get("tool_history", [])
 
+                    # Restore cached triage data if available in pe_data
+                    cached_triage = cached.get('_cached_triage')
+                    if cached_triage:
+                        state._cached_triage = cached_triage
+
                     await ctx.info(f"Analysis loaded from cache (SHA256: {_file_sha256[:16]}...)")
                     await ctx.report_progress(95, 100)
 
