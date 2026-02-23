@@ -8,7 +8,7 @@ from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 async def get_tool_history(
     ctx: Context,
     tool_name: Optional[str] = None,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Retrieve the history of tools run during this session.

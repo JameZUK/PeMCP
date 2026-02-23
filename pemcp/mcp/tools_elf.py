@@ -14,7 +14,7 @@ if PYELFTOOLS_AVAILABLE:
 async def elf_analyze(
     ctx: Context,
     file_path: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: triage] Comprehensive ELF binary analysis: file header, program
@@ -148,7 +148,7 @@ async def elf_analyze(
 async def elf_dwarf_info(
     ctx: Context,
     file_path: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Extracts DWARF debug information from an ELF binary:

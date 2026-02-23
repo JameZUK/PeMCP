@@ -41,6 +41,7 @@ def _detect_analysis_phase() -> str:
 @tool_decorator
 async def get_session_summary(
     ctx: Context,
+    compact: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Returns a comprehensive summary of the current session and any
@@ -84,14 +85,34 @@ async def get_session_summary(
 
     # Notes
     notes = state.get_notes()
+
+    # Current session tool history
+    current_history = state.get_tool_history()
+
+    if compact:
+        # Compact: phase + counts only, no full lists
+        tool_counts = Counter(h["tool_name"] for h in current_history)
+        result["notes_count"] = len(notes)
+        result["notes_by_category"] = dict(Counter(n.get("category", "general") for n in notes))
+        result["tools_run_count"] = len(current_history)
+        result["unique_tools"] = len(tool_counts)
+        if ANGR_AVAILABLE:
+            angr_task = state.get_task("startup-angr")
+            if angr_task:
+                result["angr"] = angr_task.get("status", "unknown")
+            else:
+                proj, cfg = state.get_angr_snapshot()
+                result["angr"] = "ready" if proj else "not_initialized"
+        else:
+            result["angr"] = "unavailable"
+        return result
+
     result["notes"] = {
         "count": len(notes),
         "notes": notes[:50],
         "by_category": dict(Counter(n.get("category", "general") for n in notes)),
     }
 
-    # Current session tool history
-    current_history = state.get_tool_history()
     tool_counts = Counter(h["tool_name"] for h in current_history)
     result["current_session"] = {
         "tools_run_count": len(current_history),
@@ -394,3 +415,302 @@ async def get_progress_overview(
         result["angr"] = "unavailable"
 
     return result
+
+
+# ===================================================================
+#  Phase-based tool discovery
+# ===================================================================
+
+_TOOLS_BY_PHASE = {
+    "triage": [
+        ("get_triage_report", "START HERE. Comprehensive automated triage with risk scoring."),
+        ("classify_binary_purpose", "AI-free classification of binary type and purpose."),
+        ("detect_binary_format", "Detect file format (PE, ELF, Mach-O, shellcode, etc.)."),
+        ("get_analyzed_file_summary", "Quick overview of loaded file structure."),
+        ("detect_packing", "Detect packing/obfuscation with multiple heuristics."),
+    ],
+    "explore": [
+        ("get_function_map", "Scored function list — prioritize what to decompile."),
+        ("get_hex_dump", "Inspect raw bytes at a specific offset. Accepts hex: '0x1b22d8'."),
+        ("detect_crypto_constants", "Scan for AES S-boxes, SHA constants, RC4 init."),
+        ("identify_crypto_algorithm", "Deep crypto identification with confidence scoring."),
+        ("extract_config_automated", "Auto-extract C2 URLs, IPs, domains, registry keys."),
+        ("get_focused_imports", "Suspicious imports with risk categorization."),
+        ("search_floss_strings", "Search FLOSS-extracted strings."),
+        ("extract_steganography", "Detect data hidden after image EOF markers."),
+        ("analyze_entropy_by_offset", "Sliding-window entropy to find encrypted/packed regions."),
+        ("scan_for_embedded_files", "Detect embedded PE, ZIP, ELF within the binary."),
+    ],
+    "deep-dive": [
+        ("decompile_function_with_angr", "Decompile a function to pseudocode."),
+        ("find_path_to_address", "Symbolic execution to reach a target address."),
+        ("get_reaching_definitions", "Data flow: what values reach a point."),
+        ("get_data_dependencies", "Track data dependencies for a function."),
+        ("brute_force_simple_crypto", "Try XOR/RC4/ADD against encrypted data."),
+        ("auto_extract_crypto_keys", "Search for crypto keys near constants."),
+        ("emulate_binary_with_qiling", "Full OS emulation with Qiling Framework."),
+        ("run_speakeasy_emulation", "Windows API emulation with Speakeasy."),
+        ("try_all_unpackers", "Orchestrate multiple unpacking methods."),
+        ("find_oep_heuristic", "Detect Original Entry Point of packed binaries."),
+        ("diff_payloads", "Compare two binary payloads byte-by-byte."),
+    ],
+    "context": [
+        ("add_note", "Record a finding — essential for long analysis sessions."),
+        ("get_notes", "Retrieve analysis notes."),
+        ("auto_note_function", "Auto-generate behavioral summary after decompiling."),
+        ("get_analysis_digest", "Aggregated findings overview — call periodically."),
+        ("get_session_summary", "Full session summary with tool history."),
+        ("get_progress_overview", "Lightweight progress snapshot."),
+        ("suggest_next_action", "AI-free recommendations based on current findings."),
+    ],
+    "utility": [
+        ("export_project", "Export session as portable archive."),
+        ("import_project", "Import a previous session archive."),
+        ("generate_analysis_report", "Generate markdown report from findings."),
+        ("auto_name_sample", "Suggest descriptive filename for the sample."),
+        ("get_iocs_structured", "Export IOCs in JSON/CSV/STIX format."),
+        ("get_cache_stats", "View analysis cache statistics."),
+        ("list_tools_by_phase", "This tool — discover tools by analysis phase."),
+    ],
+}
+
+
+@tool_decorator
+async def list_tools_by_phase(
+    ctx: Context,
+    phase: str = "all",
+) -> Dict[str, Any]:
+    """
+    [Phase: utility] Lists available tools organized by analysis phase. Helps
+    discover the right tool for your current workflow stage.
+
+    Phases: triage, explore, deep-dive, context, utility, or 'all'.
+
+    When to use: When you're unsure which tools are available for your current
+    analysis stage, or when starting work on a new binary.
+
+    Args:
+        ctx: MCP Context.
+        phase: Analysis phase to filter by. Default 'all' shows everything.
+    """
+    phase = phase.lower().replace("_", "-")
+    if phase == "all":
+        result = {}
+        for p, tools in _TOOLS_BY_PHASE.items():
+            result[p] = [{"tool": t, "description": d} for t, d in tools]
+        return {
+            "phases": result,
+            "current_phase": _detect_analysis_phase(),
+            "hint": "Use suggest_next_action() for personalized recommendations.",
+        }
+    elif phase in _TOOLS_BY_PHASE:
+        tools = _TOOLS_BY_PHASE[phase]
+        return {
+            "phase": phase,
+            "tools": [{"tool": t, "description": d} for t, d in tools],
+            "count": len(tools),
+            "current_phase": _detect_analysis_phase(),
+        }
+    else:
+        return {
+            "error": f"Unknown phase '{phase}'.",
+            "available_phases": list(_TOOLS_BY_PHASE.keys()),
+        }
+
+
+# ===================================================================
+#  Intelligent next-action suggestion
+# ===================================================================
+
+@tool_decorator
+async def suggest_next_action(
+    ctx: Context,
+) -> Dict[str, Any]:
+    """
+    [Phase: context] Analyzes current session state — triage results, notes,
+    tool history, function scores — and recommends 3-5 specific next steps
+    with rationale. No LLM involved, purely rule-based.
+
+    When to use: When you're unsure what to do next, or after completing a
+    phase of analysis. More specific than get_session_summary().
+
+    Args:
+        ctx: MCP Context.
+    """
+    suggestions: List[Dict[str, str]] = []
+
+    phase = _detect_analysis_phase()
+
+    # Gather context
+    history = state.get_tool_history()
+    ran_tools = set(h["tool_name"] for h in history)
+    prev = getattr(state, "previous_session_history", []) or []
+    ran_tools |= set(h["tool_name"] for h in prev)
+    notes = state.get_notes() if state.filepath else []
+    triage = getattr(state, '_cached_triage', None)
+    func_scores = getattr(state, '_cached_function_scores', None)
+
+    if phase == "not_started" or not state.filepath:
+        return {
+            "phase": phase,
+            "suggestions": [
+                {"tool": "open_file(filepath='...')", "rationale": "No file loaded. Load a binary to begin analysis."},
+            ],
+        }
+
+    # --- Phase: file_loaded ---
+    if phase == "file_loaded":
+        suggestions.append({
+            "tool": "get_triage_report(compact=True)",
+            "rationale": "File loaded but not triaged yet. Start with automated triage for risk assessment.",
+        })
+        return {"phase": phase, "suggestions": suggestions}
+
+    # --- Phase: triaged ---
+    if "get_triage_report" in ran_tools and triage:
+        risk_level = triage.get("risk_level", "")
+        sus_imports = triage.get("suspicious_imports", [])
+
+        if "get_function_map" not in ran_tools and ANGR_AVAILABLE:
+            suggestions.append({
+                "tool": "get_function_map(compact=True)",
+                "rationale": "Get scored function list to prioritize decompilation targets.",
+            })
+
+        # Check for crypto indicators
+        has_crypto = any(
+            isinstance(imp, dict) and "crypt" in imp.get("function", "").lower()
+            for imp in sus_imports
+        )
+        if has_crypto and "identify_crypto_algorithm" not in ran_tools:
+            suggestions.append({
+                "tool": "identify_crypto_algorithm()",
+                "rationale": "Triage found crypto imports. Identify which algorithms are used.",
+            })
+
+        # Check for networking
+        has_network = any(
+            isinstance(imp, dict) and any(n in imp.get("function", "").lower()
+                for n in ["internet", "http", "url", "socket", "connect"])
+            for imp in sus_imports
+        )
+        if has_network and "extract_config_automated" not in ran_tools:
+            suggestions.append({
+                "tool": "extract_config_automated()",
+                "rationale": "Networking imports found. Extract C2 configuration automatically.",
+            })
+
+        # Check packing
+        packing = triage.get("packing_assessment", {})
+        if isinstance(packing, dict) and packing.get("likely_packed"):
+            if "try_all_unpackers" not in ran_tools:
+                suggestions.append({
+                    "tool": "try_all_unpackers()",
+                    "rationale": f"Binary appears packed ({packing.get('packer_name', 'unknown')}). Try automated unpacking.",
+                })
+
+    # --- Phase: exploring / advanced ---
+    if func_scores and ANGR_AVAILABLE:
+        explored_addrs = {n.get("address") for n in notes if n.get("category") == "function"}
+        unexplored = [
+            f for f in func_scores
+            if f.get("addr") not in explored_addrs and f.get("score", 0) > 10
+        ]
+        if unexplored:
+            top = unexplored[0]
+            suggestions.append({
+                "tool": f"decompile_function_with_angr(address='{top['addr']}')",
+                "rationale": f"Highest-scored unexplored function: {top.get('name', '?')} (score {top.get('score', 0)})",
+            })
+
+    # Notes-related suggestions
+    func_notes = [n for n in notes if n.get("category") == "function"]
+    if "decompile_function_with_angr" in ran_tools and not func_notes:
+        suggestions.append({
+            "tool": "auto_note_function(address=<last_decompiled>)",
+            "rationale": "You've decompiled functions but haven't recorded findings. Use auto_note_function() after each decompile.",
+        })
+
+    # Digest suggestion
+    if len(notes) >= 5 and "get_analysis_digest" not in ran_tools:
+        suggestions.append({
+            "tool": "get_analysis_digest()",
+            "rationale": f"You have {len(notes)} notes accumulated. Review findings digest.",
+        })
+
+    # Report suggestion for advanced phase
+    if phase == "advanced" and "generate_analysis_report" not in ran_tools:
+        suggestions.append({
+            "tool": "generate_analysis_report()",
+            "rationale": "Analysis is well advanced. Generate a comprehensive report.",
+        })
+
+    # Ensure we have at least one suggestion
+    if not suggestions:
+        suggestions.append({
+            "tool": "get_analysis_digest()",
+            "rationale": "Review accumulated findings to decide next steps.",
+        })
+
+    return {
+        "phase": phase,
+        "suggestions": suggestions[:5],
+        "tools_used": len(ran_tools),
+        "notes_count": len(notes),
+    }
+
+
+# ===================================================================
+#  Analysis timeline
+# ===================================================================
+
+@tool_decorator
+async def get_analysis_timeline(
+    ctx: Context,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    [Phase: context] Merges tool history with notes into a chronological timeline
+    of analysis activity. Shows what was done and discovered, in order.
+
+    When to use: When reviewing what happened during an analysis session,
+    or when documenting the analysis workflow.
+
+    Args:
+        ctx: MCP Context.
+        limit: Max timeline entries. Default 20.
+    """
+    events: List[Dict[str, Any]] = []
+
+    # Add tool history entries
+    for h in state.get_tool_history():
+        events.append({
+            "timestamp": h.get("timestamp", ""),
+            "type": "tool",
+            "name": h.get("tool_name", "?"),
+            "summary": h.get("result_summary", ""),
+            "duration_ms": h.get("duration_ms", 0),
+        })
+
+    # Add notes as events
+    for n in state.get_notes():
+        events.append({
+            "timestamp": n.get("created_at", ""),
+            "type": "note",
+            "category": n.get("category", "general"),
+            "content": n.get("content", "")[:200],
+            "address": n.get("address"),
+        })
+
+    # Sort by timestamp
+    events.sort(key=lambda e: e.get("timestamp", ""))
+
+    # Take the most recent entries
+    events = events[-limit:]
+
+    return {
+        "timeline": events,
+        "total_events": len(state.get_tool_history()) + len(state.get_notes()),
+        "returned": len(events),
+        "phase": _detect_analysis_phase(),
+    }

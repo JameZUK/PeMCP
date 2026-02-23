@@ -81,6 +81,10 @@ class AnalyzerState:
         self._cached_function_scores: Optional[List[Dict[str, Any]]] = None
         self.last_digest_timestamp: float = 0.0
 
+        # Paginated result cache (LRU per-tool, 5 slots each)
+        from pemcp.mcp._input_helpers import _ToolResultCache
+        self.result_cache = _ToolResultCache()
+
         # Timestamp of last activity (for session TTL cleanup)
         self.last_active: float = time.time()
 

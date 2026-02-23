@@ -24,7 +24,7 @@ if ANGR_AVAILABLE:
 async def diff_binaries(
     ctx: Context,
     file_path_b: str,
-    limit: int = 50,
+    limit: int = 20,
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -152,7 +152,7 @@ async def diff_binaries(
 @tool_decorator
 async def detect_self_modifying_code(
     ctx: Context,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: advanced] Detects instructions that write to executable memory —
@@ -242,7 +242,7 @@ async def detect_self_modifying_code(
 async def find_code_caves(
     ctx: Context,
     min_size: int = 16,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: advanced] Finds unused/padding regions (code caves) in executable sections.
@@ -935,7 +935,7 @@ async def emulate_with_watchpoints(
 @tool_decorator
 async def identify_cpp_classes(
     ctx: Context,
-    limit: int = 50,
+    limit: int = 20,
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -1117,7 +1117,8 @@ async def get_call_graph(
     ctx: Context,
     root_address: Optional[str] = None,
     max_depth: int = 0,
-    limit: int = 500,
+    limit: int = 50,
+    compact: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Exports the full inter-procedural call graph, or a subgraph
@@ -1200,6 +1201,14 @@ async def get_call_graph(
 
         nodes.sort(key=lambda n: n["callees"], reverse=True)
 
+        if compact:
+            # Compact: summary stats + top 10 hub functions only
+            return {
+                "total_functions": len(callgraph.nodes()),
+                "total_call_edges": len(callgraph.edges()),
+                "top_hubs": [{"address": n["address"], "name": n["name"], "callees": n["callees"]} for n in nodes[:10]],
+            }
+
         edges = []
         for src, dst in list(callgraph.edges())[:limit]:
             src_name = state.angr_cfg.functions[src].name if src in state.angr_cfg.functions else hex(src)
@@ -1219,3 +1228,164 @@ async def get_call_graph(
         raise RuntimeError("get_call_graph timed out after 300 seconds.")
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_call_graph", "the 'limit' parameter")
+
+
+# ===================================================================
+#  find_anti_debug_comprehensive
+# ===================================================================
+
+@tool_decorator
+async def find_anti_debug_comprehensive(
+    ctx: Context,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Comprehensive anti-analysis and anti-debug technique detection.
+    Goes beyond the triage report by checking for specific API patterns, timing checks,
+    TLS callbacks, PEB access, and known evasion techniques.
+
+    When to use: After triage when anti-debug imports are flagged and you need a
+    detailed inventory of evasion techniques. Also useful for packed samples where
+    anti-debug prevents dynamic analysis.
+
+    Next steps: decompile_function_with_angr() on functions containing anti-debug
+    to understand the specific implementation and potential bypasses.
+
+    Args:
+        ctx: The MCP Context object.
+    """
+    await ctx.info("Scanning for anti-debug and anti-analysis techniques")
+    _check_angr_ready("find_anti_debug_comprehensive")
+
+    def _scan():
+        _ensure_project_and_cfg()
+
+        techniques = []
+        functions_with_antidbg = []
+
+        # Known anti-debug/anti-analysis APIs
+        ANTI_DEBUG_APIS = {
+            "IsDebuggerPresent": {"category": "debugger_check", "severity": "high",
+                                  "description": "Checks PEB.BeingDebugged flag"},
+            "CheckRemoteDebuggerPresent": {"category": "debugger_check", "severity": "high",
+                                           "description": "Checks if a remote debugger is attached"},
+            "NtQueryInformationProcess": {"category": "debugger_check", "severity": "high",
+                                          "description": "Can query ProcessDebugPort, ProcessDebugObjectHandle"},
+            "NtQuerySystemInformation": {"category": "system_check", "severity": "medium",
+                                         "description": "Can detect VMs and debuggers via system info classes"},
+            "OutputDebugStringA": {"category": "debugger_check", "severity": "medium",
+                                   "description": "Error-based debugger detection technique"},
+            "OutputDebugStringW": {"category": "debugger_check", "severity": "medium",
+                                   "description": "Error-based debugger detection (wide)"},
+            "GetTickCount": {"category": "timing_check", "severity": "medium",
+                             "description": "Timing-based anti-debug (detects single-step)"},
+            "GetTickCount64": {"category": "timing_check", "severity": "medium",
+                               "description": "64-bit timing-based anti-debug"},
+            "QueryPerformanceCounter": {"category": "timing_check", "severity": "medium",
+                                        "description": "High-resolution timing check"},
+            "QueryPerformanceFrequency": {"category": "timing_check", "severity": "low",
+                                           "description": "Often paired with QueryPerformanceCounter"},
+            "GetSystemTime": {"category": "timing_check", "severity": "low",
+                              "description": "System time-based timing check"},
+            "NtQueryVirtualMemory": {"category": "memory_check", "severity": "medium",
+                                     "description": "Can detect breakpoints in memory"},
+            "VirtualProtect": {"category": "memory_manipulation", "severity": "low",
+                               "description": "Can be used to detect/remove breakpoints"},
+            "SetUnhandledExceptionFilter": {"category": "exception_handler", "severity": "medium",
+                                            "description": "SEH-based anti-debug technique"},
+            "RtlAddVectoredExceptionHandler": {"category": "exception_handler", "severity": "medium",
+                                                "description": "VEH-based anti-debug technique"},
+            "NtSetInformationThread": {"category": "thread_hiding", "severity": "high",
+                                       "description": "ThreadHideFromDebugger — hides thread from debugger"},
+            "NtClose": {"category": "exception_based", "severity": "medium",
+                        "description": "Closing invalid handle causes exception under debugger"},
+            "CloseHandle": {"category": "exception_based", "severity": "low",
+                            "description": "CloseHandle with invalid handle — exception under debugger"},
+            "FindWindowA": {"category": "window_check", "severity": "medium",
+                            "description": "Searches for debugger windows (OllyDbg, x64dbg, etc.)"},
+            "FindWindowW": {"category": "window_check", "severity": "medium",
+                            "description": "Wide string variant of debugger window search"},
+            "CreateToolhelp32Snapshot": {"category": "process_check", "severity": "medium",
+                                         "description": "Process enumeration — can detect analysis tools"},
+            "Process32First": {"category": "process_check", "severity": "low",
+                               "description": "Process enumeration helper"},
+            "Process32Next": {"category": "process_check", "severity": "low",
+                              "description": "Process enumeration helper"},
+            "GetModuleHandleA": {"category": "module_check", "severity": "low",
+                                  "description": "Can check for loaded analysis DLLs"},
+        }
+
+        callgraph = state.angr_cfg.functions.callgraph
+
+        for addr, func in state.angr_cfg.functions.items():
+            func_anti_apis = []
+            try:
+                for callee_addr in callgraph.successors(addr):
+                    if callee_addr in state.angr_cfg.functions:
+                        callee_name = state.angr_cfg.functions[callee_addr].name
+                        for api_name, info in ANTI_DEBUG_APIS.items():
+                            if api_name.lower() in callee_name.lower():
+                                func_anti_apis.append({
+                                    "api": api_name,
+                                    "category": info["category"],
+                                    "severity": info["severity"],
+                                    "description": info["description"],
+                                })
+            except Exception:
+                continue
+
+            if func_anti_apis:
+                functions_with_antidbg.append({
+                    "address": hex(addr),
+                    "name": func.name,
+                    "techniques": func_anti_apis,
+                })
+                for api_info in func_anti_apis:
+                    techniques.append({
+                        "technique": api_info["api"],
+                        "category": api_info["category"],
+                        "severity": api_info["severity"],
+                        "function": hex(addr),
+                        "function_name": func.name,
+                    })
+
+        # Check TLS callbacks (often used for anti-debug)
+        tls_callbacks = []
+        if state.pe_data:
+            tls_info = state.pe_data.get("tls_info", {})
+            if isinstance(tls_info, dict):
+                callbacks = tls_info.get("callbacks", [])
+                if callbacks:
+                    tls_callbacks = callbacks
+                    techniques.append({
+                        "technique": "TLS_Callbacks",
+                        "category": "early_execution",
+                        "severity": "high",
+                        "function": str(callbacks),
+                        "function_name": "TLS callback(s)",
+                    })
+
+        # Categorize findings
+        categories = {}
+        for t in techniques:
+            cat = t["category"]
+            categories.setdefault(cat, []).append(t["technique"])
+        categories = {k: list(set(v)) for k, v in categories.items()}
+
+        severity_counts = {"high": 0, "medium": 0, "low": 0}
+        for t in techniques:
+            severity_counts[t["severity"]] = severity_counts.get(t["severity"], 0) + 1
+
+        return {
+            "total_techniques_found": len(techniques),
+            "severity_summary": severity_counts,
+            "categories": categories,
+            "functions_with_anti_debug": functions_with_antidbg[:30],
+            "tls_callbacks": tls_callbacks,
+            "techniques": techniques[:50],
+        }
+
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_scan), timeout=120)
+    except asyncio.TimeoutError:
+        raise RuntimeError("find_anti_debug_comprehensive timed out after 120 seconds.")
+    return await _check_mcp_response_size(ctx, result, "find_anti_debug_comprehensive")

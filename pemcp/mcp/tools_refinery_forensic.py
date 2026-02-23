@@ -25,7 +25,7 @@ async def refinery_forensic(
     ctx: Context,
     operation: str,
     data_hex: Optional[str] = None,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Forensic analysis via Binary Refinery.
 

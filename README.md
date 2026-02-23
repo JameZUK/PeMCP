@@ -1,6 +1,6 @@
 # PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **151 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **171 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -42,11 +42,11 @@ This creates three critical bottlenecks:
 
 ### How PeMCP Changes the Game
 
-PeMCP eliminates these bottlenecks by putting **151 specialised analysis tools behind a single AI-driven interface**. Instead of learning 10 different tools, you describe what you want to know in natural language and the AI orchestrates the right tools automatically.
+PeMCP eliminates these bottlenecks by putting **171 specialised analysis tools behind a single AI-driven interface**. Instead of learning 10 different tools, you describe what you want to know in natural language and the AI orchestrates the right tools automatically.
 
 **What makes PeMCP unique is the combination of three capabilities that no other single tool provides:**
 
-1. **Breadth** — 151 tools spanning PE/ELF/Mach-O parsing, Angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/Capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration. This is the equivalent of an entire malware lab in one MCP server.
+1. **Breadth** — 171 tools spanning PE/ELF/Mach-O parsing, Angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/Capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration. This is the equivalent of an entire malware lab in one MCP server.
 
 2. **AI reasoning over results** — Unlike tools that just produce output, PeMCP feeds results back to an AI that can reason about them. When the AI decompiles a function and sees `VirtualAlloc` followed by `memcpy` and an indirect call, it doesn't just report the disassembly — it recognises the shellcode injection pattern, notes it as a finding, and suggests investigating the source buffer.
 
@@ -96,11 +96,14 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 ### Comprehensive Static Analysis
 
 - **PE Structure** — 24 dedicated tools for every PE data directory and header.
-- **Signatures** — Authenticode validation (Signify), certificate parsing (Cryptography), packer detection (PEiD), and YARA scanning.
+- **Signatures** — Authenticode validation (Signify), certificate parsing (Cryptography), packer detection (PEiD), YARA scanning, and custom YARA rule execution.
 - **Capabilities** — Integrated Capa analysis to map binary behaviours to the MITRE ATT&CK framework.
-- **Strings** — FLOSS integration for extracting static, stack, tight, and decoded strings, ranked by relevance using StringSifter.
-- **Crypto Analysis** — Detect crypto constants (AES S-box, DES, RC4), scan for API hashes, entropy analysis.
+- **Strings** — FLOSS integration for extracting static, stack, tight, and decoded strings, ranked by relevance using StringSifter. VA-based string extraction for decompilation follow-up.
+- **Crypto Analysis** — Detect crypto constants (AES S-box, DES, RC4), scan for API hashes, entropy analysis. Advanced crypto algorithm identification, automated key extraction, and brute-force decryption.
 - **Deobfuscation** — Multi-byte XOR brute-forcing, format string detection, wide string extraction.
+- **Payload Extraction** — Steganography detection, custom container parsing, and automated C2 configuration extraction.
+- **IOC Export** — Structured IOC aggregation with JSON, CSV, and STIX 2.1 bundle export formats.
+- **Unpacking** — Multi-method unpacking orchestration, PE reconstruction from memory dumps, and heuristic OEP detection.
 
 ### Extended Library Integrations
 
@@ -126,6 +129,8 @@ PeMCP is designed for **large binary corpus analysis** where AI clients need to 
 - **Tool History** — Every tool invocation is recorded with parameters, result summaries, and timing. Use `get_tool_history()` to review what was done, or `get_session_summary()` for full session state.
 - **Cross-Session Restoration** — When a previously analysed file is reopened, `open_file` returns a `session_context` field containing restored notes and prior tool history, enabling the AI to resume where it left off.
 - **Analysis Digest** — `get_analysis_digest()` compiles all accumulated notes, triage findings, IOCs, coverage stats, and unexplored targets into a single context-efficient summary — what was *learned*, not just what tools ran.
+- **Discoverability** — `list_tools_by_phase()` organises tools by workflow stage, `suggest_next_action()` recommends specific next steps based on session state, and `get_analysis_timeline()` merges tool history with notes into a chronological narrative.
+- **Workflow Automation** — `generate_analysis_report()` produces a comprehensive Markdown report from accumulated findings, and `auto_name_sample()` suggests descriptive filenames based on detected capabilities and C2 indicators.
 - **Project Export/Import** — Bundle analysis + notes + history + binary into a `.pemcp_project.tar.gz` for sharing or archiving with `export_project`.
 
 ### Dynamic File Loading, Caching & API Key Management
@@ -138,7 +143,7 @@ PeMCP is designed for **large binary corpus analysis** where AI clients need to 
 
 ### Robust Architecture
 
-- **Modular Package** — Clean `pemcp/` package structure with 33 tool modules, separated concerns (parsers, MCP tools, CLI, configuration).
+- **Modular Package** — Clean `pemcp/` package structure with 39 tool modules, separated concerns (parsers, MCP tools, CLI, configuration).
 - **Docker-First Design** — No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Thread-Safe State** — Centralised `AnalyzerState` class with locking for concurrent access.
 - **Background Tasks** — Long-running operations (symbolic execution, Angr CFG) run asynchronously with heartbeat monitoring.
@@ -262,7 +267,7 @@ Analyst: "Open this carved PE and analyse it"
 
 | Capability | PeMCP | Ghidra | IDA Pro | pestudio | CyberChef | Binary Refinery CLI |
 |---|---|---|---|---|---|---|
-| **PE/ELF/Mach-O parsing** | 151 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
+| **PE/ELF/Mach-O parsing** | 171 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
 | **Decompilation** | Angr (auto, all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No | No | No |
 | **Symbolic execution** | Angr (automated) | Limited (Ghidra scripts) | No | No | No | No |
 | **Data transforms** | 200+ via Binary Refinery | Manual scripting | Manual scripting | No | 300+ (manual) | 200+ (CLI) |
@@ -806,7 +811,7 @@ docker run --rm -i \
 
 ## MCP Tools Reference
 
-PeMCP exposes **151 tools** organised into the following categories.
+PeMCP exposes **171 tools** organised into the following categories.
 
 ### File Management & Sample Discovery
 
@@ -869,7 +874,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 
 > **Note:** PEiD matches and YARA matches are now accessed via `get_pe_data(key='peid_matches')` and `get_pe_data(key='yara_matches')`.
 
-### String Analysis (11 tools)
+### String Analysis (13 tools)
 
 | Tool | Description |
 |---|---|
@@ -883,6 +888,8 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `fuzzy_search_strings` | Fuzzy matching to find similar strings. |
 | `find_and_decode_encoded_strings` | Multi-layer Base64/Hex/XOR decoding with heuristics. |
 | `get_strings_summary` | Categorised string intelligence — groups strings by type (URLs, IPs, file paths, registry keys, mutex names, base64 blobs) with counts and top examples. |
+| `search_yara_custom` | Compile and run custom YARA rules (provided as a string) against the loaded binary. Returns matching rules with offsets. Useful for validating hypotheses about byte patterns or structures. |
+| `get_string_at_va` | Extract a string at a virtual address by resolving VA to file offset. Reads bytes until null terminator with auto-encoding detection (ASCII/UTF-16LE). Useful when decompilation references a string pointer. |
 
 ### Triage & Forensics
 
@@ -922,7 +929,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `patch_binary_memory` | Patch the loaded binary in memory with new bytes. |
 | `get_cross_reference_map` | Multi-dimensional cross-reference — for one or more functions, returns API calls, string refs, callers, callees, suspicious imports, and complexity in a single response. |
 
-### Binary Analysis — Extended Angr (23 tools)
+### Binary Analysis — Extended Angr (24 tools)
 
 | Tool | Description |
 |---|---|
@@ -949,6 +956,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `save_patched_binary` | Save a patched binary to disk. |
 | `identify_cpp_classes` | Recover C++ vtables and class hierarchies. |
 | `get_function_map` | Smart function ranking — scores every function by interestingness (complexity, suspicious API calls, string refs, xref count) and groups by purpose. |
+| `find_anti_debug_comprehensive` | Comprehensive anti-analysis and anti-debug technique detection — checks specific API patterns (IsDebuggerPresent, NtQueryInformationProcess, timing checks, PEB access), TLS callbacks, and known evasion techniques. Returns a detailed inventory with severity ratings. |
 
 ### Extended Library Tools (13 tools)
 
@@ -968,7 +976,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `scan_for_embedded_files` | Detect embedded files/firmware with Binwalk. |
 | `get_extended_capabilities` | List all available tools and library versions. |
 
-### Qiling Cross-Platform Emulation (7 tools)
+### Qiling Cross-Platform Emulation (8 tools)
 
 | Tool | Description |
 |---|---|
@@ -979,6 +987,7 @@ Available `get_pe_data` keys: `file_hashes`, `dos_header`, `nt_headers`, `data_d
 | `qiling_dump_unpacked_binary` | Dynamic unpacking via emulation — handles custom/unknown packers that YARA-based unipacker cannot identify. |
 | `qiling_resolve_api_hashes` | Resolve API hash values (ROR13, CRC32, DJB2, FNV-1a) against known DLL exports. |
 | `qiling_memory_search` | Run a binary then search process memory for decrypted strings, C2 URLs, keys, or byte patterns. |
+| `qiling_setup_check` | Check Qiling Framework setup status — venv availability, rootfs directory structure, and essential DLLs for each architecture. Provides specific copy commands for missing DLLs. |
 
 > **Note:** Qiling runs in an isolated venv (`/app/qiling-venv`) with unicorn 1.x, keeping the main environment's unicorn 2.x intact for angr. Linux rootfs is pre-populated at Docker build time. Windows PE emulation requires real DLL files copied from a Windows installation — see `docs/QILING_ROOTFS.md` for setup instructions. Registry hive stubs are auto-generated at runtime.
 
@@ -1077,6 +1086,49 @@ The real power of PeMCP's Binary Refinery integration emerges when tools are cha
 **Parse forensic artifacts:**
 `refinery_forensic(operation='pcap_http')` → `refinery_extract(operation='embedded')` → per-file: `open_file()` → `get_triage_report()`
 
+### Cryptographic Analysis (3 tools)
+
+| Tool | Description |
+|---|---|
+| `identify_crypto_algorithm` | Identify cryptographic algorithms via S-box scanning, key schedule patterns, hash constants, CRC tables, and crypto API imports. Returns confidence-scored detections. |
+| `auto_extract_crypto_keys` | Search for potential cryptographic keys near identified constants using entropy-based heuristics. Returns key candidates with offset, entropy, and confidence scores. |
+| `brute_force_simple_crypto` | Brute-force XOR (single/multi-byte), RC4, ADD/SUB/ROL/ROR transforms against the loaded binary. Validates results by checking for PE headers, readable strings, and known patterns. Supports known-plaintext XOR key detection. |
+
+### Payload Extraction (3 tools)
+
+| Tool | Description |
+|---|---|
+| `extract_steganography` | Detect data hidden after image EOF markers (PNG IEND, JPEG FFD9, GIF trailer), BMP size mismatches, and PE overlay data. Returns payload entropy, magic bytes, and extraction hints. |
+| `parse_custom_container` | Parse binary data following common malware container patterns: `delimiter_size_payload`, `size_payload`, or `fixed_chunks`. Auto-detects delimiters and chunk sizes with entropy analysis. |
+| `extract_config_automated` | Extract potential C2 configuration data using regex patterns — IPs, URLs, domains, registry keys, file paths, mutexes, and base64-encoded config blobs. Auto-saves significant findings as notes. |
+
+### IOC Export (1 tool)
+
+| Tool | Description |
+|---|---|
+| `get_iocs_structured` | Aggregate IOCs from triage, string analysis, config extraction, and notes into a deduplicated, categorised collection. Supports three export formats: **JSON**, **CSV**, and **STIX 2.1 Bundle**. |
+
+### Unpacking & OEP Detection (3 tools)
+
+| Tool | Description |
+|---|---|
+| `try_all_unpackers` | Orchestrate multiple unpacking methods (Unipacker, Binary Refinery vstack, PE overlay extraction) and return the best result with method comparison. |
+| `reconstruct_pe_from_dump` | Reconstruct a valid PE from a memory dump by fixing headers using LIEF — realigns sections, fixes SizeOfImage/SizeOfHeaders, and adjusts base address. |
+| `find_oep_heuristic` | Detect Original Entry Point of packed binaries using multiple heuristics: tail-jump detection, section-hop analysis, entropy transitions, and known packer patterns. Returns confidence-scored candidates. |
+
+### Binary Comparison (1 tool)
+
+| Tool | Description |
+|---|---|
+| `diff_payloads` | Compare two binary payloads byte-by-byte — reports identical/different regions, similarity percentage, and XOR relationship detection. For PE files, includes structural comparison (sections, imports). |
+
+### Workflow & Reporting (2 tools)
+
+| Tool | Description |
+|---|---|
+| `generate_analysis_report` | Generate a comprehensive analysis report from accumulated findings in Markdown or plain text — includes file info, risk assessment, key findings, explored functions, IOCs, analyst notes, and timeline. |
+| `auto_name_sample` | Suggest a descriptive filename based on detected capabilities, classification, and C2 indicators (e.g. `service_keylogger_c2_192.168.105.250.dll`). |
+
 ### AI-Optimised Analysis — Streamlined Tools
 
 These tools are designed for progressive, context-efficient analysis by AI clients with limited context windows. They provide summaries first, details on demand, and cross-reference data across multiple analysis dimensions.
@@ -1091,6 +1143,9 @@ These tools are designed for progressive, context-efficient analysis by AI clien
 | `auto_note_function` | **Auto-summarise a function** — generates a one-line behavioral summary from API call patterns and saves it as a persistent note for later aggregation. |
 | `get_analysis_digest` | **Running analysis summary** — aggregates triage findings, function notes, IOCs, coverage stats, and unexplored high-priority targets into a context-efficient digest. Call periodically to refresh understanding. |
 | `get_function_complexity_list(compact=True)` | **Compact complexity list** — returns minimal per-function data (addr, name, blocks) instead of the full structure. |
+| `list_tools_by_phase(phase)` | **Tool discovery** — browse all tools grouped by analysis phase (triage, explore, deep-dive, context, utility). Helps find the right tool for the current stage. |
+| `suggest_next_action()` | **Smart recommendations** — analyses current session state (loaded file, notes, tool history) and recommends 3-5 specific next steps. |
+| `get_analysis_timeline()` | **Investigation narrative** — merges tool history with notes into a single chronological timeline showing the full analysis story. |
 
 #### Recommended AI Workflow
 
@@ -1128,6 +1183,9 @@ Notes and tool history are the primary mechanism for preserving analysis context
 | `get_session_summary` | Full session state: file info, notes, tool history, angr status, analysis phase. |
 | `get_analysis_digest` | Accumulated findings digest — what was *learned*, not just what tools ran. |
 | `get_progress_overview` | Lightweight progress snapshot — analysis phase, note count, tool history count, and coverage percentage. |
+| `list_tools_by_phase` | Browse available tools organised by analysis phase (triage, explore, deep-dive, context, utility). Helps discover the right tool for your current workflow stage. |
+| `suggest_next_action` | Analyse current session state and recommend 3-5 specific next steps based on what has already been done and what remains unexplored. |
+| `get_analysis_timeline` | Merge tool history with notes into a single chronological timeline — shows the full narrative of the investigation. |
 | `export_project` | Export session (analysis + notes + history + optionally the binary) as `.pemcp_project.tar.gz`. |
 | `import_project` | Import a previously exported project archive. |
 
@@ -1161,21 +1219,22 @@ pemcp/
 │   └── printers.py             # CLI output formatting
 └── mcp/
     ├── __init__.py
-    ├── server.py                — MCP server setup & validation helpers
+    ├── server.py                — MCP server setup, response truncation & validation helpers
     ├── _angr_helpers.py         — Shared angr utilities (project/CFG init, address resolution)
     ├── _format_helpers.py       — Shared binary format helpers
     ├── _refinery_helpers.py     — Shared Binary Refinery utilities (hex conversion, safety limits)
     ├── _category_maps.py        — Category mappings for tool organisation
+    ├── _input_helpers.py        — Hex/int parameter parsing, LRU result cache, pagination utilities
     ├── tools_pe.py              — File management & PE data retrieval (7 tools)
     ├── tools_pe_extended.py     — Extended PE analysis (14 tools)
-    ├── tools_strings.py         — String analysis, capa & fuzzy search (11 tools)
+    ├── tools_strings.py         — String analysis, capa, fuzzy search & custom YARA (13 tools)
     ├── tools_angr.py            — Core angr tools (16 tools)
     ├── tools_angr_disasm.py     — Angr disassembly & function recovery (6 tools)
     ├── tools_angr_dataflow.py   — Angr data flow analysis (5 tools)
     ├── tools_angr_hooks.py      — Angr function hooking (3 tools)
-    ├── tools_angr_forensic.py   — Angr forensic & advanced analysis (9 tools)
+    ├── tools_angr_forensic.py   — Angr forensic & advanced analysis (10 tools)
     ├── tools_new_libs.py        — LIEF/Capstone/Keystone/Speakeasy (13 tools)
-    ├── tools_qiling.py          — Qiling cross-platform emulation (7 tools)
+    ├── tools_qiling.py          — Qiling cross-platform emulation (8 tools)
     ├── tools_dotnet.py          — .NET analysis (dnfile/dncil, 2 tools)
     ├── tools_go.py              — Go binary analysis (pygore, 1 tool)
     ├── tools_rust.py            — Rust binary analysis (2 tools)
@@ -1191,8 +1250,14 @@ pemcp/
     ├── tools_samples.py         — Sample directory listing & discovery (1 tool)
     ├── tools_notes.py           — Persistent notes management (5 tools)
     ├── tools_history.py         — Tool invocation history (2 tools)
-    ├── tools_session.py         — Session summary & analysis digest (3 tools)
+    ├── tools_session.py         — Session summary, analysis digest & discoverability (6 tools)
     ├── tools_export.py          — Project export/import (2 tools)
+    ├── tools_crypto.py          — Cryptographic algorithm identification & key extraction (3 tools)
+    ├── tools_payload.py         — Steganography, container parsing & config extraction (3 tools)
+    ├── tools_ioc.py             — Structured IOC export (JSON/CSV/STIX) (1 tool)
+    ├── tools_unpack.py          — Multi-method unpacking & OEP detection (3 tools)
+    ├── tools_diff.py            — Binary payload comparison (1 tool)
+    ├── tools_workflow.py        — Report generation & sample naming (2 tools)
     ├── tools_refinery.py        — Binary Refinery core transforms (11 tools)
     ├── tools_refinery_advanced.py — Refinery advanced transforms (8 tools)
     ├── tools_refinery_dotnet.py — Refinery .NET analysis (1 dispatched tool)
@@ -1312,7 +1377,7 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 PeMCP has two layers of testing, with automated CI via **GitHub Actions**:
 
 - **Unit tests** (`tests/`) — 398 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrized edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
-- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 151 MCP tools against a running server, organised into 20 test categories with pytest markers.
+- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 171 MCP tools against a running server, organised into 19 test categories with pytest markers.
 - **CI/CD** (`.github/workflows/ci.yml`) — Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (60% floor), and syntax checking on every push and PR.
 
 ```bash
