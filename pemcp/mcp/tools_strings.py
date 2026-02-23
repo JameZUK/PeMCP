@@ -261,7 +261,7 @@ async def get_floss_analysis_info(ctx: Context,
 
 @tool_decorator
 async def get_capa_analysis_info(ctx: Context,
-                                 limit: int,
+                                 limit: int = 20,
                                  offset: Optional[int] = 0,
                                  filter_rule_name: Optional[str] = None,
                                  filter_namespace: Optional[str] = None,
@@ -284,7 +284,7 @@ async def get_capa_analysis_info(ctx: Context,
 
     Args:
         ctx: The MCP Context object.
-        limit: (int) Max capability rules to return. Must be positive.
+        limit: (int) Max capability rules to return. Defaults to 20. Must be positive.
         offset: (Optional[int]) Starting index for rule pagination. Defaults to 0.
         filter_rule_name: (Optional[str]) Filter rules by name/ID (substring, case-insensitive).
         filter_namespace: (Optional[str]) Filter rules by namespace prefix (case-insensitive, e.g. 'anti-analysis' matches 'anti-analysis/obfuscation/...').

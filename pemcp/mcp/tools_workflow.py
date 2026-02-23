@@ -74,7 +74,29 @@ async def generate_analysis_report(
         sections.append(f"| Filename | {filename} |")
         sections.append(f"| MD5 | {hashes.get('md5', 'N/A')} |")
         sections.append(f"| SHA-256 | {hashes.get('sha256', 'N/A')} |")
-        sections.append(f"| Size | {pe_data.get('file_size', 'N/A')} bytes |")
+        # file_size fallback chain: pe_data → triage.file_info → os.path.getsize()
+        file_size = pe_data.get('file_size')
+        if not file_size and triage:
+            file_info = triage.get('file_info', {})
+            if isinstance(file_info, dict):
+                file_size = file_info.get('file_size')
+        if not file_size:
+            try:
+                file_size = os.path.getsize(filepath)
+            except OSError:
+                file_size = None
+        if file_size and isinstance(file_size, (int, float)):
+            size_bytes = int(file_size)
+            if size_bytes >= 1_048_576:
+                size_human = f"{size_bytes / 1_048_576:.1f} MB"
+            elif size_bytes >= 1024:
+                size_human = f"{size_bytes / 1024:.1f} KB"
+            else:
+                size_human = f"{size_bytes} B"
+            size_display = f"{size_bytes:,} bytes ({size_human})"
+        else:
+            size_display = "N/A"
+        sections.append(f"| Size | {size_display} |")
         sections.append(f"| Format | {mode} |")
         sections.append("")
 
@@ -247,10 +269,54 @@ async def auto_name_sample(
             if "createremotethread" in func or "writeprocessmemory" in func:
                 capabilities.add("inject")
 
+    # Scan capa capabilities for additional labels
+    _CAPA_NAMESPACE_LABELS = {
+        "anti-analysis": "antidbg",
+        "persistence": "persist",
+        "collection": "collect",
+        "credential-access": "credtheft",
+        "defense-evasion": "evasion",
+        "execution": "exec",
+        "impact": "impact",
+        "c2": "c2",
+        "exfiltration": "exfil",
+        "lateral-movement": "lateral",
+    }
+    sus_caps = triage.get("suspicious_capabilities", [])
+    if isinstance(sus_caps, list):
+        for cap in sus_caps:
+            ns = ""
+            if isinstance(cap, dict):
+                ns = cap.get("namespace", "").split("/")[0].lower()
+            elif isinstance(cap, str):
+                ns = cap.split("/")[0].lower()
+            label = _CAPA_NAMESPACE_LABELS.get(ns)
+            if label:
+                capabilities.add(label)
+
     if found_type:
         parts.append(found_type)
     elif capabilities:
         parts.append("_".join(sorted(capabilities)[:2]))
+
+    # --- Risk level hint ---
+    risk_level = triage.get("risk_level", "")
+    if risk_level in ("HIGH", "CRITICAL"):
+        parts.append(risk_level.lower())
+
+    # --- Size hint ---
+    file_info = triage.get("file_info", {})
+    file_size = file_info.get("file_size") if isinstance(file_info, dict) else None
+    if not file_size:
+        try:
+            file_size = os.path.getsize(state.filepath) if state.filepath else None
+        except OSError:
+            file_size = None
+    if isinstance(file_size, (int, float)):
+        if file_size > 10_000_000:
+            parts.append("large")
+        elif file_size < 10_000:
+            parts.append("tiny")
 
     # --- C2 indicator ---
     net_iocs = triage.get("network_iocs", {})

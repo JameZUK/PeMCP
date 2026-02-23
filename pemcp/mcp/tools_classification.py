@@ -1,7 +1,39 @@
 """MCP tools for binary purpose classification."""
-from typing import Dict, Any
+from typing import Dict, Any, List
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE, CAPA_AVAILABLE, FLOSS_AVAILABLE, YARA_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+
+
+# Import-to-behavior mapping for behavioral indicators
+_IMPORT_BEHAVIORS: Dict[str, str] = {
+    "CreateNamedPipe": "IPC (named pipes)",
+    "ConnectNamedPipe": "IPC (named pipes)",
+    "CreatePipe": "IPC (pipes)",
+    "TerminateProcess": "Process management",
+    "OpenProcess": "Process management",
+    "CreateRemoteThread": "Code injection",
+    "WriteProcessMemory": "Code injection",
+    "VirtualAllocEx": "Remote memory allocation",
+    "NtUnmapViewOfSection": "Process hollowing",
+    "SetWindowsHookEx": "Input hooking",
+    "GetAsyncKeyState": "Keystroke monitoring",
+    "QueryPerformanceCounter": "Anti-debug (timing)",
+    "GetTickCount": "Anti-debug (timing)",
+    "IsDebuggerPresent": "Anti-debug (detection)",
+    "CheckRemoteDebuggerPresent": "Anti-debug (detection)",
+    "NtQueryInformationProcess": "Anti-debug (detection)",
+    "CreateService": "Service installation",
+    "RegSetValueEx": "Registry modification",
+    "RegCreateKeyEx": "Registry modification",
+    "InternetOpen": "HTTP networking",
+    "HttpSendRequest": "HTTP networking",
+    "URLDownloadToFile": "File download",
+    "WinExec": "Process execution",
+    "ShellExecute": "Process execution",
+    "CryptEncrypt": "Encryption",
+    "CryptDecrypt": "Decryption",
+    "BCryptEncrypt": "Encryption",
+}
 
 
 @tool_decorator
@@ -188,7 +220,38 @@ async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
             primary = p
             break
 
-    return {
+    # --- Behavioral Indicators from triage data ---
+    behavioral_indicators: List[str] = []
+    triage = getattr(state, '_cached_triage', None)
+    risk_level = None
+
+    if triage:
+        risk_level = triage.get("risk_level")
+
+        # Capa capabilities
+        sus_caps = triage.get("suspicious_capabilities", [])
+        if isinstance(sus_caps, list):
+            for cap in sus_caps:
+                if isinstance(cap, dict):
+                    ns = cap.get("namespace", "")
+                    name = cap.get("name", cap.get("capability", ""))
+                    if ns and name:
+                        behavioral_indicators.append(f"{ns}: {name}")
+                    elif name:
+                        behavioral_indicators.append(str(name))
+                elif isinstance(cap, str):
+                    behavioral_indicators.append(cap)
+
+        # Import-to-behavior mapping
+        for func_name in all_import_names:
+            for api_pattern, behavior in _IMPORT_BEHAVIORS.items():
+                if api_pattern in func_name:
+                    indicator = f"{behavior} ({func_name})"
+                    if indicator not in behavioral_indicators:
+                        behavioral_indicators.append(indicator)
+                    break
+
+    result: Dict[str, Any] = {
         "primary_type": primary,
         "classifications": classifications,
         "evidence": evidence,
@@ -199,3 +262,10 @@ async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
         "import_dll_count": len(all_dll_names),
         "import_function_count": len(all_import_names),
     }
+
+    if behavioral_indicators:
+        result["behavioral_indicators"] = behavioral_indicators[:20]
+    if risk_level:
+        result["risk_level"] = risk_level
+
+    return result

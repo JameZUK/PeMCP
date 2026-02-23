@@ -611,7 +611,7 @@ class TestGetProgressOverview:
             source = f.read()
         # Find the function body
         idx = source.index("async def get_progress_overview(")
-        func_body = source[idx:idx + 2000]
+        func_body = source[idx:idx + 3000]
         assert '"analysis_phase"' in func_body
         assert '"file_loaded"' in func_body
         assert '"coverage_pct"' in func_body
