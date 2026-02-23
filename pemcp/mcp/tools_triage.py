@@ -1850,6 +1850,10 @@ async def get_triage_report(
     # Cache for use by get_analysis_digest and other progressive tools
     state._cached_triage = triage_report
 
+    # Persist triage in pe_data so it survives cache loads across sessions
+    if state.pe_data is not None:
+        state.pe_data['_cached_triage'] = triage_report
+
     # Auto-save key triage findings as notes for the analysis digest
     _auto_save_triage_notes(triage_report)
 
