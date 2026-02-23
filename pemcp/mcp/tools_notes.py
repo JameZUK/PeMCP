@@ -57,7 +57,7 @@ async def get_notes(
     ctx: Context,
     category: Optional[str] = None,
     address: Optional[str] = None,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Retrieve notes for the currently loaded file, optionally

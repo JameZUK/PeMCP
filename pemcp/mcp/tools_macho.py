@@ -13,7 +13,7 @@ if LIEF_AVAILABLE:
 async def macho_analyze(
     ctx: Context,
     file_path: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: triage] Analyses a Mach-O binary: header, load commands, segments,

@@ -17,7 +17,7 @@ if DNCIL_AVAILABLE:
 async def dotnet_analyze(
     ctx: Context,
     file_path: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: triage] Comprehensive .NET assembly analysis: CLR header, metadata
@@ -195,7 +195,7 @@ async def dotnet_disassemble_method(
     ctx: Context,
     method_rva: str,
     file_path: Optional[str] = None,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Disassembles a .NET method's CIL bytecode into

@@ -4,9 +4,10 @@ import base64
 import codecs
 import os
 import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from pemcp.config import state, logger, Context, STRINGSIFTER_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
+from pemcp.mcp._input_helpers import _parse_int_param
 from pemcp.utils import safe_regex_search as _safe_regex_search
 from pemcp.parsers.strings import _decode_single_byte_xor, _format_hex_dump_lines, _get_string_category
 if STRINGSIFTER_AVAILABLE:
@@ -14,7 +15,7 @@ if STRINGSIFTER_AVAILABLE:
 
 
 @tool_decorator
-async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_line: Optional[int]=16, limit_lines: Optional[int]=256, offset: Optional[int] = None) -> List[str]:
+async def get_hex_dump(ctx: Context, start_offset: Union[int, str] = 0, length: Union[int, str] = 256, bytes_per_line: Optional[int]=16, limit_lines: Optional[int]=256, offset: Optional[Union[int, str]] = None) -> List[str]:
     """
     [Phase: explore] Retrieves a hex dump of a specified region from the loaded binary.
 
@@ -29,9 +30,9 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
 
     Args:
         ctx: The MCP Context object.
-        start_offset: (int) The starting offset (0-based) in the file from which to begin the hex dump.
-        offset: (Optional[int]) Alias for start_offset. If provided, overrides start_offset.
-        length: (int) The number of bytes to include in the hex dump. Must be positive.
+        start_offset: The starting offset (0-based). Accepts int or hex string (e.g. '0x1b22d8').
+        offset: Alias for start_offset. If provided, overrides start_offset. Accepts hex strings.
+        length: The number of bytes to include. Accepts int or hex string. Must be positive.
         bytes_per_line: (Optional[int]) The number of bytes to display per line. Defaults to 16. Must be positive.
         limit_lines: (Optional[int]) The maximum number of lines to return. Defaults to 256. Must be positive.
 
@@ -43,6 +44,8 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
     """
     if offset is not None:
         start_offset = offset  # Allow 'offset' as an alias for 'start_offset'
+    start_offset = _parse_int_param(start_offset, "start_offset")
+    length = _parse_int_param(length, "length")
     await ctx.info(f"Hex dump requested: Offset {hex(start_offset)}, Length {length}, Bytes/Line {bytes_per_line}, Limit Lines {limit_lines}")
     if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
         raise RuntimeError(
@@ -50,9 +53,9 @@ async def get_hex_dump(ctx: Context, start_offset: int, length: int, bytes_per_l
             "The server must be started with --input-file to pre-load a file. "
             "If a file was provided, check the server logs for load errors."
         )
-    if not isinstance(start_offset, int) or start_offset < 0:
+    if start_offset < 0:
         raise ValueError("start_offset must be a non-negative integer.")
-    if not isinstance(length, int) or length <= 0:
+    if length <= 0:
         raise ValueError("length must be a positive integer.")
 
     bpl = 16

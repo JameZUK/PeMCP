@@ -52,7 +52,7 @@ async def search_floss_strings(
     max_sifter_score: Optional[float] = None,
     sort_order: Optional[str] = None,
     min_length: int = 0,
-    limit: int = 100,
+    limit: int = 20,
     case_sensitive: bool = False
 ) -> Dict[str, Any]:
     """
@@ -161,8 +161,9 @@ async def search_floss_strings(
 async def get_floss_analysis_info(ctx: Context,
                                   string_type: Optional[str] = None,
                                   only_with_references: bool = False,
-                                  limit: int = 100,
-                                  offset: Optional[int] = 0
+                                  limit: int = 20,
+                                  offset: Optional[int] = 0,
+                                  compact: bool = False,
                                  ) -> Dict[str, Any]:
     """
     [Phase: explore] Retrieves FLOSS analysis results with option to filter for
@@ -209,6 +210,22 @@ async def get_floss_analysis_info(ctx: Context,
     response_data: Dict[str, Any] = {"status": status}
     if floss_data_block.get("error"): response_data["error_details"] = floss_data_block.get("error")
 
+    if compact:
+        # Compact: counts per string type + top 5 strings per type
+        strings_data = floss_data_block.get("strings", {})
+        counts = {}
+        top_strings = {}
+        for stype in ["static_strings", "stack_strings", "tight_strings", "decoded_strings"]:
+            items = strings_data.get(stype, [])
+            counts[stype] = len(items) if isinstance(items, list) else 0
+            if isinstance(items, list) and items:
+                top_strings[stype] = [
+                    (s.get("string", s) if isinstance(s, dict) else str(s))
+                    for s in items[:5]
+                ]
+        response_data["string_counts"] = counts
+        response_data["top_strings"] = top_strings
+        return response_data
 
     if string_type is None: # Return metadata and config
         response_data["metadata"] = floss_data_block.get("metadata", {})
@@ -252,7 +269,8 @@ async def get_capa_analysis_info(ctx: Context,
                                  filter_mbc_id: Optional[str] = None,
                                  fields_per_rule: Optional[List[str]] = None,
                                  get_report_metadata_only: bool = False,
-                                 source_string_limit: Optional[int] = None
+                                 source_string_limit: Optional[int] = None,
+                                 compact: bool = False,
                                  ) -> Dict[str, Any]:
     """
     [Phase: explore] Retrieves an overview of Capa capability rules with filtering
@@ -299,6 +317,22 @@ async def get_capa_analysis_info(ctx: Context,
     capa_data_block = state.pe_data.get('capa_analysis', {})
     capa_full_results = capa_data_block.get('results')
     capa_status = capa_data_block.get("status", "Unknown")
+
+    if compact and capa_full_results:
+        # Compact: rule names and namespaces only, no match details
+        rules = capa_full_results.get("rules", {})
+        compact_rules = []
+        for rule_id, rule_data in list(rules.items())[:limit]:
+            meta = rule_data.get("meta", {}) if isinstance(rule_data, dict) else {}
+            compact_rules.append({
+                "name": meta.get("name", rule_id),
+                "namespace": meta.get("namespace", ""),
+            })
+        return {
+            "status": capa_status,
+            "total_capabilities": len(rules),
+            "rules": compact_rules,
+        }
 
     current_offset = 0
     if offset is not None and isinstance(offset, int) and offset >= 0:
@@ -881,7 +915,7 @@ async def get_top_sifted_strings(
 async def get_strings_for_function(
     ctx: Context,
     function_va: int,
-    limit: int = 100
+    limit: int = 20
 ) -> List[Dict[str, Any]]:
     """
     [Phase: deep-dive] Finds all strings referenced by a specific function via
@@ -1216,3 +1250,169 @@ async def get_strings_summary(
     }
 
     return await _check_mcp_response_size(ctx, result, "get_strings_summary")
+
+
+# ===================================================================
+#  search_yara_custom
+# ===================================================================
+
+@tool_decorator
+async def search_yara_custom(
+    ctx: Context,
+    rules_string: str = "",
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Compiles and runs custom YARA rules (provided as a string)
+    against the currently loaded binary. Returns matching rules with offsets.
+
+    When to use: When you have a hypothesis about specific byte patterns, strings,
+    or structures in the binary and want to validate it with a YARA rule.
+
+    Args:
+        ctx: The MCP Context object.
+        rules_string: (str) YARA rules as a string, e.g.
+            'rule test { strings: $a = "MZ" condition: $a }'
+        limit: (int) Max matches to return per rule.
+    """
+    from pemcp.config import YARA_AVAILABLE
+    await ctx.info("Running custom YARA rules")
+    _check_pe_loaded("search_yara_custom")
+
+    if not YARA_AVAILABLE:
+        raise RuntimeError(
+            "[search_yara_custom] YARA is not installed. Install with: pip install yara-python"
+        )
+    if not rules_string.strip():
+        raise ValueError("rules_string is required. Provide YARA rules as a string.")
+
+    import yara
+
+    try:
+        compiled = yara.compile(source=rules_string)
+    except yara.SyntaxError as e:
+        return {"error": f"YARA compilation error: {e}"}
+
+    filepath = state.filepath
+    try:
+        matches = compiled.match(filepath)
+    except Exception as e:
+        return {"error": f"YARA scan error: {e}"}
+
+    results = []
+    for match in matches:
+        match_info: Dict[str, Any] = {
+            "rule": match.rule,
+            "tags": list(match.tags) if match.tags else [],
+            "meta": dict(match.meta) if match.meta else {},
+        }
+        string_matches = []
+        for s in match.strings:
+            for instance in s.instances[:limit]:
+                string_matches.append({
+                    "identifier": s.identifier,
+                    "offset": instance.offset,
+                    "matched_data": instance.matched_data.hex()[:64],
+                })
+        match_info["strings"] = string_matches[:limit]
+        results.append(match_info)
+
+    return await _check_mcp_response_size(ctx, {
+        "matches": results,
+        "match_count": len(results),
+        "rules_compiled": True,
+    }, "search_yara_custom")
+
+
+# ===================================================================
+#  get_string_at_va
+# ===================================================================
+
+@tool_decorator
+async def get_string_at_va(
+    ctx: Context,
+    virtual_address: str = "",
+    max_length: int = 256,
+    encoding: str = "auto",
+) -> Dict[str, Any]:
+    """
+    [Phase: deep-dive] Extracts a string at a given virtual address by resolving
+    the VA to a file offset and reading bytes until a null terminator or max_length.
+
+    When to use: When decompilation or disassembly references a string at a VA
+    and you want to see the actual string content without manually calculating offsets.
+
+    Args:
+        ctx: The MCP Context object.
+        virtual_address: (str) Virtual address as hex string (e.g. '0x401000').
+        max_length: (int) Maximum bytes to read (default 256).
+        encoding: (str) 'ascii', 'utf16le', or 'auto' (tries both).
+    """
+    await ctx.info(f"Extracting string at VA {virtual_address}")
+    _check_pe_loaded("get_string_at_va")
+
+    if not virtual_address:
+        raise ValueError("virtual_address is required (e.g. '0x401000').")
+
+    from pemcp.mcp._input_helpers import _parse_int_param
+    va = _parse_int_param(virtual_address, "virtual_address")
+
+    pe = state.pe_object
+    if pe is None:
+        return {"error": "PE object not available. This tool requires a PE file."}
+
+    # Resolve VA to file offset
+    try:
+        offset = pe.get_offset_from_rva(va - pe.OPTIONAL_HEADER.ImageBase)
+    except Exception:
+        return {"error": f"Could not resolve VA {hex(va)} to a file offset. Check that the address is valid."}
+
+    # Read raw bytes from file
+    try:
+        with open(state.filepath, "rb") as f:
+            f.seek(offset)
+            raw = f.read(max_length)
+    except Exception as e:
+        return {"error": f"Failed to read at offset {offset}: {e}"}
+
+    results: Dict[str, Any] = {
+        "virtual_address": hex(va),
+        "file_offset": hex(offset),
+    }
+
+    def _extract_ascii(data: bytes) -> str:
+        end = data.find(b'\x00')
+        if end == -1:
+            end = len(data)
+        return data[:end].decode('ascii', errors='replace')
+
+    def _extract_utf16(data: bytes) -> str:
+        # Find null terminator (two zero bytes on even boundary)
+        for i in range(0, len(data) - 1, 2):
+            if data[i] == 0 and data[i + 1] == 0:
+                return data[:i].decode('utf-16-le', errors='replace')
+        return data.decode('utf-16-le', errors='replace')
+
+    if encoding == "auto":
+        ascii_str = _extract_ascii(raw)
+        utf16_str = _extract_utf16(raw)
+        # Prefer the longer readable string
+        ascii_printable = sum(1 for c in ascii_str if c.isprintable())
+        utf16_printable = sum(1 for c in utf16_str if c.isprintable())
+        if utf16_printable > ascii_printable and len(utf16_str) > 1:
+            results["string"] = utf16_str
+            results["encoding"] = "utf-16-le"
+        else:
+            results["string"] = ascii_str
+            results["encoding"] = "ascii"
+    elif encoding == "utf16le":
+        results["string"] = _extract_utf16(raw)
+        results["encoding"] = "utf-16-le"
+    else:
+        results["string"] = _extract_ascii(raw)
+        results["encoding"] = "ascii"
+
+    results["length"] = len(results["string"])
+    results["hex_preview"] = raw[:32].hex()
+
+    return results

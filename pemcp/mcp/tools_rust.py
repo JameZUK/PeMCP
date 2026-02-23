@@ -175,7 +175,7 @@ async def rust_analyze(
 async def rust_demangle_symbols(
     ctx: Context,
     symbols: List[str],
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Demangles Rust symbol names to human-readable form.
