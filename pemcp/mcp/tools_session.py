@@ -339,23 +339,28 @@ async def get_analysis_digest(
 @tool_decorator
 async def get_progress_overview(
     ctx: Context,
+    include_suggestions: bool = True,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Lightweight progress snapshot — cheap enough to call at the
     start of every turn. Returns analysis phase, note counts, tool call count,
-    function coverage percentage, and angr status in a single small response.
+    function coverage percentage, angr status, and optionally top-3 next-action
+    suggestions in a single small response.
 
-    When to use: Call at the start of each turn to orient yourself. Use
-    get_analysis_digest() when you need full findings detail, or
-    get_session_summary() when you need tool history and suggestions.
+    When to use: Call at the start of each turn to orient yourself. This is the
+    recommended single tool for quick context — it replaces the need to call
+    suggest_next_action() separately. Use get_analysis_digest() when you need
+    full findings detail, or get_session_summary() when you need tool history.
 
     Does not require a file to be loaded (returns minimal info if no file is open).
 
     Args:
         ctx: The MCP Context object.
+        include_suggestions: (bool) If True (default), include top-3 next-action
+            suggestions. Set to False to skip suggestion generation.
 
     Returns:
-        A compact dictionary with progress metrics.
+        A compact dictionary with progress metrics and optional suggestions.
     """
     result: Dict[str, Any] = {
         "analysis_phase": _detect_analysis_phase(),
@@ -414,6 +419,10 @@ async def get_progress_overview(
     else:
         result["angr"] = "unavailable"
 
+    # Include top-3 suggestions when requested
+    if include_suggestions:
+        result["suggestions"] = _build_suggestions(max_suggestions=3)
+
     return result
 
 
@@ -460,8 +469,8 @@ _TOOLS_BY_PHASE = {
         ("auto_note_function", "Auto-generate behavioral summary after decompiling."),
         ("get_analysis_digest", "Aggregated findings overview — call periodically."),
         ("get_session_summary", "Full session summary with tool history."),
-        ("get_progress_overview", "Lightweight progress snapshot."),
-        ("suggest_next_action", "AI-free recommendations based on current findings."),
+        ("get_progress_overview", "Lightweight progress snapshot with top-3 suggestions. Preferred over suggest_next_action."),
+        ("suggest_next_action", "Detailed 5-suggestion recommendations. Use get_progress_overview for quick context."),
     ],
     "utility": [
         ("export_project", "Export session as portable archive."),
@@ -475,33 +484,113 @@ _TOOLS_BY_PHASE = {
 }
 
 
+_SPECIALIZED_TOOL_GROUPS: Dict[str, List[tuple]] = {
+    "format-specific": [
+        ("elf_analyze", "Comprehensive ELF binary analysis."),
+        ("elf_dwarf_info", "Extract DWARF debug information from ELF."),
+        ("macho_analyze", "Comprehensive Mach-O binary analysis."),
+        ("dotnet_analyze", "Analyze .NET assembly metadata and types."),
+        ("dotnet_disassemble_method", "Disassemble a specific .NET method."),
+        ("go_analyze", "Analyze Go binary metadata and symbols."),
+        ("rust_analyze", "Analyze Rust binary metadata."),
+        ("rust_demangle_symbols", "Demangle Rust symbol names."),
+        ("parse_dotnet_metadata", "Parse raw .NET metadata tables."),
+    ],
+    "emulation": [
+        ("emulate_binary_with_qiling", "Full OS emulation with Qiling Framework."),
+        ("emulate_shellcode_with_qiling", "Emulate raw shellcode with Qiling."),
+        ("qiling_trace_execution", "Trace execution with Qiling."),
+        ("qiling_hook_api_calls", "Hook API calls during Qiling emulation."),
+        ("qiling_dump_unpacked_binary", "Dump unpacked binary from Qiling memory."),
+        ("qiling_resolve_api_hashes", "Resolve API hashes via Qiling emulation."),
+        ("qiling_memory_search", "Search Qiling emulation memory."),
+        ("emulate_pe_with_windows_apis", "Windows API emulation with Speakeasy."),
+        ("emulate_shellcode_with_speakeasy", "Shellcode emulation with Speakeasy."),
+        ("emulate_function_execution", "Emulate a single function with angr."),
+        ("emulate_with_watchpoints", "Emulate with memory watchpoints."),
+    ],
+    "refinery": [
+        ("refinery_pipeline", "Run a multi-step Binary Refinery pipeline."),
+        ("refinery_xor", "XOR decode/encode with Binary Refinery."),
+        ("refinery_decrypt", "Decrypt data with Binary Refinery (AES, RC4, etc.)."),
+        ("refinery_decompress", "Decompress data (zlib, gzip, LZMA, etc.)."),
+        ("refinery_extract_iocs", "Extract IOCs using Binary Refinery."),
+        ("refinery_carve", "Carve embedded files from binary data."),
+        ("refinery_deobfuscate_script", "Deobfuscate scripts (PowerShell, VBS, JS)."),
+        ("refinery_pe_operations", "PE-specific operations (overlay, resources, etc.)."),
+        ("refinery_codec", "Encode/decode data (base64, hex, etc.)."),
+        ("refinery_dotnet", ".NET-specific Binary Refinery operations."),
+        ("refinery_auto_decrypt", "Automated decryption attempts."),
+        ("refinery_list_units", "List all available Binary Refinery units."),
+    ],
+    "advanced-analysis": [
+        ("get_reaching_definitions", "Data flow: what values reach a point."),
+        ("get_data_dependencies", "Track data dependencies for a function."),
+        ("get_control_dependencies", "Control flow dependencies for a function."),
+        ("propagate_constants", "Constant propagation analysis."),
+        ("get_value_set_analysis", "Value set analysis for a function."),
+        ("get_dominators", "Dominator tree for a function."),
+        ("get_backward_slice", "Backward slice from a program point."),
+        ("get_forward_slice", "Forward slice from a program point."),
+        ("find_path_to_address", "Symbolic execution to reach a target."),
+        ("find_path_with_custom_input", "Symbolic execution with custom inputs."),
+        ("detect_self_modifying_code", "Detect self-modifying code patterns."),
+        ("find_code_caves", "Find unused code regions in the binary."),
+        ("scan_for_indirect_jumps", "Find indirect jump/call targets."),
+        ("identify_cpp_classes", "Identify C++ class hierarchies."),
+        ("get_call_graph", "Generate function call graph."),
+        ("find_anti_debug_comprehensive", "Comprehensive anti-debug detection."),
+    ],
+}
+
+
 @tool_decorator
 async def list_tools_by_phase(
     ctx: Context,
     phase: str = "all",
+    include_specialized: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: utility] Lists available tools organized by analysis phase. Helps
     discover the right tool for your current workflow stage.
 
     Phases: triage, explore, deep-dive, context, utility, or 'all'.
+    Specialized groups: format-specific, emulation, refinery, advanced-analysis.
 
     When to use: When you're unsure which tools are available for your current
     analysis stage, or when starting work on a new binary.
 
     Args:
         ctx: MCP Context.
-        phase: Analysis phase to filter by. Default 'all' shows everything.
+        phase: Analysis phase or specialized group to filter by. Default 'all'.
+        include_specialized: (bool) If True, include specialized tool groups
+            (format-specific, emulation, refinery, advanced-analysis) in 'all' output.
+            Default False.
     """
     phase = phase.lower().replace("_", "-")
+
+    # Check if requesting a specialized group directly
+    if phase in _SPECIALIZED_TOOL_GROUPS:
+        tools = _SPECIALIZED_TOOL_GROUPS[phase]
+        return {
+            "group": phase,
+            "tools": [{"tool": t, "description": d} for t, d in tools],
+            "count": len(tools),
+            "current_phase": _detect_analysis_phase(),
+        }
+
     if phase == "all":
-        result = {}
+        result: Dict[str, Any] = {}
         for p, tools in _TOOLS_BY_PHASE.items():
             result[p] = [{"tool": t, "description": d} for t, d in tools]
+        if include_specialized:
+            for group_name, tools in _SPECIALIZED_TOOL_GROUPS.items():
+                result[group_name] = [{"tool": t, "description": d} for t, d in tools]
         return {
             "phases": result,
             "current_phase": _detect_analysis_phase(),
-            "hint": "Use suggest_next_action() for personalized recommendations.",
+            "specialized_groups": list(_SPECIALIZED_TOOL_GROUPS.keys()),
+            "hint": "Use phase='<group>' to list a specialized group, or include_specialized=True to see all.",
         }
     elif phase in _TOOLS_BY_PHASE:
         tools = _TOOLS_BY_PHASE[phase]
@@ -513,8 +602,9 @@ async def list_tools_by_phase(
         }
     else:
         return {
-            "error": f"Unknown phase '{phase}'.",
+            "error": f"Unknown phase or group '{phase}'.",
             "available_phases": list(_TOOLS_BY_PHASE.keys()),
+            "available_specialized_groups": list(_SPECIALIZED_TOOL_GROUPS.keys()),
         }
 
 
@@ -522,26 +612,15 @@ async def list_tools_by_phase(
 #  Intelligent next-action suggestion
 # ===================================================================
 
-@tool_decorator
-async def suggest_next_action(
-    ctx: Context,
-) -> Dict[str, Any]:
-    """
-    [Phase: context] Analyzes current session state — triage results, notes,
-    tool history, function scores — and recommends 3-5 specific next steps
-    with rationale. No LLM involved, purely rule-based.
+def _build_suggestions(max_suggestions: int = 5) -> List[Dict[str, str]]:
+    """Build rule-based next-action suggestions from current session state.
 
-    When to use: When you're unsure what to do next, or after completing a
-    phase of analysis. More specific than get_session_summary().
-
-    Args:
-        ctx: MCP Context.
+    Shared logic used by both suggest_next_action (full detail) and
+    get_progress_overview (compact top-3).
     """
     suggestions: List[Dict[str, str]] = []
-
     phase = _detect_analysis_phase()
 
-    # Gather context
     history = state.get_tool_history()
     ran_tools = set(h["tool_name"] for h in history)
     prev = getattr(state, "previous_session_history", []) or []
@@ -551,12 +630,7 @@ async def suggest_next_action(
     func_scores = getattr(state, '_cached_function_scores', None)
 
     if phase == "not_started" or not state.filepath:
-        return {
-            "phase": phase,
-            "suggestions": [
-                {"tool": "open_file(filepath='...')", "rationale": "No file loaded. Load a binary to begin analysis."},
-            ],
-        }
+        return [{"tool": "open_file(filepath='...')", "rationale": "No file loaded. Load a binary to begin analysis."}]
 
     # --- Phase: file_loaded ---
     if phase == "file_loaded":
@@ -564,11 +638,10 @@ async def suggest_next_action(
             "tool": "get_triage_report(compact=True)",
             "rationale": "File loaded but not triaged yet. Start with automated triage for risk assessment.",
         })
-        return {"phase": phase, "suggestions": suggestions}
+        return suggestions[:max_suggestions]
 
     # --- Phase: triaged ---
     if "get_triage_report" in ran_tools and triage:
-        risk_level = triage.get("risk_level", "")
         sus_imports = triage.get("suspicious_imports", [])
 
         if "get_function_map" not in ran_tools and ANGR_AVAILABLE:
@@ -652,9 +725,37 @@ async def suggest_next_action(
             "rationale": "Review accumulated findings to decide next steps.",
         })
 
+    return suggestions[:max_suggestions]
+
+
+@tool_decorator
+async def suggest_next_action(
+    ctx: Context,
+) -> Dict[str, Any]:
+    """
+    [Phase: context] Analyzes current session state — triage results, notes,
+    tool history, function scores — and recommends 3-5 specific next steps
+    with rationale. No LLM involved, purely rule-based.
+
+    When to use: When you need detailed recommendations with rationale. For a
+    quick overview with suggestions included, prefer get_progress_overview()
+    which is cheaper and includes top-3 suggestions.
+
+    Args:
+        ctx: MCP Context.
+    """
+    phase = _detect_analysis_phase()
+    suggestions = _build_suggestions(max_suggestions=5)
+
+    notes = state.get_notes() if state.filepath else []
+    history = state.get_tool_history()
+    ran_tools = set(h["tool_name"] for h in history)
+    prev = getattr(state, "previous_session_history", []) or []
+    ran_tools |= set(h["tool_name"] for h in prev)
+
     return {
         "phase": phase,
-        "suggestions": suggestions[:5],
+        "suggestions": suggestions,
         "tools_used": len(ran_tools),
         "notes_count": len(notes),
     }

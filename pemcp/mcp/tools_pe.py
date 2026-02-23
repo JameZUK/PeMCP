@@ -595,8 +595,6 @@ async def reanalyze_loaded_pe_file(
     capa_rules_dir: Optional[str] = None,
     capa_sigs_dir: Optional[str] = None,
     analyses_to_skip: Optional[List[str]] = None,
-    skip_capa_analysis: Optional[bool] = None,
-    skip_floss_analysis: Optional[bool] = None,
     pre_analyze_angr: bool = False,
     floss_options: Optional[Dict[str, Any]] = None,
     verbose_mcp_output: bool = False,
@@ -605,7 +603,7 @@ async def reanalyze_loaded_pe_file(
     ) -> Dict[str, Any]:
     """
     Re-triggers a full or partial analysis of the PE file that was pre-loaded at server startup.
-    Allows skipping heavy analyses (PEiD, YARA, Capa, FLOSS) via 'analyses_to_skip' list or specific flags.
+    Allows skipping heavy analyses (PEiD, YARA, Capa, FLOSS) via 'analyses_to_skip' list.
     The analysis results are updated globally. FLOSS specific parameters can also be provided.
 
     If 'pre_analyze_angr' is True, it will also build the Angr Control Flow Graph (CFG) to speed up
@@ -618,8 +616,7 @@ async def reanalyze_loaded_pe_file(
         capa_rules_dir: (str) Optional path to capa rules directory.
         capa_sigs_dir: (str) Optional path to capa signatures directory.
         analyses_to_skip: (list[str]) Analysis names to skip (e.g. ["capa", "floss", "yara", "peid"]).
-        skip_capa_analysis: (bool) Shorthand to skip/force capa analysis.
-        skip_floss_analysis: (bool) Shorthand to skip/force FLOSS analysis.
+            This is the single mechanism for skipping analyses.
         pre_analyze_angr: (bool) If True, build the Angr CFG for faster subsequent analysis.
         floss_options: (dict) Optional FLOSS configuration. Accepted keys:
             min_length (int), verbose_level (int), debug_level (str: NONE/DEFAULT/TRACE/SUPERTRACE),
@@ -657,20 +654,6 @@ async def reanalyze_loaded_pe_file(
     normalized_analyses_to_skip = []
     if analyses_to_skip:
         normalized_analyses_to_skip = [analysis.lower() for analysis in analyses_to_skip]
-
-    if skip_capa_analysis is True and "capa" not in normalized_analyses_to_skip:
-        normalized_analyses_to_skip.append("capa")
-        await ctx.info("Capa analysis will be skipped due to 'skip_capa_analysis=True'.")
-    elif skip_capa_analysis is False and "capa" in normalized_analyses_to_skip:
-        normalized_analyses_to_skip.remove("capa")
-        await ctx.info("Capa analysis will be performed as 'skip_capa_analysis=False'.")
-
-    if skip_floss_analysis is True and "floss" not in normalized_analyses_to_skip:
-        normalized_analyses_to_skip.append("floss")
-        await ctx.info("FLOSS analysis will be skipped due to 'skip_floss_analysis=True'.")
-    elif skip_floss_analysis is False and "floss" in normalized_analyses_to_skip:
-        normalized_analyses_to_skip.remove("floss")
-        await ctx.info("FLOSS analysis will be performed as 'skip_floss_analysis=False'.")
 
     if normalized_analyses_to_skip:
         await ctx.info(f"Final list of analyses to skip during re-analysis: {', '.join(normalized_analyses_to_skip) if normalized_analyses_to_skip else 'None'}")

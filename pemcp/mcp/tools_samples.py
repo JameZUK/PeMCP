@@ -1,4 +1,5 @@
 """MCP tool for listing and discovering sample files in the configured samples directory."""
+import datetime
 import os
 from typing import Dict, Any, Optional, List
 from pathlib import Path
@@ -8,14 +9,41 @@ from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 from pemcp.mcp._format_helpers import get_magic_hint
 
 
+# Mapping from format_hint values to filter categories
+_FORMAT_CATEGORIES: Dict[str, str] = {
+    "PE32": "pe",
+    "PE32+": "pe",
+    "ELF": "elf",
+    "Mach-O": "macho",
+    "ZIP": "archive",
+    "RAR": "archive",
+    "7z": "archive",
+    "GZIP": "archive",
+}
+
+
+def _format_size(size_bytes: int) -> str:
+    """Convert bytes to human-readable size string."""
+    if size_bytes >= 1_048_576:
+        return f"{size_bytes / 1_048_576:.1f} MB"
+    elif size_bytes >= 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes} B"
+
+
 def _build_file_entry(file_path: str, base_path: str) -> Dict[str, Any]:
     """Build a metadata dict for a single file."""
     stat = os.stat(file_path)
+    mtime = datetime.datetime.fromtimestamp(
+        stat.st_mtime, tz=datetime.timezone.utc
+    ).strftime("%Y-%m-%d %H:%M UTC")
     return {
         "name": os.path.basename(file_path),
         "path": file_path,
         "relative_path": os.path.relpath(file_path, base_path),
         "size_bytes": stat.st_size,
+        "size_human": _format_size(stat.st_size),
+        "modified": mtime,
         "format_hint": get_magic_hint(file_path),
     }
 
@@ -25,10 +53,16 @@ async def list_samples(
     ctx: Context,
     recursive: bool = False,
     glob_pattern: Optional[str] = None,
+    format_filter: str = "all",
+    show_all: bool = False,
+    sort_by: str = "name",
 ) -> Dict[str, Any]:
     """
     [Phase: load] Lists files available in the configured samples directory.
     Use this to discover what samples are available before calling open_file().
+
+    By default, only recognized binary formats (PE, ELF, Mach-O, archives) are
+    shown. Set show_all=True to include all files regardless of format.
 
     When to use: At the start of a session to see what files are available,
     or when the user asks which samples can be analyzed.
@@ -44,10 +78,16 @@ async def list_samples(
                    If False (default), list only files in the top-level samples directory.
         glob_pattern: (Optional[str]) A glob pattern to filter files (e.g. '*.exe', '*.dll', 'malware_*').
                       Applied to filenames only (not full paths). If not set, all files are listed.
+        format_filter: (str) Filter by detected format: 'pe', 'elf', 'macho', 'archive', or 'all' (default).
+                       Based on magic-byte detection.
+        show_all: (bool) If False (default), hides files with 'Unknown' format hint.
+                  Set to True to see all files including non-binary formats.
+        sort_by: (str) Sort results by: 'name' (default), 'size', or 'date'.
 
     Returns:
         A dictionary containing the samples directory path, file count,
-        and a list of files with name, full path, relative path, size, and format hint.
+        and a list of files with name, full path, relative path, size, human-readable size,
+        modification date, and format hint.
     """
     if state.samples_path is None:
         return {
@@ -88,10 +128,33 @@ async def list_samples(
                 continue
             if glob_pattern and not Path(entry.name).match(glob_pattern):
                 continue
-            files.append(_build_file_entry(entry.path, samples_dir))
+            try:
+                files.append(_build_file_entry(entry.path, samples_dir))
+            except (OSError, ValueError):
+                continue
 
-    # Sort by name for consistent output
-    files.sort(key=lambda f: f["relative_path"])
+    # --- Format filtering ---
+    format_filter_lower = format_filter.lower()
+    if format_filter_lower != "all":
+        files = [
+            f for f in files
+            if _FORMAT_CATEGORIES.get(f.get("format_hint", ""), "").lower() == format_filter_lower
+        ]
+    elif not show_all:
+        # Default: hide files with Unknown format hint
+        files = [
+            f for f in files
+            if f.get("format_hint", "Unknown") != "Unknown"
+        ]
+
+    # --- Sorting ---
+    sort_by_lower = sort_by.lower()
+    if sort_by_lower == "size":
+        files.sort(key=lambda f: f.get("size_bytes", 0), reverse=True)
+    elif sort_by_lower == "date":
+        files.sort(key=lambda f: f.get("modified", ""), reverse=True)
+    else:
+        files.sort(key=lambda f: f["relative_path"])
 
     # Build directory tree summary for recursive listings
     subdirs: List[str] = []
@@ -116,6 +179,15 @@ async def list_samples(
 
     if glob_pattern:
         result["glob_pattern"] = glob_pattern
+
+    if format_filter_lower != "all":
+        result["format_filter"] = format_filter_lower
+
+    if show_all:
+        result["show_all"] = True
+
+    if sort_by_lower != "name":
+        result["sort_by"] = sort_by_lower
 
     if subdirs:
         result["subdirectories"] = subdirs

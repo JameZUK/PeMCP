@@ -235,7 +235,27 @@ def _get_environment_info() -> Dict[str, Any]:
         },
     }
 
-    return {
+    # Build warnings for common configuration issues
+    warnings: List[str] = []
+    if export_dir and not export_writable:
+        warnings.append(
+            f"Export directory '{export_dir}' exists but is not writable. "
+            "Files cannot be saved there. Set PEMCP_EXPORT_DIR to a writable path."
+        )
+    if not export_dir:
+        warnings.append(
+            "No export directory found. Set PEMCP_EXPORT_DIR or mount /output "
+            "to enable file exports."
+        )
+    if container_info["containerized"] and not mount_mappings:
+        warnings.append(
+            "Running inside a container but no path mappings configured. "
+            "File paths in tool outputs will be container-internal paths. "
+            "Set PEMCP_PATH_MAP, PEMCP_HOST_SAMPLES, or PEMCP_HOST_EXPORT "
+            "to enable host path translation."
+        )
+
+    result: Dict[str, Any] = {
         "containerized": container_info["containerized"],
         "container_type": container_info["container_type"],
         "paths": paths,
@@ -243,6 +263,9 @@ def _get_environment_info() -> Dict[str, Any]:
         "writable_paths": writable_paths,
         "recommended_export_path": recommended,
     }
+    if warnings:
+        result["warnings"] = warnings
+    return result
 
 
 @tool_decorator
