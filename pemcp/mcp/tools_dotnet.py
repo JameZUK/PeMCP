@@ -20,8 +20,16 @@ async def dotnet_analyze(
     limit: int = 100,
 ) -> Dict[str, Any]:
     """
-    Comprehensive .NET assembly analysis: CLR header, metadata streams,
-    type definitions, method definitions, assembly references, and user strings.
+    [Phase: triage] Comprehensive .NET assembly analysis: CLR header, metadata
+    streams, type definitions, method definitions, assembly references, and
+    user strings.
+
+    When to use: When detect_binary_format() or classify_binary_purpose()
+    identifies a .NET assembly. This is the primary .NET analysis tool.
+
+    Next steps: dotnet_disassemble_method() to inspect specific methods,
+    get_triage_report() for risk assessment, extract_wide_strings() for
+    .NET wide string data.
 
     Args:
         file_path: Optional path to a .NET binary. If None, uses the loaded file.
@@ -190,7 +198,14 @@ async def dotnet_disassemble_method(
     limit: int = 200,
 ) -> Dict[str, Any]:
     """
-    Disassembles a .NET method's CIL bytecode into human-readable opcodes.
+    [Phase: deep-dive] Disassembles a .NET method's CIL bytecode into
+    human-readable opcodes.
+
+    When to use: After dotnet_analyze() identified interesting methods. Use
+    the method_rva from dotnet_analyze()'s method_definitions output.
+
+    Next steps: add_note() to record method behavior, auto_note_function()
+    with a custom_summary for the .NET method.
 
     Args:
         method_rva: Hex RVA of the method (from dotnet_analyze's method_definitions).

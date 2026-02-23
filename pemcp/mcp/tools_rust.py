@@ -91,9 +91,14 @@ async def rust_analyze(
     file_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Extracts Rust binary metadata: compiler version, crate dependencies
-    (name, version, features), toolchain, and dependencies imphash.
+    [Phase: triage] Extracts Rust binary metadata: compiler version, crate
+    dependencies (name, version, features), toolchain, and imphash.
     Falls back to string-based detection for stripped binaries.
+
+    When to use: When detect_binary_format() identifies a Rust binary.
+
+    Next steps: rust_demangle_symbols() to make symbol names readable,
+    decompile_function_with_angr() on interesting functions.
 
     Args:
         file_path: Optional path to a Rust binary. If None, uses the loaded file.
@@ -173,8 +178,11 @@ async def rust_demangle_symbols(
     limit: int = 200,
 ) -> Dict[str, Any]:
     """
-    Demangles Rust symbol names to human-readable form.
+    [Phase: explore] Demangles Rust symbol names to human-readable form.
     e.g. '_ZN3foo3bar17h05af221e174051e8E' -> 'foo::bar'
+
+    When to use: After rust_analyze() returns mangled symbol names. Readable
+    names help identify interesting functions for decompilation.
 
     Args:
         symbols: List of mangled Rust symbol names.

@@ -22,14 +22,15 @@ async def add_note(
     tool_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Add a note to the currently loaded file. Notes persist in the analysis
-    cache and are restored when the same file is reopened later.
+    [Phase: context] Add a note to the currently loaded file. Notes persist in
+    the analysis cache and are restored when the same file is reopened later.
 
-    Use notes to record observations, findings, or analysis context that
-    should be preserved across sessions. Notes are the primary mechanism
-    for managing context in long-running binary analysis — they feed into
-    get_analysis_digest() which aggregates all findings into a single
-    context-efficient summary.
+    When to use: After any analysis step that produces important findings — IOCs,
+    behavioral observations, function purposes, or tool results. Notes are the
+    primary context management mechanism in long-running binary analysis.
+
+    Notes feed into get_analysis_digest() which aggregates all findings into a
+    single context-efficient summary.
 
     Args:
         ctx: The MCP Context object.
@@ -59,8 +60,12 @@ async def get_notes(
     limit: int = 50,
 ) -> Dict[str, Any]:
     """
-    Retrieve notes for the currently loaded file, optionally filtered
-    by category or address.
+    [Phase: context] Retrieve notes for the currently loaded file, optionally
+    filtered by category or address.
+
+    When to use: When you need to review specific notes (e.g. all function notes,
+    or notes at a specific address). For a full findings overview, prefer
+    get_analysis_digest() which aggregates notes with other context.
 
     Args:
         ctx: The MCP Context object.
@@ -94,7 +99,11 @@ async def update_note(
     tool_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Update an existing note by its ID. Only specified fields are changed.
+    [Phase: context] Update an existing note by its ID. Only specified fields
+    are changed.
+
+    When to use: When you have new information about a previously noted finding
+    and want to update rather than create a duplicate note.
 
     Args:
         ctx: The MCP Context object.
@@ -128,7 +137,9 @@ async def delete_note(
     note_id: str,
 ) -> Dict[str, Any]:
     """
-    Delete a note by its ID.
+    [Phase: context] Delete a note by its ID.
+
+    When to use: When a previous finding has been superseded or was incorrect.
 
     Args:
         ctx: The MCP Context object.
@@ -155,13 +166,16 @@ async def auto_note_function(
     address: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Auto-generates a one-line behavioral summary of a function and saves it as a
-    persistent note. Uses API call pattern matching (not LLM inference) based on
-    the function's callees in the CFG.
+    [Phase: deep-dive] Auto-generates a one-line behavioral summary of a function
+    and saves it as a persistent note. Uses API call pattern matching (not LLM)
+    based on the function's callees in the CFG.
 
-    Call this after decompiling a function to build up the analysis digest —
-    later, get_analysis_digest() will aggregate all function notes without
-    needing the full decompilation output in context.
+    When to use: After decompile_function_with_angr() — call this to record what
+    the function does without keeping full pseudocode in context. Essential for
+    building up get_analysis_digest() over the course of analysis.
+
+    Next steps: Continue decompiling other functions from get_function_map(),
+    or call get_analysis_digest() to review accumulated findings.
 
     Args:
         ctx: The MCP Context object.

@@ -11,17 +11,16 @@ async def get_tool_history(
     limit: int = 50,
 ) -> Dict[str, Any]:
     """
-    Retrieve the history of tools run during this session.
-    Each entry includes the tool name, timestamp, parameters used,
-    a brief result summary, and duration in milliseconds.
+    [Phase: context] Retrieve the history of tools run during this session.
+    Each entry includes tool name, timestamp, parameters, result summary,
+    and duration in milliseconds.
 
-    Use this to review what analysis steps have already been performed,
+    When to use: To review what analysis steps have already been performed,
     avoid redundant work, and understand the investigation timeline.
-    Previous session history (from prior runs on the same file) is also
-    available when a file is loaded from cache.
 
     For a higher-level view of what was *learned* (not just what ran),
-    use get_analysis_digest() instead.
+    use get_analysis_digest() instead. Previous session history is also
+    available when a file is loaded from cache.
 
     Args:
         ctx: The MCP Context object.
@@ -56,8 +55,11 @@ async def clear_tool_history(
     ctx: Context,
 ) -> Dict[str, Any]:
     """
-    Clear all tool history entries for the current session.
+    [Phase: utility] Clear all tool history entries for the current session.
     This does not affect the cached history from previous sessions.
+
+    When to use: When you want a clean slate for tracking analysis steps,
+    e.g. after a false start or methodology change.
 
     Args:
         ctx: The MCP Context object.

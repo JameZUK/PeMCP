@@ -22,8 +22,15 @@ from pemcp.utils import shannon_entropy
 @tool_decorator
 async def get_section_permissions(ctx: Context, limit: int = 50) -> Dict[str, Any]:
     """
-    Maps every section's permission flags (Read/Write/Execute) with anomaly detection.
-    Flags sections with dangerous combinations like Write+Execute (W+X).
+    [Phase: explore] Maps every section's permission flags (Read/Write/Execute)
+    with anomaly detection. Flags sections with dangerous W+X (writable+executable).
+
+    When to use: After triage reveals section anomalies, or when investigating
+    packing, code injection, or self-modifying code.
+
+    Next steps: If W+X sections found → get_hex_dump() to inspect content,
+    decompile_function_with_angr() to analyze code in suspicious sections, or
+    detect_packing() for packer analysis. Record findings with add_note().
 
     Args:
         limit: Max sections to return.
@@ -79,8 +86,15 @@ async def get_section_permissions(ctx: Context, limit: int = 50) -> Dict[str, An
 @tool_decorator
 async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
     """
-    Returns extended PE metadata not covered by basic header tools: machine type,
-    subsystem, OS version, linker version, ASLR/DEP/CFG flags, and entry point context.
+    [Phase: explore] Returns extended PE metadata not covered by basic header tools:
+    machine type, subsystem, OS version, linker version, ASLR/DEP/CFG flags, and
+    entry point context.
+
+    When to use: When you need detailed PE header info beyond what triage provides,
+    e.g. to check security mitigations or identify the build environment.
+
+    Next steps: If security flags are missing → get_load_config_details() for CFG
+    details. If timestamp is suspicious → check get_triage_report() timestamp_analysis.
     """
     await ctx.info("Extracting extended PE metadata")
     _check_pe_loaded("get_pe_metadata")
@@ -169,8 +183,15 @@ async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
 @tool_decorator
 async def extract_resources(ctx: Context, limit: int = 50) -> Dict[str, Any]:
     """
-    Extracts PE resource data with types, sizes, language IDs, entropy,
-    and the first 64 bytes of each resource payload (hex encoded).
+    [Phase: explore] Extracts PE resource data with types, sizes, language IDs,
+    entropy, and the first 64 bytes of each resource payload (hex encoded).
+
+    When to use: When triage flags resource anomalies, or when investigating
+    droppers, installers, or binaries with embedded payloads in resources.
+
+    Next steps: If high-entropy resources found → scan_for_embedded_files() to
+    check for embedded executables, get_hex_dump() to inspect resource data.
+    If RT_MANIFEST found → extract_manifest() for privilege/compatibility info.
 
     Args:
         limit: Max resources to return.
@@ -239,8 +260,15 @@ async def extract_resources(ctx: Context, limit: int = 50) -> Dict[str, Any]:
 @tool_decorator
 async def extract_manifest(ctx: Context) -> Dict[str, Any]:
     """
-    Extracts and returns the embedded application manifest (RT_MANIFEST resource).
-    Manifests reveal requested privileges, COM registrations, and compatibility info.
+    [Phase: explore] Extracts the embedded application manifest (RT_MANIFEST resource).
+    Manifests reveal requested privileges (e.g. requireAdministrator), COM registrations,
+    and OS compatibility info.
+
+    When to use: When investigating privilege escalation, UAC bypass, or to
+    understand the binary's declared capabilities and compatibility settings.
+
+    Next steps: If elevated privileges requested → decompile_function_with_angr()
+    at entry point to understand what requires elevation. Record with add_note().
     """
     await ctx.info("Extracting manifest")
     _check_pe_loaded("extract_manifest")
@@ -275,8 +303,14 @@ async def extract_manifest(ctx: Context) -> Dict[str, Any]:
 @tool_decorator
 async def get_load_config_details(ctx: Context) -> Dict[str, Any]:
     """
-    Parses the Load Configuration directory in detail: Control Flow Guard (CFG),
-    security cookie, SafeSEH handlers, and guard flags.
+    [Phase: explore] Parses the Load Configuration directory in detail: Control Flow
+    Guard (CFG), security cookie, SafeSEH handlers, and guard flags.
+
+    When to use: When assessing exploit mitigations, or when triage shows CFG/CET
+    flags are set and you want to understand the specific protections enabled.
+
+    Next steps: If CFG is absent → binary may be vulnerable to control-flow hijacking.
+    Use get_pe_metadata() to cross-reference with ASLR/DEP status.
     """
     await ctx.info("Parsing Load Config directory")
     _check_pe_loaded("get_load_config_details")
@@ -334,8 +368,15 @@ async def extract_wide_strings(
     limit: int = 200,
 ) -> Dict[str, Any]:
     """
-    Extracts UTF-16LE (wide) strings from the binary. Essential for Windows
-    GUI applications and .NET binaries where strings are stored as wchar_t*.
+    [Phase: explore] Extracts UTF-16LE (wide) strings from the binary. Essential
+    for Windows GUI applications and .NET binaries where strings are wchar_t*.
+
+    When to use: When FLOSS static strings miss expected strings (common with GUI
+    apps), or when triage shows .NET/Delphi/GUI classification and you need string
+    analysis. Complements get_floss_analysis_info() which focuses on ASCII.
+
+    Next steps: Review strings for IOCs → add_note() to record findings.
+    Use search_for_specific_strings() to search for specific patterns found here.
 
     Args:
         min_length: Minimum string length in characters.
@@ -389,8 +430,15 @@ async def extract_wide_strings(
 @tool_decorator
 async def detect_format_strings(ctx: Context, limit: int = 50) -> Dict[str, Any]:
     """
-    Scans for printf/scanf-style format specifiers (%s, %x, %d, %n, etc.)
-    in strings. The dangerous %n specifier can indicate format string vulnerabilities.
+    [Phase: explore] Scans for printf/scanf-style format specifiers (%s, %x, %d,
+    %n, etc.) in strings. The dangerous %n specifier can indicate format string
+    vulnerabilities.
+
+    When to use: When investigating vulnerability research or exploit development.
+    Especially useful for binaries handling user input with printf-family functions.
+
+    Next steps: If dangerous %n found → decompile_function_with_angr() at the
+    containing function to verify exploitability. Record with add_note().
 
     Args:
         limit: Max findings to return.
@@ -443,8 +491,15 @@ async def detect_format_strings(ctx: Context, limit: int = 50) -> Dict[str, Any]
 @tool_decorator
 async def detect_compression_headers(ctx: Context, limit: int = 30) -> Dict[str, Any]:
     """
-    Scans the binary for embedded compression/archive magic bytes:
+    [Phase: explore] Scans the binary for embedded compression/archive magic bytes:
     zlib, gzip, LZMA, ZIP, RAR, 7z, bzip2, cab, and XZ.
+
+    When to use: When investigating droppers, packers, or binaries with overlay data.
+    Triage overlay_analysis or high resource entropy suggests embedded archives.
+
+    Next steps: If archives found → scan_for_embedded_files() to extract them,
+    get_hex_dump(start_offset=<offset>) to inspect compressed data. For packed
+    binaries → auto_unpack_pe() or detect_packing().
 
     Args:
         limit: Max findings to return.
@@ -525,7 +580,14 @@ async def deobfuscate_xor_multi_byte(
     key_hex: str,
 ) -> Dict[str, Any]:
     """
-    Decrypts data using a multi-byte XOR key (repeating key cipher).
+    [Phase: deep-dive] Decrypts data using a multi-byte XOR key (repeating key cipher).
+
+    When to use: After identifying XOR-encrypted data via detect_crypto_constants(),
+    string analysis, or decompilation. Use bruteforce_xor_key() first if the key
+    is unknown.
+
+    Next steps: If decrypted data looks like a PE → open_file() to analyze it.
+    If it contains strings/URLs → add_note() to record IOCs.
 
     Args:
         data_hex: Hex-encoded encrypted data.
@@ -568,8 +630,15 @@ async def bruteforce_xor_key(
     limit: int = 10,
 ) -> Dict[str, Any]:
     """
-    Brute-forces XOR key for encrypted data. Optionally uses known plaintext
-    to derive the key directly.
+    [Phase: deep-dive] Brute-forces XOR key for encrypted data. Optionally uses
+    known plaintext to derive the key directly.
+
+    When to use: When you've found XOR-encrypted data (via detect_crypto_constants,
+    decompilation, or hex dump) but don't know the key. Provide known_plaintext
+    (e.g. 'MZ', 'http') for faster key recovery.
+
+    Next steps: Once key found → deobfuscate_xor_multi_byte() to decrypt full data.
+    If decrypted data is a PE → open_file(). Record findings with add_note().
 
     Args:
         data_hex: Hex-encoded encrypted data.
@@ -659,8 +728,15 @@ async def bruteforce_xor_key(
 @tool_decorator
 async def detect_crypto_constants(ctx: Context, limit: int = 50) -> Dict[str, Any]:
     """
-    Scans for known cryptographic constants (AES S-box, DES, SHA, RC4, etc.)
-    to identify crypto algorithm usage without symbolic execution.
+    [Phase: explore] Scans for known cryptographic constants (AES S-box, DES, SHA,
+    RC4, etc.) to identify crypto algorithm usage without symbolic execution.
+
+    When to use: When investigating ransomware, C2 encryption, credential theft,
+    or any binary suspected of using custom cryptography.
+
+    Next steps: Use get_cross_reference_map(target_address=<offset>) to find code
+    referencing the crypto constants, then decompile_function_with_angr() to
+    understand the encryption logic. Record findings with add_note().
 
     Args:
         limit: Max findings to return.
@@ -730,8 +806,15 @@ async def analyze_entropy_by_offset(
     limit: int = 500,
 ) -> Dict[str, Any]:
     """
-    Computes sliding-window Shannon entropy across the binary to locate
-    encrypted/compressed/packed regions.
+    [Phase: explore] Computes sliding-window Shannon entropy across the binary to
+    locate encrypted, compressed, or packed regions.
+
+    When to use: When investigating packing or embedded encrypted payloads. Triage
+    packing_assessment provides a summary; this gives offset-level granularity.
+
+    Next steps: High-entropy regions (>7.0) → get_hex_dump() to inspect content,
+    detect_compression_headers() to check for known archive formats, or
+    detect_packing() for packer analysis.
 
     Args:
         window_size: Size of entropy calculation window in bytes.
@@ -780,8 +863,15 @@ async def scan_for_api_hashes(
     limit: int = 50,
 ) -> Dict[str, Any]:
     """
-    Scans for known API name hashes used by shellcode/malware to hide imports.
-    Supports common hashing algorithms: ror13 (rotate-right-13), djb2, crc32.
+    [Phase: explore] Scans for known API name hashes used by shellcode and malware
+    to hide imports via dynamic resolution (e.g. ror13, djb2, crc32).
+
+    When to use: When triage shows very few imports (suggesting dynamic resolution),
+    or when analyzing shellcode. Common in malware that avoids static import tables.
+
+    Next steps: If API hashes resolved → decompile_function_with_angr() at those
+    offsets to see how APIs are called. Use get_hex_dump() to inspect surrounding
+    shellcode. Record findings with add_note().
 
     Args:
         hash_algorithm: Algorithm to check ('ror13', 'djb2', 'crc32'). Default 'ror13'.
@@ -878,8 +968,16 @@ async def scan_for_api_hashes(
 @tool_decorator
 async def get_import_hash_analysis(ctx: Context) -> Dict[str, Any]:
     """
-    Computes multiple import-based similarity hashes: imphash (MD5 of import table),
-    and provides import categorization by DLL function (networking, crypto, process, file I/O, etc.).
+    [Phase: explore] Computes import-based similarity hashes (imphash) and categorizes
+    imports by function: networking, crypto, process manipulation, file I/O, registry,
+    anti-debug, privilege escalation, service control, and code injection.
+
+    When to use: After triage to understand the binary's API usage patterns and for
+    sample clustering. The imphash can identify malware families sharing code.
+
+    Next steps: Use compute_similarity_hashes() for fuzzy hashing (ssdeep/TLSH).
+    If suspicious categories found → get_focused_imports() for detailed import
+    analysis, decompile_function_with_angr() to analyze usage of flagged APIs.
     """
     await ctx.info("Computing import hash analysis")
     _check_pe_loaded("get_import_hash_analysis")
