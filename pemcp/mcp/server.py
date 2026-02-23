@@ -82,7 +82,14 @@ def tool_decorator(func):
         current_state.touch()
 
         start_time = time.time()
-        result = await func(*args, **kwargs)
+        try:
+            result = await func(*args, **kwargs)
+        except (RuntimeError, ValueError) as exc:
+            # Enrich error messages with actionable hints
+            enriched = _enrich_error_message(str(exc))
+            if enriched != str(exc):
+                raise type(exc)(enriched) from exc.__cause__
+            raise
         duration_ms = int((time.time() - start_time) * 1000)
 
         # Record tool invocation in history (skip meta-tools)
@@ -152,27 +159,85 @@ def _check_angr_ready(tool_name: str, *, require_cfg: bool = True) -> None:
                 "Please wait and retry shortly. Use check_task_status('startup-angr') to monitor progress."
             )
 
+_PREREQUISITE_HINTS = {
+    "floss_analysis": (
+        "FLOSS analysis data is not available. Possible causes:\n"
+        "  1. FLOSS was skipped at startup (--skip-floss flag)\n"
+        "  2. FLOSS is not installed on this server\n"
+        "  3. FLOSS analysis failed during file loading\n"
+        "Fix: Run reanalyze_loaded_pe_file() to re-run all analyses, "
+        "or check server logs for FLOSS errors."
+    ),
+    "capa_analysis": (
+        "CAPA analysis data is not available. Possible causes:\n"
+        "  1. CAPA was skipped at startup (--skip-capa flag)\n"
+        "  2. CAPA is not installed on this server\n"
+        "  3. CAPA analysis failed during file loading\n"
+        "Fix: Run reanalyze_loaded_pe_file() to re-run all analyses."
+    ),
+    "yara_matches": (
+        "YARA match data is not available. Possible causes:\n"
+        "  1. YARA was skipped at startup (--skip-yara flag)\n"
+        "  2. YARA rules were not found or failed to compile\n"
+        "Fix: Run reanalyze_loaded_pe_file() or check YARA rule paths."
+    ),
+    "peid_matches": (
+        "PEiD signature data is not available. Possible causes:\n"
+        "  1. PEiD was skipped at startup (--skip-peid flag)\n"
+        "  2. PEiD signature database (userdb.txt) was not found\n"
+        "Fix: Run reanalyze_loaded_pe_file() to re-run all analyses."
+    ),
+}
+
+# Map error message patterns to suggested next actions.
+_ERROR_HINTS = {
+    "angr background analysis is still in progress": (
+        "Suggested: Call check_task_status('startup-angr') to monitor progress, "
+        "or use non-angr tools while waiting (get_hex_dump, detect_crypto_constants, "
+        "extract_resources, etc.)."
+    ),
+    "no file is currently loaded": (
+        "Suggested: Call open_file(filepath) to load a binary, "
+        "or restart the server with --input-file to pre-load one."
+    ),
+    "not installed": (
+        "Suggested: Check the server's installed packages. The Docker image "
+        "includes all dependencies. If running locally, check requirements.txt."
+    ),
+}
+
 def _check_data_key_available(key_name: str, tool_name: str) -> None:
     """
     Check that a specific analysis data key is available in pe_data.
-    Provides context-aware feedback about why data might be missing.
+    Provides context-aware feedback about why data might be missing,
+    including specific prerequisites and fix instructions.
     """
     _check_pe_loaded(tool_name)
     if key_name not in state.pe_data:
-        # Check if this was a skipped analysis
-        skipped_hint = ""
-        skip_map = {
-            "floss_analysis": "floss", "capa_analysis": "capa",
-            "yara_matches": "yara", "peid_matches": "peid"
-        }
-        if key_name in skip_map:
-            skipped_hint = (
-                f" This analysis may have been skipped via --skip-{skip_map[key_name]} at startup. "
-                "Use reanalyze_loaded_pe_file to re-run the analysis."
-            )
+        hint = _PREREQUISITE_HINTS.get(key_name, "")
+        if not hint:
+            # Fallback to the old skip_map logic for unknown keys
+            skip_map = {
+                "floss_analysis": "floss", "capa_analysis": "capa",
+                "yara_matches": "yara", "peid_matches": "peid"
+            }
+            if key_name in skip_map:
+                hint = (
+                    f" This analysis may have been skipped via --skip-{skip_map[key_name]} at startup. "
+                    "Use reanalyze_loaded_pe_file() to re-run the analysis."
+                )
         raise RuntimeError(
-            f"[{tool_name}] Analysis data for '{key_name}' is not available.{skipped_hint}"
+            f"[{tool_name}] Analysis data for '{key_name}' is not available. {hint}"
         )
+
+
+def _enrich_error_message(error_msg: str) -> str:
+    """Append actionable hints to known error patterns."""
+    msg_lower = error_msg.lower()
+    for pattern, hint in _ERROR_HINTS.items():
+        if pattern in msg_lower:
+            return f"{error_msg}\n\n{hint}"
+    return error_msg
 
 async def _check_mcp_response_size(
     ctx: Context,

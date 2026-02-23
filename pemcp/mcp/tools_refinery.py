@@ -414,7 +414,7 @@ async def refinery_extract_iocs(
     ctx: Context,
     data_hex: Optional[str] = None,
     indicator_type: str = "all",
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Extract IOCs from data using Binary Refinery's xtp unit.
 
@@ -488,7 +488,7 @@ async def refinery_carve(
     file_type: str = "pe",
     data_hex: Optional[str] = None,
     decode: bool = True,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Carve embedded patterns or files from data via Binary Refinery.
 

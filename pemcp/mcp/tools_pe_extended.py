@@ -20,7 +20,7 @@ from pemcp.utils import shannon_entropy
 # ===================================================================
 
 @tool_decorator
-async def get_section_permissions(ctx: Context, limit: int = 50) -> Dict[str, Any]:
+async def get_section_permissions(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     """
     [Phase: explore] Maps every section's permission flags (Read/Write/Execute)
     with anomaly detection. Flags sections with dangerous W+X (writable+executable).
@@ -181,7 +181,7 @@ async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
 
 
 @tool_decorator
-async def extract_resources(ctx: Context, limit: int = 50) -> Dict[str, Any]:
+async def extract_resources(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     """
     [Phase: explore] Extracts PE resource data with types, sizes, language IDs,
     entropy, and the first 64 bytes of each resource payload (hex encoded).
@@ -365,7 +365,7 @@ async def get_load_config_details(ctx: Context) -> Dict[str, Any]:
 async def extract_wide_strings(
     ctx: Context,
     min_length: int = 4,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Extracts UTF-16LE (wide) strings from the binary. Essential
@@ -428,7 +428,7 @@ async def extract_wide_strings(
 
 
 @tool_decorator
-async def detect_format_strings(ctx: Context, limit: int = 50) -> Dict[str, Any]:
+async def detect_format_strings(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     """
     [Phase: explore] Scans for printf/scanf-style format specifiers (%s, %x, %d,
     %n, etc.) in strings. The dangerous %n specifier can indicate format string
@@ -726,7 +726,7 @@ async def bruteforce_xor_key(
 
 
 @tool_decorator
-async def detect_crypto_constants(ctx: Context, limit: int = 50) -> Dict[str, Any]:
+async def detect_crypto_constants(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     """
     [Phase: explore] Scans for known cryptographic constants (AES S-box, DES, SHA,
     RC4, etc.) to identify crypto algorithm usage without symbolic execution.
@@ -803,7 +803,7 @@ async def analyze_entropy_by_offset(
     ctx: Context,
     window_size: int = 256,
     step: int = 256,
-    limit: int = 500,
+    limit: int = 50,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Computes sliding-window Shannon entropy across the binary to
@@ -860,7 +860,7 @@ async def analyze_entropy_by_offset(
 async def scan_for_api_hashes(
     ctx: Context,
     hash_algorithm: str = "ror13",
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Scans for known API name hashes used by shellcode and malware
@@ -966,7 +966,7 @@ async def scan_for_api_hashes(
 
 
 @tool_decorator
-async def get_import_hash_analysis(ctx: Context) -> Dict[str, Any]:
+async def get_import_hash_analysis(ctx: Context, compact: bool = False) -> Dict[str, Any]:
     """
     [Phase: explore] Computes import-based similarity hashes (imphash) and categorizes
     imports by function: networking, crypto, process manipulation, file I/O, registry,
@@ -1020,6 +1020,13 @@ async def get_import_hash_analysis(ctx: Context) -> Dict[str, Any]:
 
     # Remove empty categories
     import_categories = {k: v for k, v in import_categories.items() if v}
+
+    if compact:
+        return {
+            "imphash": imphash,
+            "total_imports": total_imports,
+            "category_counts": {k: len(v) for k, v in import_categories.items()},
+        }
 
     return {
         "imphash": imphash,

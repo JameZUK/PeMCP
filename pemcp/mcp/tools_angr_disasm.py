@@ -90,7 +90,7 @@ async def get_calling_conventions(
     ctx: Context,
     function_address: Optional[str] = None,
     recover_all: bool = False,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Recovers calling conventions, parameter counts, and return
@@ -301,7 +301,7 @@ async def get_function_variables(
 async def identify_library_functions(
     ctx: Context,
     signature_path: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Matches functions against FLIRT signatures to identify known
@@ -510,6 +510,7 @@ async def get_function_map(
     limit: int = 30,
     group_by: str = "category",
     include_details: bool = False,
+    compact: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Ranks all functions by 'interestingness' and groups by purpose.
@@ -678,6 +679,24 @@ async def get_function_map(
 
     total_functions = len(scored)
     top = scored[:limit]
+
+    # Compact mode: return only name, addr, score — no grouping or details
+    if compact:
+        compact_funcs = [
+            {"addr": f["addr"], "name": f["name"], "score": f["score"]}
+            for f in top
+        ]
+        result = {
+            "total_functions": total_functions,
+            "returned": len(compact_funcs),
+            "functions": compact_funcs,
+        }
+        if top:
+            best = top[0]
+            result["suggested_start"] = (
+                f"{best['addr']} ({best['name']}) — score {best['score']}, {best['reason']}"
+            )
+        return await _check_mcp_response_size(ctx, result, "get_function_map")
 
     if group_by == "category":
         groups: Dict[str, list] = {}

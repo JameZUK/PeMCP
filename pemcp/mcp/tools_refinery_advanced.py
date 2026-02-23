@@ -26,7 +26,7 @@ async def refinery_regex_extract(
     ctx: Context,
     pattern: str,
     data_hex: Optional[str] = None,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Extract regex matches from binary data via Binary Refinery.
 
@@ -471,7 +471,7 @@ async def refinery_decompile(
 async def refinery_extract_domains(
     ctx: Context,
     data_hex: Optional[str] = None,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Extract DNS domain names from binary data via Binary Refinery.
 

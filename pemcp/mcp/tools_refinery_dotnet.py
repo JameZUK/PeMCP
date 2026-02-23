@@ -55,7 +55,7 @@ async def refinery_dotnet(
     ctx: Context,
     operation: str,
     data_hex: Optional[str] = None,
-    limit: int = 200,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Analyse .NET assemblies via Binary Refinery.
 

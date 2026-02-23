@@ -78,7 +78,7 @@ async def get_reaching_definitions(
     ctx: Context,
     function_address: str,
     target_instruction: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 20,
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -229,7 +229,7 @@ async def get_data_dependencies(
     function_address: str,
     instruction_address: Optional[str] = None,
     direction: str = "backward",
-    limit: int = 100,
+    limit: int = 20,
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -411,7 +411,7 @@ async def get_control_dependencies(
     ctx: Context,
     function_address: str,
     target_address: Optional[str] = None,
-    limit: int = 100,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: advanced] Builds the Control Dependence Graph (CDG) — shows which

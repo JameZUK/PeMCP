@@ -26,7 +26,7 @@ async def refinery_executable(
     offset: Optional[str] = None,
     size: int = 256,
     count: int = 50,
-    limit: int = 50,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """Low-level executable analysis via Binary Refinery.
 
