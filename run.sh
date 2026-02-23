@@ -80,10 +80,21 @@ common_args() {
 
     local args=(
         --rm
-        --user "$(id -u):$(id -g)"
-        --group-add 1500
         -e "HOME=/app/home"
         -e "USER=${USER:-pemcp}"
+    )
+
+    # Podman rootless needs --userns=keep-id to map host UID into the container
+    # so bind-mounted directories are writable. Docker doesn't need this.
+    if [[ "$RUNTIME" == "podman" ]]; then
+        args+=(--userns=keep-id)
+    else
+        args+=(--user "$(id -u):$(id -g)")
+        args+=(--group-add 1500)
+    fi
+
+    args+=(
+        -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
         -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro${SELINUX_SUFFIX}"
         -v "$CACHE_DIR:/app/home/.pemcp:rw${SELINUX_SUFFIX}"

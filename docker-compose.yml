@@ -31,7 +31,7 @@ services:
     volumes:
       - ./samples:/samples:ro
       - ${PEMCP_OUTPUT:-./output}:/output:rw
-      - pemcp-data:/app/home/.pemcp
+      - ${PEMCP_CACHE:-~/.pemcp}:/app/home/.pemcp:rw
       - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
@@ -68,7 +68,7 @@ services:
     volumes:
       - ./samples:/samples:ro
       - ${PEMCP_OUTPUT:-./output}:/output:rw
-      - pemcp-data:/app/home/.pemcp
+      - ${PEMCP_CACHE:-~/.pemcp}:/app/home/.pemcp:rw
       - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
@@ -76,7 +76,3 @@ services:
     command: ["--mcp-server", "--samples-path", "/samples"]
     profiles:
       - stdio
-
-volumes:
-  pemcp-data:
-    name: pemcp-data
