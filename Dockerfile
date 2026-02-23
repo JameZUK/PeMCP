@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     libffi-dev \
     libmagic-dev \
+    binwalk \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Upgrade Pip ---
@@ -33,7 +34,7 @@ RUN pip install --no-cache-dir \
     "angr[unicorn]" \
     nampa \
     flare-floss \
-    flare-capa \
+    "flare-capa>=9.3,<9.4" \
     vivisect
 
 # --- Install Core Dependencies ---
@@ -177,7 +178,6 @@ RUN pip install --no-cache-dir \
 # Each installed separately so a failure in one doesn't block the others,
 # but combined into a single layer to reduce image layer count.
 RUN pip install --no-cache-dir dotnetfile || true && \
-    pip install --no-cache-dir binwalk3 || true && \
     pip install --no-cache-dir pygore || true
 
 # --- Patch oscrypto for OpenSSL 3.x compatibility (bookworm ships OpenSSL 3) ---

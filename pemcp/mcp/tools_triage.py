@@ -296,16 +296,22 @@ def _triage_packing_assessment(indicator_limit: int) -> Tuple[Dict[str, Any], in
     #   1. Section-name-confirmed: EP/heuristic match aligns with section names
     #   2. EP match: signature matched at entry point (high confidence)
     #   3. Heuristic match: signature matched somewhere in code (lower confidence)
+    # Well-known packer families for boosting EP match confidence
+    _KNOWN_PACKER_KEYWORDS = {
+        'upx', 'aspack', 'petite', 'fsg', 'mew', 'nspack', 'pecompact',
+        'themida', 'vmprotect', 'enigma', 'mpress', 'kkrunchy',
+    }
     ranked_matches: List[Dict[str, str]] = []
     seen: set = set()
     for name in ep_names:
         if name in seen:
             continue
         seen.add(name)
-        # Check if this match aligns with section-name evidence
         name_lower = name.lower()
         if any(fam.lower() in name_lower for fam in section_packer_families):
             ranked_matches.append({"match": name, "confidence": "high", "source": "ep+sections"})
+        elif any(kw in name_lower for kw in _KNOWN_PACKER_KEYWORDS):
+            ranked_matches.append({"match": name, "confidence": "high", "source": "entry_point"})
         else:
             ranked_matches.append({"match": name, "confidence": "medium", "source": "entry_point"})
     for name in heuristic_names:
@@ -315,6 +321,8 @@ def _triage_packing_assessment(indicator_limit: int) -> Tuple[Dict[str, Any], in
         name_lower = name.lower()
         if any(fam.lower() in name_lower for fam in section_packer_families):
             ranked_matches.append({"match": name, "confidence": "medium", "source": "heuristic+sections"})
+        elif any(kw in name_lower for kw in _KNOWN_PACKER_KEYWORDS):
+            ranked_matches.append({"match": name, "confidence": "medium", "source": "heuristic"})
         else:
             ranked_matches.append({"match": name, "confidence": "low", "source": "heuristic"})
 
