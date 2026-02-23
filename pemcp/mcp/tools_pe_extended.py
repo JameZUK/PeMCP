@@ -481,11 +481,34 @@ async def detect_format_strings(ctx: Context, limit: int = 20) -> Dict[str, Any]
     findings = await asyncio.to_thread(_scan)
     dangerous_count = sum(1 for f in findings if f["has_dangerous_n"])
 
-    return {
+    result = {
         "total_format_strings": len(findings),
         "dangerous_n_count": dangerous_count,
         "findings": findings[:limit],
     }
+
+    # Warn when binary is likely packed — format specifier matches in
+    # compressed data are almost always false positives.
+    likely_packed = (state.pe_data or {}).get("triage", {}).get(
+        "packing_assessment", {}
+    ).get("likely_packed", False)
+    if not likely_packed:
+        # Lightweight fallback: check if PE sections have very high entropy
+        try:
+            for sec in pe.sections:
+                if sec.get_entropy() > 7.0 and sec.SizeOfRawData > 1024:
+                    likely_packed = True
+                    break
+        except Exception:
+            pass
+    if likely_packed:
+        result["warning"] = (
+            "Binary appears packed or compressed. Format specifier matches "
+            "in compressed data are likely false positives. Consider unpacking "
+            "first with auto_unpack_pe() or try_all_unpackers()."
+        )
+
+    return result
 
 
 @tool_decorator

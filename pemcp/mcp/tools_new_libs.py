@@ -606,6 +606,27 @@ async def emulate_pe_with_windows_apis(
         "timeout_seconds": timeout_seconds,
         "limit": limit,
     }, timeout_seconds)
+
+    # Warn when emulation captured nothing on a packed binary
+    if result.get("total_api_calls", -1) == 0:
+        likely_packed = (state.pe_data or {}).get("triage", {}).get(
+            "packing_assessment", {}
+        ).get("likely_packed", False)
+        if not likely_packed and state.pe_object:
+            try:
+                for sec in state.pe_object.sections:
+                    if sec.get_entropy() > 7.0 and sec.SizeOfRawData > 1024:
+                        likely_packed = True
+                        break
+            except Exception:
+                pass
+        if likely_packed:
+            result["warning"] = (
+                "Binary appears packed — emulation ran the packer stub, not the "
+                "real payload. Unpack first with auto_unpack_pe() or "
+                "try_all_unpackers(), then re-emulate the unpacked binary."
+            )
+
     return await _check_mcp_response_size(ctx, result, "emulate_pe_with_windows_apis", "the 'limit' parameter")
 
 
@@ -681,6 +702,7 @@ async def _run_unipacker(cmd: dict, timeout_seconds: int) -> dict:
 async def auto_unpack_pe(
     ctx: Context,
     output_path: Optional[str] = None,
+    timeout_seconds: int = 120,
 ) -> Dict[str, Any]:
     """
     Automatically unpacks a packed PE using Un{i}packer (Unicorn-based).
@@ -689,6 +711,7 @@ async def auto_unpack_pe(
 
     Args:
         output_path: Where to save the unpacked binary. Default: <original>_unpacked.exe.
+        timeout_seconds: Max time for unpacking in seconds. Default 120.
     """
     await ctx.info("Auto-unpacking PE")
     _check_lib("unipacker", _check_unipacker_available(), "auto_unpack_pe")
@@ -701,7 +724,6 @@ async def auto_unpack_pe(
     # Validate output path against sandbox
     state.check_path_allowed(os.path.abspath(output_path))
 
-    timeout_seconds = 300
     result = await _run_unipacker({
         "action": "unpack_pe",
         "filepath": state.filepath,

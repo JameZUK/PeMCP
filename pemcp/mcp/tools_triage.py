@@ -263,24 +263,64 @@ def _triage_packing_assessment(indicator_limit: int) -> Tuple[Dict[str, Any], in
     # PEiD matches
     ep_matches = peid_data.get('ep_matches', [])
     heuristic_matches = peid_data.get('heuristic_matches', [])
-    packer_names = [
-        m.get('name', m.get('match', 'unknown')) if isinstance(m, dict) else str(m)
-        for m in (ep_matches + heuristic_matches)
-        if isinstance(m, (dict, str))
-    ]
+    _to_name = lambda m: (m.get('name', m.get('match', 'unknown')) if isinstance(m, dict) else str(m))
+    ep_names = [_to_name(m) for m in ep_matches if isinstance(m, (dict, str))]
+    heuristic_names = [_to_name(m) for m in heuristic_matches if isinstance(m, (dict, str))]
+    packer_names = ep_names + heuristic_names
     if packer_names:
         risk_score += 4
 
-    # Known packer section names
+    # Known packer section names — strongest signal for packer identification
     PACKER_SECTION_NAMES = {'UPX0', 'UPX1', 'UPX2', '.aspack', '.adata', '.nsp0', '.nsp1',
                             '.perplex', '.themida', '.vmp0', '.vmp1', '.enigma1', '.petite'}
+    # Map section names → packer family for ranking
+    _SECTION_TO_PACKER = {
+        'UPX0': 'UPX', 'UPX1': 'UPX', 'UPX2': 'UPX',
+        '.aspack': 'ASPack', '.adata': 'ASPack',
+        '.nsp0': 'NsPack', '.nsp1': 'NsPack',
+        '.perplex': 'Perplex', '.themida': 'Themida',
+        '.vmp0': 'VMProtect', '.vmp1': 'VMProtect',
+        '.enigma1': 'Enigma', '.petite': 'Petite',
+    }
     suspicious_section_names: List[str] = []
+    section_packer_families: set = set()
     for sec in sections_data:
         if isinstance(sec, dict):
             name = sec.get('name', '').strip()
             if name in PACKER_SECTION_NAMES:
                 suspicious_section_names.append(name)
+                section_packer_families.add(_SECTION_TO_PACKER.get(name, name))
                 risk_score += 3
+
+    # Rank PEiD matches by confidence tier:
+    #   1. Section-name-confirmed: EP/heuristic match aligns with section names
+    #   2. EP match: signature matched at entry point (high confidence)
+    #   3. Heuristic match: signature matched somewhere in code (lower confidence)
+    ranked_matches: List[Dict[str, str]] = []
+    seen: set = set()
+    for name in ep_names:
+        if name in seen:
+            continue
+        seen.add(name)
+        # Check if this match aligns with section-name evidence
+        name_lower = name.lower()
+        if any(fam.lower() in name_lower for fam in section_packer_families):
+            ranked_matches.append({"match": name, "confidence": "high", "source": "ep+sections"})
+        else:
+            ranked_matches.append({"match": name, "confidence": "medium", "source": "entry_point"})
+    for name in heuristic_names:
+        if name in seen:
+            continue
+        seen.add(name)
+        name_lower = name.lower()
+        if any(fam.lower() in name_lower for fam in section_packer_families):
+            ranked_matches.append({"match": name, "confidence": "medium", "source": "heuristic+sections"})
+        else:
+            ranked_matches.append({"match": name, "confidence": "low", "source": "heuristic"})
+
+    # Sort: high > medium > low
+    _CONF_ORDER = {"high": 0, "medium": 1, "low": 2}
+    ranked_matches.sort(key=lambda m: _CONF_ORDER.get(m["confidence"], 3))
 
     is_likely_packed = (
         bool(packer_names)
@@ -289,15 +329,28 @@ def _triage_packing_assessment(indicator_limit: int) -> Tuple[Dict[str, Any], in
         or bool(suspicious_section_names)
     )
 
-    return {
+    result: Dict[str, Any] = {
         "likely_packed": is_likely_packed,
         "max_section_entropy": round(max_entropy, 3),
         "high_entropy_executable_sections": high_entropy_sections,
-        "peid_matches": packer_names[:5],
+        "peid_matches": [m["match"] for m in ranked_matches[:5]],
+        "peid_ranked": ranked_matches[:8],
         "total_import_functions": total_import_funcs,
         "minimal_imports": total_import_funcs < 10,
         "packer_section_names": suspicious_section_names,
-    }, risk_score
+    }
+    # Flag when section names contradict the top PEiD match (e.g., UPX sections
+    # but top match says "Armadillo")
+    if section_packer_families and ranked_matches:
+        top = ranked_matches[0]["match"].lower()
+        if not any(fam.lower() in top for fam in section_packer_families):
+            result["peid_conflict"] = (
+                f"Section names suggest {', '.join(sorted(section_packer_families))} "
+                f"but top PEiD match is '{ranked_matches[0]['match']}'. "
+                f"Section names are generally more reliable."
+            )
+
+    return result, risk_score
 
 
 # ===================================================================

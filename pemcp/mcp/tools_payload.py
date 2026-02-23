@@ -612,4 +612,25 @@ async def extract_config_automated(
             "Check FLOSS strings: search_floss_strings(query='http')",
         ]
 
+    # Warn when binary is likely packed — regex matches in compressed data
+    # produce garbage like X:\¬8§Ã*.
+    likely_packed = (state.pe_data or {}).get("triage", {}).get(
+        "packing_assessment", {}
+    ).get("likely_packed", False)
+    if not likely_packed and state.pe_object:
+        try:
+            for sec in state.pe_object.sections:
+                if sec.get_entropy() > 7.0 and sec.SizeOfRawData > 1024:
+                    likely_packed = True
+                    break
+        except Exception:
+            pass
+    if likely_packed:
+        result["warning"] = (
+            "Binary appears packed or compressed. Config matches extracted from "
+            "compressed data are likely false positives (garbage paths, random byte "
+            "sequences). Consider unpacking first with auto_unpack_pe() or "
+            "try_all_unpackers()."
+        )
+
     return await _check_mcp_response_size(ctx, result, "extract_config_automated")

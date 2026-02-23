@@ -49,7 +49,7 @@ async def try_all_unpackers(
     [Phase: deep-dive] Orchestrates multiple unpacking methods on the loaded PE
     file and returns the best result. Tries methods in order of reliability:
     1. Unipacker (generic PE unpacking)
-    2. Binary Refinery vstack (virtual-address PE reconstruction)
+    2. Binary Refinery PE reconstruction (pefix, peoverlay)
     3. PE overlay extraction
 
     When to use: When detect_packing() or triage confirms the binary is packed
@@ -99,6 +99,13 @@ async def try_all_unpackers(
                         "output_path": data["output_path"],
                         "details": data,
                     })
+                else:
+                    results.append({
+                        "method": "unipacker",
+                        "status": "no_output",
+                        "error": data.get("error", "Process succeeded but produced no output file"),
+                        "details": data,
+                    })
             else:
                 results.append({
                     "method": "unipacker",
@@ -112,44 +119,50 @@ async def try_all_unpackers(
     else:
         results.append({"method": "unipacker", "status": "not_available"})
 
-    # --- Method 2: Binary Refinery vstack ---
+    # --- Method 2: Binary Refinery PE reconstruction ---
     if REFINERY_AVAILABLE:
-        await ctx.info("Trying Binary Refinery vstack...")
+        await ctx.info("Trying Binary Refinery PE reconstruction...")
         try:
-            def _try_vstack():
-                from refinery.units.formats.pe.peoverlay import peoverlay
-                from refinery.units.formats.pe.pevaddr import pevaddr
+            def _try_refinery_pe():
                 raw = state.pe_object.__data__
+
+                # Try pefix (PE repair/reconstruction) — available in binary-refinery
                 try:
-                    # Try virtual address reconstruction
-                    reconstructed = bytes(raw | pevaddr())
+                    from refinery.units.formats.pe.pefix import pefix
+                    reconstructed = bytes(raw | pefix())
                     if len(reconstructed) > 0 and reconstructed[:2] == b"MZ":
-                        return {"data_hex": reconstructed[:4096].hex(), "size": len(reconstructed), "method_detail": "pevaddr"}
+                        return {"data_hex": reconstructed[:4096].hex(), "size": len(reconstructed), "method_detail": "pefix"}
+                except ImportError:
+                    pass
                 except Exception:
                     pass
+
+                # Try overlay extraction
                 try:
-                    # Try overlay extraction
+                    from refinery.units.formats.pe.peoverlay import peoverlay
                     for chunk in raw | peoverlay():
                         overlay = bytes(chunk)
                         if len(overlay) > 64:
                             return {"data_hex": overlay[:4096].hex(), "size": len(overlay), "method_detail": "peoverlay"}
+                except ImportError:
+                    pass
                 except Exception:
                     pass
                 return None
 
-            vstack_result = await asyncio.to_thread(_try_vstack)
-            if vstack_result:
+            refinery_result = await asyncio.to_thread(_try_refinery_pe)
+            if refinery_result:
                 results.append({
-                    "method": "refinery_vstack",
+                    "method": "refinery_pe",
                     "status": "success",
-                    "details": vstack_result,
+                    "details": refinery_result,
                 })
             else:
-                results.append({"method": "refinery_vstack", "status": "no_output"})
+                results.append({"method": "refinery_pe", "status": "no_output"})
         except Exception as e:
-            results.append({"method": "refinery_vstack", "status": "error", "error": str(e)[:200]})
+            results.append({"method": "refinery_pe", "status": "error", "error": str(e)[:200]})
     else:
-        results.append({"method": "refinery_vstack", "status": "not_available"})
+        results.append({"method": "refinery_pe", "status": "not_available"})
 
     # --- Method 3: PE overlay extraction ---
     await ctx.info("Checking PE overlay...")
