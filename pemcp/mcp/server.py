@@ -215,6 +215,14 @@ _ERROR_HINTS = {
         "Run qiling_setup_check() to verify DLL setup. Ensure ntdll.dll and kernel32.dll "
         "are present in the rootfs Windows/System32/ directory."
     ),
+    "qiling framework is not available": (
+        "Suggested: The Qiling venv may not be set up. If using Docker, rebuild the image. "
+        "Run qiling_setup_check() for detailed diagnostics."
+    ),
+    "qiling rootfs directory not found": (
+        "Suggested: Create the rootfs directory or set QILING_ROOTFS env var. "
+        "Run qiling_setup_check() for step-by-step setup guidance."
+    ),
 }
 
 def _check_data_key_available(key_name: str, tool_name: str) -> None:
