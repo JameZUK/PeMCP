@@ -204,6 +204,25 @@ _ERROR_HINTS = {
         "Suggested: Check the server's installed packages. The Docker image "
         "includes all dependencies. If running locally, check requirements.txt."
     ),
+    "failed to initialize qiling": (
+        "Suggested: Run qiling_setup_check() to verify rootfs and DLL setup. "
+        "Windows PE emulation requires real DLL files (ntdll.dll, kernel32.dll, etc.) "
+        "in the rootfs. See docs/QILING_ROOTFS.md for setup instructions. "
+        "For quick analysis, try emulate_shellcode_with_qiling or Speakeasy tools instead."
+    ),
+    "windows api implementation": (
+        "Suggested: This usually means Qiling's Windows API layer couldn't initialize. "
+        "Run qiling_setup_check() to verify DLL setup. Ensure ntdll.dll and kernel32.dll "
+        "are present in the rootfs Windows/System32/ directory."
+    ),
+    "qiling framework is not available": (
+        "Suggested: The Qiling venv may not be set up. If using Docker, rebuild the image. "
+        "Run qiling_setup_check() for detailed diagnostics."
+    ),
+    "qiling rootfs directory not found": (
+        "Suggested: Create the rootfs directory or set QILING_ROOTFS env var. "
+        "Run qiling_setup_check() for step-by-step setup guidance."
+    ),
 }
 
 def _check_data_key_available(key_name: str, tool_name: str) -> None:

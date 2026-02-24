@@ -23,6 +23,34 @@ from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_respon
 #  Subprocess helper (mirrors _run_speakeasy / _run_unipacker pattern)
 # ---------------------------------------------------------------------------
 
+# Qiling-specific error enrichment (applied to subprocess results, not exceptions)
+_QILING_ERROR_HINTS = {
+    "windows api implementation error": (
+        "This usually means Windows DLL files are missing or incomplete in the rootfs. "
+        "Qiling needs real Windows DLLs (ntdll.dll, kernel32.dll, etc.) to emulate PE files. "
+        "Run qiling_setup_check() to diagnose, then copy DLLs from a Windows machine."
+    ),
+    "dll not found": (
+        "A required DLL could not be found in the rootfs. Copy the missing DLL from a "
+        "Windows installation into qiling-rootfs/<arch>_windows/Windows/System32/. "
+        "Run qiling_setup_check() for specific guidance."
+    ),
+    "registry hive": (
+        "Windows registry hive files are missing or corrupt. "
+        "The runner normally auto-creates these. Try running qiling_setup_check() to diagnose."
+    ),
+}
+
+
+def _enrich_qiling_error(error_msg: str) -> str:
+    """Append actionable hints to known Qiling error patterns."""
+    msg_lower = error_msg.lower()
+    for pattern, hint in _QILING_ERROR_HINTS.items():
+        if pattern in msg_lower:
+            return f"{error_msg}\n\nHint: {hint}"
+    return error_msg
+
+
 async def _run_qiling(cmd: dict, timeout_seconds: int) -> dict:
     """Invoke the qiling runner subprocess in the isolated venv."""
     proc = await asyncio.create_subprocess_exec(
@@ -50,9 +78,15 @@ async def _run_qiling(cmd: dict, timeout_seconds: int) -> dict:
         return {"error": f"Qiling runner failed (exit {proc.returncode}): {err_msg}"}
 
     try:
-        return json.loads(stdout.decode())
+        result = json.loads(stdout.decode())
     except json.JSONDecodeError:
         return {"error": f"Invalid JSON from Qiling runner: {stdout.decode(errors='replace')[:500]}"}
+
+    # Enrich error results with actionable hints
+    if isinstance(result, dict) and "error" in result:
+        result["error"] = _enrich_qiling_error(result["error"])
+
+    return result
 
 
 def _check_qiling(tool_name: str):
