@@ -10,6 +10,7 @@ for angr's native unicorn bridge.
 """
 import json
 import os
+import shutil
 import sys
 import struct
 import hashlib
@@ -294,20 +295,35 @@ def _find_rootfs(os_type, arch, rootfs_path):
     ), None
 
 
+def _cleanup_staged_binary(staged_path):
+    """Remove the staged binary copy from the rootfs.  Best-effort."""
+    if staged_path:
+        try:
+            os.remove(staged_path)
+        except OSError:
+            pass
+
+
 def _init_qiling_for_binary(filepath, rootfs_path):
     """Detect binary format, validate rootfs/DLLs, and create a Qiling instance.
 
-    Returns (ql, os_type, arch, fmt_desc, dll_warning) on success.
-    Returns (None, os_type, arch, fmt_desc, error_dict) on failure,
+    Qiling requires the binary to live *inside* the rootfs so it can map
+    host paths to virtual guest paths.  We copy the sample into a staging
+    directory inside the rootfs before creating the Qiling instance.
+
+    Returns (ql, os_type, arch, fmt_desc, dll_warning, staged_path) on success.
+    Returns (None, os_type, arch, fmt_desc, error_dict, None) on failure,
     where error_dict is a dict with 'error' (and optionally 'traceback') keys.
+    Callers must call ``_cleanup_staged_binary(staged_path)`` in a finally
+    block after emulation completes.
     """
     os_type, arch, fmt_desc = _detect_binary_format(filepath)
     if os_type is None:
-        return None, None, None, fmt_desc, {"error": f"Cannot detect binary format: {fmt_desc}"}
+        return None, None, None, fmt_desc, {"error": f"Cannot detect binary format: {fmt_desc}"}, None
 
     rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
     if err:
-        return None, os_type, arch, fmt_desc, {"error": err}
+        return None, os_type, arch, fmt_desc, {"error": err}, None
 
     # Pre-validate: for Windows binaries, fail fast if essential DLLs are missing
     if os_type == "windows":
@@ -319,17 +335,29 @@ def _init_qiling_for_binary(filepath, rootfs_path):
                     "Use qiling_setup_check() to see exactly which DLLs are missing "
                     "and get copy commands to fix the issue."
                 ),
-            }
+            }, None
+
+    # Stage the binary inside the rootfs so Qiling can resolve paths
+    staging_dir = os.path.join(rootfs, "_pemcp_samples")
+    os.makedirs(staging_dir, exist_ok=True)
+    staged_path = os.path.join(staging_dir, os.path.basename(filepath))
+    try:
+        shutil.copy2(filepath, staged_path)
+    except OSError as e:
+        return None, os_type, arch, fmt_desc, {
+            "error": f"Failed to stage binary into rootfs: {e}",
+        }, None
 
     try:
         ql = Qiling(
-            [filepath],
+            [staged_path],
             rootfs,
             ostype=_ql_os(os_type),
             archtype=_ql_arch(arch),
             verbose=QL_VERBOSE.DISABLED,
         )
     except Exception as e:
+        _cleanup_staged_binary(staged_path)
         err_msg = f"Failed to initialize Qiling: {type(e).__name__}: {e}"
         if dll_warning:
             err_msg += f"\n\nNote: {dll_warning}"
@@ -337,9 +365,9 @@ def _init_qiling_for_binary(filepath, rootfs_path):
         return None, os_type, arch, fmt_desc, {
             "error": err_msg,
             "traceback": tb[:2000],
-        }
+        }, None
 
-    return ql, os_type, arch, fmt_desc, dll_warning
+    return ql, os_type, arch, fmt_desc, dll_warning, staged_path
 
 
 # ---------------------------------------------------------------------------
@@ -355,58 +383,61 @@ def emulate_binary(cmd):
     max_instructions = cmd.get("max_instructions", 0)
     limit = cmd.get("limit", 200)
 
-    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    ql, os_type, arch, fmt_desc, init_result, staged_path = _init_qiling_for_binary(filepath, rootfs_path)
     if ql is None:
         return init_result
     dll_warning = init_result
 
-    api_calls = []
-    file_activity = []
-    registry_activity = []
-    network_activity = []
-
-    # Set up OS-appropriate API/syscall interception
-    _setup_api_hooks(ql, os_type, api_calls, limit)
-
     try:
-        if max_instructions > 0:
-            ql.run(count=max_instructions, timeout=timeout_seconds * 1000000)
-        else:
-            ql.run(timeout=timeout_seconds * 1000000)
-    except Exception:
-        # Emulation may raise on exit or unhandled API -- expected
-        pass
+        api_calls = []
+        file_activity = []
+        registry_activity = []
+        network_activity = []
 
-    # Post-hoc activity classification from captured calls
-    for entry in api_calls:
-        api_lower = (entry.get("api") or "").lower()
-        if any(k in api_lower for k in ("createfile", "writefile", "readfile", "deletefile",
-                                         "open", "write", "read", "fopen", "fwrite")):
-            if len(file_activity) < limit:
-                file_activity.append({"api": entry["api"], "params": entry["params"]})
-        elif any(k in api_lower for k in ("regopen", "regset", "regquery", "regcreate", "regdelete")):
-            if len(registry_activity) < limit:
-                registry_activity.append({"api": entry["api"], "params": entry["params"]})
-        elif any(k in api_lower for k in ("socket", "connect", "send", "recv", "wsastartup",
-                                           "bind", "listen", "accept", "getaddrinfo",
-                                           "internetopen", "httpopen", "urldownload")):
-            if len(network_activity) < limit:
-                network_activity.append({"api": entry["api"], "params": entry["params"]})
+        # Set up OS-appropriate API/syscall interception
+        _setup_api_hooks(ql, os_type, api_calls, limit)
 
-    result = {
-        "status": "completed",
-        "format": fmt_desc,
-        "os_type": os_type,
-        "architecture": arch,
-        "total_api_calls": len(api_calls),
-        "api_calls": _safe_slice(api_calls, limit),
-        "file_activity": _safe_slice(file_activity, limit),
-        "registry_activity": _safe_slice(registry_activity, limit),
-        "network_activity": _safe_slice(network_activity, limit),
-    }
-    if dll_warning:
-        result["warning"] = dll_warning
-    return result
+        try:
+            if max_instructions > 0:
+                ql.run(count=max_instructions, timeout=timeout_seconds * 1000000)
+            else:
+                ql.run(timeout=timeout_seconds * 1000000)
+        except Exception:
+            # Emulation may raise on exit or unhandled API -- expected
+            pass
+
+        # Post-hoc activity classification from captured calls
+        for entry in api_calls:
+            api_lower = (entry.get("api") or "").lower()
+            if any(k in api_lower for k in ("createfile", "writefile", "readfile", "deletefile",
+                                             "open", "write", "read", "fopen", "fwrite")):
+                if len(file_activity) < limit:
+                    file_activity.append({"api": entry["api"], "params": entry["params"]})
+            elif any(k in api_lower for k in ("regopen", "regset", "regquery", "regcreate", "regdelete")):
+                if len(registry_activity) < limit:
+                    registry_activity.append({"api": entry["api"], "params": entry["params"]})
+            elif any(k in api_lower for k in ("socket", "connect", "send", "recv", "wsastartup",
+                                               "bind", "listen", "accept", "getaddrinfo",
+                                               "internetopen", "httpopen", "urldownload")):
+                if len(network_activity) < limit:
+                    network_activity.append({"api": entry["api"], "params": entry["params"]})
+
+        result = {
+            "status": "completed",
+            "format": fmt_desc,
+            "os_type": os_type,
+            "architecture": arch,
+            "total_api_calls": len(api_calls),
+            "api_calls": _safe_slice(api_calls, limit),
+            "file_activity": _safe_slice(file_activity, limit),
+            "registry_activity": _safe_slice(registry_activity, limit),
+            "network_activity": _safe_slice(network_activity, limit),
+        }
+        if dll_warning:
+            result["warning"] = dll_warning
+        return result
+    finally:
+        _cleanup_staged_binary(staged_path)
 
 
 def emulate_shellcode(cmd):
@@ -484,59 +515,62 @@ def trace_execution(cmd):
     timeout_seconds = cmd.get("timeout_seconds", 30)
     limit = cmd.get("limit", 500)
 
-    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    ql, os_type, arch, fmt_desc, init_result, staged_path = _init_qiling_for_binary(filepath, rootfs_path)
     if ql is None:
         return init_result
     dll_warning = init_result
 
-    instructions = []
-    unique_addresses = set()
-
-    def _code_hook(ql, address, size):
-        if len(instructions) >= limit:
-            ql.emu_stop()
-            return
-        # Read the bytes at this address
-        try:
-            insn_bytes = ql.mem.read(address, size)
-            instructions.append({
-                "address": _hex(address),
-                "size": size,
-                "bytes": insn_bytes.hex(),
-            })
-            unique_addresses.add(address)
-        except Exception:
-            instructions.append({
-                "address": _hex(address),
-                "size": size,
-                "bytes": None,
-            })
-
-    ql.hook_code(_code_hook)
-
-    begin = int(start_address, 0) if start_address else None
-    end = int(end_address, 0) if end_address else None
-
     try:
-        kwargs = {"timeout": timeout_seconds * 1000000, "count": max_instructions}
-        if begin is not None:
-            kwargs["begin"] = begin
-        if end is not None:
-            kwargs["end"] = end
-        ql.run(**kwargs)
-    except Exception:
-        pass
+        instructions = []
+        unique_addresses = set()
 
-    result = {
-        "status": "completed",
-        "format": fmt_desc,
-        "total_instructions_traced": len(instructions),
-        "unique_addresses": len(unique_addresses),
-        "instructions": _safe_slice(instructions, limit),
-    }
-    if dll_warning:
-        result["warning"] = dll_warning
-    return result
+        def _code_hook(ql, address, size):
+            if len(instructions) >= limit:
+                ql.emu_stop()
+                return
+            # Read the bytes at this address
+            try:
+                insn_bytes = ql.mem.read(address, size)
+                instructions.append({
+                    "address": _hex(address),
+                    "size": size,
+                    "bytes": insn_bytes.hex(),
+                })
+                unique_addresses.add(address)
+            except Exception:
+                instructions.append({
+                    "address": _hex(address),
+                    "size": size,
+                    "bytes": None,
+                })
+
+        ql.hook_code(_code_hook)
+
+        begin = int(start_address, 0) if start_address else None
+        end = int(end_address, 0) if end_address else None
+
+        try:
+            kwargs = {"timeout": timeout_seconds * 1000000, "count": max_instructions}
+            if begin is not None:
+                kwargs["begin"] = begin
+            if end is not None:
+                kwargs["end"] = end
+            ql.run(**kwargs)
+        except Exception:
+            pass
+
+        result = {
+            "status": "completed",
+            "format": fmt_desc,
+            "total_instructions_traced": len(instructions),
+            "unique_addresses": len(unique_addresses),
+            "instructions": _safe_slice(instructions, limit),
+        }
+        if dll_warning:
+            result["warning"] = dll_warning
+        return result
+    finally:
+        _cleanup_staged_binary(staged_path)
 
 
 def hook_api_calls(cmd):
@@ -549,57 +583,60 @@ def hook_api_calls(cmd):
     max_instructions = cmd.get("max_instructions", 0)
     limit = cmd.get("limit", 200)
 
-    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    ql, os_type, arch, fmt_desc, init_result, staged_path = _init_qiling_for_binary(filepath, rootfs_path)
     if ql is None:
         return init_result
     dll_warning = init_result
 
-    captured_calls = []
-
-    # If specific APIs requested, hook each; otherwise hook all.
-    # For specific APIs on Windows, use set_api per name.
-    # For the wildcard case, use _setup_api_hooks which handles OS differences.
-    if target_apis and os_type == "windows":
-        for api_name in target_apis:
-            def _make_hook(name):
-                def _hook(ql, address, params):
-                    if len(captured_calls) < limit:
-                        entry = {
-                            "api": name,
-                            "address": _hex(address),
-                            "params": {},
-                            "retval": None,
-                        }
-                        if isinstance(params, dict):
-                            for k, v in list(params.items())[:8]:
-                                entry["params"][k] = str(v)[:500] if v is not None else None
-                        captured_calls.append(entry)
-                return _hook
-            try:
-                ql.os.set_api(api_name, _make_hook(api_name), QL_INTERCEPT.CALL)
-            except Exception:
-                pass  # API may not exist in the emulated environment
-    else:
-        _setup_api_hooks(ql, os_type, captured_calls, limit)
-
     try:
-        kwargs = {"timeout": timeout_seconds * 1000000}
-        if max_instructions > 0:
-            kwargs["count"] = max_instructions
-        ql.run(**kwargs)
-    except Exception:
-        pass
+        captured_calls = []
 
-    result = {
-        "status": "completed",
-        "format": fmt_desc,
-        "target_apis": target_apis if target_apis else ["* (all)"],
-        "total_captured": len(captured_calls),
-        "captured_calls": _safe_slice(captured_calls, limit),
-    }
-    if dll_warning:
-        result["warning"] = dll_warning
-    return result
+        # If specific APIs requested, hook each; otherwise hook all.
+        # For specific APIs on Windows, use set_api per name.
+        # For the wildcard case, use _setup_api_hooks which handles OS differences.
+        if target_apis and os_type == "windows":
+            for api_name in target_apis:
+                def _make_hook(name):
+                    def _hook(ql, address, params):
+                        if len(captured_calls) < limit:
+                            entry = {
+                                "api": name,
+                                "address": _hex(address),
+                                "params": {},
+                                "retval": None,
+                            }
+                            if isinstance(params, dict):
+                                for k, v in list(params.items())[:8]:
+                                    entry["params"][k] = str(v)[:500] if v is not None else None
+                            captured_calls.append(entry)
+                    return _hook
+                try:
+                    ql.os.set_api(api_name, _make_hook(api_name), QL_INTERCEPT.CALL)
+                except Exception:
+                    pass  # API may not exist in the emulated environment
+        else:
+            _setup_api_hooks(ql, os_type, captured_calls, limit)
+
+        try:
+            kwargs = {"timeout": timeout_seconds * 1000000}
+            if max_instructions > 0:
+                kwargs["count"] = max_instructions
+            ql.run(**kwargs)
+        except Exception:
+            pass
+
+        result = {
+            "status": "completed",
+            "format": fmt_desc,
+            "target_apis": target_apis if target_apis else ["* (all)"],
+            "total_captured": len(captured_calls),
+            "captured_calls": _safe_slice(captured_calls, limit),
+        }
+        if dll_warning:
+            result["warning"] = dll_warning
+        return result
+    finally:
+        _cleanup_staged_binary(staged_path)
 
 
 def dump_unpacked(cmd):
@@ -613,71 +650,74 @@ def dump_unpacked(cmd):
     timeout_seconds = cmd.get("timeout_seconds", 120)
     max_instructions = cmd.get("max_instructions", 0)
 
-    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    ql, os_type, arch, fmt_desc, init_result, staged_path = _init_qiling_for_binary(filepath, rootfs_path)
     if ql is None:
         return init_result
     dll_warning = init_result
 
-    # If a specific dump address is provided, hook it to trigger dump
-    dump_triggered = {"done": False}
-
-    if dump_address:
-        addr = int(dump_address, 0)
-        def _dump_hook(ql):
-            if not dump_triggered["done"]:
-                dump_triggered["done"] = True
-                ql.emu_stop()
-        ql.hook_address(_dump_hook, addr)
-
     try:
-        kwargs = {"timeout": timeout_seconds * 1000000}
-        if max_instructions > 0:
-            kwargs["count"] = max_instructions
-        ql.run(**kwargs)
-    except Exception:
-        pass
+        # If a specific dump address is provided, hook it to trigger dump
+        dump_triggered = {"done": False}
 
-    # Dump memory
-    try:
-        if dump_address and dump_size:
+        if dump_address:
             addr = int(dump_address, 0)
-            size = int(dump_size, 0) if isinstance(dump_size, str) else dump_size
-            data = ql.mem.read(addr, size)
-        else:
-            # Dump the main mapped region (image base + size)
-            # Find the largest mapped region that looks like the PE image
-            maps = ql.mem.get_mapinfo()
-            best_region = None
-            best_size = 0
-            for start, end, perms, label, _path in maps:
-                region_size = end - start
-                if region_size > best_size:
-                    best_size = region_size
-                    best_region = (start, region_size)
-            if best_region:
-                data = ql.mem.read(best_region[0], best_region[1])
+            def _dump_hook(ql):
+                if not dump_triggered["done"]:
+                    dump_triggered["done"] = True
+                    ql.emu_stop()
+            ql.hook_address(_dump_hook, addr)
+
+        try:
+            kwargs = {"timeout": timeout_seconds * 1000000}
+            if max_instructions > 0:
+                kwargs["count"] = max_instructions
+            ql.run(**kwargs)
+        except Exception:
+            pass
+
+        # Dump memory
+        try:
+            if dump_address and dump_size:
+                addr = int(dump_address, 0)
+                size = int(dump_size, 0) if isinstance(dump_size, str) else dump_size
+                data = ql.mem.read(addr, size)
             else:
-                return {"error": "No mapped memory regions found to dump."}
+                # Dump the main mapped region (image base + size)
+                # Find the largest mapped region that looks like the PE image
+                maps = ql.mem.get_mapinfo()
+                best_region = None
+                best_size = 0
+                for start, end, perms, label, _path in maps:
+                    region_size = end - start
+                    if region_size > best_size:
+                        best_size = region_size
+                        best_region = (start, region_size)
+                if best_region:
+                    data = ql.mem.read(best_region[0], best_region[1])
+                else:
+                    return {"error": "No mapped memory regions found to dump."}
 
-        with open(output_path, "wb") as f:
-            f.write(data)
+            with open(output_path, "wb") as f:
+                f.write(data)
 
-        result = {
-            "status": "success",
-            "input_file": filepath,
-            "output_file": output_path,
-            "output_size": len(data),
-            "dump_address": dump_address or _hex(best_region[0]) if not dump_address and best_region else dump_address,
-            "sha256": hashlib.sha256(data).hexdigest(),
-        }
-        if dll_warning:
-            result["warning"] = dll_warning
-        return result
-    except Exception as e:
-        err_msg = f"Memory dump failed: {e}"
-        if dll_warning:
-            err_msg += f"\n\nNote: {dll_warning}"
-        return {"error": err_msg}
+            result = {
+                "status": "success",
+                "input_file": filepath,
+                "output_file": output_path,
+                "output_size": len(data),
+                "dump_address": dump_address or _hex(best_region[0]) if not dump_address and best_region else dump_address,
+                "sha256": hashlib.sha256(data).hexdigest(),
+            }
+            if dll_warning:
+                result["warning"] = dll_warning
+            return result
+        except Exception as e:
+            err_msg = f"Memory dump failed: {e}"
+            if dll_warning:
+                err_msg += f"\n\nNote: {dll_warning}"
+            return {"error": err_msg}
+    finally:
+        _cleanup_staged_binary(staged_path)
 
 
 def resolve_api_hashes(cmd):
@@ -858,81 +898,84 @@ def memory_search(cmd):
     context_bytes = cmd.get("context_bytes", 32)
     limit = cmd.get("limit", 50)
 
-    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    ql, os_type, arch, fmt_desc, init_result, staged_path = _init_qiling_for_binary(filepath, rootfs_path)
     if ql is None:
         return init_result
     dll_warning = init_result
 
-    # Run for N instructions to let the binary unpack/initialize
     try:
-        kwargs = {"timeout": timeout_seconds * 1000000}
-        if max_instructions > 0:
-            kwargs["count"] = max_instructions
-        ql.run(**kwargs)
-    except Exception:
-        pass
+        # Run for N instructions to let the binary unpack/initialize
+        try:
+            kwargs = {"timeout": timeout_seconds * 1000000}
+            if max_instructions > 0:
+                kwargs["count"] = max_instructions
+            ql.run(**kwargs)
+        except Exception:
+            pass
 
-    # Search memory
-    matches = []
+        # Search memory
+        matches = []
 
-    # Build search needles
-    needles = []
-    for pat in search_patterns:
-        needles.append(("string", pat, pat.encode("utf-8")))
-        needles.append(("string_wide", pat, pat.encode("utf-16-le")))
-    if search_hex:
-        needles.append(("hex", search_hex, bytes.fromhex(search_hex)))
+        # Build search needles
+        needles = []
+        for pat in search_patterns:
+            needles.append(("string", pat, pat.encode("utf-8")))
+            needles.append(("string_wide", pat, pat.encode("utf-16-le")))
+        if search_hex:
+            needles.append(("hex", search_hex, bytes.fromhex(search_hex)))
 
-    try:
-        maps = ql.mem.get_mapinfo()
-        for start, end, perms, label, _path in maps:
-            if len(matches) >= limit:
-                break
-            try:
-                region_data = ql.mem.read(start, end - start)
-            except Exception:
-                continue
-
-            for needle_type, needle_display, needle_bytes in needles:
+        try:
+            maps = ql.mem.get_mapinfo()
+            for start, end, perms, label, _path in maps:
                 if len(matches) >= limit:
                     break
-                offset = 0
-                while offset < len(region_data):
-                    idx = region_data.find(needle_bytes, offset)
-                    if idx == -1:
-                        break
-                    abs_addr = start + idx
-                    # Extract context
-                    ctx_start = max(0, idx - context_bytes)
-                    ctx_end = min(len(region_data), idx + len(needle_bytes) + context_bytes)
-                    context_data = region_data[ctx_start:ctx_end]
+                try:
+                    region_data = ql.mem.read(start, end - start)
+                except Exception:
+                    continue
 
-                    matches.append({
-                        "address": _hex(abs_addr),
-                        "type": needle_type,
-                        "pattern": needle_display,
-                        "region": f"{_hex(start)}-{_hex(end)} ({label})",
-                        "context_hex": context_data.hex(),
-                    })
+                for needle_type, needle_display, needle_bytes in needles:
                     if len(matches) >= limit:
                         break
-                    offset = idx + len(needle_bytes)
-    except Exception as e:
-        return {"error": f"Memory search failed: {e}"}
+                    offset = 0
+                    while offset < len(region_data):
+                        idx = region_data.find(needle_bytes, offset)
+                        if idx == -1:
+                            break
+                        abs_addr = start + idx
+                        # Extract context
+                        ctx_start = max(0, idx - context_bytes)
+                        ctx_end = min(len(region_data), idx + len(needle_bytes) + context_bytes)
+                        context_data = region_data[ctx_start:ctx_end]
 
-    result = {
-        "status": "completed",
-        "format": fmt_desc,
-        "search_patterns": search_patterns,
-        "search_hex": search_hex,
-        "instructions_executed": max_instructions,
-        "memory_regions_scanned": len(maps) if 'maps' in locals() else 0,
-        "total_matches": len(matches),
-        "matches": _safe_slice(matches, limit),
-    }
-    if dll_warning:
-        result["warning"] = dll_warning
-    return result
+                        matches.append({
+                            "address": _hex(abs_addr),
+                            "type": needle_type,
+                            "pattern": needle_display,
+                            "region": f"{_hex(start)}-{_hex(end)} ({label})",
+                            "context_hex": context_data.hex(),
+                        })
+                        if len(matches) >= limit:
+                            break
+                        offset = idx + len(needle_bytes)
+        except Exception as e:
+            return {"error": f"Memory search failed: {e}"}
+
+        result = {
+            "status": "completed",
+            "format": fmt_desc,
+            "search_patterns": search_patterns,
+            "search_hex": search_hex,
+            "instructions_executed": max_instructions,
+            "memory_regions_scanned": len(maps) if 'maps' in locals() else 0,
+            "total_matches": len(matches),
+            "matches": _safe_slice(matches, limit),
+        }
+        if dll_warning:
+            result["warning"] = dll_warning
+        return result
+    finally:
+        _cleanup_staged_binary(staged_path)
 
 
 # ---------------------------------------------------------------------------
