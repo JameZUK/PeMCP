@@ -294,6 +294,54 @@ def _find_rootfs(os_type, arch, rootfs_path):
     ), None
 
 
+def _init_qiling_for_binary(filepath, rootfs_path):
+    """Detect binary format, validate rootfs/DLLs, and create a Qiling instance.
+
+    Returns (ql, os_type, arch, fmt_desc, dll_warning) on success.
+    Returns (None, os_type, arch, fmt_desc, error_dict) on failure,
+    where error_dict is a dict with 'error' (and optionally 'traceback') keys.
+    """
+    os_type, arch, fmt_desc = _detect_binary_format(filepath)
+    if os_type is None:
+        return None, None, None, fmt_desc, {"error": f"Cannot detect binary format: {fmt_desc}"}
+
+    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
+    if err:
+        return None, os_type, arch, fmt_desc, {"error": err}
+
+    # Pre-validate: for Windows binaries, fail fast if essential DLLs are missing
+    if os_type == "windows":
+        has_dlls, dll_msg = _check_windows_dlls(rootfs)
+        if not has_dlls:
+            return None, os_type, arch, fmt_desc, {
+                "error": (
+                    f"Cannot initialize Qiling for {fmt_desc}: {dll_msg}\n\n"
+                    "Use qiling_setup_check() to see exactly which DLLs are missing "
+                    "and get copy commands to fix the issue."
+                ),
+            }
+
+    try:
+        ql = Qiling(
+            [filepath],
+            rootfs,
+            ostype=_ql_os(os_type),
+            archtype=_ql_arch(arch),
+            verbose=QL_VERBOSE.DISABLED,
+        )
+    except Exception as e:
+        err_msg = f"Failed to initialize Qiling: {type(e).__name__}: {e}"
+        if dll_warning:
+            err_msg += f"\n\nNote: {dll_warning}"
+        tb = traceback.format_exc()
+        return None, os_type, arch, fmt_desc, {
+            "error": err_msg,
+            "traceback": tb[:2000],
+        }
+
+    return ql, os_type, arch, fmt_desc, dll_warning
+
+
 # ---------------------------------------------------------------------------
 #  Actions
 # ---------------------------------------------------------------------------
@@ -307,30 +355,15 @@ def emulate_binary(cmd):
     max_instructions = cmd.get("max_instructions", 0)
     limit = cmd.get("limit", 200)
 
-    os_type, arch, fmt_desc = _detect_binary_format(filepath)
-    if os_type is None:
-        return {"error": f"Cannot detect binary format: {fmt_desc}"}
-
-    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
-    if err:
-        return {"error": err}
+    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    if ql is None:
+        return init_result
+    dll_warning = init_result
 
     api_calls = []
     file_activity = []
     registry_activity = []
     network_activity = []
-
-    try:
-        ql = Qiling(
-            [filepath],
-            rootfs,
-            verbose=QL_VERBOSE.DISABLED,
-        )
-    except Exception as e:
-        err_msg = f"Failed to initialize Qiling: {e}"
-        if dll_warning:
-            err_msg += f"\n\nNote: {dll_warning}"
-        return {"error": err_msg}
 
     # Set up OS-appropriate API/syscall interception
     _setup_api_hooks(ql, os_type, api_calls, limit)
@@ -451,13 +484,10 @@ def trace_execution(cmd):
     timeout_seconds = cmd.get("timeout_seconds", 30)
     limit = cmd.get("limit", 500)
 
-    os_type, arch, fmt_desc = _detect_binary_format(filepath)
-    if os_type is None:
-        return {"error": f"Cannot detect binary format: {fmt_desc}"}
-
-    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
-    if err:
-        return {"error": err}
+    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    if ql is None:
+        return init_result
+    dll_warning = init_result
 
     instructions = []
     unique_addresses = set()
@@ -481,18 +511,6 @@ def trace_execution(cmd):
                 "size": size,
                 "bytes": None,
             })
-
-    try:
-        ql = Qiling(
-            [filepath],
-            rootfs,
-            verbose=QL_VERBOSE.DISABLED,
-        )
-    except Exception as e:
-        err_msg = f"Failed to initialize Qiling: {e}"
-        if dll_warning:
-            err_msg += f"\n\nNote: {dll_warning}"
-        return {"error": err_msg}
 
     ql.hook_code(_code_hook)
 
@@ -531,27 +549,12 @@ def hook_api_calls(cmd):
     max_instructions = cmd.get("max_instructions", 0)
     limit = cmd.get("limit", 200)
 
-    os_type, arch, fmt_desc = _detect_binary_format(filepath)
-    if os_type is None:
-        return {"error": f"Cannot detect binary format: {fmt_desc}"}
-
-    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
-    if err:
-        return {"error": err}
+    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    if ql is None:
+        return init_result
+    dll_warning = init_result
 
     captured_calls = []
-
-    try:
-        ql = Qiling(
-            [filepath],
-            rootfs,
-            verbose=QL_VERBOSE.DISABLED,
-        )
-    except Exception as e:
-        err_msg = f"Failed to initialize Qiling: {e}"
-        if dll_warning:
-            err_msg += f"\n\nNote: {dll_warning}"
-        return {"error": err_msg}
 
     # If specific APIs requested, hook each; otherwise hook all.
     # For specific APIs on Windows, use set_api per name.
@@ -610,25 +613,10 @@ def dump_unpacked(cmd):
     timeout_seconds = cmd.get("timeout_seconds", 120)
     max_instructions = cmd.get("max_instructions", 0)
 
-    os_type, arch, fmt_desc = _detect_binary_format(filepath)
-    if os_type is None:
-        return {"error": f"Cannot detect binary format: {fmt_desc}"}
-
-    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
-    if err:
-        return {"error": err}
-
-    try:
-        ql = Qiling(
-            [filepath],
-            rootfs,
-            verbose=QL_VERBOSE.DISABLED,
-        )
-    except Exception as e:
-        err_msg = f"Failed to initialize Qiling: {e}"
-        if dll_warning:
-            err_msg += f"\n\nNote: {dll_warning}"
-        return {"error": err_msg}
+    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    if ql is None:
+        return init_result
+    dll_warning = init_result
 
     # If a specific dump address is provided, hook it to trigger dump
     dump_triggered = {"done": False}
@@ -870,25 +858,10 @@ def memory_search(cmd):
     context_bytes = cmd.get("context_bytes", 32)
     limit = cmd.get("limit", 50)
 
-    os_type, arch, fmt_desc = _detect_binary_format(filepath)
-    if os_type is None:
-        return {"error": f"Cannot detect binary format: {fmt_desc}"}
-
-    rootfs, err, dll_warning = _find_rootfs(os_type, arch, rootfs_path)
-    if err:
-        return {"error": err}
-
-    try:
-        ql = Qiling(
-            [filepath],
-            rootfs,
-            verbose=QL_VERBOSE.DISABLED,
-        )
-    except Exception as e:
-        err_msg = f"Failed to initialize Qiling: {e}"
-        if dll_warning:
-            err_msg += f"\n\nNote: {dll_warning}"
-        return {"error": err_msg}
+    ql, os_type, arch, fmt_desc, init_result = _init_qiling_for_binary(filepath, rootfs_path)
+    if ql is None:
+        return init_result
+    dll_warning = init_result
 
     # Run for N instructions to let the binary unpack/initialize
     try:
