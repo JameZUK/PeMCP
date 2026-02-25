@@ -210,7 +210,6 @@ async def try_all_unpackers(
 
 def _unpack_next_steps(best: Optional[Dict]) -> List[str]:
     if best and best.get("status") == "success":
-        method = best.get("method", "")
         if "output_path" in best.get("details", {}):
             return [f"open_file(filepath='{best['details']['output_path']}') — analyze unpacked binary"]
         return [

@@ -96,9 +96,6 @@ async def diff_payloads(
         # Build diff report
         regions = []
         for start, end in diff_regions[:limit]:
-            ctx_start = max(0, start - context_bytes)
-            ctx_end = min(max_len, end + context_bytes)
-
             region = {
                 "offset": hex(start),
                 "length": end - start,
