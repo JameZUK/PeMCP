@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper, _log_task_exception
+from pemcp.mcp._progress_bridge import ProgressBridge
 from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
 
 if ANGR_AVAILABLE:
@@ -211,7 +212,7 @@ async def get_reaching_definitions(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "get_reaching_definitions",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _rda))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _rda, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Reaching definitions analysis queued."}
 
@@ -394,7 +395,7 @@ async def get_data_dependencies(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "get_data_dependencies",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _ddg))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _ddg, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Data dependency analysis queued."}
 
@@ -695,7 +696,7 @@ async def get_value_set_analysis(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "get_value_set_analysis",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _vsa))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _vsa, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Value-set analysis queued."}
 

@@ -1,4 +1,5 @@
 """MCP server setup, tool decorator, and validation helpers."""
+import asyncio
 import copy
 import functools
 import json
@@ -22,6 +23,19 @@ _SKIP_HISTORY_TOOLS = frozenset({
     "get_tool_history", "clear_tool_history", "get_session_summary",
     "get_notes", "add_note", "delete_note", "update_note",
     "get_progress_overview",
+})
+
+# --- Heartbeat configuration ---
+# Delay before the first heartbeat fires (avoids noise for fast tools).
+_HEARTBEAT_START_DELAY_SECONDS = 10
+# Interval between subsequent heartbeat pings.
+_HEARTBEAT_INTERVAL_SECONDS = 15
+
+# Tools that manage their own MCP progress reporting.  The generic heartbeat
+# is skipped for these to avoid conflicting or redundant messages.
+_SELF_REPORTING_TOOLS = frozenset({
+    "open_file",
+    "reanalyze_loaded_pe_file",
 })
 
 
@@ -68,18 +82,51 @@ def tool_decorator(func):
 
     Automatically records tool invocations in the session's tool history
     (except for meta-tools listed in ``_SKIP_HISTORY_TOOLS``).
+
+    For long-running tools, an automatic heartbeat sends periodic
+    ``ctx.info()`` messages so the MCP client knows the server is alive.
+    Tools that manage their own progress (listed in ``_SELF_REPORTING_TOOLS``)
+    and lightweight meta-tools are excluded from the heartbeat.
     """
     @functools.wraps(func)
     async def _with_session(*args, **kwargs):
         # Find the Context argument and activate the matching session state
+        ctx = None
         for arg in list(args) + list(kwargs.values()):
             if isinstance(arg, Context):
+                ctx = arg
                 key = get_session_key_from_context(arg)
                 activate_session_state(key)
                 break
         # Update last-active timestamp for session TTL tracking
         current_state = get_current_state()
         current_state.touch()
+
+        tool_name = func.__name__
+
+        # Set up automatic heartbeat for tools that don't self-report progress.
+        # Lightweight meta-tools and self-reporting tools are excluded.
+        heartbeat_task = None
+        if (
+            ctx is not None
+            and tool_name not in _SELF_REPORTING_TOOLS
+            and tool_name not in _SKIP_HISTORY_TOOLS
+        ):
+            async def _heartbeat():
+                await asyncio.sleep(_HEARTBEAT_START_DELAY_SECONDS)
+                elapsed = _HEARTBEAT_START_DELAY_SECONDS
+                while True:
+                    try:
+                        await ctx.info(
+                            f"[heartbeat] {tool_name} still running "
+                            f"({elapsed}s elapsed)"
+                        )
+                    except Exception:
+                        break  # Context may have been closed
+                    await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+                    elapsed += _HEARTBEAT_INTERVAL_SECONDS
+
+            heartbeat_task = asyncio.create_task(_heartbeat())
 
         start_time = time.time()
         try:
@@ -90,10 +137,18 @@ def tool_decorator(func):
             if enriched != str(exc):
                 raise type(exc)(enriched) from exc.__cause__
             raise
+        finally:
+            # Always cancel the heartbeat when the tool finishes
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                try:
+                    await heartbeat_task
+                except asyncio.CancelledError:
+                    pass
+
         duration_ms = int((time.time() - start_time) * 1000)
 
         # Record tool invocation in history (skip meta-tools)
-        tool_name = func.__name__
         if tool_name not in _SKIP_HISTORY_TOOLS:
             try:
                 current_state.record_tool_call(

@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, List
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper, _log_task_exception
+from pemcp.mcp._progress_bridge import ProgressBridge
 from pemcp.mcp._angr_helpers import _ensure_project_and_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
 
 if ANGR_AVAILABLE:
@@ -364,7 +365,7 @@ async def find_path_to_address(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "find_path_to_address"
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _solve_path))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _solve_path, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {
             "status": "queued",
@@ -478,7 +479,7 @@ async def emulate_function_execution(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "emulate_function_execution"
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _core_emulation))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _core_emulation, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Emulation queued."}
 
@@ -605,7 +606,7 @@ async def analyze_binary_loops(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "analyze_binary_loops"
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _core_logic))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _core_logic, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Loop analysis queued."}
 

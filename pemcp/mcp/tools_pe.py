@@ -26,6 +26,7 @@ from pemcp.parsers.strings import _extract_strings_from_data, _perform_unified_s
 _MAX_LIMIT = 100_000
 from pemcp.parsers.floss import _parse_floss_analysis
 from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
+from pemcp.mcp._progress_bridge import ProgressBridge
 from pemcp.mock import MockPE
 
 def _safe_env_int(key: str, default: int) -> int:
@@ -353,13 +354,9 @@ async def open_file(
                 await ctx.report_progress(15, 100)
                 await ctx.info("Analysing PE structures, signatures, and strings...")
 
-                # Use a shared progress state for the callback
-                _progress_state = {"last": 15}
-
-                def _progress_cb(step: int, total: int, message: str) -> None:
-                    # Map 0-100 analysis progress to 15-95 of overall progress
-                    mapped = 15 + int(step * 0.8)
-                    _progress_state["last"] = mapped
+                # Bridge parser progress (0-100) to MCP progress (15-95)
+                _open_bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+                _progress_cb = _open_bridge.make_callback(base_pct=15, range_pct=80)
 
                 def _run_analysis():
                     return _parse_pe_to_dict(
@@ -707,10 +704,19 @@ async def reanalyze_loaded_pe_file(
         verbose_mcp_output=verbose_mcp_output,
     )
 
+    # Create progress bridge for thread-to-MCP communication
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+    await ctx.report_progress(0, 100)
+
     def perform_analysis_in_thread():
         temp_pe_obj = None
         try:
+            bridge.report_progress(2, 100, force=True)
+            bridge.info("Loading PE file for re-analysis...", force=True)
             temp_pe_obj = pefile.PE(state.filepath, fast_load=False)
+
+            # Map _parse_pe_to_dict 0-100 to overall 5-90
+            progress_cb = bridge.make_callback(base_pct=5, range_pct=85)
 
             new_parsed_data = _parse_pe_to_dict(
                 temp_pe_obj, state.filepath, current_peid_db_path, current_yara_rules_path,
@@ -725,8 +731,11 @@ async def reanalyze_loaded_pe_file(
                 floss_only_types_arg=floss_cfg.only_types,
                 floss_functions_to_analyze_arg=floss_cfg.functions_to_analyze,
                 floss_quiet_mode_arg=floss_cfg.quiet_mode,
-                analyses_to_skip=normalized_analyses_to_skip
+                analyses_to_skip=normalized_analyses_to_skip,
+                progress_callback=progress_cb,
             )
+            bridge.report_progress(92, 100, force=True)
+            bridge.info("Core analysis complete, finalizing...")
             return temp_pe_obj, new_parsed_data
         except Exception as e_thread:
             if temp_pe_obj:
@@ -736,6 +745,8 @@ async def reanalyze_loaded_pe_file(
 
     try:
         new_pe_obj_from_thread, new_parsed_data_from_thread = await asyncio.to_thread(perform_analysis_in_thread)
+
+        await ctx.report_progress(95, 100)
 
         if state.pe_object:
             state.pe_object.close()
@@ -751,6 +762,7 @@ async def reanalyze_loaded_pe_file(
         if sha256:
             analysis_cache.put(sha256, state.pe_data, state.filepath)
 
+        await ctx.report_progress(100, 100)
         await ctx.info(f"Successfully re-analyzed PE: {state.filepath}")
         skipped_msg_part = f" (Skipped: {', '.join(normalized_analyses_to_skip) if normalized_analyses_to_skip else 'None'})"
 
