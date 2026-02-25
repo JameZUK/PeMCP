@@ -150,9 +150,22 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                 all_matches.extend(ruleset.match(data=file_data))
             except yara.Error as e_scan:
                 logger.warning("   YARA scan error in one ruleset: %s", e_scan)
-        matches = all_matches
+
+        # Deduplicate matches by rule name (same rule can exist in multiple
+        # sources, e.g. both ReversingLabs and Community).
+        seen_rules: set = set()
+        matches = []
+        for m in all_matches:
+            if m.rule not in seen_rules:
+                seen_rules.add(m.rule)
+                matches.append(m)
+
+        # Cap string instances per match to prevent huge responses
+        # (e.g. contains_base64 can produce thousands of false-positive hits).
+        _MAX_STRINGS_PER_MATCH = 25
+
         if matches:
-            logger.info("   YARA Matches Found (%d):", len(matches))
+            logger.info("   YARA Matches Found (%d unique, %d total):", len(matches), len(all_matches))
             for match in matches:
                 match_detail:Dict[str,Any]={"rule":match.rule,"namespace":match.namespace if match.namespace!='default'else None,"tags":list(match.tags)if match.tags else None,"meta":dict(match.meta)if match.meta else None,"strings":[]}
                 if match.strings:
@@ -194,6 +207,11 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                                 if len(str_data_repr) > 80:
                                     str_data_repr = str_data_repr[:77] + "..."
                                 match_detail["strings"].append({"offset": hex(s_match_offset), "identifier": s_match_id, "data": str_data_repr})
+                # Cap string instances to keep response sizes manageable
+                total_strings = len(match_detail["strings"])
+                if total_strings > _MAX_STRINGS_PER_MATCH:
+                    match_detail["strings"] = match_detail["strings"][:_MAX_STRINGS_PER_MATCH]
+                    match_detail["strings_truncated_from"] = total_strings
                 scan_results.append(match_detail)
         else: logger.info("   No YARA matches found.")
     except yara.Error as e: logger.error("   YARA Error: %s", e); scan_results.append({"error":f"YARA Error: {e!s}"})

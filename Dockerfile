@@ -264,7 +264,7 @@ COPY FastPrompt.txt .
 # container runs as the host user with membership in the pemcp group.
 # Group-writable (775) so any UID in the pemcp group can create
 # ~/.pemcp/cache and config.json inside it.
-RUN mkdir -p /app/home/.pemcp/cache && \
+RUN mkdir -p /app/home/.pemcp/cache /app/home/.cache && \
     chown -R root:pemcp /app/home && \
     chmod -R 775 /app/home
 
