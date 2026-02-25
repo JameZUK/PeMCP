@@ -431,10 +431,17 @@ async def _check_mcp_response_size(
                 if largest_key:
                     val = modified_data[largest_key]
                     if isinstance(val, list):
-                        new_len = int(len(val) * reduction_ratio)
+                        orig_len = len(val)
+                        new_len = int(orig_len * reduction_ratio)
                         new_len = max(1, new_len) # Keep at least 1
                         modified_data[largest_key] = val[:new_len]
-                        modified_data["_truncation_warning"] = f"Data in '{largest_key}' truncated from {len(val)} to {new_len} items to fit 64KB limit."
+                        modified_data["_truncation_warning"] = (
+                            f"Data in '{largest_key}' truncated from {orig_len} to {new_len} items "
+                            f"(MCP response exceeded 64KB byte-size limit). "
+                            f"Use {limit_param_info} to paginate, or request specific items."
+                            if limit_param_info else
+                            f"Data in '{largest_key}' truncated from {orig_len} to {new_len} items to fit 64KB response limit."
+                        )
                     elif isinstance(val, str):
                         new_len = int(len(val) * reduction_ratio)
                         modified_data[largest_key] = val[:new_len] + "...[TRUNCATED]"
