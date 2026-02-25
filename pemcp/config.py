@@ -270,6 +270,7 @@ except ImportError:
         async def info(self, msg): print(f"(mock ctx info): {msg}")
         async def error(self, msg): print(f"(mock ctx error): {msg}")
         async def warning(self, msg): print(f"(mock ctx warning): {msg}")
+        async def report_progress(self, current, total): pass
 
 # --- Angr Integration ---
 ANGR_AVAILABLE = False
