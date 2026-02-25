@@ -138,7 +138,7 @@ async def diff_binaries(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "diff_binaries",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _diff))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _diff, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "BinDiff queued."}
 
@@ -730,7 +730,7 @@ async def find_path_with_custom_input(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "find_path_with_custom_input",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _solve))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _solve, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Custom symbolic execution queued."}
 
@@ -921,7 +921,7 @@ async def emulate_with_watchpoints(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "emulate_with_watchpoints",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _emulate))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _emulate, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Watchpoint emulation queued."}
 
@@ -1101,7 +1101,7 @@ async def identify_cpp_classes(
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "tool": "identify_cpp_classes",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _identify))
+        task = asyncio.create_task(_run_background_task_wrapper(task_id, _identify, ctx=ctx))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Class identification queued."}
 
