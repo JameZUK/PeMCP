@@ -1,14 +1,17 @@
-"""Resource management: PEiD database and Capa rules download/extraction."""
+"""Resource management: PEiD database, Capa rules, and YARA rules download/extraction."""
 import hashlib
 import os
 import zipfile
 import shutil
 
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 from pemcp.config import (
     logger, REQUESTS_AVAILABLE, CAPA_RULES_SUBDIR_NAME,
+    DATA_DIR, YARA_RULES_STORE_DIR_NAME,
+    YARA_REVERSINGLABS_ZIP_URL, YARA_REVERSINGLABS_SUBDIR,
+    YARA_COMMUNITY_ZIP_URL, YARA_COMMUNITY_SUBDIR,
 )
 from pemcp.utils import safe_print
 
@@ -231,4 +234,159 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
         if os.path.exists(zip_path):
             try: os.remove(zip_path)
             except OSError as e_rm_zip: logger.warning("Could not remove downloaded zip %s: %s", zip_path, e_rm_zip)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# YARA Rules Store
+# ---------------------------------------------------------------------------
+
+def _download_and_extract_yara_source(
+    zip_url: str,
+    target_dir: str,
+    zip_prefix_hint: str,
+    verbose: bool = False,
+) -> bool:
+    """Download a YARA rules ZIP and extract it into *target_dir*.
+
+    Returns True on success, False on failure.
+    """
+    if os.path.isdir(target_dir) and any(
+        f.endswith(('.yar', '.yara'))
+        for _d, _ds, fs in os.walk(target_dir)
+        for f in fs
+    ):
+        if verbose:
+            logger.info("YARA rules already present at: %s", target_dir)
+        return True
+
+    if not REQUESTS_AVAILABLE:
+        logger.error("'requests' library not found. Cannot download YARA rules from %s.", zip_url)
+        return False
+
+    logger.info("Downloading YARA rules from %s ...", zip_url)
+    zip_path = target_dir + ".zip"
+    try:
+        response = requests.get(zip_url, timeout=60, stream=True)
+        response.raise_for_status()
+        os.makedirs(os.path.dirname(zip_path) or ".", exist_ok=True)
+        with open(zip_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        if not _verify_download_checksum(zip_path, zip_url):
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+            return False
+
+        # Extract to a temp location next to target
+        extract_tmp = target_dir + "_extract_tmp"
+        if os.path.isdir(extract_tmp):
+            shutil.rmtree(extract_tmp)
+        os.makedirs(extract_tmp, exist_ok=True)
+
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            # Validate member paths to prevent zip-slip
+            real_tmp = os.path.realpath(extract_tmp)
+            for member in zf.namelist():
+                member_path = os.path.realpath(os.path.join(extract_tmp, member))
+                if not member_path.startswith(real_tmp + os.sep) and member_path != real_tmp:
+                    raise zipfile.BadZipFile(
+                        f"Zip member '{member}' would extract outside target directory (path traversal)."
+                    )
+            zf.extractall(extract_tmp)
+
+        # Find the top-level extracted directory (GitHub zips always have one)
+        extracted_dirs = [
+            d for d in os.listdir(extract_tmp)
+            if os.path.isdir(os.path.join(extract_tmp, d))
+        ]
+        if not extracted_dirs:
+            logger.error("No directories found after extracting %s", zip_url)
+            shutil.rmtree(extract_tmp, ignore_errors=True)
+            return False
+
+        # Pick the directory matching the hint, or just use the first one
+        source_dir = None
+        for d in extracted_dirs:
+            if d.startswith(zip_prefix_hint):
+                source_dir = os.path.join(extract_tmp, d)
+                break
+        if source_dir is None:
+            source_dir = os.path.join(extract_tmp, extracted_dirs[0])
+
+        # Move into final target
+        if os.path.isdir(target_dir):
+            shutil.rmtree(target_dir)
+        shutil.copytree(source_dir, target_dir)
+        logger.info("YARA rules extracted to: %s", target_dir)
+        return True
+
+    except requests.exceptions.RequestException as e:
+        logger.error("Error downloading YARA rules from %s: %s", zip_url, e)
+    except zipfile.BadZipFile as e:
+        logger.error("Downloaded YARA archive is not a valid zip: %s", e)
+    except Exception as e:
+        logger.error("Unexpected error during YARA rules download/extraction: %s", e, exc_info=verbose)
+    finally:
+        if os.path.exists(zip_path):
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
+        extract_tmp = target_dir + "_extract_tmp"
+        if os.path.isdir(extract_tmp):
+            shutil.rmtree(extract_tmp, ignore_errors=True)
+    return False
+
+
+def ensure_yara_rules_exist(verbose: bool = False) -> Optional[str]:
+    """Ensure the YARA rules store exists, downloading sources if needed.
+
+    Downloads two rule sets:
+    - **ReversingLabs** (MIT licence) — general-purpose malware YARA rules.
+    - **Yara-Rules Community** (GPL-2.0) — crowd-sourced rules covering
+      packers, crypto, anti-debug/VM, capabilities, malware families, etc.
+
+    Returns the path to the *yara_rules_store* directory on success, or
+    None if no rules could be obtained.
+    """
+    store_dir = str(DATA_DIR / YARA_RULES_STORE_DIR_NAME)
+    os.makedirs(store_dir, exist_ok=True)
+
+    rl_dir = os.path.join(store_dir, YARA_REVERSINGLABS_SUBDIR)
+    community_dir = os.path.join(store_dir, YARA_COMMUNITY_SUBDIR)
+
+    rl_ok = _download_and_extract_yara_source(
+        YARA_REVERSINGLABS_ZIP_URL, rl_dir,
+        zip_prefix_hint="reversinglabs-yara-rules",
+        verbose=verbose,
+    )
+    community_ok = _download_and_extract_yara_source(
+        YARA_COMMUNITY_ZIP_URL, community_dir,
+        zip_prefix_hint="rules-",
+        verbose=verbose,
+    )
+
+    if rl_ok or community_ok:
+        return store_dir
+    return None
+
+
+def get_default_yara_rules_path() -> Optional[str]:
+    """Return the default YARA rules store path if it contains any rules.
+
+    Does NOT trigger a download — call :func:`ensure_yara_rules_exist` first
+    if you want to populate the store.
+    """
+    store = DATA_DIR / YARA_RULES_STORE_DIR_NAME
+    if not store.is_dir():
+        return None
+    # Quick check: at least one .yar or .yara file anywhere in the store
+    for ext in ("*.yar", "*.yara"):
+        try:
+            next(store.rglob(ext))
+            return str(store)
+        except StopIteration:
+            continue
     return None
