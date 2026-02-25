@@ -5,7 +5,6 @@ import os
 import re
 import struct
 import datetime
-import asyncio
 
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -16,7 +15,6 @@ from pemcp.config import (
     PYELFTOOLS_AVAILABLE,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
-from pemcp.mcp._progress_bridge import ProgressBridge
 
 if PYELFTOOLS_AVAILABLE:
     from elftools.elf.elffile import ELFFile
@@ -1716,8 +1714,6 @@ async def get_triage_report(
     await ctx.info("Generating comprehensive triage report...")
 
     _check_pe_loaded("get_triage_report")
-
-    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     risk_score = 0  # Cumulative risk score (higher = more suspicious)
 
