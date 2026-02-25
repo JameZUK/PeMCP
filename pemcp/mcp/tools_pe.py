@@ -666,6 +666,10 @@ async def reanalyze_loaded_pe_file(
     current_yara_rules_path = str(Path(yara_rules_path).resolve()) if yara_rules_path and Path(yara_rules_path).exists() else None
     if yara_rules_path and current_yara_rules_path:
         state.check_path_allowed(current_yara_rules_path)
+    # Auto-resolve to default YARA rules store when not explicitly provided
+    if current_yara_rules_path is None and "yara" not in normalized_analyses_to_skip:
+        from pemcp.resources import get_default_yara_rules_path
+        current_yara_rules_path = get_default_yara_rules_path()
 
     current_capa_rules_dir_to_use = None
     if "capa" not in normalized_analyses_to_skip and CAPA_AVAILABLE:
