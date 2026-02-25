@@ -58,9 +58,19 @@ def _console_heartbeat_loop():
             sys.stderr.flush()
 
 
-def _update_progress(task_id: str, percent: int, message: str):
-    """Helper to safely update progress in the global registry."""
+def _update_progress(task_id: str, percent: int, message: str, bridge=None):
+    """Helper to safely update progress in the global registry.
+
+    If a :class:`~pemcp.mcp._progress_bridge.ProgressBridge` is provided,
+    also push the progress notification to the MCP client in real-time.
+    """
     state.update_task(task_id, progress_percent=percent, progress_message=message)
+    if bridge is not None:
+        try:
+            bridge.report_progress(percent, 100)
+            bridge.info(message)
+        except Exception:
+            pass  # Never let bridge errors break background work
 
 
 def _log_task_exception(task_id: str):
@@ -71,8 +81,21 @@ def _log_task_exception(task_id: str):
     return _callback
 
 
-async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
-    """Helper to run a blocking function in a thread and update the registry."""
+async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None, **kwargs):
+    """Helper to run a blocking function in a thread and update the registry.
+
+    Parameters
+    ----------
+    task_id : str
+        Unique identifier for this background task.
+    func : callable
+        The blocking function to run in a worker thread.
+    ctx : Context, optional
+        If provided, a :class:`ProgressBridge` is created and injected into
+        *func* (as ``_progress_bridge`` kwarg) so that the worker can push
+        real-time MCP progress notifications in addition to the pollable
+        task registry.
+    """
 
     # Lazy-start the heartbeat monitor on the first background request
     global _monitor_started
@@ -85,6 +108,15 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
 
     # Capture the caller's session state so we can propagate it into the worker thread
     _session_state = get_current_state()
+
+    # Create a ProgressBridge if we have a live MCP context
+    bridge = None
+    if ctx is not None:
+        try:
+            from pemcp.mcp._progress_bridge import ProgressBridge
+            bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+        except Exception:
+            logger.debug("Could not create ProgressBridge for background task %s", task_id, exc_info=True)
 
     def _thread_wrapper():
         # Propagate session state into this worker thread
@@ -101,10 +133,20 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
         ):
             kwargs['task_id_for_progress'] = task_id
 
+        # Inject bridge if the function can accept it
+        if bridge is not None:
+            if '_progress_bridge' in params or any(
+                p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+            ):
+                kwargs['_progress_bridge'] = bridge
+
         result = await asyncio.to_thread(_thread_wrapper)
 
         state.update_task(task_id, result=result, status=TASK_COMPLETED,
                           progress_percent=100, progress_message="Analysis complete.")
+        if bridge is not None:
+            bridge.report_progress(100, 100, force=True)
+            bridge.info("Background task complete.", force=True)
         print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
 
     except Exception as e:
@@ -114,13 +156,19 @@ async def _run_background_task_wrapper(task_id: str, func, *args, **kwargs):
 
 
 def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch_hint: str = "amd64",
-                           _session_state=None):
+                           _session_state=None, _progress_bridge=None):
     """
     Unified background worker for Angr analysis.  Supports PE, ELF, Mach-O,
     and shellcode (via ``mode='shellcode'``).
 
     This is the single implementation used by both CLI startup pre-loading
     and the ``open_file`` MCP tool.
+
+    Parameters
+    ----------
+    _progress_bridge : ProgressBridge, optional
+        If provided, progress updates are also pushed to the MCP client
+        in real-time via the bridge (in addition to the pollable task registry).
     """
     # Propagate the caller's session state so the StateProxy resolves to the
     # correct AnalyzerState inside this thread.
@@ -129,12 +177,14 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
     import angr  # imported here since this only runs when ANGR_AVAILABLE is True
 
+    bridge = _progress_bridge  # shorter alias
+
     try:
-        _update_progress(task_id, 1, "Loading Angr Project...")
+        _update_progress(task_id, 1, "Loading Angr Project...", bridge=bridge)
 
         # 1. Load Project (mode-aware)
         if mode == "shellcode":
-            _update_progress(task_id, 5, f"Loading raw shellcode as {arch_hint}...")
+            _update_progress(task_id, 5, f"Loading raw shellcode as {arch_hint}...", bridge=bridge)
             project = angr.Project(
                 filepath,
                 main_opts={"backend": "blob", "arch": arch_hint},
@@ -144,12 +194,12 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
             project = angr.Project(filepath, auto_load_libs=False)
 
         state.set_angr_results(project, None, None, None)
-        _update_progress(task_id, 20, "Building Control Flow Graph...")
+        _update_progress(task_id, 20, "Building Control Flow Graph...", bridge=bridge)
 
         # 2. Build CFG (the heaviest step)
         cfg = project.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
         state.set_angr_results(project, cfg, None, None)
-        _update_progress(task_id, 80, "Identifying loops...")
+        _update_progress(task_id, 80, "Identifying loops...", bridge=bridge)
 
         # 3. Pre-calculate Loops
         loop_finder = project.analyses.LoopFinder(kb=project.kb)
@@ -179,16 +229,19 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
             progress_percent=100,
             progress_message="Background analysis complete.",
         )
+        if bridge is not None:
+            bridge.report_progress(100, 100, force=True)
+            bridge.info("Background Angr analysis complete.", force=True)
         print(f"\n[*] Background Angr Analysis finished.", file=sys.stderr)
 
     except (OSError, RuntimeError, ValueError) as e:
         logger.error("Background Angr analysis failed: %s: %s", type(e).__name__, e, exc_info=True)
         state.update_task(task_id, status=TASK_FAILED, error=str(e))
-        _update_progress(task_id, 0, f"Failed: {e}")
+        _update_progress(task_id, 0, f"Failed: {e}", bridge=bridge)
     except Exception as e:
         logger.error("Background Angr analysis failed unexpectedly: %s: %s", type(e).__name__, e, exc_info=True)
         state.update_task(task_id, status=TASK_FAILED, error=str(e))
-        _update_progress(task_id, 0, f"Failed: {e}")
+        _update_progress(task_id, 0, f"Failed: {e}", bridge=bridge)
 
 
 def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "amd64",
