@@ -358,10 +358,14 @@ async def open_file(
                 _open_bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
                 _progress_cb = _open_bridge.make_callback(base_pct=15, range_pct=80)
 
+                # Auto-resolve default YARA rules so initial open_file includes them
+                from pemcp.resources import get_default_yara_rules_path
+                _default_yara = get_default_yara_rules_path()
+
                 def _run_analysis():
                     return _parse_pe_to_dict(
                         pe_obj, abs_path,
-                        str(DEFAULT_PEID_DB_PATH), None, None, None,
+                        str(DEFAULT_PEID_DB_PATH), _default_yara, None, None,
                         False, False, False,
                         floss_min_len_arg=FLOSS_MIN_LENGTH_DEFAULT,
                         floss_verbose_level_arg=0,

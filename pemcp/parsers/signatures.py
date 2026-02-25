@@ -100,6 +100,9 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
         if verbose: logger.info("   [VERBOSE-YARA] Loading rules from: %s", yara_rules_path)
         rules = None
         if os.path.isdir(yara_rules_path):
+            # Collect rule files grouped by immediate subdirectory so that
+            # rules within the same source (e.g. reversinglabs/, community/)
+            # are compiled together — this preserves YARA `import` support.
             # Use relative path as key to avoid collisions when multiple
             # subdirectories contain files with the same basename.
             filepaths: Dict[str, str] = {}
@@ -110,13 +113,29 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                         rel = os.path.relpath(full, yara_rules_path).replace(os.sep, '/')
                         filepaths[rel] = full
             if not filepaths: logger.warning("   No .yar or .yara files in dir: %s", yara_rules_path); return scan_results
-            # Compile per-file so that a bad rule doesn't break all scanning.
+
+            # Group files by top-level subdirectory for batch compilation.
+            groups: Dict[str, Dict[str, str]] = {}
+            for rel, full in filepaths.items():
+                group_key = rel.split('/')[0] if '/' in rel else '__root__'
+                groups.setdefault(group_key, {})[rel] = full
+
             compiled_list = []
-            for key, path in filepaths.items():
+            for group_key, group_files in groups.items():
+                # Try batch compilation first (preserves `import "pe"` etc.)
                 try:
-                    compiled_list.append(yara.compile(filepath=path))
-                except yara.Error as e_comp:
-                    logger.warning("   YARA compile error in %s: %s — skipping.", key, e_comp)
+                    compiled_list.append(yara.compile(filepaths=group_files))
+                    if verbose:
+                        logger.info("   [VERBOSE-YARA] Batch-compiled %d rules from %s/", len(group_files), group_key)
+                except yara.Error as e_batch:
+                    # Batch failed — fall back to per-file compilation for this group
+                    logger.info("   YARA batch compile failed for %s/ (%s) — trying per-file.", group_key, e_batch)
+                    for key, path in group_files.items():
+                        try:
+                            compiled_list.append(yara.compile(filepath=path))
+                        except yara.Error as e_comp:
+                            logger.warning("   YARA compile error in %s: %s — skipping.", key, e_comp)
+
             if not compiled_list:
                 logger.warning("   All YARA rule files failed to compile in: %s", yara_rules_path)
                 return scan_results
@@ -131,9 +150,22 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                 all_matches.extend(ruleset.match(data=file_data))
             except yara.Error as e_scan:
                 logger.warning("   YARA scan error in one ruleset: %s", e_scan)
-        matches = all_matches
+
+        # Deduplicate matches by rule name (same rule can exist in multiple
+        # sources, e.g. both ReversingLabs and Community).
+        seen_rules: set = set()
+        matches = []
+        for m in all_matches:
+            if m.rule not in seen_rules:
+                seen_rules.add(m.rule)
+                matches.append(m)
+
+        # Cap string instances per match to prevent huge responses
+        # (e.g. contains_base64 can produce thousands of false-positive hits).
+        _MAX_STRINGS_PER_MATCH = 25
+
         if matches:
-            logger.info("   YARA Matches Found (%d):", len(matches))
+            logger.info("   YARA Matches Found (%d unique, %d total):", len(matches), len(all_matches))
             for match in matches:
                 match_detail:Dict[str,Any]={"rule":match.rule,"namespace":match.namespace if match.namespace!='default'else None,"tags":list(match.tags)if match.tags else None,"meta":dict(match.meta)if match.meta else None,"strings":[]}
                 if match.strings:
@@ -175,6 +207,11 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                                 if len(str_data_repr) > 80:
                                     str_data_repr = str_data_repr[:77] + "..."
                                 match_detail["strings"].append({"offset": hex(s_match_offset), "identifier": s_match_id, "data": str_data_repr})
+                # Cap string instances to keep response sizes manageable
+                total_strings = len(match_detail["strings"])
+                if total_strings > _MAX_STRINGS_PER_MATCH:
+                    match_detail["strings"] = match_detail["strings"][:_MAX_STRINGS_PER_MATCH]
+                    match_detail["strings_truncated_from"] = total_strings
                 scan_results.append(match_detail)
         else: logger.info("   No YARA matches found.")
     except yara.Error as e: logger.error("   YARA Error: %s", e); scan_results.append({"error":f"YARA Error: {e!s}"})
