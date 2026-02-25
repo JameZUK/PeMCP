@@ -1,4 +1,4 @@
-# PeMCP — GenAI Automated Advanced Multi-Format Binary Analysis
+# PeMCP - GenAI Automated Advanced Multi-Format Binary Analysis
 
 ![PeMCP Logo](docs/logo.svg)
 
