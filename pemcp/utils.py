@@ -3,12 +3,31 @@ import atexit
 import concurrent.futures
 import datetime
 import math
+import os
 import re
 import sys
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import pefile
+from pemcp.config import pefile, logger
+
+
+def _safe_env_int(key: str, default: int) -> int:
+    """Read an environment variable as int with fallback to *default*.
+
+    Returns *default* when the variable is missing or its value cannot be
+    converted to ``int`` (e.g. empty string, float notation, non-numeric
+    text).  A warning is logged for invalid values so operators can notice
+    misconfigurations.
+    """
+    val = os.environ.get(key)
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        logger.warning("Invalid value for %s=%r, using default %d", key, val, default)
+        return default
 
 # Module-level shared executor for regex timeout protection.
 # Using a small pool avoids per-call thread creation/teardown overhead.

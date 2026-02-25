@@ -124,6 +124,13 @@ CAPA_IMPORT_ERROR = None
 MAX_MCP_RESPONSE_SIZE_KB = 64
 MAX_MCP_RESPONSE_SIZE_BYTES = MAX_MCP_RESPONSE_SIZE_KB * 1024
 
+# --- Timeout Constants (seconds) ---
+ANGR_ANALYSIS_TIMEOUT = 300    # angr symbolic execution / analysis operations
+ANGR_SHORT_TIMEOUT = 120       # shorter angr operations (e.g. anti-debug scan)
+HTTP_DOWNLOAD_TIMEOUT = 60     # downloading resources (YARA rules, capa rules)
+HTTP_API_TIMEOUT = 20          # external API calls (e.g. VirusTotal)
+HTTP_QUICK_TIMEOUT = 15        # quick HTTP requests (e.g. PEiD DB download)
+
 try:
     import capa
     import capa.main

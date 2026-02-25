@@ -28,17 +28,7 @@ from pemcp.parsers.floss import _parse_floss_analysis
 from pemcp.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
 from pemcp.mcp._progress_bridge import ProgressBridge
 from pemcp.mock import MockPE
-
-def _safe_env_int(key: str, default: int) -> int:
-    """Read an environment variable as int with fallback to default."""
-    val = os.environ.get(key)
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        logger.warning("Invalid value for %s=%r, using default %d", key, val, default)
-        return default
+from pemcp.utils import _safe_env_int
 
 # Limit concurrent heavy analyses (open_file with full PE parsing, FLOSS, etc.).
 # This is a global semaphore shared across all HTTP sessions.  In multi-tenant
