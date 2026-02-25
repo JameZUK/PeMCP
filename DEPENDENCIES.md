@@ -188,9 +188,76 @@ The bundled capa-rules must match the capa major version.  If you bump
 Current alignment: **flare-capa >=9.3,<9.4** with **capa-rules v9.3.0**.
 The minor version must match — rules use syntax from their matching capa release.
 
+### Capa rule cache (`XDG_CACHE_HOME`)
+
+Capa writes a compiled-rules cache file to `$XDG_CACHE_HOME/capa-*.cache`
+(via `platformdirs`).  In Docker the container runs as an arbitrary UID
+(via `--user "$(id -u):$(id -g)"`), so the default `~/.cache/` may not
+be writable.
+
+**Fix:** The Dockerfile sets `ENV XDG_CACHE_HOME=/tmp` so the cache
+always lands in a world-writable directory.  If the Dockerfile ENV is
+ever removed, add `-e XDG_CACHE_HOME=/tmp` to the `docker run` command
+or the `run.sh` helper.
+
 ---
 
-## 7. Library API renames (runtime compatibility)
+## 7. Bundled YARA rules store
+
+PeMCP bundles YARA rules from two legitimate open-source projects so
+that YARA scanning works out-of-the-box without the user needing to
+supply their own rules via `--yara-rules`.
+
+| Source | Licence | Description |
+|--------|---------|-------------|
+| [ReversingLabs YARA Rules](https://github.com/reversinglabs/reversinglabs-yara-rules) | MIT | General-purpose malware detection rules. Uses YARA `import "pe"` etc. |
+| [Yara-Rules Community](https://github.com/Yara-Rules/rules) | GPL-2.0 | Crowd-sourced rules: packers, crypto, anti-debug/VM, capabilities, malware families. |
+
+### Store layout
+
+```
+yara_rules_store/
+  reversinglabs/     ← ReversingLabs archive (develop branch)
+  community/         ← Yara-Rules project archive (master branch)
+```
+
+### How rules are obtained
+
+- **Docker (build-time):** Both ZIP archives are downloaded and extracted
+  during `docker build` (see the `PYEOF` block in the Dockerfile).  No
+  network access is needed at runtime.
+- **Local / non-Docker (first run):** When `--yara-rules` is not
+  specified and no `yara_rules_store/` directory exists, PeMCP calls
+  `ensure_yara_rules_exist()` which downloads both archives to
+  `DATA_DIR/yara_rules_store/`.  Subsequent runs reuse the local copy.
+
+### Compilation strategy
+
+YARA rules are compiled **per top-level subdirectory** (i.e. one batch
+for `reversinglabs/`, one for `community/`).  This preserves YARA
+`import` statements (`import "pe"`, `import "math"`, etc.) which many
+ReversingLabs rules require.  If batch compilation fails for a group
+(e.g. a rule references an unsupported module), PeMCP falls back to
+per-file compilation for that group, logging a warning for each file
+that fails.
+
+Matches are **deduplicated by rule name** after scanning — if both
+sources define a rule with the same name (e.g. `IsPE64`), only the
+first match is kept.  String instances per rule match are capped at 25
+to prevent noisy rules (e.g. `contains_base64`) from inflating MCP
+response sizes.
+
+### Updating the URLs
+
+If you need to pin to a specific tag or update the sources:
+
+- `pemcp/config.py` → `YARA_REVERSINGLABS_ZIP_URL`,
+  `YARA_COMMUNITY_ZIP_URL`
+- `Dockerfile` → the corresponding `urllib.request.urlretrieve(...)` URLs
+
+---
+
+## 8. Library API renames (runtime compatibility)
 
 Several libraries renamed classes or APIs in newer versions, breaking
 PeMCP's imports.  These are handled with compatibility shims:
@@ -291,7 +358,7 @@ automatically.
 
 ---
 
-## 8. PyPI version ceilings for optional packages
+## 9. PyPI version ceilings for optional packages
 
 Several optional packages have low version ceilings on PyPI — the latest
 available version is *below* the minimum you might naively expect:
@@ -311,7 +378,7 @@ only available from GitHub, install it in the Dockerfile via
 
 ---
 
-## 9. Binary Refinery sub-dependencies
+## 10. Binary Refinery sub-dependencies
 
 Binary Refinery is a large framework with 200+ units.  Many units are
 self-contained, but some require optional packages that are **not** pulled
@@ -374,6 +441,9 @@ tool wrappers detect this and return a clear error message.
 10. dotnetfile, binwalk, pygore (best-effort, main env)
 11. oscrypto patch
 12. Assert UC_ARCH_RISCV exists                      ← build-time guard
+13. Pre-populate capa rules (v9.3.0)                 ← avoids runtime download
+14. Pre-populate YARA rules store (ReversingLabs + Yara-Rules Community)
+15. Copy application files
 ```
 
 Since speakeasy, unipacker, and qiling are all in isolated venvs,

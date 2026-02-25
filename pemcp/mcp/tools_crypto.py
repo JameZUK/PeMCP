@@ -498,7 +498,6 @@ async def brute_force_simple_crypto(
 
     def _brute_force():
         results = []
-        total_algos = len(algorithms)
 
         def _score_result(decrypted: bytes) -> float:
             """Score decrypted data: higher = more likely correct."""
