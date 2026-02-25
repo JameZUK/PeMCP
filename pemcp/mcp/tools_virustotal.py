@@ -2,7 +2,7 @@
 import datetime
 import asyncio
 from typing import Dict, Any, Optional
-from pemcp.config import state, logger, Context, REQUESTS_AVAILABLE, VT_API_URL_FILE_REPORT
+from pemcp.config import state, logger, Context, REQUESTS_AVAILABLE, VT_API_URL_FILE_REPORT, HTTP_API_TIMEOUT
 from pemcp.user_config import get_config_value
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 if REQUESTS_AVAILABLE:
@@ -106,7 +106,7 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
 
     try:
         await ctx.info(f"Querying VirusTotal API for hash: {main_hash_value}")
-        http_response = await asyncio.to_thread(requests.get, api_url, headers=headers, timeout=20)
+        http_response = await asyncio.to_thread(requests.get, api_url, headers=headers, timeout=HTTP_API_TIMEOUT)
 
         if http_response.status_code == 200:
             vt_json_response = http_response.json()

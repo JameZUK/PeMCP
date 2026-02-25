@@ -6,7 +6,7 @@ import sys
 
 from typing import Dict, Any, Optional, List
 
-from pemcp.config import state, logger, Context, ANGR_AVAILABLE
+from pemcp.config import state, logger, Context, ANGR_AVAILABLE, ANGR_ANALYSIS_TIMEOUT
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from pemcp.mcp._progress_bridge import ProgressBridge
@@ -202,9 +202,9 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
         except Exception as e: return {"error": f"Decompilation failed: {e}"}
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_decompile), timeout=300)
+        result = await asyncio.wait_for(asyncio.to_thread(_decompile), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
-        raise RuntimeError("Decompilation timed out after 300 seconds.")
+        raise RuntimeError(f"Decompilation timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "decompile_function_with_angr")
 
@@ -244,9 +244,9 @@ async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any
         return {"function_name": func.name, "address": hex(addr_to_use), "nodes": nodes_data, "edges": edges_data}
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_extract_graph), timeout=300)
+        result = await asyncio.wait_for(asyncio.to_thread(_extract_graph), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
-        raise RuntimeError("CFG extraction timed out after 300 seconds.")
+        raise RuntimeError(f"CFG extraction timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_function_cfg")
 

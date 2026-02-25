@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional
 from pemcp.config import state, logger, Context, analysis_cache
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded
 from pemcp.cache import CACHE_DIR
+from pemcp.utils import _safe_env_int
 
 try:
     from pemcp import __version__ as PEMCP_VERSION
@@ -26,10 +27,10 @@ PROJECT_EXTENSION = ".pemcp_project.tar.gz"
 IMPORT_DIR = Path.home() / ".pemcp" / "imported"
 
 # Maximum size of a single imported binary (default 256 MB, matches PEMCP_MAX_FILE_SIZE_MB)
-_MAX_IMPORT_BINARY_SIZE = int(os.getenv("PEMCP_MAX_FILE_SIZE_MB", "256")) * 1024 * 1024
+_MAX_IMPORT_BINARY_SIZE = _safe_env_int("PEMCP_MAX_FILE_SIZE_MB", 256) * 1024 * 1024
 
 # Maximum total size of all imported binaries (default 1 GB)
-_MAX_IMPORT_DIR_SIZE = int(os.getenv("PEMCP_MAX_IMPORT_DIR_SIZE_MB", "1024")) * 1024 * 1024
+_MAX_IMPORT_DIR_SIZE = _safe_env_int("PEMCP_MAX_IMPORT_DIR_SIZE_MB", 1024) * 1024 * 1024
 
 
 @tool_decorator

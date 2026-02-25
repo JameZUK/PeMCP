@@ -12,6 +12,7 @@ from pemcp.config import (
     DATA_DIR, YARA_RULES_STORE_DIR_NAME,
     YARA_REVERSINGLABS_ZIP_URL, YARA_REVERSINGLABS_SUBDIR,
     YARA_COMMUNITY_ZIP_URL, YARA_COMMUNITY_SUBDIR,
+    HTTP_DOWNLOAD_TIMEOUT, HTTP_QUICK_TIMEOUT,
 )
 from pemcp.utils import safe_print
 
@@ -60,7 +61,7 @@ def ensure_peid_db_exists(url: str, local_path: str, verbose: bool = False) -> b
         return False
     safe_print(f"[*] PEiD database not found at {local_path}. Attempting download from {url}...", verbose_prefix=" ")
     try:
-        response = requests.get(url, timeout=15); response.raise_for_status()
+        response = requests.get(url, timeout=HTTP_QUICK_TIMEOUT); response.raise_for_status()
         Path(local_path).parent.mkdir(parents=True, exist_ok=True)
         with open(local_path, 'wb') as f: f.write(response.content)
         if not _verify_download_checksum(local_path, url):
@@ -99,7 +100,7 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
 
     try:
         logger.info("Downloading capa rules from %s to %s...", rules_zip_url, zip_path)
-        response = requests.get(rules_zip_url, timeout=60, stream=True)
+        response = requests.get(rules_zip_url, timeout=HTTP_DOWNLOAD_TIMEOUT, stream=True)
         response.raise_for_status()
         with open(zip_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
@@ -267,7 +268,7 @@ def _download_and_extract_yara_source(
     logger.info("Downloading YARA rules from %s ...", zip_url)
     zip_path = target_dir + ".zip"
     try:
-        response = requests.get(zip_url, timeout=60, stream=True)
+        response = requests.get(zip_url, timeout=HTTP_DOWNLOAD_TIMEOUT, stream=True)
         response.raise_for_status()
         os.makedirs(os.path.dirname(zip_path) or ".", exist_ok=True)
         with open(zip_path, 'wb') as f:
