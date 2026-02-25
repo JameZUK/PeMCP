@@ -172,7 +172,8 @@ def _parse_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
             dll_info: Dict[str, Any] = {'dll_name': "Unknown"}
             try:
                 dll_info['dll_name'] = entry.dll.decode('utf-8', 'ignore') if entry.dll else "N/A"
-            except Exception:
+            except Exception as e:
+                logger.debug("DLL name decode failed, keeping 'Unknown': %s", e)
                 pass  # Keep 'Unknown' if decoding fails
 
             dll_info['struct'] = entry.struct.dump_dict()
@@ -501,7 +502,8 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
                 section_name_cleaned_for_log = "UnknownSection"
                 try:
                     section_name_cleaned_for_log = sec.Name.decode('utf-8', 'ignore').rstrip('\x00')
-                except Exception:
+                except Exception as e:
+                    logger.debug("Section name decode failed: %s", e)
                     pass
                 logger.warning("PEiD section data error %s: %s", section_name_cleaned_for_log, e)
 
@@ -560,7 +562,8 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
             if entry.struct.szName:
                 try:
                     dll_name = pe.get_string_at_rva(entry.struct.szName).decode('utf-8', 'ignore')
-                except Exception:
+                except Exception as e:
+                    logger.debug("Delay-load DLL name decode failed: %s", e)
                     pass
 
             delay_syms = []
@@ -765,7 +768,8 @@ def _parse_bound_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
             }
             try:
                 d_dict['name'] = desc.name.decode('utf-8', 'ignore') if desc.name else "N/A"
-            except Exception:
+            except Exception as e:
+                logger.debug("Bound import name decode failed: %s", e)
                 pass
 
             if hasattr(desc, 'entries'):
@@ -773,7 +777,8 @@ def _parse_bound_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
                     r_dict: Dict[str, Any] = {'struct': ref.struct.dump_dict(), 'name': None}
                     try:
                         r_dict['name'] = ref.name.decode('utf-8', 'ignore') if ref.name else "N/A"
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Bound import forwarder ref name decode failed: %s", e)
                         pass
                     d_dict['forwarder_refs'].append(r_dict)
             bound_list.append(d_dict)
@@ -885,7 +890,8 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         if progress_callback:
             try:
                 progress_callback(step, total, message)
-            except Exception:
+            except Exception as e:
+                logger.debug("Progress reporting failed: %s", e)
                 pass  # Never let progress reporting break the analysis
 
     try:
