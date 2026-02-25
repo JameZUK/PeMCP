@@ -1,4 +1,4 @@
-# PeMCP — Advanced Multi-Format Binary Analysis & MCP Server
+# PeMCP — GenAI Automated Advanced Multi-Format Binary Analysis
 
 PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **171 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
