@@ -100,13 +100,38 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
         if verbose: logger.info("   [VERBOSE-YARA] Loading rules from: %s", yara_rules_path)
         rules = None
         if os.path.isdir(yara_rules_path):
-            filepaths = {f_name: os.path.join(dirname, f_name) for dirname, _, files in os.walk(yara_rules_path) for f_name in files if f_name.lower().endswith(('.yar', '.yara'))}
+            # Use relative path as key to avoid collisions when multiple
+            # subdirectories contain files with the same basename.
+            filepaths: Dict[str, str] = {}
+            for dirname, _, files in os.walk(yara_rules_path):
+                for f_name in files:
+                    if f_name.lower().endswith(('.yar', '.yara')):
+                        full = os.path.join(dirname, f_name)
+                        rel = os.path.relpath(full, yara_rules_path).replace(os.sep, '/')
+                        filepaths[rel] = full
             if not filepaths: logger.warning("   No .yar or .yara files in dir: %s", yara_rules_path); return scan_results
-            rules = yara.compile(filepaths=filepaths)
-        elif os.path.isfile(yara_rules_path): rules = yara.compile(filepath=yara_rules_path)
+            # Compile per-file so that a bad rule doesn't break all scanning.
+            compiled_list = []
+            for key, path in filepaths.items():
+                try:
+                    compiled_list.append(yara.compile(filepath=path))
+                except yara.Error as e_comp:
+                    logger.warning("   YARA compile error in %s: %s — skipping.", key, e_comp)
+            if not compiled_list:
+                logger.warning("   All YARA rule files failed to compile in: %s", yara_rules_path)
+                return scan_results
+            rules = compiled_list  # list of compiled rule sets
+        elif os.path.isfile(yara_rules_path): rules = [yara.compile(filepath=yara_rules_path)]
         else: logger.warning("   YARA rules path not valid: %s", yara_rules_path); return scan_results
 
-        matches = rules.match(data=file_data)
+        # rules is now a list of compiled rule sets
+        all_matches = []
+        for ruleset in rules:
+            try:
+                all_matches.extend(ruleset.match(data=file_data))
+            except yara.Error as e_scan:
+                logger.warning("   YARA scan error in one ruleset: %s", e_scan)
+        matches = all_matches
         if matches:
             logger.info("   YARA Matches Found (%d):", len(matches))
             for match in matches:

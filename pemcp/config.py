@@ -293,6 +293,13 @@ CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v
 CAPA_RULES_DEFAULT_DIR_NAME = "capa_rules_store"
 CAPA_RULES_SUBDIR_NAME = "rules"
 
+# --- YARA Rules Store ---
+YARA_RULES_STORE_DIR_NAME = "yara_rules_store"
+YARA_REVERSINGLABS_ZIP_URL = "https://github.com/reversinglabs/reversinglabs-yara-rules/archive/refs/heads/develop.zip"
+YARA_REVERSINGLABS_SUBDIR = "reversinglabs"
+YARA_COMMUNITY_ZIP_URL = "https://github.com/Yara-Rules/rules/archive/refs/heads/master.zip"
+YARA_COMMUNITY_SUBDIR = "community"
+
 DEPENDENCIES = [
     ("cryptography", "cryptography", "Cryptography (for digital signatures)", False),
     ("requests", "requests", "Requests (for PEiD DB download & capa/FLOSS support)", False),

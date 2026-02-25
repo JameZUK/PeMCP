@@ -211,6 +211,47 @@ if top.exists():
     shutil.rmtree(str(top))
 PYEOF
 
+# --- Pre-populate YARA rules store (avoids runtime download) ---
+# Two sources are bundled:
+#   1. ReversingLabs YARA Rules (MIT licence)  — general malware detection
+#   2. Yara-Rules Community (GPL-2.0)          — packers, crypto, anti-debug, capabilities
+RUN python <<'PYEOF' && rm -f /tmp/rl-yara.zip /tmp/community-yara.zip
+import urllib.request, zipfile, shutil, os, pathlib
+
+store = pathlib.Path("/app/yara_rules_store")
+store.mkdir(exist_ok=True)
+
+# --- ReversingLabs ---
+rl_url = "https://github.com/reversinglabs/reversinglabs-yara-rules/archive/refs/heads/develop.zip"
+rl_zip = "/tmp/rl-yara.zip"
+urllib.request.urlretrieve(rl_url, rl_zip)
+with zipfile.ZipFile(rl_zip) as zf:
+    zf.extractall("/tmp")
+rl_src = next(p for p in pathlib.Path("/tmp").iterdir() if p.name.startswith("reversinglabs-yara-rules") and p.is_dir())
+target_rl = store / "reversinglabs"
+if target_rl.exists():
+    shutil.rmtree(str(target_rl))
+shutil.copytree(str(rl_src), str(target_rl))
+shutil.rmtree(str(rl_src))
+rl_count = sum(1 for _ in target_rl.rglob("*.yar"))
+print(f"  ReversingLabs YARA rules installed: {rl_count} files")
+
+# --- Yara-Rules Community ---
+community_url = "https://github.com/Yara-Rules/rules/archive/refs/heads/master.zip"
+community_zip = "/tmp/community-yara.zip"
+urllib.request.urlretrieve(community_url, community_zip)
+with zipfile.ZipFile(community_zip) as zf:
+    zf.extractall("/tmp")
+community_src = next(p for p in pathlib.Path("/tmp").iterdir() if p.name.startswith("rules-") and p.is_dir())
+target_community = store / "community"
+if target_community.exists():
+    shutil.rmtree(str(target_community))
+shutil.copytree(str(community_src), str(target_community))
+shutil.rmtree(str(community_src))
+community_count = sum(1 for _ in target_community.rglob("*.yar")) + sum(1 for _ in target_community.rglob("*.yara"))
+print(f"  Yara-Rules Community rules installed: {community_count} files")
+PYEOF
+
 # --- Copy Application Files ---
 COPY PeMCP.py .
 COPY pemcp/ ./pemcp/
