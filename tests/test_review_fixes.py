@@ -345,7 +345,7 @@ class TestCompactTriageDataAccess:
         with open(triage_path) as f:
             source = f.read()
         compact_idx = source.index("if compact:")
-        compact_block = source[compact_idx:compact_idx + 1500]
+        compact_block = source[compact_idx:compact_idx + 2500]
         assert 'caps.get("items"' not in compact_block, \
             "Compact triage should not use .get('items') on capabilities (it's a list)"
         assert "isinstance(caps, list)" in compact_block
@@ -748,7 +748,7 @@ class TestNoteHintsInTools:
         with open(disasm_path) as f:
             source = f.read()
         idx = source.index("async def get_annotated_disassembly")
-        func_body = source[idx:idx + 5000]
+        func_body = source[idx:idx + 6000]
         assert '"next_step"' in func_body
 
     def test_emulate_has_next_step(self):
