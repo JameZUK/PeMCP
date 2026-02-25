@@ -212,17 +212,24 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         # Check if it's a capa-defined exit error
         should_exit_error_type = getattr(capa.main, 'ShouldExitError', None) # Gracefully check if this exists
         if should_exit_error_type and isinstance(e, should_exit_error_type):
-            error_msg = f"Capa analysis aborted ({type(e).__name__}): {e} (status_code: {getattr(e, 'status_code', 'N/A')})"
-            capa_results["status"] = f"Error during analysis ({type(e).__name__})"
             status_code = getattr(e, 'status_code', None)
+            # Capture the original cause — ShouldExitError wraps the real
+            # exception via ``raise ShouldExitError(...) from e``.
+            cause = e.__cause__
+            cause_detail = f"{type(cause).__name__}: {cause}" if cause else str(e)
+            error_msg = f"Capa analysis aborted (status_code={status_code}): {cause_detail}"
+            capa_results["status"] = f"Error during analysis ({type(e).__name__})"
+            if cause:
+                logger.error("Capa ShouldExitError cause: %s", cause_detail, exc_info=cause)
             if status_code == 12:
                 capa_results["hint"] = (
-                    "Status code 12 = E_INVALID_RULE: capa rules failed to parse. "
-                    "This usually means a version mismatch between flare-capa and "
-                    "capa-rules. Ensure flare-capa version matches the bundled rules "
-                    "(v9.3.x for capa-rules v9.3.0). "
-                    "Fix: pip install 'flare-capa>=9.3,<9.4'"
+                    "Status code 12 = E_INVALID_RULE: one or more capa rules "
+                    "failed to parse. See the 'cause' field for the specific "
+                    "rule and error. Common causes: corrupted rules download, "
+                    "a rule using features unsupported by this capa version, "
+                    "or invalid YAML in a rule file."
                 )
+                capa_results["cause"] = cause_detail
             else:
                 capa_results["hint"] = (
                     "Capa's ShouldExitError typically means the sample is "
