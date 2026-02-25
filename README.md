@@ -97,7 +97,7 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 ### Comprehensive Static Analysis
 
 - **PE Structure** — 24 dedicated tools for every PE data directory and header.
-- **Signatures** — Authenticode validation (Signify), certificate parsing (Cryptography), packer detection (PEiD), YARA scanning, and custom YARA rule execution.
+- **Signatures** — Authenticode validation (Signify), certificate parsing (Cryptography), packer detection (PEiD), YARA scanning with bundled rules from [ReversingLabs](https://github.com/reversinglabs/reversinglabs-yara-rules) (MIT) and [Yara-Rules Community](https://github.com/Yara-Rules/rules) (GPL-2.0), and custom YARA rule execution.
 - **Capabilities** — Integrated Capa analysis to map binary behaviours to the MITRE ATT&CK framework.
 - **Strings** — FLOSS integration for extracting static, stack, tight, and decoded strings, ranked by relevance using StringSifter. VA-based string extraction for decompilation follow-up.
 - **Crypto Analysis** — Detect crypto constants (AES S-box, DES, RC4), scan for API hashes, entropy analysis. Advanced crypto algorithm identification, automated key extraction, and brute-force decryption.
@@ -140,7 +140,7 @@ PeMCP is designed for **large binary corpus analysis** where AI clients need to 
 - **No Pre-loading Required** — The MCP server starts without needing a file path. Use the `open_file` tool to load files dynamically.
 - **Analysis Caching** — Results are cached to disk in `~/.pemcp/cache/`, keyed by SHA256 hash and compressed with gzip (~12x compression). Re-opening a previously analysed file loads instantly from cache.
 - **Persistent Configuration** — API keys are stored securely in `~/.pemcp/config.json` and recalled automatically across sessions.
-- **Progress Reporting** — File loading and analysis report progress to the MCP client in real time.
+- **Progress Reporting** — Over 50 long-running tools report fine-grained progress to the MCP client in real time (percentage, stage descriptions). Tools running in background threads use a thread-safe `ProgressBridge` to push updates back to the async MCP context.
 
 ### Robust Architecture
 
@@ -650,7 +650,7 @@ pip install pefile networkx "mcp[cli]"
 
 Optional packages can be added individually:
 - `pip install cryptography signify` — Digital signature analysis
-- `pip install yara-python` — YARA scanning
+- `pip install yara-python` — YARA scanning (bundled rules from ReversingLabs and Yara-Rules Community are auto-downloaded on first run)
 - `pip install requests` — VirusTotal integration
 - `pip install rapidfuzz` — Fuzzy string search
 - `pip install flare-capa` — Capability detection
@@ -809,6 +809,7 @@ docker run --rm -i \
 | `--skip-capa` | Skip capa capability analysis |
 | `--skip-floss` | Skip FLOSS string analysis |
 | `--skip-peid` | Skip PEiD signature scanning |
+| `-y, --yara-rules PATH` | Custom YARA rule file or directory. If not provided, uses bundled rules from ReversingLabs (MIT) and Yara-Rules Community (GPL-2.0), downloading them on first run |
 | `--skip-yara` | Skip YARA scanning |
 | `-v, --verbose` | Enable verbose output |
 
@@ -1223,7 +1224,7 @@ pemcp/
 ├── hashing.py                  # ssdeep implementation
 ├── mock.py                     # MockPE for non-PE/shellcode mode
 ├── background.py               # Background task management
-├── resources.py                # PEiD/capa rule downloads
+├── resources.py                # PEiD/capa/YARA rule downloads
 ├── parsers/
 │   ├── pe.py                   # PE structure parsing
 │   ├── capa.py                 # Capa integration
@@ -1238,6 +1239,7 @@ pemcp/
     ├── _angr_helpers.py         — Shared angr utilities (project/CFG init, address resolution)
     ├── _format_helpers.py       — Shared binary format helpers
     ├── _refinery_helpers.py     — Shared Binary Refinery utilities (hex conversion, safety limits)
+    ├── _progress_bridge.py      — Thread-safe MCP progress bridge for background tools
     ├── _category_maps.py        — Category mappings for tool organisation
     ├── _input_helpers.py        — Hex/int parameter parsing, LRU result cache, pagination utilities
     ├── tools_pe.py              — File management & PE data retrieval (7 tools)
