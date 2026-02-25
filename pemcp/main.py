@@ -14,7 +14,7 @@ from pemcp.config import (
     FLOSS_MIN_LENGTH_DEFAULT,
     Actual_DebugLevel_Floss, Actual_StringType_Floss,
     DEFAULT_PEID_DB_PATH, DATA_DIR, CAPA_RULES_DEFAULT_DIR_NAME,
-    CAPA_RULES_SUBDIR_NAME,
+    CAPA_RULES_SUBDIR_NAME, YARA_AVAILABLE,
     log_library_availability,
 )
 from pemcp.mock import MockPE
@@ -84,7 +84,7 @@ def main():
 
     # --- External Resources ---
     parser.add_argument("-d", "--db", dest="peid_db", default=None, help=f"Path to PEiD userdb.txt. If not specified, defaults to '{DEFAULT_PEID_DB_PATH}'. Downloads if not found.")
-    parser.add_argument("-y", "--yara-rules", dest="yara_rules", default=None, help="Path to YARA rule file or directory.")
+    parser.add_argument("-y", "--yara-rules", dest="yara_rules", default=None, help="Path to YARA rule file or directory. If not provided, uses bundled rules from ReversingLabs (MIT) and Yara-Rules Community (GPL-2.0), downloading them on first run if needed.")
     parser.add_argument("--capa-rules-dir", default=None, help=f"Directory containing capa rule files. If not provided or empty/invalid, attempts download to '{DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME / CAPA_RULES_SUBDIR_NAME}'.")
     parser.add_argument("--capa-sigs-dir", default=None, help="Directory containing capa library identification signature files (e.g., sigs/*.sig). Optional. If not provided, attempts to find a script-relative 'capa_sigs' or uses Capa's internal default.")
 
@@ -179,6 +179,23 @@ def main():
 
     abs_peid_db_path = str(Path(args.peid_db).resolve()) if args.peid_db else str(DEFAULT_PEID_DB_PATH)
     abs_yara_rules_path = str(Path(args.yara_rules).resolve()) if args.yara_rules else None
+    # Auto-resolve to default YARA rules store when not explicitly specified
+    if abs_yara_rules_path is None and YARA_AVAILABLE and "yara" not in (
+        getattr(args, '_skip_set', None) or []
+    ):
+        from pemcp.resources import get_default_yara_rules_path, ensure_yara_rules_exist
+        abs_yara_rules_path = get_default_yara_rules_path()
+        if abs_yara_rules_path is None:
+            # Attempt to download rules on first run
+            logger.info("No YARA rules found. Attempting to download default rule sets...")
+            store = ensure_yara_rules_exist(verbose=args.verbose)
+            if store:
+                abs_yara_rules_path = store
+                logger.info("Default YARA rules available at: %s", abs_yara_rules_path)
+            else:
+                logger.info("Could not obtain default YARA rules. YARA scanning will be skipped unless --yara-rules is provided.")
+        else:
+            logger.info("Using default YARA rules store: %s", abs_yara_rules_path)
     abs_capa_rules_dir_arg = str(Path(args.capa_rules_dir).resolve()) if args.capa_rules_dir else None
     abs_capa_sigs_dir_arg = str(Path(args.capa_sigs_dir).resolve()) if args.capa_sigs_dir else None
 
