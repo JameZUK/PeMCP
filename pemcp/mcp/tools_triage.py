@@ -16,6 +16,7 @@ from pemcp.config import (
     PYELFTOOLS_AVAILABLE,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from pemcp.mcp._progress_bridge import ProgressBridge
 
 if PYELFTOOLS_AVAILABLE:
     from elftools.elf.elffile import ELFFile
@@ -1716,6 +1717,8 @@ async def get_triage_report(
 
     _check_pe_loaded("get_triage_report")
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     risk_score = 0  # Cumulative risk score (higher = more suspicious)
 
     triage_report: Dict[str, Any] = {
@@ -1751,6 +1754,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 0. Basic file info
     # ---------------------------------------------------------------
+    await ctx.report_progress(2, 100)
+    await ctx.info("[triage] Collecting file info...")
     triage_report["file_info"] = _triage_file_info(indicator_limit)
     analysis_mode = triage_report["file_info"]["mode"]
     file_size = triage_report["file_info"]["file_size"]
@@ -1765,6 +1770,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 1. Packing Assessment
     # ---------------------------------------------------------------
+    await ctx.report_progress(8, 100)
+    await ctx.info("[triage] Assessing packing...")
     data, delta = _triage_packing_assessment(indicator_limit)
     triage_report["packing_assessment"] = data
     risk_score += delta
@@ -1788,6 +1795,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 3. Suspicious Imports
     # ---------------------------------------------------------------
+    await ctx.report_progress(20, 100)
+    await ctx.info("[triage] Analyzing imports...")
     imports_result, delta = _triage_suspicious_imports(indicator_limit)
     triage_report["suspicious_imports"] = imports_result["suspicious_imports"]
     triage_report["suspicious_import_summary"] = imports_result["suspicious_import_summary"]
@@ -1796,6 +1805,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 4. Capa Capabilities
     # ---------------------------------------------------------------
+    await ctx.report_progress(28, 100)
+    await ctx.info("[triage] Checking capa capabilities...")
     capa_data, delta, capa_status_info = _triage_capa_capabilities(indicator_limit)
     triage_report["suspicious_capabilities"] = capa_data
     risk_score += delta
@@ -1805,6 +1816,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 5. Network IOC Extraction
     # ---------------------------------------------------------------
+    await ctx.report_progress(35, 100)
+    await ctx.info("[triage] Extracting network IOCs...")
     all_string_values = _collect_all_string_values()
     data, delta = _triage_network_iocs(indicator_limit, all_string_values)
     triage_report["network_iocs"] = data
@@ -1813,6 +1826,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 6. Section Anomalies
     # ---------------------------------------------------------------
+    await ctx.report_progress(42, 100)
+    await ctx.info("[triage] Checking sections & overlays...")
     sec_data, delta = _triage_section_anomalies(indicator_limit)
     triage_report["section_anomalies"] = sec_data
     risk_score += delta
@@ -1841,6 +1856,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 6d. YARA Matches
     # ---------------------------------------------------------------
+    await ctx.report_progress(55, 100)
+    await ctx.info("[triage] Running YARA rules...")
     yara_data, delta = _triage_yara_matches(indicator_limit)
     triage_report["yara_matches"] = yara_data
     risk_score += delta
@@ -1855,6 +1872,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 6f. TLS Callbacks
     # ---------------------------------------------------------------
+    await ctx.report_progress(62, 100)
+    await ctx.info("[triage] Checking TLS & security mitigations...")
     data, delta = _triage_tls_callbacks(indicator_limit)
     triage_report["tls_callbacks"] = data
     risk_score += delta
@@ -1883,6 +1902,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 6j. .NET Assembly Detection
     # ---------------------------------------------------------------
+    await ctx.report_progress(72, 100)
+    await ctx.info("[triage] Checking .NET, exports & platform features...")
     data, delta = _triage_dotnet_indicators(indicator_limit)
     triage_report["dotnet_indicators"] = data
     risk_score += delta
@@ -1911,6 +1932,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 7. High-Value String Indicators
     # ---------------------------------------------------------------
+    await ctx.report_progress(82, 100)
+    await ctx.info("[triage] Ranking high-value strings...")
     hvs_data, delta = _triage_high_value_strings(sifter_score_threshold, indicator_limit, all_string_values)
     triage_report["high_value_strings"] = hvs_data
     risk_score += delta
@@ -1925,6 +1948,8 @@ async def get_triage_report(
     # ---------------------------------------------------------------
     # 9. Risk Score & Suggested Next Tools
     # ---------------------------------------------------------------
+    await ctx.report_progress(92, 100)
+    await ctx.info("[triage] Computing risk score & recommendations...")
     risk_data = _triage_risk_and_suggestions(risk_score, analysis_mode, triage_report)
     triage_report["risk_score"] = risk_data["risk_score"]
     triage_report["risk_level"] = risk_data["risk_level"]

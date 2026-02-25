@@ -13,6 +13,7 @@ from typing import Dict, Any, List, Optional, Union
 from pemcp.config import state, logger, Context, ANGR_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from pemcp.mcp._input_helpers import _parse_int_param
+from pemcp.mcp._progress_bridge import ProgressBridge
 
 
 # ===================================================================
@@ -138,8 +139,13 @@ async def identify_crypto_algorithm(
     pe = state.pe_object
     file_data = pe.__data__
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _scan():
         findings = []
+
+        bridge.report_progress(5, 100)
+        bridge.info("Scanning for S-boxes and crypto constants...")
 
         # --- 1. Full S-box matching ---
         _SBOX_SIGS = [
@@ -217,6 +223,9 @@ async def identify_crypto_algorithm(
             if len(findings) >= limit * 2:
                 break
 
+        bridge.report_progress(60, 100)
+        bridge.info("Cross-referencing crypto imports...")
+
         # --- 2. Crypto import cross-referencing ---
         crypto_imports_found = []
         pe_data = state.pe_data or {}
@@ -229,6 +238,9 @@ async def identify_crypto_algorithm(
                         for crypto_name in _CRYPTO_IMPORTS:
                             if crypto_name.lower() in fname.lower():
                                 crypto_imports_found.append(fname)
+
+        bridge.report_progress(80, 100)
+        bridge.info("Deduplicating and ranking findings...")
 
         # --- 3. Deduplicate and sort by confidence ---
         seen = set()
@@ -293,8 +305,13 @@ async def auto_extract_crypto_keys(
     pe = state.pe_object
     file_data = pe.__data__
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _search():
         candidates = []
+
+        bridge.report_progress(5, 100)
+        bridge.info("Searching near crypto constants...")
 
         # --- 1. Search near crypto constants ---
         for sig, algo in [
@@ -360,6 +377,9 @@ async def auto_extract_crypto_keys(
 
                 idx = file_data.find(sig, idx + 1)
 
+        bridge.report_progress(55, 100)
+        bridge.info("Trying XOR known-plaintext detection...")
+
         # --- 2. XOR key detection from known-plaintext ---
         # Check if first bytes XOR'd with common plaintexts yield consistent keys
         if len(file_data) >= 64:
@@ -386,6 +406,9 @@ async def auto_extract_crypto_keys(
                             "section": None,
                             "confidence": 0.4,
                         })
+
+        bridge.report_progress(85, 100)
+        bridge.info("Ranking key candidates...")
 
         # Sort by confidence
         candidates.sort(key=lambda x: x["confidence"], reverse=True)
@@ -471,8 +494,11 @@ async def brute_force_simple_crypto(
         except ValueError as e:
             raise ValueError(f"Invalid key_hex: {e}")
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _brute_force():
         results = []
+        total_algos = len(algorithms)
 
         def _score_result(decrypted: bytes) -> float:
             """Score decrypted data: higher = more likely correct."""
@@ -513,6 +539,9 @@ async def brute_force_simple_crypto(
                     "full_size": len(decrypted),
                 })
 
+        bridge.report_progress(5, 100)
+        bridge.info("Trying XOR single-byte...")
+
         # --- XOR single byte ---
         if "xor_single" in algorithms:
             if specific_key and len(specific_key) == 1:
@@ -525,6 +554,9 @@ async def brute_force_simple_crypto(
                 _add_result("xor_single", f"0x{key:02x}", dec, score)
                 if len(results) >= limit:
                     break
+
+        bridge.report_progress(25, 100)
+        bridge.info("Trying XOR multi-byte...")
 
         # --- XOR multi-byte ---
         if "xor_multi" in algorithms and len(results) < limit:
@@ -548,6 +580,9 @@ async def brute_force_simple_crypto(
                 _add_result("xor_multi", key.hex(), dec, score)
                 if len(results) >= limit:
                     break
+
+        bridge.report_progress(45, 100)
+        bridge.info("Trying RC4...")
 
         # --- RC4 ---
         if "rc4" in algorithms and len(results) < limit:
@@ -586,6 +621,9 @@ async def brute_force_simple_crypto(
                 if len(results) >= limit:
                     break
 
+        bridge.report_progress(60, 100)
+        bridge.info("Trying ADD/SUB/ROL/ROR...")
+
         # --- ADD/SUB single byte ---
         for algo_name in ["add", "sub"]:
             if algo_name in algorithms and len(results) < limit:
@@ -615,6 +653,9 @@ async def brute_force_simple_crypto(
                     _add_result(algo_name, f"shift={shift}", dec, score)
                     if len(results) >= limit:
                         break
+
+        bridge.report_progress(90, 100)
+        bridge.info("Ranking results...")
 
         # Sort by score descending
         results.sort(key=lambda x: x["score"], reverse=True)

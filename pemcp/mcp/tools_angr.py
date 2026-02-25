@@ -170,10 +170,13 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
     await ctx.info(f"Requesting Angr decompilation for: {function_address}")
     _check_angr_ready("decompile_function_with_angr")
     target_addr = _parse_addr(function_address)
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _decompile():
 
         _ensure_project_and_cfg()
+        bridge.report_progress(5, 100)
+        bridge.info("Resolving function...")
 
         try:
             func, addr_to_use = _resolve_function_address(target_addr)
@@ -183,8 +186,12 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
                 "hint": "Verify the address. If using an offset, ensure it matches the ImageBase."
             }
 
+        bridge.report_progress(20, 100)
+        bridge.info(f"Decompiling {func.name}...")
         try:
             dec = state.angr_project.analyses.Decompiler(func, cfg=state.angr_cfg.model)
+            bridge.report_progress(90, 100)
+            bridge.info("Formatting output...")
             if not dec.codegen: return {"error": "Decompilation produced no code."}
             return {
                 "function_name": func.name,
@@ -215,18 +222,25 @@ async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any
     await ctx.info(f"Requesting CFG for: {function_address}")
     _check_angr_ready("get_function_cfg")
     target_addr = _parse_addr(function_address)
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _extract_graph():
 
         _ensure_project_and_cfg()
+        bridge.report_progress(5, 100)
+        bridge.info("Resolving function...")
 
         try:
             func, addr_to_use = _resolve_function_address(target_addr)
         except KeyError:
             return {"error": f"No function found at {hex(target_addr)}."}
 
+        bridge.report_progress(30, 100)
+        bridge.info("Extracting graph nodes and edges...")
         nodes_data = [{"addr": hex(b.addr), "size": b.size} for b in func.blocks]
         edges_data = [{"src": hex(s.addr), "dst": hex(d.addr)} for s, d in func.graph.edges]
+        bridge.report_progress(90, 100)
+        bridge.info("Formatting...")
         return {"function_name": func.name, "address": hex(addr_to_use), "nodes": nodes_data, "edges": edges_data}
 
     try:
@@ -279,7 +293,7 @@ async def find_path_to_address(
     # -----------------------------------------
 
     # --- Internal Logic ---
-    def _solve_path(task_id_for_progress=None):
+    def _solve_path(task_id_for_progress=None, _progress_bridge=None):
 
         _ensure_project_and_cfg()
 
@@ -320,7 +334,7 @@ async def find_path_to_address(
             steps = 0
 
             if task_id_for_progress:
-                _update_progress(task_id_for_progress, 0, f"Starting Solver... Techniques: {', '.join(techniques_applied)}")
+                _update_progress(task_id_for_progress, 0, f"Starting Solver... Techniques: {', '.join(techniques_applied)}", bridge=_progress_bridge)
 
             while len(simgr.active) > 0 and len(simgr.found) == 0 and steps < max_steps:
                 # Pruning logic to keep memory low
@@ -335,7 +349,7 @@ async def find_path_to_address(
                     deferred = len(simgr.stashed) + len(getattr(simgr, 'deferred', []))
                     percent = min(95, int((steps / max_steps) * 100))
                     msg = f"Solving... Active: {active}, Deferred: {deferred} (Step {steps})"
-                    _update_progress(task_id_for_progress, percent, msg)
+                    _update_progress(task_id_for_progress, percent, msg, bridge=_progress_bridge)
 
             if len(simgr.found) > 0:
                 solution = simgr.found[0].posix.dumps(0)
@@ -403,7 +417,7 @@ async def emulate_function_execution(
         args = [int(a, 16) for a in args_hex]
     except ValueError: raise ValueError("Invalid format for arguments.")
 
-    def _core_emulation(task_id_for_progress=None):
+    def _core_emulation(task_id_for_progress=None, _progress_bridge=None):
 
         _ensure_project_and_cfg()
 
@@ -429,7 +443,7 @@ async def emulate_function_execution(
                 if task_id_for_progress:
                     percent = min(99, int((steps_taken / max_steps) * 100))
                     msg = f"Emulating... Step {steps_taken}/{max_steps}"
-                    _update_progress(task_id_for_progress, percent, msg)
+                    _update_progress(task_id_for_progress, percent, msg, bridge=_progress_bridge)
 
             if len(simgr.deadended) > 0:
                 final = simgr.deadended[0]
@@ -507,7 +521,7 @@ async def analyze_binary_loops(
 
     _check_angr_ready("analyze_binary_loops")
 
-    def _core_logic(task_id_for_progress=None):
+    def _core_logic(task_id_for_progress=None, _progress_bridge=None):
         # Configuration requested by the user
         req_config = {"resolve_jumps": resolve_indirect_jumps, "data_refs": scan_data_refs}
 
@@ -531,7 +545,7 @@ async def analyze_binary_loops(
                     need_rebuild = True
 
             if need_rebuild:
-                if task_id_for_progress: _update_progress(task_id_for_progress, 10, "Building/Upgrading Control Flow Graph...")
+                if task_id_for_progress: _update_progress(task_id_for_progress, 10, "Building/Upgrading Control Flow Graph...", bridge=_progress_bridge)
 
                 new_cfg = project.analyses.CFGFast(
                     normalize=True,
@@ -544,7 +558,7 @@ async def analyze_binary_loops(
 
             # Ensure loop cache exists
             if state.angr_loop_cache is None:
-                if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...")
+                if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...", bridge=_progress_bridge)
 
                 loop_finder = project.analyses.LoopFinder(kb=project.kb)
                 raw_loops = {}
@@ -566,10 +580,10 @@ async def analyze_binary_loops(
 
                 state.set_angr_results(project, cfg, raw_loops, req_config)
             else:
-                if task_id_for_progress: _update_progress(task_id_for_progress, 90, "Using cached analysis data...")
+                if task_id_for_progress: _update_progress(task_id_for_progress, 90, "Using cached analysis data...", bridge=_progress_bridge)
 
         # Filtering Results
-        if task_id_for_progress: _update_progress(task_id_for_progress, 95, "Formatting results...")
+        if task_id_for_progress: _update_progress(task_id_for_progress, 95, "Formatting results...", bridge=_progress_bridge)
         results = []
         current_cfg_ref = cfg
 

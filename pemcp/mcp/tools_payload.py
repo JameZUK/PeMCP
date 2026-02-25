@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from pemcp.mcp._progress_bridge import ProgressBridge
 from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file, _bytes_to_hex, _safe_decode
 
 
@@ -499,7 +500,12 @@ async def extract_config_automated(
     if len(data) > 100 * 1024 * 1024:
         raise ValueError("Data too large (max 100MB).")
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _extract():
+        bridge.report_progress(5, 100)
+        bridge.info("Scanning for IPs, URLs, domains...")
+
         config: Dict[str, List] = {
             "ip_addresses": [],
             "urls": [],
@@ -541,6 +547,9 @@ async def extract_config_automated(
                     if len(config["domains"]) >= limit:
                         break
 
+        bridge.report_progress(35, 100)
+        bridge.info("Scanning for registry keys, paths, mutexes...")
+
         for match in _REGISTRY_KEY_PATTERN.finditer(data):
             entry = {"value": _safe_decode(match.group(0)), "offset": hex(match.start())}
             config["registry_keys"].append(entry)
@@ -559,6 +568,9 @@ async def extract_config_automated(
             if len(config["mutexes"]) >= limit:
                 break
 
+        bridge.report_progress(60, 100)
+        bridge.info("Scanning for Base64 config blobs...")
+
         # Base64 blobs (only long ones that might be configs)
         for match in _BASE64_BLOB_PATTERN.finditer(data):
             blob = match.group(0)
@@ -571,6 +583,9 @@ async def extract_config_automated(
                 config["base64_blobs"].append(entry)
                 if len(config["base64_blobs"]) >= limit:
                     break
+
+        bridge.report_progress(85, 100)
+        bridge.info("Finalizing config extraction...")
 
         return config
 
