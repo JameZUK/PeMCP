@@ -33,37 +33,37 @@ class TestSafeEnvInt:
 
     def test_valid_int(self, monkeypatch):
         monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "5")
-        from pemcp.mcp.tools_pe import _safe_env_int
+        from pemcp.utils import _safe_env_int
         assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 5
 
     def test_missing_env_uses_default(self, monkeypatch):
         monkeypatch.delenv("PEMCP_TEST_NONEXISTENT", raising=False)
-        from pemcp.mcp.tools_pe import _safe_env_int
+        from pemcp.utils import _safe_env_int
         assert _safe_env_int("PEMCP_TEST_NONEXISTENT", 42) == 42
 
     def test_invalid_string_uses_default(self, monkeypatch):
         monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "not_a_number")
-        from pemcp.mcp.tools_pe import _safe_env_int
+        from pemcp.utils import _safe_env_int
         assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 3
 
     def test_empty_string_uses_default(self, monkeypatch):
         monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "")
-        from pemcp.mcp.tools_pe import _safe_env_int
+        from pemcp.utils import _safe_env_int
         assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 3
 
     def test_float_string_uses_default(self, monkeypatch):
         monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "3.5")
-        from pemcp.mcp.tools_pe import _safe_env_int
+        from pemcp.utils import _safe_env_int
         assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 3
 
     def test_negative_value(self, monkeypatch):
         monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "-1")
-        from pemcp.mcp.tools_pe import _safe_env_int
+        from pemcp.utils import _safe_env_int
         assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == -1
 
     def test_zero_value(self, monkeypatch):
         monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "0")
-        from pemcp.mcp.tools_pe import _safe_env_int
+        from pemcp.utils import _safe_env_int
         assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 0
 
 

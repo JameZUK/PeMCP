@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional, List
 
 from collections import deque
 
-from pemcp.config import state, logger, Context, ANGR_AVAILABLE
+from pemcp.config import state, logger, Context, ANGR_AVAILABLE, ANGR_ANALYSIS_TIMEOUT, ANGR_SHORT_TIMEOUT
 from pemcp.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from pemcp.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from pemcp.mcp._progress_bridge import ProgressBridge
@@ -90,22 +90,26 @@ async def diff_binaries(
         try:
             for fa, fb in list(getattr(diff, 'identical_functions', []))[:limit]:
                 identical.append({"a": hex(fa.addr), "b": hex(fb.addr), "name": str(fa.name)})
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped identical_functions during diff: %s", e)
             pass
         try:
             for fa, fb in list(getattr(diff, 'differing_functions', []))[:limit]:
                 differing.append({"a": hex(fa.addr), "b": hex(fb.addr), "name_a": str(fa.name), "name_b": str(fb.name)})
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped differing_functions during diff: %s", e)
             pass
         try:
             for f in list(getattr(diff, 'unmatched_from_a', getattr(diff, 'unmatched_a', [])))[:limit]:
                 unmatched_a.append({"address": hex(f.addr), "name": str(f.name)})
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped unmatched_from_a during diff: %s", e)
             pass
         try:
             for f in list(getattr(diff, 'unmatched_from_b', getattr(diff, 'unmatched_b', [])))[:limit]:
                 unmatched_b.append({"address": hex(f.addr), "name": str(f.name)})
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped unmatched_from_b during diff: %s", e)
             pass
 
         # Force all values to plain Python types — avoids CFFI
@@ -216,7 +220,8 @@ async def detect_self_modifying_code(
                                         "writes_to": hex(store_target),
                                         "type": "direct_write_to_executable",
                                     })
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped function during self-modifying code scan: %s", e)
                     continue
 
             scanned += 1
@@ -246,9 +251,9 @@ async def detect_self_modifying_code(
         }
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_detect), timeout=300)
+        result = await asyncio.wait_for(asyncio.to_thread(_detect), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
-        raise RuntimeError("detect_self_modifying_code timed out after 300 seconds.")
+        raise RuntimeError(f"detect_self_modifying_code timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "detect_self_modifying_code", "the 'limit' parameter")
 
@@ -322,7 +327,8 @@ async def find_code_caves(
 
                 try:
                     data = loader.memory.load(start, size)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped section during code cave scan (memory load failed): %s", e)
                     continue
 
                 # Scan for runs of null bytes
@@ -369,9 +375,9 @@ async def find_code_caves(
         }
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_find_caves), timeout=300)
+        result = await asyncio.wait_for(asyncio.to_thread(_find_caves), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
-        raise RuntimeError("find_code_caves timed out after 300 seconds.")
+        raise RuntimeError(f"find_code_caves timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "find_code_caves", "the 'limit' parameter")
 
@@ -430,7 +436,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
                             "severity": "medium",
                         })
                         score += 1
-            except Exception:
+            except Exception as e:
+                logger.debug("Skipped section during packing entropy scan: %s", e)
                 continue
 
         _bridge.report_progress(35, 100)
@@ -447,7 +454,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
                     "note": "Packed binaries often have minimal imports.",
                 })
                 score += 2
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped import table analysis during packing detection: %s", e)
             pass
 
         _bridge.report_progress(50, 100)
@@ -480,7 +488,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
                         "severity": "medium",
                     })
                     score += 1
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped entry point anomaly check during packing detection: %s", e)
             pass
 
         _bridge.report_progress(80, 100)
@@ -511,9 +520,9 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
         }
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_detect), timeout=300)
+        result = await asyncio.wait_for(asyncio.to_thread(_detect), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
-        raise RuntimeError("detect_packing timed out after 300 seconds.")
+        raise RuntimeError(f"detect_packing timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "detect_packing")
 
@@ -567,7 +576,8 @@ async def save_patched_binary(
 
                 try:
                     mem_data = loader.memory.load(sec_vaddr, sec_size)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped section during binary patching (memory load failed): %s", e)
                     continue
 
                 # Map VA to file offset — CLE section attribute names vary
@@ -579,7 +589,8 @@ async def save_patched_binary(
                     # Compute from VA and mapped base as last resort
                     try:
                         file_offset = sec_vaddr - main_obj.mapped_base
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("Skipped section during binary patching (offset calc failed): %s", e)
                         continue
                 if file_offset is None or file_offset < 0:
                     continue
@@ -669,7 +680,8 @@ async def find_path_with_custom_input(
                 try:
                     sym_var = entry_state.solver.BVS(f"sym_{reg_name}", proj.arch.bits)
                     setattr(entry_state.regs, reg_name, sym_var)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped symbolic register '%s': %s", reg_name, e)
                     pass
 
         # Apply symbolic memory ranges
@@ -681,7 +693,8 @@ async def find_path_with_custom_input(
                     mem_size = int(parts[1])
                     sym_mem = entry_state.solver.BVS(f"sym_mem_{hex(mem_addr)}", mem_size * 8)
                     entry_state.memory.store(mem_addr, sym_mem)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped symbolic memory range '%s': %s", spec, e)
                     continue
 
         # Apply concrete memory values
@@ -691,7 +704,8 @@ async def find_path_with_custom_input(
                     mem_addr = int(addr_hex, 16)
                     data = bytes.fromhex(data_hex)
                     entry_state.memory.store(mem_addr, data)
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped concrete memory at '%s': %s", addr_hex, e)
                     continue
 
         if task_id_for_progress:
@@ -722,7 +736,8 @@ async def find_path_with_custom_input(
                 if stdin_data:
                     results["stdin_hex"] = stdin_data.hex()
                     results["stdin_ascii"] = stdin_data.decode('utf-8', 'ignore')
-            except Exception:
+            except Exception as e:
+                logger.debug("Skipped stdin dump from found state: %s", e)
                 pass
 
             # Resolve symbolic registers
@@ -845,7 +860,8 @@ async def emulate_with_watchpoints(
                             "length": length,
                             "pc": hex(sim_state.addr),
                         })
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped mem_write watchpoint event: %s", e)
                     pass
 
             call_state.inspect.b('mem_write', action=_on_mem_write)
@@ -866,7 +882,8 @@ async def emulate_with_watchpoints(
                             "length": sim_state.inspect.mem_read_length,
                             "pc": hex(sim_state.addr),
                         })
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped mem_read watchpoint event: %s", e)
                     pass
 
             call_state.inspect.b('mem_read', action=_on_mem_read)
@@ -879,7 +896,8 @@ async def emulate_with_watchpoints(
                     off = proj.arch.registers.get(reg_name)
                     if off is not None:
                         reg_offsets[off[0]] = reg_name
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped register offset lookup for '%s': %s", reg_name, e)
                     pass
 
             def _on_reg_write(sim_state):
@@ -896,7 +914,8 @@ async def emulate_with_watchpoints(
                             "value": val_str,
                             "pc": hex(sim_state.addr),
                         })
-                except Exception:
+                except Exception as e:
+                    logger.debug("Skipped reg_write watchpoint event: %s", e)
                     pass
 
             call_state.inspect.b('reg_write', action=_on_reg_write)
@@ -1041,7 +1060,8 @@ async def identify_cpp_classes(
                 for _sym_name, sym in main_obj.imports.items():
                     if hasattr(sym, 'rebased_addr'):
                         iat_ranges.add(sym.rebased_addr)
-        except Exception:
+        except Exception as e:
+            logger.debug("Skipped IAT range extraction during vtable scan: %s", e)
             pass
 
         # Look for arrays of function pointers in data sections
@@ -1057,7 +1077,8 @@ async def identify_cpp_classes(
 
             try:
                 data = loader.memory.load(section.min_addr, min(section.memsize, 65536))
-            except Exception:
+            except Exception as e:
+                logger.debug("Skipped section during vtable scan (memory load failed): %s", e)
                 continue
 
             ptr_size = state.angr_project.arch.bytes
@@ -1263,9 +1284,9 @@ async def get_call_graph(
         }
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_extract), timeout=300)
+        result = await asyncio.wait_for(asyncio.to_thread(_extract), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
-        raise RuntimeError("get_call_graph timed out after 300 seconds.")
+        raise RuntimeError(f"get_call_graph timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_call_graph", "the 'limit' parameter")
 
@@ -1380,7 +1401,8 @@ async def find_anti_debug_comprehensive(
                                     "severity": info["severity"],
                                     "description": info["description"],
                                 })
-            except Exception:
+            except Exception as e:
+                logger.debug("Skipped function during anti-debug scan: %s", e)
                 continue
 
             scanned += 1
@@ -1463,7 +1485,7 @@ async def find_anti_debug_comprehensive(
         }
 
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(_scan), timeout=120)
+        result = await asyncio.wait_for(asyncio.to_thread(_scan), timeout=ANGR_SHORT_TIMEOUT)
     except asyncio.TimeoutError:
-        raise RuntimeError("find_anti_debug_comprehensive timed out after 120 seconds.")
+        raise RuntimeError(f"find_anti_debug_comprehensive timed out after {ANGR_SHORT_TIMEOUT} seconds.")
     return await _check_mcp_response_size(ctx, result, "find_anti_debug_comprehensive")
