@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, List
 
 from pemcp.config import state, logger, Context, pefile
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from pemcp.mcp._progress_bridge import ProgressBridge
 from pemcp.utils import shannon_entropy
 
 
@@ -770,6 +771,8 @@ async def detect_crypto_constants(ctx: Context, limit: int = 20) -> Dict[str, An
     pe = state.pe_object
     file_data = pe.__data__
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     # Well-known crypto constants (first N bytes of each)
     CRYPTO_SIGS = [
         (bytes([0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5]), "AES S-box"),
@@ -787,7 +790,12 @@ async def detect_crypto_constants(ctx: Context, limit: int = 20) -> Dict[str, An
 
     def _scan():
         findings = []
-        for sig_bytes, name in CRYPTO_SIGS:
+        total_sigs = len(CRYPTO_SIGS)
+        for sig_idx, (sig_bytes, name) in enumerate(CRYPTO_SIGS):
+            if sig_idx % 3 == 0:
+                pct = 5 + int((sig_idx / total_sigs) * 80)
+                bridge.report_progress(pct, 100)
+                bridge.info(f"Scanning for {name}...")
             offset = 0
             while True:
                 idx = file_data.find(sig_bytes, offset)
@@ -850,8 +858,15 @@ async def analyze_entropy_by_offset(
     pe = state.pe_object
     file_data = pe.__data__
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _compute():
         points = []
+        total_windows = max(1, (len(file_data) - window_size) // step)
+
+        bridge.report_progress(5, 100)
+        bridge.info("Computing entropy windows...")
+
         for offset in range(0, len(file_data) - window_size, step):
             window = file_data[offset:offset + window_size]
             entropy = shannon_entropy(window)
@@ -859,8 +874,14 @@ async def analyze_entropy_by_offset(
                 "offset": hex(offset),
                 "entropy": round(entropy, 4),
             })
+            if len(points) % max(1, total_windows // 10) == 0:
+                pct = 5 + int((len(points) / min(total_windows, limit)) * 80)
+                bridge.report_progress(min(pct, 85), 100)
             if len(points) >= limit:
                 break
+
+        bridge.report_progress(88, 100)
+        bridge.info("Identifying high-entropy regions...")
 
         # Find high-entropy regions (>7.0)
         high_regions = [p for p in points if p["entropy"] > 7.0]
@@ -902,6 +923,8 @@ async def scan_for_api_hashes(
     """
     await ctx.info(f"Scanning for API hashes ({hash_algorithm})")
     _check_pe_loaded("scan_for_api_hashes")
+
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     # Common Windows API names
     COMMON_APIS = [
@@ -955,9 +978,16 @@ async def scan_for_api_hashes(
         pe = state.pe_object
         file_data = pe.__data__
         matches = []
+        total_dwords = max(1, (len(file_data) - 3) // 4)
+
+        bridge.report_progress(5, 100)
+        bridge.info("Scanning for API hash values...")
 
         # Scan for 4-byte aligned values matching known hashes
         for i in range(0, len(file_data) - 3, 4):
+            if (i // 4) % max(1, total_dwords // 10) == 0:
+                pct = 5 + int(((i // 4) / total_dwords) * 85)
+                bridge.report_progress(min(pct, 90), 100)
             val = struct.unpack_from('<I', file_data, i)[0]
             if val in hash_to_api:
                 section_name = None

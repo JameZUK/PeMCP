@@ -7,6 +7,7 @@ import asyncio
 from typing import Dict, Any, Optional, List, Union
 from pemcp.config import state, logger, Context, STRINGSIFTER_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
+from pemcp.mcp._progress_bridge import ProgressBridge
 from pemcp.mcp._input_helpers import _parse_int_param
 from pemcp.utils import safe_regex_search as _safe_regex_search
 from pemcp.parsers.strings import _decode_single_byte_xor, _format_hex_dump_lines, _get_string_category
@@ -301,6 +302,8 @@ async def find_and_decode_encoded_strings(
     """
     await ctx.info(f"Request to find/decode strings. Limit: {limit}, Max Layers: {max_decode_layers}, Min Confidence: {min_confidence}")
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     # --- Parameter Validation ---
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
@@ -331,18 +334,30 @@ async def find_and_decode_encoded_strings(
     base64_pattern = re.compile(rb"(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)")
     hex_pattern = re.compile(rb"(?:[0-9a-fA-F]{2}){4,}") # Require at least 4 hex pairs
 
+    await ctx.report_progress(5, 100)
+    await ctx.info("[decode] Scanning for encoded candidates...")
+
     initial_candidates = []
     for pat, min_len in [(base64_pattern, min_candidate_len_b64), (hex_pattern, min_candidate_len_hex)]:
         for match in pat.finditer(file_data):
             if len(match.group(0)) >= min_len:
                 initial_candidates.append(match)
 
+    total_candidates = len(initial_candidates)
+    await ctx.report_progress(15, 100)
+    await ctx.info(f"[decode] Found {total_candidates} candidates, decoding...")
+
     decoding_attempts = [
         ("base64", lambda b: codecs.decode(b, 'base64')),
         ("hex", lambda b: bytes.fromhex(b.decode('ascii'))),
     ]
-    for match in initial_candidates:
+    for cand_idx, match in enumerate(initial_candidates):
         if len(found_decoded_strings) >= limit: break
+
+        if total_candidates > 0 and cand_idx % max(1, total_candidates // 10) == 0:
+            pct = 15 + int((cand_idx / total_candidates) * 60)
+            bridge.report_progress(pct, 100)
+            bridge.info(f"[decode] Processing candidate {cand_idx + 1}/{total_candidates}...")
 
         original_encoded_bytes = match.group(0)
         start_offset = match.start()
@@ -451,6 +466,9 @@ async def find_and_decode_encoded_strings(
                 "confidence": round(confidence, 2),
                 "context_snippet_hex": file_data[snippet_start:snippet_end].hex()
             })
+
+    await ctx.report_progress(80, 100)
+    await ctx.info("[decode] Ranking and filtering results...")
 
     # --- Final Ranking, Filtering and Return ---
     final_results = found_decoded_strings

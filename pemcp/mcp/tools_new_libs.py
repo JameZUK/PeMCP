@@ -21,6 +21,7 @@ from pemcp.config import (
     PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_angr_ready, _check_mcp_response_size
+from pemcp.mcp._progress_bridge import ProgressBridge
 
 # Conditionally import library objects for use in tool functions.
 # Availability flags are centralized in config.py.
@@ -90,6 +91,21 @@ def _check_lib(lib_name: str, available: bool, tool_name: str):
 
 
 from pemcp.utils import _safe_slice  # noqa: E402 — canonical implementation in utils.py
+
+
+async def _subprocess_progress_reporter(ctx, tool_name: str, timeout_seconds: int):
+    """Report estimated progress for opaque subprocess operations."""
+    start = asyncio.get_event_loop().time()
+    interval = max(3, timeout_seconds // 20)
+    while True:
+        await asyncio.sleep(interval)
+        elapsed = asyncio.get_event_loop().time() - start
+        pct = min(int((elapsed / timeout_seconds) * 95), 95)
+        try:
+            await ctx.report_progress(pct, 100)
+            await ctx.info(f"[{tool_name}] Processing... {int(elapsed)}s/{timeout_seconds}s elapsed")
+        except Exception:
+            break
 
 
 # ===================================================================
@@ -600,12 +616,23 @@ async def emulate_pe_with_windows_apis(
     _check_lib("speakeasy", _check_speakeasy_available(), "emulate_pe_with_windows_apis")
     _check_pe_loaded("emulate_pe_with_windows_apis")
 
-    result = await _run_speakeasy({
-        "action": "emulate_pe",
-        "filepath": state.filepath,
-        "timeout_seconds": timeout_seconds,
-        "limit": limit,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "emulate_pe_with_windows_apis", timeout_seconds)
+    )
+    try:
+        result = await _run_speakeasy({
+            "action": "emulate_pe",
+            "filepath": state.filepath,
+            "timeout_seconds": timeout_seconds,
+            "limit": limit,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
 
     # Warn when emulation captured nothing on a packed binary
     if result.get("total_api_calls", -1) == 0:
@@ -651,14 +678,25 @@ async def emulate_shellcode_with_speakeasy(
     await ctx.info("Emulating shellcode with Speakeasy")
     _check_lib("speakeasy", _check_speakeasy_available(), "emulate_shellcode_with_speakeasy")
 
-    result = await _run_speakeasy({
-        "action": "emulate_shellcode",
-        "filepath": state.filepath,
-        "shellcode_hex": shellcode_hex,
-        "architecture": architecture,
-        "timeout_seconds": timeout_seconds,
-        "limit": limit,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "emulate_shellcode_with_speakeasy", timeout_seconds)
+    )
+    try:
+        result = await _run_speakeasy({
+            "action": "emulate_shellcode",
+            "filepath": state.filepath,
+            "shellcode_hex": shellcode_hex,
+            "architecture": architecture,
+            "timeout_seconds": timeout_seconds,
+            "limit": limit,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "emulate_shellcode_with_speakeasy", "the 'limit' parameter")
 
 
@@ -724,12 +762,22 @@ async def auto_unpack_pe(
     # Validate output path against sandbox
     state.check_path_allowed(os.path.abspath(output_path))
 
-    result = await _run_unipacker({
-        "action": "unpack_pe",
-        "filepath": state.filepath,
-        "output_path": output_path,
-        "timeout_seconds": timeout_seconds,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "auto_unpack_pe", timeout_seconds))
+    try:
+        result = await _run_unipacker({
+            "action": "unpack_pe",
+            "filepath": state.filepath,
+            "output_path": output_path,
+            "timeout_seconds": timeout_seconds,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
 
     # Add a hint for the user on success
     if result.get("status") == "success":

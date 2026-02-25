@@ -103,10 +103,10 @@ async def get_reaching_definitions(
     func_addr = _parse_addr(function_address)
     target_insn = _parse_addr(target_instruction, "target_instruction") if target_instruction else None
 
-    def _rda(task_id_for_progress=None):
+    def _rda(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 5, "Resolving function...")
+            _update_progress(task_id_for_progress, 5, "Resolving function...", bridge=_progress_bridge)
 
         try:
             func, addr_used = _resolve_function_address(func_addr)
@@ -114,7 +114,7 @@ async def get_reaching_definitions(
             return {"error": f"No function found at {hex(func_addr)}."}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 15, "Running ReachingDefinitionsAnalysis...")
+            _update_progress(task_id_for_progress, 15, "Running ReachingDefinitionsAnalysis...", bridge=_progress_bridge)
 
         try:
             # The plugin name was shortened in newer angr versions:
@@ -134,7 +134,7 @@ async def get_reaching_definitions(
             return {"error": f"ReachingDefinitionsAnalysis failed: {type(e).__name__}: {e}", "traceback_tail": tb[-500:]}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 80, "Formatting results...")
+            _update_progress(task_id_for_progress, 80, "Formatting results...", bridge=_progress_bridge)
 
         definitions = []
         _skipped_defs = 0
@@ -254,10 +254,10 @@ async def get_data_dependencies(
     func_addr = _parse_addr(function_address)
     insn_addr = _parse_addr(instruction_address, "instruction_address") if instruction_address else None
 
-    def _ddg(task_id_for_progress=None):
+    def _ddg(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 5, "Resolving function...")
+            _update_progress(task_id_for_progress, 5, "Resolving function...", bridge=_progress_bridge)
 
         try:
             func, addr_used = _resolve_function_address(func_addr)
@@ -265,7 +265,7 @@ async def get_data_dependencies(
             return {"error": f"No function found at {hex(func_addr)}."}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 15, "Running ReachingDefinitions for data dependencies...")
+            _update_progress(task_id_for_progress, 15, "Running ReachingDefinitions for data dependencies...", bridge=_progress_bridge)
 
         # The DDG analysis is deprecated in angr >=9.2.  We use
         # ReachingDefinitionsAnalysis instead, which provides
@@ -288,7 +288,7 @@ async def get_data_dependencies(
             return {"error": f"Data dependency analysis failed: {type(e).__name__}: {e}"}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 70, "Building dependency graph from RDA...")
+            _update_progress(task_id_for_progress, 70, "Building dependency graph from RDA...", bridge=_progress_bridge)
 
         # Build a dependency graph from the RDA def-use chains.
         dep_graph = None
@@ -433,14 +433,19 @@ async def get_control_dependencies(
     _check_angr_ready("get_control_dependencies")
     func_addr = _parse_addr(function_address)
     target = _parse_addr(target_address, "target_address") if target_address else None
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _cdg():
         _ensure_project_and_cfg()
+        bridge.report_progress(5, 100)
+        bridge.info("Resolving function...")
         try:
             func, addr_used = _resolve_function_address(func_addr)
         except KeyError:
             return {"error": f"No function found at {hex(func_addr)}."}
 
+        bridge.report_progress(20, 100)
+        bridge.info("Building CFGEmulated...")
         try:
             # CDG requires a CFGEmulated; CFGFast is not supported.
             # Attempt to build a CFGEmulated scoped to this function,
@@ -460,6 +465,8 @@ async def get_control_dependencies(
                             "A function-scoped CFGEmulated was attempted but failed. "
                             "Use get_dominators for a lighter control-flow analysis.",
                 }
+            bridge.report_progress(60, 100)
+            bridge.info("Computing CDG...")
             cdg = state.angr_project.analyses.CDG(
                 cfg=cfg_emu,
                 start=addr_used,
@@ -469,6 +476,8 @@ async def get_control_dependencies(
             logger.error("CDG analysis failed: %s", tb)
             return {"error": f"CDG analysis failed: {type(e).__name__}: {e}"}
 
+        bridge.report_progress(85, 100)
+        bridge.info("Extracting edges...")
         graph = cdg.graph
         if graph is None:
             return {"error": "CDG produced no graph."}
@@ -540,14 +549,19 @@ async def propagate_constants(
     await ctx.info(f"Propagating constants in {function_address}")
     _check_angr_ready("propagate_constants")
     func_addr = _parse_addr(function_address)
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _propagate():
         _ensure_project_and_cfg()
+        bridge.report_progress(5, 100)
+        bridge.info("Resolving function...")
         try:
             func, addr_used = _resolve_function_address(func_addr)
         except KeyError:
             return {"error": f"No function found at {hex(func_addr)}."}
 
+        bridge.report_progress(20, 100)
+        bridge.info("Running PropagatorAnalysis...")
         try:
             # The plugin name was shortened in newer angr versions:
             #   PropagatorAnalysis → Propagator
@@ -564,6 +578,8 @@ async def propagate_constants(
             logger.error("PropagatorAnalysis failed: %s", tb)
             return {"error": f"PropagatorAnalysis failed: {type(e).__name__}: {e}", "traceback_tail": tb[-500:]}
 
+        bridge.report_progress(80, 100)
+        bridge.info("Extracting replacements...")
         # Extract replacements — these map (addr, register/tmp) -> constant value
         replacements = []
         try:
@@ -627,10 +643,10 @@ async def get_value_set_analysis(
     _check_angr_ready("get_value_set_analysis")
     func_addr = _parse_addr(function_address)
 
-    def _vsa(task_id_for_progress=None):
+    def _vsa(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 5, "Resolving function...")
+            _update_progress(task_id_for_progress, 5, "Resolving function...", bridge=_progress_bridge)
 
         try:
             func, addr_used = _resolve_function_address(func_addr)
@@ -638,7 +654,7 @@ async def get_value_set_analysis(
             return {"error": f"No function found at {hex(func_addr)}."}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 15, "Running VFG analysis...")
+            _update_progress(task_id_for_progress, 15, "Running VFG analysis...", bridge=_progress_bridge)
 
         try:
             # VFG constructor signature has changed across angr versions.
@@ -669,7 +685,7 @@ async def get_value_set_analysis(
             }
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 80, "Extracting value sets...")
+            _update_progress(task_id_for_progress, 80, "Extracting value sets...", bridge=_progress_bridge)
 
         nodes_info = []
         try:
