@@ -11,6 +11,10 @@ WORKDIR /app
 # Suppress "Running pip as root" warnings — we're in a container,
 # there is no system package manager to conflict with.
 ENV PIP_ROOT_USER_ACTION=ignore
+# Redirect XDG cache to our writable home directory so that libraries
+# like capa (which writes to ~/.cache/capa/) work regardless of the
+# runtime UID.  run.sh sets HOME=/app/home; this keeps caches under it.
+ENV XDG_CACHE_HOME=/app/home/.cache
 
 # --- Install System Dependencies ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -264,7 +268,7 @@ COPY FastPrompt.txt .
 # container runs as the host user with membership in the pemcp group.
 # Group-writable (775) so any UID in the pemcp group can create
 # ~/.pemcp/cache and config.json inside it.
-RUN mkdir -p /app/home/.pemcp/cache && \
+RUN mkdir -p /app/home/.pemcp/cache /app/home/.cache && \
     chown -R root:pemcp /app/home && \
     chmod -R 775 /app/home
 
