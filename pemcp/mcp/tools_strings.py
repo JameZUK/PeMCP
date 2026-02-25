@@ -16,6 +16,7 @@ from pemcp.mcp.server import (
     tool_decorator, _check_pe_loaded, _check_data_key_available,
     _check_mcp_response_size,
 )
+from pemcp.mcp._progress_bridge import ProgressBridge
 from pemcp.parsers.strings import _extract_strings_from_data, _search_specific_strings_in_data
 from pemcp.utils import validate_regex_pattern as _validate_regex_pattern, safe_regex_search as _safe_regex_search
 
@@ -696,9 +697,12 @@ async def extract_strings_from_binary(
         )
 
     try:
+        await ctx.report_progress(5, 100)
+        await ctx.info("[strings] Extracting from binary...")
         file_data = state.pe_object.__data__
         found = _extract_strings_from_data(file_data, min_length)
         results = [{"offset": hex(offset), "string": s} for offset, s in found]
+        await ctx.report_progress(60, 100)
     except Exception as e:
         await ctx.error(f"String extraction error: {e}")
         raise RuntimeError(f"Failed during string extraction: {e}") from e
@@ -706,7 +710,8 @@ async def extract_strings_from_binary(
     # --- StringSifter Integration Logic ---
     if rank_with_sifter:
         try:
-            await ctx.info("Ranking extracted strings with StringSifter...")
+            await ctx.report_progress(65, 100)
+            await ctx.info("[strings] Ranking with StringSifter...")
 
             # Get just the string values for ranking
             string_values = [res["string"] for res in results]
@@ -839,6 +844,7 @@ async def get_top_sifted_strings(
         A list of unique string dictionaries, filtered and sorted as requested.
     """
     await ctx.info(f"Request for top sifted strings with granular filters.")
+    await ctx.report_progress(5, 100)
 
     # --- Parameter Validation ---
     # (Includes validation for all new and existing parameters)
@@ -884,6 +890,9 @@ async def get_top_sifted_strings(
                     all_strings.append(item)
                     seen_string_values.add(str_val)
 
+    await ctx.report_progress(30, 100)
+    await ctx.info("[sifted] Filtering strings...")
+
     # --- Granular Filtering Logic ---
     filtered_strings = []
     for item in all_strings:
@@ -901,6 +910,9 @@ async def get_top_sifted_strings(
         if _compiled_filter_regex and not _safe_regex_search(_compiled_filter_regex, str_val): continue
 
         filtered_strings.append(item)
+
+    await ctx.report_progress(70, 100)
+    await ctx.info("[sifted] Sorting results...")
 
     # --- Sorting Logic ---
     is_reversed = (sort_order.lower() == 'descending')
@@ -1081,6 +1093,9 @@ async def fuzzy_search_strings(
     if not all_strings:
         return []
 
+    await ctx.report_progress(20, 100)
+    await ctx.info(f"[fuzzy] Comparing against {len(all_strings)} strings...")
+
     # --- Fuzzy Matching Logic ---
     # Batch all comparisons in a single thread to avoid per-string dispatch overhead.
     # fuzz.ratio is microsecond-level CPU work; thread scheduling dominates otherwise.
@@ -1098,6 +1113,9 @@ async def fuzzy_search_strings(
         return results
 
     matches = await asyncio.to_thread(_batch_fuzzy_match)
+
+    await ctx.report_progress(85, 100)
+    await ctx.info(f"[fuzzy] Found {len(matches)} matches, sorting...")
 
     # --- Sorting and Finalizing ---
     matches.sort(key=lambda x: x.get('similarity_ratio', 0), reverse=True)
@@ -1277,6 +1295,7 @@ async def search_yara_custom(
     """
     from pemcp.config import YARA_AVAILABLE
     await ctx.info("Running custom YARA rules")
+    await ctx.report_progress(5, 100)
     _check_pe_loaded("search_yara_custom")
 
     if not YARA_AVAILABLE:
@@ -1292,6 +1311,9 @@ async def search_yara_custom(
         compiled = yara.compile(source=rules_string)
     except yara.SyntaxError as e:
         return {"error": f"YARA compilation error: {e}"}
+
+    await ctx.report_progress(30, 100)
+    await ctx.info("[yara] Scanning binary...")
 
     filepath = state.filepath
     try:
