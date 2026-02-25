@@ -18,6 +18,7 @@ from pemcp.config import (
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from pemcp.mcp._input_helpers import _parse_int_param
+from pemcp.mcp._progress_bridge import ProgressBridge
 
 
 def _shannon_entropy(data: bytes) -> float:
@@ -70,6 +71,7 @@ async def try_all_unpackers(
     best_result = None
 
     # --- Method 1: Unipacker ---
+    await ctx.report_progress(5, 100)
     if _check_unipacker_available():
         await ctx.info("Trying Unipacker...")
         try:
@@ -120,6 +122,7 @@ async def try_all_unpackers(
         results.append({"method": "unipacker", "status": "not_available"})
 
     # --- Method 2: Binary Refinery PE reconstruction ---
+    await ctx.report_progress(35, 100)
     if REFINERY_AVAILABLE:
         await ctx.info("Trying Binary Refinery PE reconstruction...")
         try:
@@ -269,13 +272,21 @@ async def reconstruct_pe_from_dump(
     if base_address:
         base_addr = _parse_int_param(base_address, "base_address")
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _reconstruct():
         import lief
+
+        bridge.report_progress(5, 100)
+        bridge.info("Parsing PE dump with LIEF...")
         pe = lief.parse(data)
         if pe is None:
             return {"error": "LIEF failed to parse the PE dump."}
 
         issues_fixed = []
+
+        bridge.report_progress(20, 100)
+        bridge.info("Fixing PE headers...")
 
         # Fix base address
         if base_addr is not None:
@@ -291,6 +302,9 @@ async def reconstruct_pe_from_dump(
         if section_alignment == 0:
             pe.optional_header.section_alignment = 0x1000
             issues_fixed.append("Fixed SectionAlignment to 0x1000")
+
+        bridge.report_progress(40, 100)
+        bridge.info("Recalculating SizeOfImage...")
 
         # Recalculate SizeOfImage
         max_va = 0
@@ -309,10 +323,16 @@ async def reconstruct_pe_from_dump(
             pe.optional_header.sizeof_headers = 0x400
             issues_fixed.append("Fixed SizeOfHeaders to 0x400")
 
+        bridge.report_progress(60, 100)
+        bridge.info("Rebuilding PE...")
+
         # Build the fixed PE
         builder = lief.PE.Builder(pe)
         builder.build()
         fixed_data = bytes(builder.get_build())
+
+        bridge.report_progress(90, 100)
+        bridge.info("Formatting results...")
 
         return {
             "fixed_pe_hex": fixed_data[:8192].hex(),
@@ -373,10 +393,15 @@ async def find_oep_heuristic(
     pe = state.pe_object
     file_data = pe.__data__
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _detect():
         candidates = []
         entry_point = pe.OPTIONAL_HEADER.AddressOfEntryPoint
         image_base = pe.OPTIONAL_HEADER.ImageBase
+
+        bridge.report_progress(5, 100)
+        bridge.info("Checking known packer signatures...")
 
         # --- 1. Known packer signatures ---
         _PACKER_SIGS = [
@@ -395,6 +420,9 @@ async def find_oep_heuristic(
                     "hint": hint,
                     "confidence": 0.7,
                 })
+
+        bridge.report_progress(15, 100)
+        bridge.info("Scanning for tail jumps...")
 
         # --- 2. Tail-jump detection ---
         # Look for JMP instructions at the end of the entry section
@@ -441,6 +469,9 @@ async def find_oep_heuristic(
         except Exception as e:
             logger.debug("Tail-jump detection failed: %s", e)
 
+        bridge.report_progress(35, 100)
+        bridge.info("Analyzing entropy transitions...")
+
         # --- 3. Entropy transition detection ---
         # Find the boundary where entropy drops (packed code → unpacked code)
         try:
@@ -479,6 +510,9 @@ async def find_oep_heuristic(
         except Exception as e:
             logger.debug("Entropy transition detection failed: %s", e)
 
+        bridge.report_progress(65, 100)
+        bridge.info("Analyzing executable sections...")
+
         # --- 4. Section with executable flag + low entropy ---
         try:
             for sec in pe.sections:
@@ -498,6 +532,9 @@ async def find_oep_heuristic(
                         })
         except Exception as e:
             logger.debug("Section analysis failed: %s", e)
+
+        bridge.report_progress(85, 100)
+        bridge.info("Ranking OEP candidates...")
 
         # Sort by confidence
         candidates.sort(key=lambda x: x.get("confidence", 0), reverse=True)

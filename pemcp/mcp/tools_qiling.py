@@ -19,6 +19,21 @@ from pemcp.config import (
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
 
+async def _subprocess_progress_reporter(ctx: Context, tool_name: str, timeout_seconds: int):
+    """Report estimated progress for opaque subprocess operations."""
+    start = asyncio.get_event_loop().time()
+    interval = max(3, timeout_seconds // 20)
+    while True:
+        await asyncio.sleep(interval)
+        elapsed = asyncio.get_event_loop().time() - start
+        pct = min(int((elapsed / timeout_seconds) * 95), 95)
+        try:
+            await ctx.report_progress(pct, 100)
+            await ctx.info(f"[{tool_name}] Emulating... {int(elapsed)}s/{timeout_seconds}s elapsed")
+        except Exception:
+            break
+
+
 # ---------------------------------------------------------------------------
 #  Subprocess helper (mirrors _run_speakeasy / _run_unipacker pattern)
 # ---------------------------------------------------------------------------
@@ -174,14 +189,24 @@ async def emulate_binary_with_qiling(
     _check_qiling("emulate_binary_with_qiling")
     _check_pe_loaded("emulate_binary_with_qiling")
 
-    result = await _run_qiling({
-        "action": "emulate_binary",
-        "filepath": state.filepath,
-        "rootfs_path": _rootfs_path(),
-        "timeout_seconds": timeout_seconds,
-        "max_instructions": max_instructions,
-        "limit": limit,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "emulate_binary_with_qiling", timeout_seconds))
+    try:
+        result = await _run_qiling({
+            "action": "emulate_binary",
+            "filepath": state.filepath,
+            "rootfs_path": _rootfs_path(),
+            "timeout_seconds": timeout_seconds,
+            "max_instructions": max_instructions,
+            "limit": limit,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "emulate_binary_with_qiling", "the 'limit' parameter")
 
 
@@ -226,17 +251,27 @@ async def emulate_shellcode_with_qiling(
     await ctx.info(f"Emulating shellcode with Qiling ({os_type}/{architecture})")
     _check_qiling("emulate_shellcode_with_qiling")
 
-    result = await _run_qiling({
-        "action": "emulate_shellcode",
-        "filepath": state.filepath,
-        "shellcode_hex": shellcode_hex,
-        "os_type": os_type,
-        "architecture": architecture,
-        "rootfs_path": _rootfs_path(),
-        "timeout_seconds": timeout_seconds,
-        "max_instructions": max_instructions,
-        "limit": limit,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "emulate_shellcode_with_qiling", timeout_seconds))
+    try:
+        result = await _run_qiling({
+            "action": "emulate_shellcode",
+            "filepath": state.filepath,
+            "shellcode_hex": shellcode_hex,
+            "os_type": os_type,
+            "architecture": architecture,
+            "rootfs_path": _rootfs_path(),
+            "timeout_seconds": timeout_seconds,
+            "max_instructions": max_instructions,
+            "limit": limit,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "emulate_shellcode_with_qiling", "the 'limit' parameter")
 
 
@@ -274,16 +309,26 @@ async def qiling_trace_execution(
     _check_qiling("qiling_trace_execution")
     _check_pe_loaded("qiling_trace_execution")
 
-    result = await _run_qiling({
-        "action": "trace_execution",
-        "filepath": state.filepath,
-        "rootfs_path": _rootfs_path(),
-        "start_address": start_address,
-        "end_address": end_address,
-        "max_instructions": max_instructions,
-        "timeout_seconds": timeout_seconds,
-        "limit": limit,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "qiling_trace_execution", timeout_seconds))
+    try:
+        result = await _run_qiling({
+            "action": "trace_execution",
+            "filepath": state.filepath,
+            "rootfs_path": _rootfs_path(),
+            "start_address": start_address,
+            "end_address": end_address,
+            "max_instructions": max_instructions,
+            "timeout_seconds": timeout_seconds,
+            "limit": limit,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "qiling_trace_execution", "the 'limit' parameter")
 
 
@@ -324,15 +369,25 @@ async def qiling_hook_api_calls(
     _check_qiling("qiling_hook_api_calls")
     _check_pe_loaded("qiling_hook_api_calls")
 
-    result = await _run_qiling({
-        "action": "hook_api_calls",
-        "filepath": state.filepath,
-        "rootfs_path": _rootfs_path(),
-        "target_apis": target_apis or [],
-        "timeout_seconds": timeout_seconds,
-        "max_instructions": max_instructions,
-        "limit": limit,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "qiling_hook_api_calls", timeout_seconds))
+    try:
+        result = await _run_qiling({
+            "action": "hook_api_calls",
+            "filepath": state.filepath,
+            "rootfs_path": _rootfs_path(),
+            "target_apis": target_apis or [],
+            "timeout_seconds": timeout_seconds,
+            "max_instructions": max_instructions,
+            "limit": limit,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "qiling_hook_api_calls", "the 'limit' parameter")
 
 
@@ -381,16 +436,26 @@ async def qiling_dump_unpacked_binary(
     # Validate output path against sandbox
     state.check_path_allowed(os.path.abspath(output_path))
 
-    result = await _run_qiling({
-        "action": "dump_unpacked",
-        "filepath": state.filepath,
-        "rootfs_path": _rootfs_path(),
-        "output_path": output_path,
-        "dump_address": dump_address,
-        "dump_size": dump_size,
-        "timeout_seconds": timeout_seconds,
-        "max_instructions": max_instructions,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "qiling_dump_unpacked_binary", timeout_seconds))
+    try:
+        result = await _run_qiling({
+            "action": "dump_unpacked",
+            "filepath": state.filepath,
+            "rootfs_path": _rootfs_path(),
+            "output_path": output_path,
+            "dump_address": dump_address,
+            "dump_size": dump_size,
+            "timeout_seconds": timeout_seconds,
+            "max_instructions": max_instructions,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
 
     if result.get("status") == "success":
         result["hint"] = "Use open_file() to load the unpacked binary for further analysis."
@@ -438,13 +503,23 @@ async def qiling_resolve_api_hashes(
     if not hash_values:
         return {"error": "No hash values provided. Pass a list of hex hash values to resolve."}
 
-    result = await _run_qiling({
-        "action": "resolve_api_hashes",
-        "filepath": state.filepath or "",
-        "rootfs_path": _rootfs_path(),
-        "hash_values": hash_values,
-        "hash_algorithm": hash_algorithm,
-    }, 60)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "qiling_resolve_api_hashes", 60))
+    try:
+        result = await _run_qiling({
+            "action": "resolve_api_hashes",
+            "filepath": state.filepath or "",
+            "rootfs_path": _rootfs_path(),
+            "hash_values": hash_values,
+            "hash_algorithm": hash_algorithm,
+        }, 60)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "qiling_resolve_api_hashes")
 
 
@@ -492,17 +567,27 @@ async def qiling_memory_search(
     if not search_patterns and not search_hex:
         return {"error": "No search criteria provided. Specify search_patterns (strings) and/or search_hex (bytes)."}
 
-    result = await _run_qiling({
-        "action": "memory_search",
-        "filepath": state.filepath,
-        "rootfs_path": _rootfs_path(),
-        "search_patterns": search_patterns or [],
-        "search_hex": search_hex,
-        "max_instructions": max_instructions,
-        "timeout_seconds": timeout_seconds,
-        "context_bytes": context_bytes,
-        "limit": limit,
-    }, timeout_seconds)
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "qiling_memory_search", timeout_seconds))
+    try:
+        result = await _run_qiling({
+            "action": "memory_search",
+            "filepath": state.filepath,
+            "rootfs_path": _rootfs_path(),
+            "search_patterns": search_patterns or [],
+            "search_hex": search_hex,
+            "max_instructions": max_instructions,
+            "timeout_seconds": timeout_seconds,
+            "context_bytes": context_bytes,
+            "limit": limit,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "qiling_memory_search", "the 'limit' parameter")
 
 

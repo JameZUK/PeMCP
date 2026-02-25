@@ -49,10 +49,10 @@ async def diff_binaries(
     if not os.path.isfile(abs_path_b):
         return {"error": f"File not found: {file_path_b}"}
 
-    def _diff(task_id_for_progress=None):
+    def _diff(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 5, "Loading second binary...")
+            _update_progress(task_id_for_progress, 5, "Loading second binary...", bridge=_progress_bridge)
 
         try:
             proj_b = angr.Project(abs_path_b, auto_load_libs=False)
@@ -60,7 +60,7 @@ async def diff_binaries(
             return {"error": f"Failed to load second binary: {e}"}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 20, "Building CFG for second binary...")
+            _update_progress(task_id_for_progress, 20, "Building CFG for second binary...", bridge=_progress_bridge)
 
         try:
             cfg_b = proj_b.analyses.CFGFast(normalize=True)
@@ -68,7 +68,7 @@ async def diff_binaries(
             return {"error": f"CFG generation failed for second binary: {e}"}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 50, "Running BinDiff analysis...")
+            _update_progress(task_id_for_progress, 50, "Running BinDiff analysis...", bridge=_progress_bridge)
 
         try:
             # BinDiff internally calls get_any_node() which lives on
@@ -80,7 +80,7 @@ async def diff_binaries(
             return {"error": f"BinDiff failed: {type(e).__name__}: {e}"}
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 90, "Formatting results...")
+            _update_progress(task_id_for_progress, 90, "Formatting results...", bridge=_progress_bridge)
 
         identical = []
         differing = []
@@ -167,9 +167,12 @@ async def detect_self_modifying_code(
     """
     await ctx.info("Scanning for self-modifying code")
     _check_angr_ready("detect_self_modifying_code")
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _detect():
         _ensure_project_and_cfg()
+        bridge.report_progress(5, 100)
+        bridge.info("Gathering executable section ranges...")
 
         # Gather executable section ranges
         exec_ranges = []
@@ -186,10 +189,15 @@ async def detect_self_modifying_code(
             return False
 
         findings = []
+        bridge.report_progress(15, 100)
+        bridge.info("Scanning functions for writes to executable memory...")
 
         # Scan all functions for memory writes to executable regions
+        total_funcs = len(state.angr_cfg.functions)
+        scanned = 0
         for _addr, func in state.angr_cfg.functions.items():
             if func.is_simprocedure or func.is_syscall:
+                scanned += 1
                 continue
             for block in func.blocks:
                 try:
@@ -211,9 +219,17 @@ async def detect_self_modifying_code(
                 except Exception:
                     continue
 
+            scanned += 1
+            if scanned % 50 == 0 and total_funcs > 0:
+                pct = 15 + int((scanned / total_funcs) * 70)
+                bridge.report_progress(min(pct, 85), 100)
+                bridge.info(f"Scanned {scanned}/{total_funcs} functions...")
+
             if len(findings) >= limit:
                 break
 
+        bridge.report_progress(88, 100)
+        bridge.info("Checking dedicated SMC analysis...")
         # Also try the dedicated analysis if available
         try:
             smc = state.angr_project.analyses.SelfModifyingCodeAnalysis()
@@ -261,9 +277,12 @@ async def find_code_caves(
     """
     await ctx.info("Scanning for code caves")
     _check_angr_ready("find_code_caves")
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _find_caves():
         _ensure_project_and_cfg()
+        bridge.report_progress(5, 100)
+        bridge.info("Trying built-in cave analysis...")
 
         # Try the built-in analysis first
         try:
@@ -284,6 +303,8 @@ async def find_code_caves(
             pass
 
         # Fallback: manual scan for null-byte regions in executable sections
+        bridge.report_progress(20, 100)
+        bridge.info("Scanning sections for null-byte regions...")
         loader = state.angr_project.loader
         caves = []
 
@@ -338,6 +359,8 @@ async def find_code_caves(
                     break
 
         caves.sort(key=lambda c: c["size"], reverse=True)
+        bridge.report_progress(95, 100)
+        bridge.info("Formatting results...")
 
         return {
             "total_caves": len(caves),
@@ -370,6 +393,7 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
     """
     await ctx.info("Detecting packing/obfuscation")
     _check_angr_ready("detect_packing")
+    _bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _detect():
         _ensure_project_and_cfg()
@@ -378,6 +402,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
         indicators = []
         score = 0
 
+        _bridge.report_progress(10, 100)
+        _bridge.info("Computing section entropy...")
         # 1. Section entropy analysis
         for section in getattr(loader.main_object, 'sections', []):
             try:
@@ -407,6 +433,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
             except Exception:
                 continue
 
+        _bridge.report_progress(35, 100)
+        _bridge.info("Analyzing import table...")
         # 2. Import table analysis
         try:
             imports = loader.main_object.imports
@@ -422,6 +450,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
         except Exception:
             pass
 
+        _bridge.report_progress(50, 100)
+        _bridge.info("Checking section names...")
         # 3. Section name anomalies
         known_packer_sections = {'UPX0', 'UPX1', 'UPX2', '.aspack', '.adata', '.nsp0', '.nsp1', '.perplex', '.themida'}
         for section in getattr(loader.main_object, 'sections', []):
@@ -434,6 +464,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
                 })
                 score += 3
 
+        _bridge.report_progress(65, 100)
+        _bridge.info("Checking entry point...")
         # 4. Entry point outside first section
         try:
             entry = state.angr_project.entry
@@ -451,6 +483,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
         except Exception:
             pass
 
+        _bridge.report_progress(80, 100)
+        _bridge.info("Running angr packing detector...")
         # 5. Try angr's built-in PackingDetector
         try:
             pd = state.angr_project.analyses.PackingDetector()
@@ -616,12 +650,12 @@ async def find_path_with_custom_input(
     target = _parse_addr(target_address)
     avoid = _parse_addr(avoid_address, "avoid_address") if avoid_address else None
 
-    def _solve(task_id_for_progress=None):
+    def _solve(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
         proj = state.angr_project
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 5, "Building initial state...")
+            _update_progress(task_id_for_progress, 5, "Building initial state...", bridge=_progress_bridge)
 
         add_options = {
             angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
@@ -661,7 +695,7 @@ async def find_path_with_custom_input(
                     continue
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 15, "Starting symbolic exploration...")
+            _update_progress(task_id_for_progress, 15, "Starting symbolic exploration...", bridge=_progress_bridge)
 
         simgr = proj.factory.simulation_manager(entry_state)
         simgr.use_technique(angr.exploration_techniques.DFS())
@@ -676,7 +710,7 @@ async def find_path_with_custom_input(
             steps += 1
             if task_id_for_progress and steps % 20 == 0:
                 percent = min(95, int((steps / max_steps) * 100))
-                _update_progress(task_id_for_progress, percent, f"Step {steps}, active: {len(simgr.active)}")
+                _update_progress(task_id_for_progress, percent, f"Step {steps}, active: {len(simgr.active)}", bridge=_progress_bridge)
 
         if simgr.found:
             found_state = simgr.found[0]
@@ -779,7 +813,7 @@ async def emulate_with_watchpoints(
         args_hex = []
     args = [int(a, 16) for a in args_hex]
 
-    def _emulate(task_id_for_progress=None):
+    def _emulate(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
         proj = state.angr_project
 
@@ -868,7 +902,7 @@ async def emulate_with_watchpoints(
             call_state.inspect.b('reg_write', action=_on_reg_write)
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 10, "Emulating with watchpoints...")
+            _update_progress(task_id_for_progress, 10, "Emulating with watchpoints...", bridge=_progress_bridge)
 
         simgr = proj.factory.simulation_manager(call_state)
         steps_taken = 0
@@ -888,7 +922,7 @@ async def emulate_with_watchpoints(
             steps_taken += 1
             if task_id_for_progress and steps_taken % 20 == 0:
                 percent = min(95, int((steps_taken / max_steps) * 100))
-                _update_progress(task_id_for_progress, percent, f"Step {steps_taken}, events: {len(events)}")
+                _update_progress(task_id_for_progress, percent, f"Step {steps_taken}, events: {len(events)}", bridge=_progress_bridge)
 
         status = "completed"
         error_details = None
@@ -955,11 +989,11 @@ async def identify_cpp_classes(
     """
     _check_angr_ready("identify_cpp_classes")
 
-    def _identify(task_id_for_progress=None):
+    def _identify(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
 
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 10, "Scanning for vtables...")
+            _update_progress(task_id_for_progress, 10, "Scanning for vtables...", bridge=_progress_bridge)
 
         # Try the built-in ClassIdentifier first
         try:
@@ -984,7 +1018,7 @@ async def identify_cpp_classes(
 
         # Fallback: manual vtable heuristic scan
         if task_id_for_progress:
-            _update_progress(task_id_for_progress, 30, "Using heuristic vtable scanner...")
+            _update_progress(task_id_for_progress, 30, "Using heuristic vtable scanner...", bridge=_progress_bridge)
 
         loader = state.angr_project.loader
         vtables = []
@@ -1139,9 +1173,12 @@ async def get_call_graph(
     await ctx.info("Exporting call graph")
     _check_angr_ready("get_call_graph")
     root = _parse_addr(root_address, "root_address") if root_address else None
+    _cg_bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _extract():
         _ensure_project_and_cfg()
+        _cg_bridge.report_progress(10, 100)
+        _cg_bridge.info("Building call graph...")
         callgraph = state.angr_cfg.functions.callgraph
 
         if root is not None:
@@ -1193,6 +1230,8 @@ async def get_call_graph(
                 }
 
         # Full call graph
+        _cg_bridge.report_progress(50, 100)
+        _cg_bridge.info("Extracting full call graph...")
         nodes = []
         for addr in list(callgraph.nodes())[:limit]:
             name = state.angr_cfg.functions[addr].name if addr in state.angr_cfg.functions else hex(addr)
@@ -1259,9 +1298,12 @@ async def find_anti_debug_comprehensive(
     """
     await ctx.info("Scanning for anti-debug and anti-analysis techniques")
     _check_angr_ready("find_anti_debug_comprehensive")
+    _ad_bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _scan():
         _ensure_project_and_cfg()
+        _ad_bridge.report_progress(5, 100)
+        _ad_bridge.info("Loading anti-debug API database...")
 
         techniques = []
         functions_with_antidbg = []
@@ -1319,7 +1361,11 @@ async def find_anti_debug_comprehensive(
         }
 
         callgraph = state.angr_cfg.functions.callgraph
+        _ad_bridge.report_progress(15, 100)
+        _ad_bridge.info("Scanning functions for anti-debug API calls...")
 
+        total_funcs = len(state.angr_cfg.functions)
+        scanned = 0
         for addr, func in state.angr_cfg.functions.items():
             func_anti_apis = []
             try:
@@ -1337,6 +1383,12 @@ async def find_anti_debug_comprehensive(
             except Exception:
                 continue
 
+            scanned += 1
+            if scanned % 50 == 0 and total_funcs > 0:
+                pct = 15 + int((scanned / total_funcs) * 60)
+                _ad_bridge.report_progress(min(pct, 75), 100)
+                _ad_bridge.info(f"Scanned {scanned}/{total_funcs} functions...")
+
             if func_anti_apis:
                 functions_with_antidbg.append({
                     "address": hex(addr),
@@ -1352,6 +1404,8 @@ async def find_anti_debug_comprehensive(
                         "function_name": func.name,
                     })
 
+        _ad_bridge.report_progress(80, 100)
+        _ad_bridge.info("Checking TLS callbacks...")
         # Check TLS callbacks (often used for anti-debug)
         tls_callbacks = []
         if state.pe_data:

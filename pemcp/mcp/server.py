@@ -34,8 +34,66 @@ _HEARTBEAT_INTERVAL_SECONDS = 15
 # Tools that manage their own MCP progress reporting.  The generic heartbeat
 # is skipped for these to avoid conflicting or redundant messages.
 _SELF_REPORTING_TOOLS = frozenset({
+    # Core file operations
     "open_file",
     "reanalyze_loaded_pe_file",
+    # angr tools (Group A background bridge + Group B foreground)
+    "decompile_function_with_angr",
+    "get_function_cfg",
+    "find_path_to_address",
+    "emulate_function_execution",
+    "analyze_binary_loops",
+    "find_path_with_custom_input",
+    "emulate_with_watchpoints",
+    # angr forensic tools (Group A background bridge + Group B foreground)
+    "detect_self_modifying_code",
+    "find_code_caves",
+    "detect_packing",
+    "get_call_graph",
+    "find_anti_debug_comprehensive",
+    "diff_binaries",
+    "save_patched_binary",
+    # angr dataflow tools (Group A background bridge + Group B foreground)
+    "get_reaching_definitions",
+    "get_data_dependencies",
+    "get_value_set_analysis",
+    "get_control_dependencies",
+    "propagate_constants",
+    # Qiling tools (Group D subprocess progress)
+    "emulate_binary_with_qiling",
+    "emulate_shellcode_with_qiling",
+    "qiling_trace_execution",
+    "qiling_hook_api_calls",
+    "qiling_dump_unpacked_binary",
+    "qiling_resolve_api_hashes",
+    "qiling_memory_search",
+    # Speakeasy / unipacker tools (Group D subprocess progress)
+    "emulate_pe_with_windows_apis",
+    "emulate_shellcode_with_speakeasy",
+    "auto_unpack_pe",
+    # Unpack orchestration tools (Group E)
+    "try_all_unpackers",
+    "reconstruct_pe_from_dump",
+    "find_oep_heuristic",
+    # Triage (Group C)
+    "get_triage_report",
+    # Crypto tools (Group C)
+    "identify_crypto_algorithm",
+    "auto_extract_crypto_keys",
+    "brute_force_simple_crypto",
+    # Deobfuscation (Group C)
+    "find_and_decode_encoded_strings",
+    # String tools (Group C)
+    "extract_strings_from_binary",
+    "get_top_sifted_strings",
+    "fuzzy_search_strings",
+    "search_yara_custom",
+    # Payload extraction (Group C)
+    "extract_config_automated",
+    # PE extended (Group C)
+    "detect_crypto_constants",
+    "analyze_entropy_by_offset",
+    "scan_for_api_hashes",
 })
 
 
