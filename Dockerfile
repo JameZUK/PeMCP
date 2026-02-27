@@ -261,7 +261,6 @@ COPY PeMCP.py .
 COPY pemcp/ ./pemcp/
 COPY scripts/ ./scripts/
 COPY userdb.txt .
-COPY FastPrompt.txt .
 
 # --- Create writable home directory for runtime data ---
 # run.sh passes --user "$(id -u):$(id -g)" --group-add 1500 so the
