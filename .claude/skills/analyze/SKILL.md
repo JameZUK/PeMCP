@@ -5,8 +5,8 @@ description: >
   PE/ELF/Mach-O analysis, shellcode emulation, firmware inspection, vulnerability
   auditing, C2 config extraction, unpacking, deobfuscation, and threat intelligence.
   Triggers on: binary, malware, PE, ELF, Mach-O, shellcode, firmware, analyze,
-  reverse engineer, decompile, unpack, triage, IOC, C2, implant, dropper, loader,
-  packer, obfuscation, exploit, vulnerability, capa, yara, refinery.
+  analyse, reverse engineer, decompile, unpack, triage, IOC, C2, implant, dropper,
+  loader, packer, obfuscation, exploit, vulnerability, capa, yara, refinery.
 ---
 
 # PeMCP Binary Analysis Skill
