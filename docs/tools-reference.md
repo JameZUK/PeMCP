@@ -386,7 +386,7 @@ The real power of PeMCP's Binary Refinery integration emerges when tools are cha
 
 | Tool | Description |
 |---|---|
-| `identify_c2_framework` | Match observed binary indicators (API hash algorithm/seed, config encryption, constants, YARA patterns, compiler, network headers, DLL names, command count) against a 80-family signature knowledge base. Returns ranked candidates with confidence scores, per-category match breakdowns, and extraction guidance. |
+| `identify_c2_framework` | Match observed binary indicators (API hash algorithm/seed, config encryption, constants, YARA patterns, compiler, network headers, DLL names, command count) against a 123-family signature knowledge base. Returns ranked candidates with confidence scores, per-category match breakdowns, and extraction guidance. |
 | `list_c2_signatures` | Browse the C2 signatures knowledge base. Returns a summary of all known families (name, aliases, hash algorithm/seed, config encryption, compiler, source URL) or full fingerprint details for a specific family. |
 | `verify_c2_attribution` | Verify a claimed C2 attribution by checking each piece of evidence against the knowledge base entry for a specific family. Returns a pass/fail verdict per evidence point and an overall CONFIRMED/PARTIAL_MATCH/UNLIKELY/INCONCLUSIVE verdict. Essential for avoiding misattribution between similar frameworks (e.g. AdaptixC2 vs Havoc). |
 
