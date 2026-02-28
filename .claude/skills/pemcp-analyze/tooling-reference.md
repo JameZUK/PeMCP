@@ -1,7 +1,20 @@
 # PeMCP Tool Reference
 
-Complete catalog of all 196 MCP tools organized by use case.
+Complete catalog of all 171 MCP tools organized by use case.
 Source files: `pemcp/mcp/tools_*.py`
+
+---
+
+## Tool Selection: Prefer / Avoid
+
+| Instead of... | Prefer... | Why |
+|---|---|---|
+| `get_full_analysis_results()` | `get_pe_data(key='...')` | Full dump can exceed 64KB limit; targeted queries are faster |
+| `extract_strings_from_binary()` | `get_strings_summary()` | Raw dumps are noisy; summary categorizes by type (URLs, IPs, paths) |
+| `get_pe_data(key='imports')` for security | `get_focused_imports()` | Focused imports categorizes by threat behavior |
+| `get_function_map(limit=100)` | `get_function_map(limit=20-30)` | Too many functions overwhelms context; start small, expand if needed |
+| Calling `get_analysis_digest()` repeatedly | Call at phase transitions | Digest has overhead; use it strategically |
+| `get_notes()` to check findings | `get_analysis_digest()` | Digest aggregates notes with triage data and coverage |
 
 ---
 
@@ -32,6 +45,9 @@ Source files: `pemcp/mcp/tools_*.py`
 | `classify_binary_purpose` | Determine binary type (GUI, DLL, driver, service) | — |
 | `get_virustotal_report_for_loaded_file` | Check community reputation | — |
 | `get_analyzed_file_summary` | Quick summary without full triage | — |
+| `get_capa_analysis_info` | CAPA capability analysis overview | — |
+| `get_capa_rule_match_details` | Detailed match info for a specific capa rule | `rule_name` |
+| `get_extended_capabilities` | Extended capability detection beyond capa | — |
 
 ## PE Structure
 
@@ -298,7 +314,7 @@ Source files: `pemcp/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `get_analysis_digest` | Aggregated findings summary (call every 3-5 tools) | — |
+| `get_analysis_digest` | Aggregated findings summary (call at phase transitions) | — |
 | `get_progress_overview` | Analysis coverage and gaps | — |
 | `suggest_next_action` | AI-suggested next analysis steps | — |
 | `list_tools_by_phase` | Tools organized by workflow phase | — |

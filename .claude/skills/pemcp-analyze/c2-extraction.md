@@ -81,7 +81,9 @@ SMTP/FTP/Telegram credentials stored separately.
 1. dotnet_analyze() → find classes with SMTP/FTP/credential field names
 2. dotnet_disassemble_method() on constructor or config initialization
 3. Locate AES key (often hardcoded as string or byte array in same class)
-4. refinery_codec(operation="decode", codec="b64") → refinery_decrypt(algorithm="aes256-cbc")
+4. refinery_codec(data="<encrypted field hex>", operation="decode", codec="b64")
+   → refinery_decrypt(data="<decoded bytes>", algorithm="aes256-cbc",
+     key="<key from step 3>", iv="<first 16 bytes of decoded>")
 5. Extracted fields: SMTP host, port, user, pass; FTP host, user, pass;
    Telegram bot token, chat ID; exfil timer interval
 ```
@@ -94,8 +96,10 @@ Mutex, ports, hosts, certificate hash as separate encrypted fields.
 1. dotnet_analyze() → find "Settings" class
 2. dotnet_disassemble_method("Settings::.cctor") → locate encrypted field values
 3. Find Decrypt() method → extract salt, iterations, passphrase
-4. refinery_key_derive(algorithm="pbkdf2", password=passphrase, salt=salt)
-5. refinery_decrypt(algorithm="aes256-cbc", key=derived_key) for each field
+4. refinery_key_derive(password="<passphrase string>", algorithm="pbkdf2",
+   salt="<salt hex>", iterations=50000)
+5. refinery_decrypt(data="<encrypted field hex>", algorithm="aes256-cbc",
+   key="<derived_key hex>", iv="<from first block>") for each field
 6. Expected: Hosts, Ports, Version, Install, Mutex, Certificate, ServerSignature
 ```
 
@@ -116,8 +120,8 @@ Key derived from hardcoded password via PBKDF2.
 Single-byte XOR key, config is a TLV (type-length-value) structure.
 
 ```
-1. get_hex_dump() → search .data section for 0x1000-byte high-entropy region
-2. bruteforce_xor_key() or deobfuscate_xor_single_byte() — try common keys (0x69, 0x2e)
+1. get_hex_dump(offset=<.data section start>, length=0x2000) → search for 0x1000-byte high-entropy region
+2. bruteforce_xor_key(data="<0x1000 bytes hex>") or deobfuscate_xor_single_byte(data="<0x1000 bytes hex>", key=0x69) — try common keys (0x69, 0x2e)
 3. Or: extract_config_automated() — has built-in Cobalt Strike parser
 4. Parse TLV: type (2 bytes) + length (2 bytes) + value
 5. Key fields: BeaconType (0x0001), Port (0x0002), SleepTime (0x0003),
@@ -155,9 +159,9 @@ contacts hardcoded C2, retrieves encrypted config.
 Key is first N bytes of the resource.
 
 ```
-1. extract_resources() → find SETTINGS/RCData resource
-2. Key = first byte(s) of resource (length varies by version)
-3. refinery_decrypt(algorithm="rc4", key=extracted_key)
+1. extract_resources(resource_type="RT_RCDATA") → find SETTINGS resource
+2. Key = first N bytes of resource (length varies by version, typically 1-16 bytes)
+3. refinery_decrypt(data="<resource bytes after key>", algorithm="rc4", key="<first N bytes as hex>")
 4. Parse cleartext: null-separated fields
 5. Expected: C2 host:port, password, mutex, install path, keylog settings
 ```
@@ -172,6 +176,54 @@ IP, BuildID, and feature flags.
 3. refinery_codec(operation="decode", codec="b64") on extracted strings
 4. Expected: C2 IP:port, BuildID, GrabBrowsers, GrabFTP, GrabWallets flags
 ```
+
+### AdaptixC2 Beacon / Gopher
+**Storage**: Two agent types with different encryption schemes.
+- **Beacon** (PE: EXE/DLL/shellcode): RC4-encrypted config in `.rdata` section at
+  variable offset (0x00–0x63). Structure: `size (4 bytes LE) | ciphertext | RC4 key
+  (last 16 bytes of the block)`.
+- **Gopher** (Go binary): AES-128-GCM encrypted + msgpack-serialized raw profile.
+  Structure: `key (16 bytes) | nonce (12 bytes) | ciphertext`.
+
+**YARA indicators**: API hash constants (`0x6363CE76` VirtualAlloc, `0xA1376764`
+GetAdapters, `0x68B3D2E1` NtQueryInformationProcess), `savememory` command
+comparison value `0x2321`, Go msgpack tags (`msgpack:"job_id"`, `msgpack:"acp"`).
+
+**Agent Beacon (PE)**:
+```
+1. search_yara_custom(rule="rule adaptix { strings: $h1 = {76 63 CE 63}
+   $h2 = {64 67 37 A1} condition: uint16(0) == 0x5A4D and all of them }")
+   → confirm AdaptixC2 beacon
+2. get_pe_data(key="sections") → find .rdata section offset and size
+3. get_hex_dump(offset=<.rdata VA>, length=<.rdata size>) → extract .rdata content
+4. Scan offsets 0x00–0x63 within .rdata for valid config:
+   - Read 4-byte LE size at each offset
+   - If size is plausible (< section size − 16), extract size + 16 bytes
+   - RC4 key = last 16 bytes of the extracted block
+5. refinery_decrypt(data="<first [size] bytes hex>", algorithm="rc4",
+   key="<last 16 bytes as hex>")
+6. Parse decrypted struct — first 4 bytes LE = agent_type, then type-specific:
+   - HTTP: ssl (1B), server_count (4B), servers (string+port pairs), http_method,
+     URI, parameter, user_agent, http_headers, kill_date, working_time, sleep, jitter
+   - TCP: prepend_bytes, port, listener_type, kill_date
+   - SMB: pipename (\\.\pipe\...), listener_type, kill_date
+7. Expected: C2 server:port list, HTTP method + URI + User-Agent, sleep/jitter
+   intervals, kill date, working time window (HH:MM-HH:MM)
+```
+
+**Agent Gopher (Go binary)**:
+```
+1. go_analyze() → confirm Go binary; search_for_specific_strings(
+   patterns=["gopher", "msgpack:\"job_id\"", "msgpack:\"acp\""]) → confirm Gopher
+2. Extract raw profile data (from embedded resource, overlay, or dumped from memory
+   via emulation — the profile is a standalone encrypted blob)
+3. refinery_decrypt(data="<bytes from offset 28 onwards as hex>", algorithm="aes-gcm",
+   key="<first 16 bytes as hex>", iv="<bytes 16-28 as hex>")
+4. Decrypted output is msgpack-serialized — decode to extract C2 config dict
+5. Expected: C2 server addresses, ports, protocol settings, sleep intervals
+```
+
+Ref: [av-gantimurov/adaptixc2-extractor](https://github.com/av-gantimurov/adaptixc2-extractor)
 
 ---
 

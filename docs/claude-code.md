@@ -1,0 +1,304 @@
+# Using PeMCP with Claude Code
+
+PeMCP integrates seamlessly with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via stdio transport. This guide covers setup, configuration, the analysis skill, and typical workflows.
+
+---
+
+## Adding PeMCP via the CLI
+
+The fastest way to add PeMCP to Claude Code is with the `claude mcp add` command.
+
+**Add to the current project (recommended):**
+
+```bash
+claude mcp add --scope project pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server --samples-path /path/to/samples
+```
+
+**Add with a VirusTotal API key:**
+
+```bash
+claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server --samples-path /path/to/samples
+```
+
+**Add globally for all projects (user scope):**
+
+```bash
+claude mcp add --scope user pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
+```
+
+**Add using Docker (via `run.sh` helper):**
+
+```bash
+claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --stdio
+```
+
+**Add using Docker with a custom samples directory:**
+
+```bash
+claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --samples /path/to/your/samples --stdio
+```
+
+The `run.sh` helper auto-detects Docker or Podman, builds the image if needed, and handles volume mounts and environment setup. The `--samples` flag mounts any local directory read-only into the container, mirroring the host folder name (e.g. `--samples ~/Downloads` mounts at `/Downloads`). To pass a VirusTotal API key, set it in your environment or `.env` file:
+
+```bash
+claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- /path/to/PeMCP/run.sh --samples ~/malware-zoo --stdio
+```
+
+**Add a remote HTTP server:**
+
+```bash
+claude mcp add --transport http --scope project pemcp http://127.0.0.1:8082/mcp
+```
+
+**Verify the server was added:**
+
+```bash
+claude mcp list
+```
+
+**Remove the server:**
+
+```bash
+claude mcp remove pemcp
+```
+
+---
+
+## Adding PeMCP via JSON Configuration
+
+Alternatively, you can configure PeMCP by editing JSON files directly.
+
+### Project-Level Configuration (Recommended)
+
+Add a `.mcp.json` file to your project root (an example is included in this repository):
+
+```json
+{
+  "mcpServers": {
+    "pemcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["PeMCP.py", "--mcp-server"],
+      "env": {
+        "VT_API_KEY": ""
+      }
+    }
+  }
+}
+```
+
+Adjust the `command` path if PeMCP is installed elsewhere. Use `--samples-path` to point at your samples directory so the `list_samples` tool can discover files, or set the `PEMCP_SAMPLES` environment variable:
+
+```json
+{
+  "mcpServers": {
+    "pemcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["/path/to/PeMCP/PeMCP.py", "--mcp-server", "--samples-path", "/path/to/samples"],
+      "env": {
+        "VT_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
+```
+
+### User-Level Configuration
+
+For system-wide availability across all projects, add PeMCP to `~/.claude.json`:
+
+```json
+{
+  "mcpServers": {
+    "pemcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["/absolute/path/to/PeMCP/PeMCP.py", "--mcp-server"]
+    }
+  }
+}
+```
+
+### Docker Configuration (via `run.sh`)
+
+To use the Docker image with Claude Code, point the configuration at the `run.sh` helper script. Use `--samples` to specify where your binaries live on the host — the container path mirrors the host folder name (e.g. `--samples ~/Downloads` → `/Downloads`):
+
+```json
+{
+  "mcpServers": {
+    "pemcp": {
+      "type": "stdio",
+      "command": "/path/to/PeMCP/run.sh",
+      "args": ["--samples", "/path/to/your/samples", "--stdio"],
+      "env": {
+        "VT_API_KEY": "your-api-key-here"
+      }
+    }
+  }
+}
+```
+
+Then in Claude Code, load files using the container path (which mirrors the host folder name):
+
+```
+open_file("/samples/malware.exe")
+```
+
+If `--samples` is omitted, the `./samples/` directory next to `run.sh` is mounted by default (at `/samples`). You can also set the `PEMCP_SAMPLES` environment variable instead of using the flag.
+
+The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, runs as your host UID (not root), and persists the analysis cache and configuration in `~/.pemcp` on the host (bind-mounted into the container). Use `--cache <dir>` or `PEMCP_CACHE` to override the location.
+
+---
+
+## Typical Workflow
+
+Once configured, you can interact with PeMCP through Claude Code naturally:
+
+1. **"What samples are available?"** — Claude calls `list_samples` to discover files in the configured samples directory
+2. **"Open this sample for analysis"** — Claude calls `open_file` with the path (auto-detects PE/ELF/Mach-O). If `session_context` is returned, Claude knows to call `get_analysis_digest()` to review previous findings
+3. **"What format is this?"** — Claude calls `detect_binary_format` to identify format and suggest tools
+4. **"What does this binary do?"** — Claude retrieves the triage report (key findings are auto-saved as notes)
+5. **"Decompile the main function"** — Claude uses Angr tools to decompile, then calls `auto_note_function(address)` to record a summary
+6. **"Summarise what we've found"** — Claude calls `get_analysis_digest()` for an aggregated view of all findings
+7. **"Is this a .NET binary?"** — Claude calls `dotnet_analyze` for CLR metadata and CIL disassembly
+8. **"Analyse this Go binary"** — Claude calls `go_analyze` for packages, functions, compiler version
+9. **"Check if it's on VirusTotal"** — Claude queries the VT API
+10. **"Export this analysis"** — Claude calls `export_project` to save analysis + notes + history as a portable archive
+11. **"Close the file"** — Claude calls `close_file` to free resources (notes and history are persisted to cache)
+
+API keys can be set interactively: *"Set my VirusTotal API key to abc123"* — Claude calls `set_api_key`, and the key persists across sessions.
+
+---
+
+## Example Natural Language Queries
+
+PeMCP understands analytical intent, not just tool commands. Here are examples of what you can ask:
+
+**Triage & Classification:**
+- *"Is this file malicious? Give me a quick assessment."*
+- *"What kind of binary is this — is it a service, a DLL, an installer?"*
+- *"Show me the most suspicious imports — skip the boring Windows API stuff."*
+- *"What capabilities does MITRE ATT&CK map to this sample?"*
+
+**Data Decoding & Decryption:**
+- *"There's a Base64 blob at offset 0x1000 — decode it."*
+- *"This data looks XOR encrypted. Can you figure out the key?"*
+- *"Decode this: first Base64, then XOR with key 0x41, then decompress."* → uses `refinery_pipeline`
+- *"Decrypt this AES-CBC ciphertext. The key is in the .rdata section."*
+
+**Reverse Engineering:**
+- *"Decompile the function at 0x00401230 and explain what it does."*
+- *"What functions call VirtualAlloc? Which ones look suspicious?"*
+- *"Find all the string references in the main function."*
+- *"Is there shellcode injection happening? Check for VirtualAlloc → WriteProcessMemory patterns."*
+
+**Forensics & IOC Extraction:**
+- *"Extract all URLs, IPs, and domain names from this binary."*
+- *"Parse this PCAP file and show me the HTTP transactions."*
+- *"Extract the VBA macros from this Word document and deobfuscate them."*
+- *"What's in this Windows Event Log? Show me the security events."*
+
+**Multi-Stage Analysis:**
+- *"This binary has overlay data — extract and analyse it."*
+- *"Unpack this UPX-packed binary and re-analyse."*
+- *"The .NET resources contain an encrypted payload — extract and decrypt it."*
+- *"Emulate this shellcode and tell me what APIs it calls."*
+
+---
+
+## Analysis Skill for Claude Code
+
+PeMCP ships with an **analysis skill** — a structured workflow that teaches Claude Code how to use PeMCP's 171 tools methodically, rather than relying on the model to figure it out from tool descriptions alone.
+
+Without the skill, Claude Code can still call PeMCP tools individually, but it won't follow a structured analysis methodology, may miss important steps, and won't know PeMCP-specific patterns like session persistence, note-taking discipline, or unpacking cascades.
+
+### What the Skill Does
+
+The skill provides Claude Code with:
+
+- **Goal-adaptive workflow** — Detects whether you want malware triage, deep reverse engineering, vulnerability auditing, firmware analysis, threat intel extraction, or binary comparison, and adjusts tool selection and depth accordingly.
+- **Phased analysis** — Structured progression from environment discovery → identification → unpacking → mapping → deep dive → extraction → research → reporting, with clear decision points between phases.
+- **Evidence-first methodology** — All findings must cite specific tool output. Indicators (VirusTotal detections, capa matches, YARA hits) are treated as leads to investigate, not conclusions. Extraction of C2 configs and decoded payloads includes the full chain of evidence (where the data was, what algorithm/key was used, how the key was obtained).
+- **Multi-file workflows** — Guidance for dropper-payload relationships, DLL sideloading investigations, campaign sample comparison, and shellcode extraction from loaders, including cross-file reference discovery (searching strings and imports for companion filenames).
+- **Context management** — Automatic note-taking after every decompilation, periodic digest calls to synthesise findings, and session persistence awareness.
+- **Comprehensive tool coverage** — A complete reference for all 171 tools organised by use case, plus specialised guides for C2 config extraction, unpacking strategies, and safe online research methodology.
+
+### Installing the Skill
+
+The skill files live in `.claude/skills/pemcp-analyze/` within the PeMCP repository. If you cloned the repo, they're already in place — no additional installation is needed.
+
+**Verify the skill is present:**
+
+```bash
+ls .claude/skills/pemcp-analyze/
+```
+
+You should see:
+
+```
+SKILL.md              # Core workflow — phases, operating principles, goal detection
+tooling-reference.md  # Complete 171-tool catalog by use case
+c2-extraction.md      # C2 config decoding patterns by malware family
+unpacking-guide.md    # Packer identification and unpacking pipelines
+online-research.md    # Safe online research and decoder translation
+```
+
+**If you're using PeMCP from a different working directory**, the skill won't auto-load since Claude Code skills are project-relative. You have two options:
+
+1. **Run Claude Code from the PeMCP directory** (simplest):
+   ```bash
+   cd /path/to/PeMCP
+   claude
+   ```
+
+2. **Copy the skill into your own project**:
+   ```bash
+   cp -r /path/to/PeMCP/.claude/skills /path/to/your/project/.claude/skills
+   ```
+
+### Using the Skill
+
+**Automatic invocation** — The skill triggers automatically when Claude Code detects binary analysis context (PeMCP tools in the conversation, or keywords like "malware", "binary", "analyse", "PE", "ELF", "decompile", etc.). Just start talking about analysis and the skill activates.
+
+**Manual invocation** — Type `/pemcp-analyze` in Claude Code to explicitly activate the skill:
+
+```
+/pemcp-analyze
+```
+
+**Example sessions:**
+
+Quick malware triage:
+```
+> Open /samples/suspicious.exe and tell me if it's malicious
+```
+
+Deep reverse engineering:
+```
+> I need to fully reverse engineer this binary — find the crypto routines,
+> extract any configs, and document how it works
+```
+
+Targeted extraction:
+```
+> This is AsyncRAT. Extract the C2 config and show me how you got it
+```
+
+Multi-file investigation:
+```
+> I have a dropper (loader.exe) and its payload (data.bin) in /samples —
+> analyse them together
+```
+
+The skill runs autonomously through Phases 0-3 (environment discovery, identification, unpacking, mapping). Before entering the deep dive phase, it pauses to present findings so far and asks whether you want to proceed deeper and which areas to focus on. After analysis, it presents a concise evidence-backed summary and offers to generate a detailed report or export the session.
+
+### Skill File Reference
+
+| File | Purpose |
+|------|---------|
+| [`SKILL.md`](../.claude/skills/pemcp-analyze/SKILL.md) | Core workflow orchestration — operating principles, 8 analysis phases, goal detection, reporting format, multi-file workflows, context management |
+| [`tooling-reference.md`](../.claude/skills/pemcp-analyze/tooling-reference.md) | Complete catalog of all 171 MCP tools organised by use case with brief descriptions and key parameters |
+| [`c2-extraction.md`](../.claude/skills/pemcp-analyze/c2-extraction.md) | C2 config storage patterns, family-specific extraction strategies (Agent Tesla, AsyncRAT, Cobalt Strike, Emotet, Remcos, AdaptixC2, etc.), generic unknown-family approach, validation checklist |
+| [`unpacking-guide.md`](../.claude/skills/pemcp-analyze/unpacking-guide.md) | Packer identification indicators, 5-method unpacking cascade (auto → orchestrated → emulation-based → emulation analysis → manual OEP), special cases for multi-layer packing, .NET obfuscators, shellcode loaders |
+| [`online-research.md`](../.claude/skills/pemcp-analyze/online-research.md) | When and how to research online, search query patterns, read-and-understand methodology, decoder operation → PeMCP tool translation table, safety rules |

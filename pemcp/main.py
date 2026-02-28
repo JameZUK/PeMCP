@@ -1,12 +1,15 @@
 """Main entry point: argument parsing, CLI mode, and MCP server startup."""
 import os
 import sys
+import signal
 import logging
 import datetime
 import threading
 import argparse
 
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import List, Optional
 
 from pemcp.config import (
     state, logger, pefile,
@@ -75,7 +78,35 @@ else:
     logger.info("binary-refinery not installed — skipping refinery tool registration")
 
 
-def main():
+# ---------------------------------------------------------------------------
+#  Resolved configuration dataclass — replaces many loose local variables
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _ResolvedConfig:
+    """Holds all resolved paths and FLOSS configuration for a run."""
+    abs_input_file: Optional[str] = None
+    abs_peid_db_path: str = ""
+    abs_yara_rules_path: Optional[str] = None
+    abs_capa_rules_dir: Optional[str] = None
+    abs_capa_sigs_dir: Optional[str] = None
+    analyses_to_skip: List[str] = field(default_factory=list)
+    # FLOSS config
+    floss_min_len: int = 4
+    floss_fmt: str = "auto"
+    floss_debug_level: object = None  # Actual_DebugLevel_Floss enum
+    floss_disabled_types: List = field(default_factory=list)
+    floss_only_types: List = field(default_factory=list)
+    floss_functions: List[int] = field(default_factory=list)
+    floss_quiet: bool = True
+
+
+# ---------------------------------------------------------------------------
+#  Phase 1: Argument parsing
+# ---------------------------------------------------------------------------
+
+def _parse_arguments() -> argparse.Namespace:
+    """Build the CLI parser and return parsed arguments."""
     parser = argparse.ArgumentParser(description="Comprehensive PE File Analyzer.", formatter_class=argparse.RawTextHelpFormatter)
 
     # --- Input & Mode ---
@@ -150,7 +181,16 @@ def main():
     if args is None:
         print("[!] Args is None after parsing attempt, exiting.", file=sys.stderr)
         sys.exit(1)
-    # Configure logging AFTER args are parsed (not at import time)
+
+    return args
+
+
+# ---------------------------------------------------------------------------
+#  Phase 2: Logging configuration
+# ---------------------------------------------------------------------------
+
+def _configure_logging(args: argparse.Namespace) -> int:
+    """Set up logging based on parsed arguments. Returns the log level."""
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(level=log_level, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
     logger.setLevel(log_level)
@@ -164,50 +204,61 @@ def main():
     if args.mcp_transport == 'sse':
         logger.warning("SSE transport is deprecated. Please use 'streamable-http' or 'stdio' instead.")
 
+    return log_level
+
+
+# ---------------------------------------------------------------------------
+#  Phase 3: Path and skip-list resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_paths(args: argparse.Namespace) -> _ResolvedConfig:
+    """Resolve input file, resource paths, skip list, and FLOSS config."""
+    cfg = _ResolvedConfig()
+
     # CLI mode requires --input-file
     if not args.mcp_server and not args.input_file:
         print("[!] Error: --input-file is required for CLI mode.", file=sys.stderr)
         sys.exit(1)
 
-    abs_input_file = None
     if args.input_file:
-        abs_input_file = str(Path(args.input_file).resolve())
-        if not os.path.exists(abs_input_file):
-            logger.critical("Input file not found: %s", abs_input_file)
-            print(f"[!] Error: Input file not found: {abs_input_file}", file=sys.stderr)
+        cfg.abs_input_file = str(Path(args.input_file).resolve())
+        if not os.path.exists(cfg.abs_input_file):
+            logger.critical("Input file not found: %s", cfg.abs_input_file)
+            print(f"[!] Error: Input file not found: {cfg.abs_input_file}", file=sys.stderr)
             sys.exit(1)
 
-    abs_peid_db_path = str(Path(args.peid_db).resolve()) if args.peid_db else str(DEFAULT_PEID_DB_PATH)
-    abs_yara_rules_path = str(Path(args.yara_rules).resolve()) if args.yara_rules else None
+    cfg.abs_peid_db_path = str(Path(args.peid_db).resolve()) if args.peid_db else str(DEFAULT_PEID_DB_PATH)
+    cfg.abs_yara_rules_path = str(Path(args.yara_rules).resolve()) if args.yara_rules else None
+
     # Auto-resolve to default YARA rules store when not explicitly specified
-    if abs_yara_rules_path is None and YARA_AVAILABLE and "yara" not in (
+    if cfg.abs_yara_rules_path is None and YARA_AVAILABLE and "yara" not in (
         getattr(args, '_skip_set', None) or []
     ):
         from pemcp.resources import get_default_yara_rules_path, ensure_yara_rules_exist
-        abs_yara_rules_path = get_default_yara_rules_path()
-        if abs_yara_rules_path is None:
-            # Attempt to download rules on first run
+        cfg.abs_yara_rules_path = get_default_yara_rules_path()
+        if cfg.abs_yara_rules_path is None:
             logger.info("No YARA rules found. Attempting to download default rule sets...")
             store = ensure_yara_rules_exist(verbose=args.verbose)
             if store:
-                abs_yara_rules_path = store
-                logger.info("Default YARA rules available at: %s", abs_yara_rules_path)
+                cfg.abs_yara_rules_path = store
+                logger.info("Default YARA rules available at: %s", cfg.abs_yara_rules_path)
             else:
                 logger.info("Could not obtain default YARA rules. YARA scanning will be skipped unless --yara-rules is provided.")
         else:
-            logger.info("Using default YARA rules store: %s", abs_yara_rules_path)
-    abs_capa_rules_dir_arg = str(Path(args.capa_rules_dir).resolve()) if args.capa_rules_dir else None
-    abs_capa_sigs_dir_arg = str(Path(args.capa_sigs_dir).resolve()) if args.capa_sigs_dir else None
+            logger.info("Using default YARA rules store: %s", cfg.abs_yara_rules_path)
 
-    analyses_to_skip_arg_list = []
-    if args.skip_capa: analyses_to_skip_arg_list.append("capa")
-    if args.skip_floss: analyses_to_skip_arg_list.append("floss")
-    if args.skip_peid: analyses_to_skip_arg_list.append("peid")
-    if args.skip_yara: analyses_to_skip_arg_list.append("yara")
-    if analyses_to_skip_arg_list:
-        logger.info("Skipping analyses: %s", ", ".join(analyses_to_skip_arg_list))
+    cfg.abs_capa_rules_dir = str(Path(args.capa_rules_dir).resolve()) if args.capa_rules_dir else None
+    cfg.abs_capa_sigs_dir = str(Path(args.capa_sigs_dir).resolve()) if args.capa_sigs_dir else None
 
-    # Validate user-supplied regex pattern early to catch ReDoS / invalid patterns
+    # Skip list
+    if args.skip_capa: cfg.analyses_to_skip.append("capa")
+    if args.skip_floss: cfg.analyses_to_skip.append("floss")
+    if args.skip_peid: cfg.analyses_to_skip.append("peid")
+    if args.skip_yara: cfg.analyses_to_skip.append("yara")
+    if cfg.analyses_to_skip:
+        logger.info("Skipping analyses: %s", ", ".join(cfg.analyses_to_skip))
+
+    # Validate user-supplied regex pattern early
     if args.regex_pattern:
         try:
             validate_regex_pattern(args.regex_pattern)
@@ -215,13 +266,24 @@ def main():
             print(f"[!] Error: Invalid --regex pattern: {e}", file=sys.stderr)
             sys.exit(1)
 
-    # FLOSS Config
-    floss_min_len_resolved = args.floss_min_length if args.floss_min_length is not None else FLOSS_MIN_LENGTH_DEFAULT
-    floss_fmt = args.floss_format
+    # Resolve FLOSS configuration
+    _resolve_floss_config(args, cfg)
 
-    # Auto-detect architecture hint for shellcode mode if user left it as 'auto'
-    if args.mode == 'shellcode' and floss_fmt == 'auto':
-        floss_fmt = 'sc64' # Default to 64-bit if unspecified
+    return cfg
+
+
+# ---------------------------------------------------------------------------
+#  Phase 4: FLOSS configuration resolution
+# ---------------------------------------------------------------------------
+
+def _resolve_floss_config(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
+    """Resolve all FLOSS-related parameters into *cfg*."""
+    cfg.floss_min_len = args.floss_min_length if args.floss_min_length is not None else FLOSS_MIN_LENGTH_DEFAULT
+    cfg.floss_fmt = args.floss_format
+
+    # Auto-detect architecture hint for shellcode mode
+    if args.mode == 'shellcode' and cfg.floss_fmt == 'auto':
+        cfg.floss_fmt = 'sc64'
         logger.info("Shellcode mode detected with 'auto' format. Defaulting to 'sc64' (64-bit). Use --floss-format sc32 for 32-bit.")
 
     floss_debug_level_map = {
@@ -229,292 +291,332 @@ def main():
         "DEBUG": Actual_DebugLevel_Floss.DEFAULT,
         "TRACE": Actual_DebugLevel_Floss.TRACE, "SUPERTRACE": Actual_DebugLevel_Floss.SUPERTRACE
     }
-    floss_script_debug_level_enum_val_resolved = floss_debug_level_map.get(args.floss_script_debug_level.upper(), Actual_DebugLevel_Floss.NONE)
+    cfg.floss_debug_level = floss_debug_level_map.get(args.floss_script_debug_level.upper(), Actual_DebugLevel_Floss.NONE)
 
-    if args.verbose and floss_script_debug_level_enum_val_resolved == Actual_DebugLevel_Floss.NONE:
-        floss_script_debug_level_enum_val_resolved = Actual_DebugLevel_Floss.TRACE
+    if args.verbose and cfg.floss_debug_level == Actual_DebugLevel_Floss.NONE:
+        cfg.floss_debug_level = Actual_DebugLevel_Floss.TRACE
         logger.info("Verbose mode active, elevating FLOSS debug level to TRACE.")
 
-    # Resolve FLOSS lists
-    floss_disabled_types_resolved = []
-    if args.floss_no_static: floss_disabled_types_resolved.append(Actual_StringType_Floss.STATIC)
-    if args.floss_no_stack: floss_disabled_types_resolved.append(Actual_StringType_Floss.STACK)
-    if args.floss_no_tight: floss_disabled_types_resolved.append(Actual_StringType_Floss.TIGHT)
-    if args.floss_no_decoded: floss_disabled_types_resolved.append(Actual_StringType_Floss.DECODED)
+    if args.floss_no_static: cfg.floss_disabled_types.append(Actual_StringType_Floss.STATIC)
+    if args.floss_no_stack: cfg.floss_disabled_types.append(Actual_StringType_Floss.STACK)
+    if args.floss_no_tight: cfg.floss_disabled_types.append(Actual_StringType_Floss.TIGHT)
+    if args.floss_no_decoded: cfg.floss_disabled_types.append(Actual_StringType_Floss.DECODED)
 
-    floss_only_types_resolved = []
-    if args.floss_only_static: floss_only_types_resolved.append(Actual_StringType_Floss.STATIC)
-    if args.floss_only_stack: floss_only_types_resolved.append(Actual_StringType_Floss.STACK)
-    if args.floss_only_tight: floss_only_types_resolved.append(Actual_StringType_Floss.TIGHT)
-    if args.floss_only_decoded: floss_only_types_resolved.append(Actual_StringType_Floss.DECODED)
+    if args.floss_only_static: cfg.floss_only_types.append(Actual_StringType_Floss.STATIC)
+    if args.floss_only_stack: cfg.floss_only_types.append(Actual_StringType_Floss.STACK)
+    if args.floss_only_tight: cfg.floss_only_types.append(Actual_StringType_Floss.TIGHT)
+    if args.floss_only_decoded: cfg.floss_only_types.append(Actual_StringType_Floss.DECODED)
 
-    floss_functions_to_analyze_resolved = []
-    if args.floss_functions:
-        for func_str in args.floss_functions:
-            try: floss_functions_to_analyze_resolved.append(int(func_str, 0))
-            except ValueError: logger.warning("Invalid FLOSS function address '%s', skipping.", func_str)
+    for func_str in (args.floss_functions or []):
+        try:
+            cfg.floss_functions.append(int(func_str, 0))
+        except ValueError:
+            logger.warning("Invalid FLOSS function address '%s', skipping.", func_str)
 
-    floss_quiet_resolved = args.floss_quiet or (not args.verbose and args.mcp_server and not (floss_script_debug_level_enum_val_resolved > Actual_DebugLevel_Floss.NONE))
+    cfg.floss_quiet = args.floss_quiet or (
+        not args.verbose and args.mcp_server
+        and not (cfg.floss_debug_level > Actual_DebugLevel_Floss.NONE)
+    )
 
-    # --- MCP Server Mode ---
-    if args.mcp_server:
-        if not MCP_SDK_AVAILABLE:
-            logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.");
+
+# ---------------------------------------------------------------------------
+#  Phase 5: MCP pre-loading
+# ---------------------------------------------------------------------------
+
+def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
+    """Pre-load a file into state for MCP server mode."""
+    abs_input_file = cfg.abs_input_file
+    logger.info("MCP Server: Loading input file: %s (Mode: %s)", abs_input_file, args.mode)
+    try:
+        if not os.path.isfile(abs_input_file):
+            logger.critical("Input path for MCP server is not a file: %s", abs_input_file)
             sys.exit(1)
 
-        # Configure path sandboxing — mandatory for HTTP transports
-        if args.allowed_paths:
-            state.allowed_paths = [str(Path(p).resolve()) for p in args.allowed_paths]
-            logger.info("Path sandboxing enabled. Allowed paths: %s", state.allowed_paths)
-        elif args.mcp_transport in ("sse", "streamable-http"):
-            logger.critical(
-                "Running in network mode (HTTP) requires --allowed-paths for security. "
-                "Specify directories that MCP clients are allowed to access, e.g.: "
-                "--allowed-paths /path/to/samples /tmp/analysis"
-            )
-            sys.exit(1)
-
-        # Configure API key authentication for HTTP transports
-        api_key = args.api_key or os.environ.get("PEMCP_API_KEY")
-        if args.mcp_transport in ("sse", "streamable-http"):
-            if api_key:
-                state.api_key = api_key
-                logger.info("API key authentication enabled for HTTP transport.")
-            else:
+        # Auto-detect format if mode is 'auto'
+        effective_mode = args.mode
+        if effective_mode == 'auto':
+            with open(abs_input_file, 'rb') as f:
+                magic = f.read(4)
+            effective_mode = detect_format_from_magic(magic)
+            if effective_mode == "unknown":
+                effective_mode = 'pe'
                 logger.warning(
-                    "Running HTTP transport without --api-key. Any client that can reach the "
-                    "endpoint can use all tools. Set --api-key or PEMCP_API_KEY env var for "
-                    "bearer token authentication. Use a TLS-terminating reverse proxy in production."
+                    "Unrecognized file format (magic: %s). "
+                    "Falling back to PE mode. Use --mode to specify the format explicitly.",
+                    magic.hex(),
                 )
+            logger.info("Auto-detected format: %s", effective_mode)
 
-        # Configure samples directory
-        samples_path = args.samples_path or os.environ.get("PEMCP_SAMPLES")
-        if samples_path:
-            resolved = str(Path(samples_path).resolve())
-            if os.path.isdir(resolved):
-                state.samples_path = resolved
-                logger.info("Samples directory configured: %s", resolved)
-            else:
-                logger.warning("Samples path does not exist or is not a directory: %s", resolved)
+        # Loading logic with mode support
+        if effective_mode == 'shellcode':
+            with open(abs_input_file, 'rb') as f:
+                raw_data = f.read()
+            state.pe_object = MockPE(raw_data)
+            state.filepath = abs_input_file
+            state.pe_data = {
+                "filepath": abs_input_file,
+                "mode": "shellcode",
+                "file_hashes": _parse_file_hashes(raw_data),
+                "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
+                "floss_analysis": {"status": "Pending..."}
+            }
+            if "floss" not in cfg.analyses_to_skip:
+                state.pe_data['floss_analysis'] = _parse_floss_analysis(
+                    abs_input_file, cfg.floss_min_len, args.floss_verbose_level,
+                    cfg.floss_debug_level, cfg.floss_fmt,
+                    cfg.floss_disabled_types, cfg.floss_only_types,
+                    cfg.floss_functions, cfg.floss_quiet,
+                    args.regex_pattern
+                )
+                _perform_unified_string_sifting(state.pe_data)
+
+        elif effective_mode in ('elf', 'macho'):
+            with open(abs_input_file, 'rb') as f:
+                raw_data = f.read()
+            state.pe_object = MockPE(raw_data)
+            state.filepath = abs_input_file
+            format_label = "ELF" if effective_mode == "elf" else "Mach-O"
+            state.pe_data = {
+                "filepath": abs_input_file,
+                "mode": effective_mode,
+                "format": format_label,
+                "file_hashes": _parse_file_hashes(raw_data),
+                "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
+                "note": f"{format_label} binary loaded. Use format-specific tools (elf_analyze/macho_analyze) and angr tools for analysis.",
+            }
+            logger.info("Loaded %s binary: %s", format_label, abs_input_file)
+
         else:
-            logger.info("No samples directory configured. Use --samples-path or set PEMCP_SAMPLES env var to enable the list_samples tool.")
+            temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
+            state.filepath = abs_input_file
+            state.pe_object = temp_pe_obj_for_preload
+            state.pe_data = _parse_pe_to_dict(
+                temp_pe_obj_for_preload, abs_input_file, cfg.abs_peid_db_path, cfg.abs_yara_rules_path,
+                cfg.abs_capa_rules_dir, cfg.abs_capa_sigs_dir,
+                args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
+                floss_min_len_arg=cfg.floss_min_len,
+                floss_verbose_level_arg=args.floss_verbose_level,
+                floss_script_debug_level_arg=cfg.floss_debug_level,
+                floss_format_hint_arg=cfg.floss_fmt,
+                floss_disabled_types_arg=cfg.floss_disabled_types,
+                floss_only_types_arg=cfg.floss_only_types,
+                floss_functions_to_analyze_arg=cfg.floss_functions,
+                floss_quiet_mode_arg=cfg.floss_quiet,
+                analyses_to_skip=cfg.analyses_to_skip
+            )
+            _perform_unified_string_sifting(state.pe_data)
 
-        # --- Optional Pre-loading (only when --input-file is provided) ---
-        if abs_input_file:
-            logger.info("MCP Server: Loading input file: %s (Mode: %s)", abs_input_file, args.mode)
-            try:
-                if not os.path.isfile(abs_input_file):
-                    logger.critical("Input path for MCP server is not a file: %s", abs_input_file)
-                    sys.exit(1)
+        logger.info("MCP: Successfully loaded analysis for: %s.", abs_input_file)
 
-                # --- Auto-detect format if mode is 'auto' ---
-                effective_mode = args.mode
-                if effective_mode == 'auto':
-                    with open(abs_input_file, 'rb') as f:
-                        magic = f.read(4)
-                    effective_mode = detect_format_from_magic(magic)
-                    if effective_mode == "unknown":
-                        effective_mode = 'pe'  # fallback
-                        logger.warning(
-                            "Unrecognized file format (magic: %s). "
-                            "Falling back to PE mode. Use --mode to specify the format explicitly.",
-                            magic.hex(),
-                        )
-                    logger.info("Auto-detected format: %s", effective_mode)
+        # Background Angr analysis (mode aware)
+        if ANGR_AVAILABLE:
+            arch_hint = "amd64" if "64" in cfg.floss_fmt else "x86"
+            start_angr_background(
+                abs_input_file,
+                mode=effective_mode,
+                arch_hint=arch_hint,
+                tool_label="startup_auto_analysis",
+            )
 
-                # --- Loading Logic with Mode Support ---
-                if effective_mode == 'shellcode':
-                    with open(abs_input_file, 'rb') as f:
-                        raw_data = f.read()
-                    state.pe_object = MockPE(raw_data)
-                    state.filepath = abs_input_file
+    except (OSError, pefile.PEFormatError, ValueError, RuntimeError) as e:
+        logger.critical("MCP: Failed to pre-load file: %s: %s", type(e).__name__, e, exc_info=True)
+        if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
+            temp_pe_obj_for_preload.close()
+        state.filepath = None
+        state.pe_data = None
+        state.pe_object = None
+        logger.error("MCP server startup aborted due to pre-load failure.")
+        sys.exit(1)
+    except Exception as e:
+        logger.critical("MCP: Unexpected error during pre-load: %s: %s", type(e).__name__, e, exc_info=True)
+        if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
+            temp_pe_obj_for_preload.close()
+        state.filepath = None
+        state.pe_data = None
+        state.pe_object = None
+        sys.exit(1)
 
-                    state.pe_data = {
-                        "filepath": abs_input_file,
-                        "mode": "shellcode",
-                        "file_hashes": _parse_file_hashes(raw_data),
-                        "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
-                        "floss_analysis": {"status": "Pending..."}
-                    }
 
-                    if "floss" not in analyses_to_skip_arg_list:
-                        state.pe_data['floss_analysis'] = _parse_floss_analysis(
-                            abs_input_file, floss_min_len_resolved, args.floss_verbose_level,
-                            floss_script_debug_level_enum_val_resolved, floss_fmt,
-                            floss_disabled_types_resolved, floss_only_types_resolved,
-                            floss_functions_to_analyze_resolved, floss_quiet_resolved,
-                            args.regex_pattern
-                        )
-                        _perform_unified_string_sifting(state.pe_data)
+# ---------------------------------------------------------------------------
+#  Phase 6: MCP server startup
+# ---------------------------------------------------------------------------
 
-                elif effective_mode in ('elf', 'macho'):
-                    with open(abs_input_file, 'rb') as f:
-                        raw_data = f.read()
-                    state.pe_object = MockPE(raw_data)
-                    state.filepath = abs_input_file
-                    format_label = "ELF" if effective_mode == "elf" else "Mach-O"
+def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level: int) -> None:
+    """Configure and run the MCP server."""
+    if not MCP_SDK_AVAILABLE:
+        logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.")
+        sys.exit(1)
 
-                    state.pe_data = {
-                        "filepath": abs_input_file,
-                        "mode": effective_mode,
-                        "format": format_label,
-                        "file_hashes": _parse_file_hashes(raw_data),
-                        "basic_ascii_strings": [{"offset": hex(o), "string": s} for o, s in _extract_strings_from_data(raw_data, 5)],
-                        "note": f"{format_label} binary loaded. Use format-specific tools (elf_analyze/macho_analyze) and angr tools for analysis.",
-                    }
-                    logger.info("Loaded %s binary: %s", format_label, abs_input_file)
+    # Configure path sandboxing — mandatory for HTTP transports
+    if args.allowed_paths:
+        state.allowed_paths = [str(Path(p).resolve()) for p in args.allowed_paths]
+        logger.info("Path sandboxing enabled. Allowed paths: %s", state.allowed_paths)
+    elif args.mcp_transport in ("sse", "streamable-http"):
+        logger.critical(
+            "Running in network mode (HTTP) requires --allowed-paths for security. "
+            "Specify directories that MCP clients are allowed to access, e.g.: "
+            "--allowed-paths /path/to/samples /tmp/analysis"
+        )
+        sys.exit(1)
 
-                else:
-                    temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
-                    state.filepath = abs_input_file
-                    state.pe_object = temp_pe_obj_for_preload
-
-                    state.pe_data = _parse_pe_to_dict(
-                        temp_pe_obj_for_preload, abs_input_file, abs_peid_db_path, abs_yara_rules_path,
-                        abs_capa_rules_dir_arg, abs_capa_sigs_dir_arg,
-                        args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                        floss_min_len_arg=floss_min_len_resolved,
-                        floss_verbose_level_arg=args.floss_verbose_level,
-                        floss_script_debug_level_arg=floss_script_debug_level_enum_val_resolved,
-                        floss_format_hint_arg=floss_fmt,
-                        floss_disabled_types_arg=floss_disabled_types_resolved,
-                        floss_only_types_arg=floss_only_types_resolved,
-                        floss_functions_to_analyze_arg=floss_functions_to_analyze_resolved,
-                        floss_quiet_mode_arg=floss_quiet_resolved,
-                        analyses_to_skip=analyses_to_skip_arg_list
-                    )
-                    _perform_unified_string_sifting(state.pe_data)
-
-                logger.info("MCP: Successfully loaded analysis for: %s.", abs_input_file)
-
-                # --- Background Angr Analysis (Mode Aware) ---
-                if ANGR_AVAILABLE:
-                    arch_hint = "amd64" if "64" in floss_fmt else "x86"
-                    start_angr_background(
-                        abs_input_file,
-                        mode=effective_mode,
-                        arch_hint=arch_hint,
-                        tool_label="startup_auto_analysis",
-                    )
-
-            except (OSError, pefile.PEFormatError, ValueError, RuntimeError) as e:
-                logger.critical("MCP: Failed to pre-load file: %s: %s", type(e).__name__, e, exc_info=True)
-                if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
-                    temp_pe_obj_for_preload.close()
-                state.filepath = None
-                state.pe_data = None
-                state.pe_object = None
-                logger.error("MCP server startup aborted due to pre-load failure.")
-                sys.exit(1)
-            except Exception as e:
-                logger.critical("MCP: Unexpected error during pre-load: %s: %s", type(e).__name__, e, exc_info=True)
-                if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
-                    temp_pe_obj_for_preload.close()
-                state.filepath = None
-                state.pe_data = None
-                state.pe_object = None
-                sys.exit(1)
+    # Configure API key authentication for HTTP transports
+    api_key = args.api_key or os.environ.get("PEMCP_API_KEY")
+    if args.mcp_transport in ("sse", "streamable-http"):
+        if api_key:
+            state.api_key = api_key
+            logger.info("API key authentication enabled for HTTP transport.")
         else:
-            logger.info("MCP Server: No --input-file provided. Server starting without a pre-loaded file.")
-            logger.info("Use the 'open_file' tool to load a PE file for analysis.")
+            logger.warning(
+                "Running HTTP transport without --api-key. Any client that can reach the "
+                "endpoint can use all tools. Set --api-key or PEMCP_API_KEY env var for "
+                "bearer token authentication. Use a TLS-terminating reverse proxy in production."
+            )
 
-        logger.info("The MCP server is ready.")
-
-        if args.mcp_transport in ("sse", "streamable-http"):
-            mcp_server.settings.host = args.mcp_host
-            mcp_server.settings.port = args.mcp_port
-            mcp_server.settings.log_level = logging.getLevelName(log_level).lower()
-            transport_label = "streamable-http" if args.mcp_transport == "streamable-http" else "SSE (deprecated)"
-            logger.info("Starting MCP server (%s) on http://%s:%d", transport_label, args.mcp_host, args.mcp_port)
+    # Configure samples directory
+    samples_path = args.samples_path or os.environ.get("PEMCP_SAMPLES")
+    if samples_path:
+        resolved = str(Path(samples_path).resolve())
+        if os.path.isdir(resolved):
+            state.samples_path = resolved
+            logger.info("Samples directory configured: %s", resolved)
         else:
-            logger.info("Starting MCP server (stdio).")
-
-        server_exc=None
-        try:
-            # If API key is configured for HTTP transport, wrap with auth middleware
-            if api_key and args.mcp_transport in ("sse", "streamable-http"):
-                try:
-                    import uvicorn
-                    from pemcp.auth import BearerAuthMiddleware
-
-                    if args.mcp_transport == "streamable-http":
-                        app = mcp_server.streamable_http_app()
-                    else:
-                        app = mcp_server.sse_app()
-                    secured_app = BearerAuthMiddleware(app, api_key)
-                    uvicorn.run(
-                        secured_app,
-                        host=args.mcp_host,
-                        port=args.mcp_port,
-                        log_level=logging.getLevelName(log_level).lower(),
-                    )
-                except (ImportError, AttributeError) as e:
-                    logger.warning("Could not apply auth middleware (%s), falling back to unauthenticated mode", e)
-                    mcp_server.run(transport=args.mcp_transport)
-            else:
-                mcp_server.run(transport=args.mcp_transport)
-        except KeyboardInterrupt:
-            logger.info("MCP Server stopped by user (KeyboardInterrupt).")
-        except Exception as e:
-            logger.critical("MCP Server encountered an unhandled error: %s", e, exc_info=True)
-            server_exc=e
-        finally:
-            if state.pe_object:
-                state.pe_object.close()
-                logger.info("MCP: Closed pre-loaded object upon server exit.")
-            sys.exit(1 if server_exc else 0)
-
-    # --- CLI Mode ---
+            logger.warning("Samples path does not exist or is not a directory: %s", resolved)
     else:
-        try:
-            if args.mode == 'shellcode':
-                print(f"[*] CLI Mode: Shellcode Analysis ({abs_input_file})")  # abs_input_file guaranteed non-None in CLI mode
-                with open(abs_input_file, 'rb') as f:
-                    data = f.read()
+        logger.info("No samples directory configured. Use --samples-path or set PEMCP_SAMPLES env var to enable the list_samples tool.")
 
-                print(f"\n--- File Hashes ---")
-                hashes = _parse_file_hashes(data)
-                for k, v in hashes.items(): print(f"  {k.upper()}: {v}")
+    # Optional pre-loading
+    if cfg.abs_input_file:
+        _preload_file(args, cfg)
+    else:
+        logger.info("MCP Server: No --input-file provided. Server starting without a pre-loaded file.")
+        logger.info("Use the 'open_file' tool to load a PE file for analysis.")
 
-                if args.extract_strings:
-                    print(f"\n--- Strings (Min Len: {args.min_str_len}) ---")
-                    for off, s in _extract_strings_from_data(data, args.min_str_len):
-                        print(f"  {hex(off)}: {s}")
+    logger.info("The MCP server is ready.")
 
-                if args.hexdump_offset is not None and args.hexdump_length is not None:
-                     print(f"\n--- Hex Dump ---")
-                     start = args.hexdump_offset
-                     end = start + args.hexdump_length
-                     lines = _format_hex_dump_lines(data[start:end], start, 16)
-                     for l in lines[:args.hexdump_lines]: print(l)
+    if args.mcp_transport in ("sse", "streamable-http"):
+        mcp_server.settings.host = args.mcp_host
+        mcp_server.settings.port = args.mcp_port
+        mcp_server.settings.log_level = logging.getLevelName(log_level).lower()
+        transport_label = "streamable-http" if args.mcp_transport == "streamable-http" else "SSE (deprecated)"
+        logger.info("Starting MCP server (%s) on http://%s:%d", transport_label, args.mcp_host, args.mcp_port)
+    else:
+        logger.info("Starting MCP server (stdio).")
 
-                print("\n[!] Note: For deep shellcode analysis (Angr/FLOSS), please use MCP Server mode or FLOSS directly.")
+    # Translate SIGTERM into KeyboardInterrupt so the existing cleanup
+    # path (finally block) runs identically for both Ctrl-C and container
+    # stop / kill signals.
+    def _sigterm_handler(signum, frame):
+        raise KeyboardInterrupt
 
-            elif args.mode in ('elf', 'macho'):
-                print(f"[!] Error: CLI mode does not support '{args.mode}' format analysis.", file=sys.stderr)
-                print("[!] Please use MCP server mode (--mcp-server) for ELF and Mach-O analysis.", file=sys.stderr)
-                sys.exit(1)
-            else:
-                # PE CLI Mode
-                pe_obj = pefile.PE(abs_input_file, fast_load=False)
-                try:
-                    _cli_analyze_and_print_pe(
-                        abs_input_file, abs_peid_db_path, abs_yara_rules_path,
-                        abs_capa_rules_dir_arg, abs_capa_sigs_dir_arg,
-                        args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                        floss_min_len_resolved, args.floss_verbose_level,
-                        floss_script_debug_level_enum_val_resolved, floss_fmt,
-                        floss_disabled_types_resolved, floss_only_types_resolved,
-                        floss_functions_to_analyze_resolved, floss_quiet_resolved,
-                        args.extract_strings, args.min_str_len, args.search_string,
-                        args.strings_limit, args.hexdump_offset, args.hexdump_length,
-                        args.hexdump_lines, analyses_to_skip_arg_list
-                    )
-                finally:
-                    pe_obj.close()
-        except KeyboardInterrupt:
-            print("\n[*] CLI Analysis interrupted by user. Exiting.")
+    signal.signal(signal.SIGTERM, _sigterm_handler)
+
+    server_exc = None
+    try:
+        # If API key is configured for HTTP transport, wrap with auth middleware
+        if api_key and args.mcp_transport in ("sse", "streamable-http"):
+            try:
+                import uvicorn
+                from pemcp.auth import BearerAuthMiddleware
+
+                if args.mcp_transport == "streamable-http":
+                    app = mcp_server.streamable_http_app()
+                else:
+                    app = mcp_server.sse_app()
+                secured_app = BearerAuthMiddleware(app, api_key)
+                uvicorn.run(
+                    secured_app,
+                    host=args.mcp_host,
+                    port=args.mcp_port,
+                    log_level=logging.getLevelName(log_level).lower(),
+                )
+            except (ImportError, AttributeError) as e:
+                logger.warning("Could not apply auth middleware (%s), falling back to unauthenticated mode", e)
+                mcp_server.run(transport=args.mcp_transport)
+        else:
+            mcp_server.run(transport=args.mcp_transport)
+    except KeyboardInterrupt:
+        logger.info("MCP Server stopped by user (KeyboardInterrupt).")
+    except Exception as e:
+        logger.critical("MCP Server encountered an unhandled error: %s", e, exc_info=True)
+        server_exc = e
+    finally:
+        if state.pe_object:
+            state.pe_object.close()
+            logger.info("MCP: Closed pre-loaded object upon server exit.")
+        sys.exit(1 if server_exc else 0)
+
+
+# ---------------------------------------------------------------------------
+#  Phase 7: CLI analysis
+# ---------------------------------------------------------------------------
+
+def _run_cli_analysis(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
+    """Run CLI-mode analysis and print results."""
+    abs_input_file = cfg.abs_input_file
+    try:
+        if args.mode == 'shellcode':
+            print(f"[*] CLI Mode: Shellcode Analysis ({abs_input_file})")
+            with open(abs_input_file, 'rb') as f:
+                data = f.read()
+
+            print(f"\n--- File Hashes ---")
+            hashes = _parse_file_hashes(data)
+            for k, v in hashes.items(): print(f"  {k.upper()}: {v}")
+
+            if args.extract_strings:
+                print(f"\n--- Strings (Min Len: {args.min_str_len}) ---")
+                for off, s in _extract_strings_from_data(data, args.min_str_len):
+                    print(f"  {hex(off)}: {s}")
+
+            if args.hexdump_offset is not None and args.hexdump_length is not None:
+                 print(f"\n--- Hex Dump ---")
+                 start = args.hexdump_offset
+                 end = start + args.hexdump_length
+                 lines = _format_hex_dump_lines(data[start:end], start, 16)
+                 for l in lines[:args.hexdump_lines]: print(l)
+
+            print("\n[!] Note: For deep shellcode analysis (Angr/FLOSS), please use MCP Server mode or FLOSS directly.")
+
+        elif args.mode in ('elf', 'macho'):
+            print(f"[!] Error: CLI mode does not support '{args.mode}' format analysis.", file=sys.stderr)
+            print("[!] Please use MCP server mode (--mcp-server) for ELF and Mach-O analysis.", file=sys.stderr)
             sys.exit(1)
-        except Exception as e_cli_main:
-            print(f"\n[!] A critical unexpected error occurred during CLI analysis: {type(e_cli_main).__name__} - {e_cli_main}", file=sys.stderr)
-            sys.exit(1)
+        else:
+            # PE CLI Mode
+            pe_obj = pefile.PE(abs_input_file, fast_load=False)
+            try:
+                _cli_analyze_and_print_pe(
+                    abs_input_file, cfg.abs_peid_db_path, cfg.abs_yara_rules_path,
+                    cfg.abs_capa_rules_dir, cfg.abs_capa_sigs_dir,
+                    args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
+                    cfg.floss_min_len, args.floss_verbose_level,
+                    cfg.floss_debug_level, cfg.floss_fmt,
+                    cfg.floss_disabled_types, cfg.floss_only_types,
+                    cfg.floss_functions, cfg.floss_quiet,
+                    args.extract_strings, args.min_str_len, args.search_string,
+                    args.strings_limit, args.hexdump_offset, args.hexdump_length,
+                    args.hexdump_lines, cfg.analyses_to_skip
+                )
+            finally:
+                pe_obj.close()
+    except KeyboardInterrupt:
+        print("\n[*] CLI Analysis interrupted by user. Exiting.")
+        sys.exit(1)
+    except Exception as e_cli_main:
+        print(f"\n[!] A critical unexpected error occurred during CLI analysis: {type(e_cli_main).__name__} - {e_cli_main}", file=sys.stderr)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+#  Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    args = _parse_arguments()
+    log_level = _configure_logging(args)
+    cfg = _resolve_paths(args)
+
+    if args.mcp_server:
+        _start_mcp_server(args, cfg, log_level)
+    else:
+        _run_cli_analysis(args, cfg)
