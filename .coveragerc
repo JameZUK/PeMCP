@@ -4,7 +4,6 @@ omit =
     pemcp/mcp/tools_*.py
     pemcp/mcp/server.py
     pemcp/mcp/_angr_helpers.py
-    pemcp/mcp/_format_helpers.py
     # Parsers requiring optional heavy deps
     pemcp/parsers/capa.py
     pemcp/parsers/floss.py

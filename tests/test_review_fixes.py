@@ -21,7 +21,7 @@ pytest.importorskip("pefile", reason="pefile not installed")
 
 def _run(coro):
     """Helper to run async functions in tests."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 # ===================================================================

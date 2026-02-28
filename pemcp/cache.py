@@ -211,7 +211,9 @@ class AnalysisCache:
         Store a ``pe_data`` dict in the cache.  Returns True on success.
 
         Optionally includes session notes and tool history alongside the
-        analysis data.
+        analysis data.  The gzip compression runs outside the lock to
+        avoid blocking concurrent callers during the (potentially slow)
+        compression step.
         """
         if not self.enabled:
             return False
@@ -241,6 +243,16 @@ class AnalysisCache:
             "tool_history": tool_history or [],
         }
 
+        # Compress OUTSIDE the lock — this can be slow for large analyses
+        # and would otherwise block concurrent get()/put() callers.
+        try:
+            compressed = gzip.compress(
+                json.dumps(wrapper).encode("utf-8")
+            )
+        except (TypeError, ValueError) as e:
+            logger.error("Cache serialization error for %s...: %s", sha256[:12], e)
+            return False
+
         with self._lock:
             try:
                 entry_dir = self._entry_dir(sha256)
@@ -248,11 +260,10 @@ class AnalysisCache:
                 entry_path = self._entry_path(sha256)
 
                 tmp = entry_path.with_suffix(".tmp")
-                with gzip.open(tmp, "wt", encoding="utf-8") as f:
-                    json.dump(wrapper, f)
+                tmp.write_bytes(compressed)
                 tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
 
-                file_size = entry_path.stat().st_size
+                file_size = len(compressed)
                 meta = self._load_meta()
                 meta[sha256] = {
                     "original_filename": os.path.basename(original_filepath),
@@ -279,7 +290,7 @@ class AnalysisCache:
                 self._evict_if_needed(meta)
                 return True
 
-            except (OSError, TypeError, ValueError) as e:
+            except OSError as e:
                 logger.error("Cache write error for %s...: %s", sha256[:12], e)
                 return False
 

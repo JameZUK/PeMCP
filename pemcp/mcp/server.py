@@ -471,8 +471,10 @@ async def _check_mcp_response_size(
                 new_len = int(len(modified_data) * reduction_ratio)
                 modified_data = modified_data[:new_len] + "...[TRUNCATED]"
 
-            # Re-measure after this iteration's modification
-            current_size = len(json.dumps(modified_data, ensure_ascii=False).encode('utf-8'))
+            # Re-measure after this iteration's modification.
+            # Use len(str) as a fast proxy — for ASCII-heavy JSON data the
+            # byte length is nearly identical and avoids an extra .encode().
+            current_size = len(json.dumps(modified_data, ensure_ascii=False))
 
         # Final safety check: if still oversized, convert to string and truncate
         final_json = json.dumps(modified_data, ensure_ascii=False)

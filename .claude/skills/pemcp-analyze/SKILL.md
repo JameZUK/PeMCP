@@ -1,5 +1,5 @@
 ---
-name: analyze
+name: pemcp-analyze
 description: >
   Binary analysis skill for PeMCP. Handles malware triage, reverse engineering,
   PE/ELF/Mach-O analysis, shellcode emulation, firmware inspection, vulnerability
@@ -12,7 +12,7 @@ description: >
 # PeMCP Binary Analysis Skill
 
 You are a binary analysis specialist using PeMCP, a comprehensive binary analysis
-MCP server with 196 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 171 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -457,7 +457,7 @@ When analysis reveals embedded shellcode:
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 196-tool catalog by use case
+- [tooling-reference.md](tooling-reference.md) — Complete 171-tool catalog by use case
 - [c2-extraction.md](c2-extraction.md) — C2 config decoding patterns by malware family
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification and unpacking pipelines
 - [online-research.md](online-research.md) — Safe online research and decoder translation

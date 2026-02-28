@@ -1,6 +1,6 @@
 # PeMCP Tool Reference
 
-Complete catalog of all 196 MCP tools organized by use case.
+Complete catalog of all 171 MCP tools organized by use case.
 Source files: `pemcp/mcp/tools_*.py`
 
 ---
@@ -32,6 +32,9 @@ Source files: `pemcp/mcp/tools_*.py`
 | `classify_binary_purpose` | Determine binary type (GUI, DLL, driver, service) | — |
 | `get_virustotal_report_for_loaded_file` | Check community reputation | — |
 | `get_analyzed_file_summary` | Quick summary without full triage | — |
+| `get_capa_analysis_info` | CAPA capability analysis overview | — |
+| `get_capa_rule_match_details` | Detailed match info for a specific capa rule | `rule_name` |
+| `get_extended_capabilities` | Extended capability detection beyond capa | — |
 
 ## PE Structure
 
