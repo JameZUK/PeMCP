@@ -285,7 +285,7 @@ pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
 pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
 pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
 pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 175 tools exist
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 178 tools exist
 ```
 
 ### Environment Variables
