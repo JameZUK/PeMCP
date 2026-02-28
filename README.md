@@ -1,10 +1,8 @@
-# PeMCP - GenAI Automated Advanced Multi-Format Binary Analysis
+# PeMCP - AI-Powered Binary Analysis
 
 ![PeMCP Logo](docs/logo.svg)
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **175 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
-
-PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
+Point an AI at a binary and ask questions. PeMCP gives Claude Code (or any MCP client) **175 analysis tools** — decompilation, emulation, string decoding, YARA scanning, and more — so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by just describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
 
 ---
 
