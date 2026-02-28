@@ -95,7 +95,6 @@ common_args() {
 
     args+=(
         -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
-        -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro${SELINUX_SUFFIX}"
         -v "$CACHE_DIR:/app/home/.pemcp:rw${SELINUX_SUFFIX}"
     )

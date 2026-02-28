@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-PeMCP is a **professional-grade binary analysis toolkit** that exposes 196+ specialised tools via the Model Context Protocol (MCP), bridging AI reasoning with low-level reverse engineering. The codebase is well-structured, thoughtfully documented, and production-ready for its Docker-first deployment model. The architecture demonstrates mature engineering patterns — per-session state isolation via `contextvars`, graceful degradation for 20+ optional libraries, and an elegant subprocess-venv strategy to resolve incompatible unicorn engine versions across four emulation frameworks.
+PeMCP is a **professional-grade binary analysis toolkit** that exposes 171 specialised tools via the Model Context Protocol (MCP), bridging AI reasoning with low-level reverse engineering. The codebase is well-structured, thoughtfully documented, and production-ready for its Docker-first deployment model. The architecture demonstrates mature engineering patterns — per-session state isolation via `contextvars`, graceful degradation for 20+ optional libraries, and an elegant subprocess-venv strategy to resolve incompatible unicorn engine versions across four emulation frameworks.
 
 **Overall Assessment: Strong** — with a handful of targeted improvements that would elevate it further.
 

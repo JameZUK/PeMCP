@@ -2,7 +2,7 @@
 
 ![PeMCP Logo](docs/logo.svg)
 
-PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **196 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
+PeMCP is a professional-grade Python toolkit for in-depth static and dynamic analysis of **PE, ELF, Mach-O, .NET, Go, and Rust** binaries, plus raw shellcode. It operates as both a powerful CLI tool for generating comprehensive reports and as a **Model Context Protocol (MCP) server**, providing AI assistants and other MCP clients with **171 specialised tools** to interactively explore, decompile, and analyse binaries across all major platforms.
 
 PeMCP bridges the gap between high-level AI reasoning and low-level binary instrumentation, turning any MCP-compatible client into a capable malware analyst.
 
@@ -50,11 +50,11 @@ This creates three critical bottlenecks:
 
 ### How PeMCP Changes the Game
 
-PeMCP eliminates these bottlenecks by putting **196 specialised analysis tools behind a single AI-driven interface**. Instead of learning 10 different tools, you describe what you want to know in natural language and the AI orchestrates the right tools automatically.
+PeMCP eliminates these bottlenecks by putting **171 specialised analysis tools behind a single AI-driven interface**. Instead of learning 10 different tools, you describe what you want to know in natural language and the AI orchestrates the right tools automatically.
 
 **What makes PeMCP unique is the combination of three capabilities that no other single tool provides:**
 
-1. **Breadth** — 196 tools spanning PE/ELF/Mach-O parsing, Angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/Capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration. This is the equivalent of an entire malware lab in one MCP server.
+1. **Breadth** — 171 tools spanning PE/ELF/Mach-O parsing, Angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/Capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration. This is the equivalent of an entire malware lab in one MCP server.
 
 2. **AI reasoning over results** — Unlike tools that just produce output, PeMCP feeds results back to an AI that can reason about them. When the AI decompiles a function and sees `VirtualAlloc` followed by `memcpy` and an indirect call, it doesn't just report the disassembly — it recognises the shellcode injection pattern, notes it as a finding, and suggests investigating the source buffer.
 
@@ -276,7 +276,7 @@ Analyst: "Open this carved PE and analyse it"
 
 | Capability | PeMCP | Ghidra | IDA Pro | pestudio | CyberChef | Binary Refinery CLI |
 |---|---|---|---|---|---|---|
-| **PE/ELF/Mach-O parsing** | 196 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
+| **PE/ELF/Mach-O parsing** | 171 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
 | **Decompilation** | Angr (auto, all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No | No | No |
 | **Symbolic execution** | Angr (automated) | Limited (Ghidra scripts) | No | No | No | No |
 | **Data transforms** | 200+ via Binary Refinery | Manual scripting | Manual scripting | No | 300+ (manual) | 200+ (CLI) |
@@ -523,7 +523,7 @@ PeMCP understands analytical intent, not just tool commands. Here are examples o
 
 ## Analysis Skill for Claude Code
 
-PeMCP ships with an **analysis skill** — a structured workflow that teaches Claude Code how to use PeMCP's 196 tools methodically, rather than relying on the model to figure it out from tool descriptions alone.
+PeMCP ships with an **analysis skill** — a structured workflow that teaches Claude Code how to use PeMCP's 171 tools methodically, rather than relying on the model to figure it out from tool descriptions alone.
 
 Without the skill, Claude Code can still call PeMCP tools individually, but it won't follow a structured analysis methodology, may miss important steps, and won't know PeMCP-specific patterns like session persistence, note-taking discipline, or unpacking cascades.
 
@@ -536,23 +536,23 @@ The skill provides Claude Code with:
 - **Evidence-first methodology** — All findings must cite specific tool output. Indicators (VirusTotal detections, capa matches, YARA hits) are treated as leads to investigate, not conclusions. Extraction of C2 configs and decoded payloads includes the full chain of evidence (where the data was, what algorithm/key was used, how the key was obtained).
 - **Multi-file workflows** — Guidance for dropper-payload relationships, DLL sideloading investigations, campaign sample comparison, and shellcode extraction from loaders, including cross-file reference discovery (searching strings and imports for companion filenames).
 - **Context management** — Automatic note-taking after every decompilation, periodic digest calls to synthesise findings, and session persistence awareness.
-- **Comprehensive tool coverage** — A complete reference for all 196 tools organised by use case, plus specialised guides for C2 config extraction, unpacking strategies, and safe online research methodology.
+- **Comprehensive tool coverage** — A complete reference for all 171 tools organised by use case, plus specialised guides for C2 config extraction, unpacking strategies, and safe online research methodology.
 
 ### Installing the Skill
 
-The skill files live in `.claude/skills/analyze/` within the PeMCP repository. If you cloned the repo, they're already in place — no additional installation is needed.
+The skill files live in `.claude/skills/pemcp-analyze/` within the PeMCP repository. If you cloned the repo, they're already in place — no additional installation is needed.
 
 **Verify the skill is present:**
 
 ```bash
-ls .claude/skills/analyze/
+ls .claude/skills/pemcp-analyze/
 ```
 
 You should see:
 
 ```
 SKILL.md              # Core workflow — phases, operating principles, goal detection
-tooling-reference.md  # Complete 196-tool catalog by use case
+tooling-reference.md  # Complete 171-tool catalog by use case
 c2-extraction.md      # C2 config decoding patterns by malware family
 unpacking-guide.md    # Packer identification and unpacking pipelines
 online-research.md    # Safe online research and decoder translation
@@ -575,10 +575,10 @@ online-research.md    # Safe online research and decoder translation
 
 **Automatic invocation** — The skill triggers automatically when Claude Code detects binary analysis context (PeMCP tools in the conversation, or keywords like "malware", "binary", "analyse", "PE", "ELF", "decompile", etc.). Just start talking about analysis and the skill activates.
 
-**Manual invocation** — Type `/analyze` in Claude Code to explicitly activate the skill:
+**Manual invocation** — Type `/pemcp-analyze` in Claude Code to explicitly activate the skill:
 
 ```
-/analyze
+/pemcp-analyze
 ```
 
 **Example sessions:**
@@ -611,11 +611,11 @@ The skill runs autonomously through Phases 0-3 (environment discovery, identific
 
 | File | Purpose |
 |------|---------|
-| [`SKILL.md`](.claude/skills/analyze/SKILL.md) | Core workflow orchestration — operating principles, 8 analysis phases, goal detection, reporting format, multi-file workflows, context management |
-| [`tooling-reference.md`](.claude/skills/analyze/tooling-reference.md) | Complete catalog of all 196 MCP tools organised by use case with brief descriptions and key parameters |
-| [`c2-extraction.md`](.claude/skills/analyze/c2-extraction.md) | C2 config storage patterns, family-specific extraction strategies (Agent Tesla, AsyncRAT, Cobalt Strike, Emotet, Remcos, etc.), generic unknown-family approach, validation checklist |
-| [`unpacking-guide.md`](.claude/skills/analyze/unpacking-guide.md) | Packer identification indicators, 5-method unpacking cascade (auto → orchestrated → emulation-based → emulation analysis → manual OEP), special cases for multi-layer packing, .NET obfuscators, shellcode loaders |
-| [`online-research.md`](.claude/skills/analyze/online-research.md) | When and how to research online, search query patterns, read-and-understand methodology, decoder operation → PeMCP tool translation table, safety rules |
+| [`SKILL.md`](.claude/skills/pemcp-analyze/SKILL.md) | Core workflow orchestration — operating principles, 8 analysis phases, goal detection, reporting format, multi-file workflows, context management |
+| [`tooling-reference.md`](.claude/skills/pemcp-analyze/tooling-reference.md) | Complete catalog of all 171 MCP tools organised by use case with brief descriptions and key parameters |
+| [`c2-extraction.md`](.claude/skills/pemcp-analyze/c2-extraction.md) | C2 config storage patterns, family-specific extraction strategies (Agent Tesla, AsyncRAT, Cobalt Strike, Emotet, Remcos, etc.), generic unknown-family approach, validation checklist |
+| [`unpacking-guide.md`](.claude/skills/pemcp-analyze/unpacking-guide.md) | Packer identification indicators, 5-method unpacking cascade (auto → orchestrated → emulation-based → emulation analysis → manual OEP), special cases for multi-layer packing, .NET obfuscators, shellcode loaders |
+| [`online-research.md`](.claude/skills/pemcp-analyze/online-research.md) | When and how to research online, search query patterns, read-and-understand methodology, decoder operation → PeMCP tool translation table, safety rules |
 
 ---
 
@@ -922,7 +922,7 @@ docker run --rm -i \
 
 ## MCP Tools Reference
 
-PeMCP exposes **196 tools** organised into the following categories.
+PeMCP exposes **171 tools** organised into the following categories.
 
 ### File Management & Sample Discovery
 
@@ -1552,7 +1552,7 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 PeMCP has two layers of testing, with automated CI via **GitHub Actions**:
 
 - **Unit tests** (`tests/`) — 398 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrized edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
-- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 196 MCP tools against a running server, organised into 19 test categories with pytest markers.
+- **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 171 MCP tools against a running server, organised into 19 test categories with pytest markers.
 - **CI/CD** (`.github/workflows/ci.yml`) — Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (60% floor), and syntax checking on every push and PR.
 
 ```bash
