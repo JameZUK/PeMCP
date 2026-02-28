@@ -858,9 +858,9 @@ class TestSignifyImportHandling:
     """Verify signify import handles non-ImportError exceptions."""
 
     def test_signify_import_has_general_exception_handler(self):
-        """config.py should catch generic Exception for signify import."""
+        """imports.py should catch generic Exception for signify import."""
         config_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "config.py"
+            os.path.dirname(__file__), "..", "pemcp", "imports.py"
         )
         with open(config_path) as f:
             source = f.read()
