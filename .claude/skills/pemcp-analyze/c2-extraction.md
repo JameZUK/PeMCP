@@ -4,6 +4,35 @@ Guide for extracting command-and-control configurations from malware using PeMCP
 
 ---
 
+## Step 0: Identify the C2 Framework First
+
+**Before following any family-specific recipe below**, use the C2 identification
+tools to confirm which framework you are dealing with:
+
+```
+1. identify_c2_framework(hash_algorithm=..., hash_seed=..., hash_constants=...,
+     config_encryption=..., compiler=..., matched_strings=...)
+   → Returns ranked candidates with confidence scores
+
+2. verify_c2_attribution(family="<top candidate>", hash_seed=..., ...)
+   → Confirms or rejects the attribution with per-check verdicts
+
+3. list_c2_signatures(family="<name>")
+   → View full fingerprint profile for extraction guidance
+```
+
+**Why**: Different frameworks share techniques (DJB2 hashing: Havoc vs AdaptixC2;
+ROR13: Cobalt Strike vs BRc4; RC4 config: AdaptixC2 vs BRc4 vs Remcos). Without
+checking discriminating indicators (hash seeds, specific constants), you will
+follow the wrong extraction recipe and waste analysis time.
+
+Provide as many evidence parameters as you have — the more indicators, the more
+accurate the attribution. High-confidence indicators: hash algorithm + seed,
+verified hash constants, YARA matches. Supporting indicators: config encryption,
+compiler, DLL names, network headers, command count.
+
+---
+
 ## Common C2 Storage Patterns
 
 ### Pattern 1: XOR-Encrypted in .data / .rdata Section
@@ -177,6 +206,89 @@ IP, BuildID, and feature flags.
 4. Expected: C2 IP:port, BuildID, GrabBrowsers, GrabFTP, GrabWallets flags
 ```
 
+### NjRAT (.NET)
+**Storage**: Plaintext or lightly obfuscated static fields. C2 comms use
+`|'|'|` pipe separator. Very simple config structure.
+
+```
+1. dotnet_analyze() → find main class with Host, Port, Dir fields
+2. dotnet_disassemble_method() on constructor → extract plaintext values
+3. search_for_specific_strings(patterns=["|'|'|", "njRAT", "njq8"])
+4. Expected: Host, Port, Victim name, Directory, Registry key, Mutex, Version
+```
+
+### NanoCore (.NET)
+**Storage**: Config in .NET embedded resource, DES-CBC encrypted with
+PBKDF2-derived key from a GUID string.
+
+```
+1. dotnet_analyze() → find config class with PrimaryConnectionHost
+2. refinery_dotnet(operation="extract_resources") → extract embedded resources
+3. Locate GUID key in Decrypt method → refinery_key_derive(algorithm="pbkdf2")
+4. refinery_decrypt(algorithm="des-cbc", key="<derived key>")
+5. Expected: PrimaryConnectionHost, ConnectionPort, Mutex, GroupName, Version
+```
+
+### Gh0st RAT (Native)
+**Storage**: Plaintext C2 strings in .data section. Identified by 5-byte magic
+header ("Gh0st" or variant) in network packets, Zlib-compressed, 13-byte header.
+
+```
+1. search_yara_custom(rule="rule gh0st { strings: $m = \"Gh0st\"
+   condition: uint16(0) == 0x5A4D and $m }")
+2. get_strings_summary() → look for IP/domain strings near the magic
+3. get_hex_dump() at .data section → search for C2 host:port strings
+4. Expected: C2 host:port, Service name, Connection password
+   Note: Many Gh0st variants change the 5-byte magic — search for
+   any 5-byte string followed by Zlib-compressed data (78 9C header)
+```
+
+### PlugX / ShadowPad
+**Storage**: Multi-layer encryption (XOR → RC4 → LZNT1 decompression).
+Decrypted config starts with PLUG magic (0x504C5547). Typically loaded
+via DLL side-loading.
+
+```
+1. search_yara_custom(rule="rule plugx { strings: $m = {50 4C 55 47}
+   condition: uint16(0) == 0x5A4D and $m }")
+2. If not found statically, check for DLL side-loading pattern:
+   - identify_library_functions() → look for LoadLibrary/GetProcAddress
+   - Check for accompanying .dat/.bin config file
+3. get_hex_dump() → extract encrypted config blob from .data section
+4. Apply XOR decryption → RC4 decryption → LZNT1 decompression
+5. Verify PLUG magic (0x504C5547) at start of decrypted data
+6. Expected: C2 servers (up to 4), ports, protocol, campaign ID, mutex
+```
+
+### DarkComet (Native)
+**Storage**: RC4-encrypted config in PE resource named "DCDATA". Key derived
+from version string (e.g., `#KCMDDC4#-890`).
+
+```
+1. extract_resources(resource_type="RT_RCDATA") → find DCDATA resource
+2. Identify version from strings: search_for_specific_strings(
+   patterns=["#KCMDDC", "DarkComet"])
+3. RC4 key = version string (e.g., "#KCMDDC51#-890" for v5.1)
+4. refinery_decrypt(data="<resource hex>", algorithm="rc4",
+   key="<version string as hex>")
+5. Parse as newline-separated key=value pairs
+6. Expected: GENCODE, MUTEX, SID, NETDATA (C2 host:port), persistence settings
+```
+
+### QakBot / Qbot
+**Storage**: RC4-encrypted config in PE resources with specific IDs
+(3/311 or 118/524). Key derived from SHA1/SHA256 of hardcoded strings.
+
+```
+1. extract_resources() → look for resources with IDs "3"/"311" or "118"/"524"
+2. Identify RC4 key: decompile_function_with_angr() on resource-loading func
+   → key is SHA1 or SHA256 hash of a hardcoded string
+3. refinery_decrypt(data="<resource hex>", algorithm="rc4", key="<sha hash>")
+4. Parse C2 list as array of IP:port pairs (each entry: 1B type + 4B IP + 2B port)
+5. Resource 311/524 contains campaign ID + timestamp (plaintext after decryption)
+6. Expected: C2 IP:port pairs (up to 150), Campaign ID (bb, obama, azd, etc.)
+```
+
 ### AdaptixC2 Beacon / Gopher
 **Storage**: Two agent types with different encryption schemes.
 - **Beacon** (PE: EXE/DLL/shellcode): RC4-encrypted config in `.rdata` section at
@@ -231,7 +343,15 @@ Ref: [av-gantimurov/adaptixc2-extractor](https://github.com/av-gantimurov/adapti
 
 When the malware family is unknown, use this systematic approach:
 
-### Step 1: Identify Config Location
+### Step 1: Identify the Framework
+```
+1. identify_c2_framework()            → match any available evidence against KB
+2. list_c2_signatures()               → browse known families and their fingerprints
+   If a match is found with HIGH confidence, skip to Step 5 below
+   and follow the family-specific recipe.
+```
+
+### Step 2: Identify Config Location
 ```
 1. extract_config_automated()          → try automated extraction first
 2. get_strings_summary()               → look for URL/IP/domain patterns
@@ -240,15 +360,17 @@ When the malware family is unknown, use this systematic approach:
 5. scan_for_embedded_files()           → check for embedded configs
 ```
 
-### Step 2: Identify Decryption Mechanism
+### Step 3: Identify Decryption Mechanism
 ```
 1. identify_crypto_algorithm()         → detect crypto constants
 2. decompile_function_with_angr()      → decompile suspect functions
 3. get_reaching_definitions()          → trace key/IV sources
 4. get_backward_slice()               → trace encrypted data source
+   After identifying the algorithm and key, re-run identify_c2_framework()
+   with the new evidence — you may now match a known family.
 ```
 
-### Step 3: Extract and Decrypt
+### Step 4: Extract and Decrypt
 ```
 1. get_hex_dump(offset, length)        → extract raw encrypted data
 2. Apply appropriate decryption:
@@ -260,12 +382,13 @@ When the malware family is unknown, use this systematic approach:
 3. refinery_pipeline()                 → chain operations if multi-layer
 ```
 
-### Step 4: Parse and Validate
+### Step 5: Verify Attribution and Parse
 ```
-1. refinery_extract_iocs()             → extract IOCs from decrypted data
-2. refinery_extract_domains()          → pull domains
-3. Validate: do extracted IPs/domains make sense? Are ports valid?
-4. add_note(content="C2 config: ...", category="ioc")
+1. verify_c2_attribution(family=...)   → confirm family before reporting
+2. refinery_extract_iocs()             → extract IOCs from decrypted data
+3. refinery_extract_domains()          → pull domains
+4. Validate: do extracted IPs/domains make sense? Are ports valid?
+5. add_note(content="C2 config: ...", category="ioc")
 ```
 
 ---
