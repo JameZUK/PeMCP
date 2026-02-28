@@ -575,8 +575,8 @@ class TestFileManagement:
         """
         async def _test():
             async with managed_mcp_session() as s:
-                r = await call_tool(s, "close_file", expected_type=dict,
-                                    expected_status=("status", "success"))
+                await call_tool(s, "close_file", expected_type=dict,
+                               expected_status=("status", "success"))
         run(_test())
 
     @pytest.mark.pe_file
@@ -855,7 +855,7 @@ class TestStringAnalysis:
                                     expected_type=dict)
                 if r.get("strings"):
                     for item in r["strings"]:
-                        assert "references" in item and item["references"]
+                        assert item.get("references")
         run(_test())
 
     @pytest.mark.pe_file
@@ -1092,8 +1092,8 @@ class TestCapaAnalysis:
     def test_get_capa_analysis_info(self):
         async def _test():
             async with managed_mcp_session() as s:
-                r = await call_tool(s, "get_capa_analysis_info", {"limit": 10},
-                                    expected_type=dict, expected_keys=["rules"])
+                await call_tool(s, "get_capa_analysis_info", {"limit": 10},
+                               expected_type=dict, expected_keys=["rules"])
         run(_test())
 
     @pytest.mark.pe_file
@@ -2167,9 +2167,9 @@ class TestErrorHandling:
                 # The tool may return an error OR handle gracefully with a
                 # status/message — either is acceptable, as long as it doesn't crash.
                 try:
-                    r = await call_tool(s, "deobfuscate_base64",
-                                        {"hex_string": "not_valid_hex!!"},
-                                        allow_none=True)
+                    await call_tool(s, "deobfuscate_base64",
+                                   {"hex_string": "not_valid_hex!!"},
+                                   allow_none=True)
                     # If it returns successfully, that's acceptable (graceful handling)
                     logger.info("[PASS] deobfuscate_base64 handled invalid hex gracefully")
                 except Exception:
@@ -2274,9 +2274,9 @@ class TestErrorHandling:
         async def _test():
             async with managed_mcp_session() as s:
                 for key in ["file_hashes", "sections", "imports"]:
-                    r = await call_tool(s, "get_pe_data",
-                                        {"key": key, "limit": 3},
-                                        allow_none=True)
+                    await call_tool(s, "get_pe_data",
+                                   {"key": key, "limit": 3},
+                                   allow_none=True)
         run(_test())
 
 
