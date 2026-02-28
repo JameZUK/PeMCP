@@ -9,6 +9,10 @@ pefile = pytest.importorskip("pefile", reason="pefile not installed")
 from pemcp.utils import (
     shannon_entropy,
     format_timestamp,
+    get_file_characteristics,
+    get_dll_characteristics,
+    get_section_characteristics,
+    get_relocation_type_str,
     get_symbol_type_str,
     get_symbol_storage_class_str,
     validate_regex_pattern,
@@ -121,6 +125,21 @@ class TestGetSymbolTypeStr:
             result = get_symbol_type_str(val)
             assert isinstance(result, str)
 
+    def test_base_types(self):
+        for base in range(0x10):
+            result = get_symbol_type_str(base)
+            assert isinstance(result, str)
+
+    def test_pointer_derived_type(self):
+        ptr_type = pefile.IMAGE_SYM_DTYPE_POINTER << 4
+        result = get_symbol_type_str(ptr_type)
+        assert "POINTER" in result
+
+    def test_array_derived_type(self):
+        arr_type = pefile.IMAGE_SYM_DTYPE_ARRAY << 4
+        result = get_symbol_type_str(arr_type)
+        assert "ARRAY" in result
+
 
 # ---------------------------------------------------------------------------
 # get_symbol_storage_class_str
@@ -145,6 +164,78 @@ class TestGetSymbolStorageClassStr:
     def test_unknown_class(self):
         result = get_symbol_storage_class_str(999)
         assert "UNKNOWN" in result
+
+
+# ---------------------------------------------------------------------------
+# get_file_characteristics / get_dll_characteristics / get_section_characteristics
+# ---------------------------------------------------------------------------
+
+class TestGetFileCharacteristics:
+    def test_no_flags(self):
+        assert get_file_characteristics(0) == ["NONE"]
+
+    def test_executable_image(self):
+        # IMAGE_FILE_EXECUTABLE_IMAGE = 0x0002
+        result = get_file_characteristics(0x0002)
+        assert any("EXECUTABLE" in r for r in result)
+
+    def test_multiple_flags(self):
+        # DLL (0x2000) + EXECUTABLE_IMAGE (0x0002)
+        result = get_file_characteristics(0x2002)
+        assert len(result) >= 2
+
+
+class TestGetDllCharacteristics:
+    def test_no_flags(self):
+        assert get_dll_characteristics(0) == ["NONE"]
+
+    def test_dynamic_base(self):
+        # IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE = 0x0040
+        result = get_dll_characteristics(0x0040)
+        assert len(result) >= 1
+        assert result != ["NONE"]
+
+    def test_nx_compat(self):
+        # IMAGE_DLLCHARACTERISTICS_NX_COMPAT = 0x0100
+        result = get_dll_characteristics(0x0100)
+        assert len(result) >= 1
+
+
+class TestGetSectionCharacteristics:
+    def test_no_flags(self):
+        assert get_section_characteristics(0) == ["NONE"]
+
+    def test_code_section(self):
+        # IMAGE_SCN_CNT_CODE = 0x00000020
+        result = get_section_characteristics(0x00000020)
+        assert len(result) >= 1
+        assert result != ["NONE"]
+
+    def test_executable_readable(self):
+        # MEM_EXECUTE (0x20000000) | MEM_READ (0x40000000)
+        result = get_section_characteristics(0x60000000)
+        assert len(result) >= 2
+
+
+# ---------------------------------------------------------------------------
+# get_relocation_type_str
+# ---------------------------------------------------------------------------
+
+class TestGetRelocationType:
+    def test_known_type(self):
+        # Type 3 = IMAGE_REL_BASED_HIGHLOW on x86
+        result = get_relocation_type_str(3)
+        assert isinstance(result, str)
+        assert "UNKNOWN" not in result
+
+    def test_unknown_type(self):
+        result = get_relocation_type_str(9999)
+        assert "UNKNOWN" in result
+
+    def test_type_zero(self):
+        # Type 0 = IMAGE_REL_BASED_ABSOLUTE (padding)
+        result = get_relocation_type_str(0)
+        assert isinstance(result, str)
 
 
 # ---------------------------------------------------------------------------
@@ -280,3 +371,20 @@ class TestSafePrint:
         safe_print("world", verbose_prefix="[INFO] ")
         captured = capsys.readouterr()
         assert "[INFO] world" in captured.out
+
+    def test_unicode_encode_error_fallback(self, monkeypatch, capsys):
+        """Exercise the UnicodeEncodeError fallback path."""
+        call_count = 0
+        real_print = print
+
+        def mock_print(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise UnicodeEncodeError("ascii", "", 0, 1, "mock")
+            real_print(*args, **kwargs)
+
+        monkeypatch.setattr("builtins.print", mock_print)
+        safe_print("test \u2603")  # snowman char
+        captured = capsys.readouterr()
+        assert "test" in captured.out or call_count >= 2
