@@ -2863,3 +2863,4038 @@ families:
   - T1102
   - T1041
   - T1005
+- family: XWorm
+  aliases:
+  - X-Worm
+  - Neptune
+  description: .NET RAT with modular plugin architecture. Config stored as AES-256-ECB encrypted static fields
+    in a Settings class, keyed by MD5 hash of the Mutex field. Uses raw TCP with a configurable separator
+    (default '<Xwormmm>') and supports USB spreading, keylogging, HVNC, and DDoS.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-256-ecb
+    key_length: 32
+    structure: dotnet_static_fields_aes_ecb
+    structure_description: Config values stored as static string fields in a .NET Settings class (14 fields).
+      Fields are Base64-encoded then AES-256-ECB encrypted. Key is MD5 hash of the Mutex config field,
+      copied twice to fill 32 bytes. Default keys include '<123456789>' (v5.6) and '<666666>' (v6.0).
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - Host
+    - Port
+    - KEY (encryption key)
+    - SPL (separator string)
+    - Sleep (interval)
+    - Group
+    - USBNM (USB spreader filename)
+    - InstallDir
+    - InstallStr
+    - Mutex
+    - version identifier
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.5
+  commands:
+    count_range:
+    - 15
+    - 25
+    known_names:
+    - ping
+    - pong
+    - rec
+    - YOURINFOIS
+    - plugin
+    - savePlugin
+    - RemovePlugins
+    - OfflineGet
+    - PCShutdown
+    - PCRestart
+    - PCLogoff
+    - StartDDOS
+    - StopDDOS
+    - StartReport
+    - StopReport
+    - Xchat
+    - ngrok
+    confidence_weight: 0.7
+  compilation:
+    compiler: csharp
+    linker: null
+    architectures:
+    - x86
+    - AnyCPU
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - <Xwormmm>
+    - XWorm V
+    - <123456789>
+    - AlgorithmAES
+    - ClientSocket
+    - Xlogger
+    - USB.exe
+    - /create /f /RL HIGHEST /sc minute /mo 1 /tn
+    confidence_weight: 0.95
+  references:
+  - url: https://any.run/cybersecurity-blog/xworm-malware-communication-analysis/
+    title: 'ANY.RUN: XWorm C&C Communication Analysis'
+  - url: https://cert.pl/en/posts/2023/10/deworming-the-xworm/
+    title: 'CERT Polska: Deworming the XWorm'
+  - url: https://www.picussecurity.com/resource/blog/xworm-rises-again-dissecting-the-modular-malwares-v6-resurrection
+    title: 'Picus Security: XWorm V6 Resurrection'
+  mitre_attack:
+  - T1059.001
+  - T1053.005
+  - T1547.001
+  - T1056.001
+  - T1113
+  - T1573.001
+  - T1082
+  - T1091
+- family: Warzone RAT
+  aliases:
+  - WarzoneRAT
+  - Ave Maria
+  - AveMaria
+  - Ave_Maria
+  description: Native C++ RAT with RC4-encrypted config in the .bss PE section. Uses raw TCP for C2
+    with RC4 encryption (key 'warzone160\x00'). Features include remote VNC, reverse shell, process
+    hollowing, browser/email credential harvesting, keylogging, and UAC bypass via IFileOperation.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: 50
+    structure: bss_section_rc4
+    structure_description: Config stored in .bss section. Format is key_length (4B LE) followed by
+      50-byte RC4 key, then RC4-encrypted config data in UTF-16 encoding. C2 address encoded as
+      UTF-16 with its length as a LE 4-byte integer after the key.
+    location:
+      section: .bss
+      offset_range:
+      - 0
+      - 512
+    parsed_fields:
+    - C2 address (UTF-16)
+    - C2 port
+    - Persistence path
+    - Mutex name
+    - Install directory
+    confidence_weight: 0.95
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range:
+    - 10
+    - 20
+    known_names:
+    - Remote VNC
+    - Remote Shell
+    - File Explorer
+    - Process Manager
+    - Remote Webcam
+    - Password Manager
+    - Reverse SOCKS
+    - Download Execute
+    - Remote Keylogger
+    - HRDP Manager
+    - Privilege Escalation
+    confidence_weight: 0.5
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - AVE_MARIA
+    - warzone160
+    - nevergonnagiveyouup
+    confidence_weight: 0.95
+  references:
+  - url: https://attack.mitre.org/software/S0670/
+    title: 'MITRE ATT&CK: WarzoneRAT S0670'
+  - url: https://www.splunk.com/en_us/blog/security/defending-the-gates-understanding-and-detecting-ave-maria-warzone-rat.html
+    title: 'Splunk: Defending the Gates - Ave Maria/Warzone RAT'
+  - url: https://research.openanalysis.net/warzone/malware/config/2021/05/31/warzone_rat_config.html
+    title: 'OALabs: Warzone Config Extraction'
+  mitre_attack:
+  - T1547.001
+  - T1055.012
+  - T1056.001
+  - T1003
+  - T1555.003
+  - T1059.003
+  - T1082
+  - T1548.002
+  - T1132
+- family: DCRat
+  aliases:
+  - Dark Crystal RAT
+  - DarkCrystal RAT
+  - DarkCrystalRAT
+  - DcRAT
+  description: .NET RAT with modular plugin architecture and its own IDE (DCRat Studio). Config is
+    Base64-encoded, zlib-compressed, and AES-256-CBC encrypted with PBKDF-derived key and HMAC
+    verification. Uses hash-based command dispatch to avoid plaintext command strings.
+  source_url: null
+  api_hash:
+    algorithm: custom_command_hash
+    seed: null
+    case_sensitive: false
+    formula: Custom hash-based command dispatch (commands referenced by hash, not plaintext)
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.6
+  config:
+    encryption: aes-256-cbc
+    key_length: 32
+    structure: dotnet_resource_aes_cbc_hmac
+    structure_description: Config is a Base64-encoded blob in .NET resources. Decryption flow is
+      Base64 decode, then HMAC verification, then AES-256-CBC decrypt. Key derived via PBKDF with
+      password and salt. Mutex is MD5 hash (hex) of the Base64-encoded config string.
+    location:
+      section: dotnet_resource
+      offset_range: null
+    parsed_fields:
+    - MHost (main C2)
+    - BHost (backup C2)
+    - Mutex
+    - Enabled features/toggles
+    - Plugin list
+    - Sleep interval
+    - Install path
+    - Persistence method
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.2
+  compilation:
+    compiler: csharp
+    linker: null
+    architectures:
+    - x86
+    - AnyCPU
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - ns12
+    - dgz
+    - MHost
+    - BHost
+    - DarkCrystal
+    - DCRat
+    confidence_weight: 0.85
+  references:
+  - url: https://cloud.google.com/blog/topics/threat-intelligence/analyzing-dark-crystal-rat-backdoor
+    title: 'Mandiant: Analyzing Dark Crystal RAT'
+  - url: https://www.splunk.com/en_us/blog/security/dark-crystal-rat-agent-deep-dive.html
+    title: 'Splunk: Dark Crystal RAT Agent Deep Dive'
+  - url: https://securelist.com/new-wave-of-attacks-with-dcrat-backdoor-distributed-by-maas/115850/
+    title: 'Securelist: DCRat Backdoor MaaS'
+  mitre_attack:
+  - T1059.001
+  - T1547.001
+  - T1053.005
+  - T1082
+  - T1005
+  - T1555.003
+  - T1539
+  - T1113
+  - T1056.001
+  - T1027
+- family: VenomRAT
+  aliases:
+  - Venom RAT
+  - VenomRAT HVNC
+  description: .NET RAT forked from AsyncRAT with additional HVNC, Clipper, and Telegram control modules.
+    Config uses identical AES-256-CBC encryption scheme as AsyncRAT. Features certificate-pinned TLS
+    for C2 and can dynamically retrieve C2 addresses from Pastebin.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-256-cbc
+    key_length: 32
+    structure: dotnet_static_fields_aes
+    structure_description: Config values stored as static fields in a .NET Settings class, Base64-encoded
+      then AES-256-CBC encrypted. Identical structure to AsyncRAT. Includes certificate for TLS
+      pinning. C2 address may be retrieved dynamically from Pastebin raw URLs.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - Ports
+    - Hosts
+    - Version
+    - Key
+    - MTX (mutex)
+    - Certifi (TLS certificate)
+    - ServerSignature
+    - Anti (anti-analysis toggle)
+    - BDOS (anti-DDoS)
+    - Group
+    - Hwid
+    - Install
+    - InstallFolder
+    - InstallFile
+    - Autorun
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - tcp
+    - tls
+    default_headers: []
+    uri_patterns:
+    - https://pastebin.com/raw/
+    user_agent_patterns: []
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.2
+  compilation:
+    compiler: csharp
+    linker: null
+    architectures:
+    - x86
+    - AnyCPU
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - VenomRAT
+    - VenomMutex_
+    - AsyncMutex_
+    - Ports
+    - Hosts
+    - Certifi
+    - ServerSignature
+    - hvnc
+    - hidden_desktop
+    confidence_weight: 0.9
+  references:
+  - url: https://www.fortinet.com/blog/threat-research/scrubcrypt-deploys-venomrat-with-arsenal-of-plugins
+    title: 'FortiGuard: ScrubCrypt Deploys VenomRAT'
+  - url: https://hunt.io/malware-families/venomrat
+    title: 'hunt.io: VenomRAT'
+  - url: https://github.com/embee-research/Asyncrat-Venom-Dcrat-Config-Extractor
+    title: 'Embee Research: AsyncRAT/Venom/DCRat Config Extractor'
+  mitre_attack:
+  - T1059.001
+  - T1053.005
+  - T1547.001
+  - T1056.001
+  - T1113
+  - T1573.001
+  - T1082
+  - T1555.003
+  - T1102
+- family: SugarGh0st RAT
+  aliases:
+  - SugarGh0st
+  - Sugar Gh0st
+  - SugarGhost
+  description: Modified Gh0st RAT variant used by SneakyChef APT. Key differentiator is an 8-byte packet
+    header (versus 5-byte in classic Gh0st RAT). Delivered via multi-stage chain using DLL sideloading,
+    XOR decryption, and aPLib decompression. Features ODBC registry reconnaissance.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: null
+    structure: embedded_after_unpacking
+    structure_description: C2 config embedded in the DLL payload after multi-stage unpacking (Base64 JS
+      -> shellcode -> XOR decrypt -> aPLib decompress -> SugarGh0st DLL). C2 address stored as plaintext
+      or lightly obfuscated string in the unpacked DLL.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 address
+    - C2 port
+    - Reconnect interval (default 10s)
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.5
+  commands:
+    count_range:
+    - 12
+    - 20
+    known_names:
+    - Keylogging
+    - Screen Capture
+    - Webcam Access
+    - Reverse Shell
+    - File Manager
+    - Process Manager
+    - Service Manager
+    - Download Execute
+    - ODBC Recon
+    - Load Library
+    - Clear Event Logs
+    - System Info
+    confidence_weight: 0.6
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    formats:
+    - dll
+    rich_header: true
+    confidence_weight: 0.3
+  constants:
+    heartbeat_bytes: '0x000011A40100'
+    packet_header_size: 8
+    confidence_weight: 0.85
+  dll_loading:
+    technique: dll_sideloading
+    loaded_dlls: []
+    api_count_estimates: {}
+    confidence_weight: 0.6
+  yara_indicators:
+    hex_patterns:
+    - name: sugargh0st_heartbeat
+      hex: 00 00 11 A4 01 00
+    string_patterns:
+    - DynamicWrapperX
+    - DllToShellCode
+    confidence_weight: 0.9
+  references:
+  - url: https://blog.talosintelligence.com/new-sugargh0st-rat/
+    title: 'Cisco Talos: New SugarGh0st RAT'
+  - url: https://blog.talosintelligence.com/sneakychef-sugargh0st-rat/
+    title: 'Cisco Talos: SneakyChef Espionage Group'
+  - url: https://www.proofpoint.com/us/blog/threat-insight/security-brief-artificial-sweetener-sugargh0st-rat-used-target-american
+    title: 'Proofpoint: SugarGh0st Targeting AI Experts'
+  mitre_attack:
+  - T1574.002
+  - T1059.007
+  - T1056.001
+  - T1113
+  - T1125
+  - T1059.003
+  - T1083
+  - T1057
+  - T1070.001
+  - T1082
+  - T1105
+- family: XenoRAT
+  aliases:
+  - Xeno RAT
+  - Xeno-RAT
+  - MoonPeak
+  description: Open-source .NET RAT with HVNC, SOCKS5 reverse proxy, live microphone capture, and
+    multiple UAC bypass methods. Config includes IP, port, mutex, encryption password, and authentication
+    string. MoonPeak is a North Korean (UAT-5394/Kimsuky) modified variant with tight client-server
+    version coupling.
+  source_url: https://github.com/moom825/xeno-rat
+  api_hash: null
+  config:
+    encryption: aes-cbc
+    key_length: null
+    structure: dotnet_builder_stub
+    structure_description: Config values (IP, port, mutex, encryption password, authentication string,
+      compression setting) embedded in .NET stub generated by builder. Client must provide matching
+      encryption password, authentication string, and compression protocol for successful C2 handshake.
+      MoonPeak variant forces compression before encryption.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - IP/hostname
+    - Port
+    - Mutex name
+    - Encryption password
+    - Authentication string
+    - Compression setting
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names:
+    - HVNC
+    - Microphone Capture
+    - Reverse Proxy (SOCKS5)
+    - Keylogging
+    - Screenshot
+    - Webcam
+    - File Transfer
+    - Remote Shell
+    - Clipboard Monitor
+    - Process Injection
+    - UAC Bypass
+    confidence_weight: 0.5
+  compilation:
+    compiler: csharp
+    linker: null
+    architectures:
+    - x86
+    - AnyCPU
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - xeno
+    - moom825
+    - ConfuserEx
+    - Confuser Core
+    confidence_weight: 0.8
+  references:
+  - url: https://blog.talosintelligence.com/moonpeak-malware-infrastructure-north-korea/
+    title: 'Cisco Talos: MoonPeak Infrastructure'
+  - url: https://hunt.io/malware-families/xenorat
+    title: 'hunt.io: XenoRAT'
+  - url: https://www.cyfirma.com/research/xeno-rat-a-new-remote-access-trojan-with-advance-capabilities/
+    title: 'CYFIRMA: Xeno RAT Analysis'
+  mitre_attack:
+  - T1055
+  - T1056.001
+  - T1113
+  - T1125
+  - T1090
+  - T1027
+  - T1547.001
+  - T1082
+  - T1548.002
+- family: NetSupport RAT
+  aliases:
+  - NetSupport Manager
+  - NetSupportManager RAT
+  - NSM RAT
+  description: Legitimate remote administration tool frequently abused by threat actors. Config stored in
+    plaintext client32.ini file. C2 communication via HTTP POST with distinctive 'fakeurl.htm' gateway
+    URL and 'NetSupport Manager/1.3' User-Agent. Drop package includes characteristic set of DLLs.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: plaintext
+    key_length: null
+    structure: ini_file
+    structure_description: Configuration stored in plaintext INI file (client32.ini or client32u.ini)
+      co-located with the executable. Key fields include GatewayAddress, GSK (gateway security key),
+      Port (commonly 443), silent=1, SysTray=0, Usernames=*. License info in NSM.LIC file.
+    location:
+      section: external_file
+      offset_range: null
+    parsed_fields:
+    - GatewayAddress
+    - GSK (gateway security key)
+    - Port
+    - silent flag
+    - SysTray flag
+    - Usernames
+    confidence_weight: 0.95
+  network:
+    protocols:
+    - http
+    default_headers:
+    - Content-Type: application/x-www-form-urlencoded
+    uri_patterns:
+    - fakeurl.htm
+    user_agent_patterns:
+    - NetSupport Manager/1.3
+    confidence_weight: 0.95
+  commands:
+    count_range: null
+    known_names:
+    - CMD=POLL
+    - CMD=ENCD
+    - INFO=1
+    - ACK=1
+    confidence_weight: 0.7
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading:
+    technique: colocated_dll_package
+    loaded_dlls:
+    - HTCTL32.DLL
+    - PCICL32.DLL
+    - PCICHEK.DLL
+    - pcicapi.DLL
+    - TCCTL32.DLL
+    - CryptPak.dll
+    - IPCTL32.DLL
+    - keyshowhook.dll
+    - remcmdstub.exe
+    api_count_estimates: {}
+    confidence_weight: 0.9
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - fakeurl.htm
+    - NetSupport Manager/1.3
+    - NetSupport Gateway
+    - CMD=POLL
+    - CMD=ENCD
+    - client32.ini
+    - NSM.LIC
+    - silent=1
+    - GatewayAddress=
+    confidence_weight: 0.95
+  references:
+  - url: https://blogs.vmware.com/security/2023/11/netsupport-rat-the-rat-king-returns.html
+    title: 'VMware: NetSupport RAT King Returns'
+  - url: https://cloud.google.com/blog/topics/threat-intelligence/fake-software-update-abuses-netsupport-remote-access-tool
+    title: 'Mandiant: Fake Software Update NetSupport'
+  - url: https://corelight.com/blog/detecting-netsupport-manager-abuse
+    title: 'Corelight: Detecting NetSupport Manager Abuse'
+  mitre_attack:
+  - T1219
+  - T1547.001
+  - T1059.001
+  - T1204
+  - T1082
+  - T1016
+  - T1033
+- family: SectopRAT
+  aliases:
+  - SecTopRAT
+  - ArechClient2
+  - Arechclient2
+  - 1xxbot
+  description: .NET RAT with hidden secondary desktop capability for browser manipulation. Uses AES-256
+    encryption for C2 with a 32-byte key stored as 'rawData' variable. Protected by 'calli' obfuscator
+    (ModC) that replaces normal method calls with calli IL instructions. Communicates over TCP on
+    atypical ports (15647, 15678, 15649, 15847).
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-256
+    key_length: 32
+    structure: dotnet_resource_custom
+    structure_description: Config stored in .NET resource named 'resource' with custom decryption algorithm.
+      C2 encryption key stored as 32-byte rawData array in .NET class. Random 16-byte IV prepended to
+      encrypted data. JSON-formatted control messages with encryption toggle via 'On'/'Off' fields.
+    location:
+      section: dotnet_resource
+      offset_range: null
+    parsed_fields:
+    - Build ID
+    - C2 encryption key (rawData)
+    - C2 address
+    - Port
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names:
+    - Hidden Desktop
+    - Browser Credential Stealing
+    - Crypto Wallet Theft
+    - Screenshot Capture
+    - System Profiling
+    - Chrome Extension Deploy
+    - BrowserLogging
+    - File Operations
+    - Remote Shell
+    confidence_weight: 0.5
+  compilation:
+    compiler: csharp
+    linker: null
+    architectures:
+    - x86
+    - AnyCPU
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants:
+    typical_ports:
+    - 15647
+    - 15678
+    - 15649
+    - 15847
+    - 9000
+    confidence_weight: 0.7
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - rawData
+    - BrowserLogging
+    - LightingService.exe
+    - spoolsvc.exe
+    - CreateDesktopW
+    confidence_weight: 0.85
+  references:
+  - url: https://www.gdatasoftware.com/blog/2021/02/36633-new-version-adds-encrypted-communication
+    title: 'G DATA: SecTopRAT Encrypted C2 Communications'
+  - url: https://malwr-analysis.com/2025/02/18/arechclient2-malware-analysis-sectoprat/
+    title: 'Malwr Analysis: ArechClient2/SectopRAT'
+  - url: https://www.darktrace.com/blog/not-your-average-rodent-darktraces-mitigation-of-the-sectop-remote-access-trojan-rat
+    title: 'Darktrace: SecTop RAT Exposed'
+  mitre_attack:
+  - T1555.003
+  - T1539
+  - T1113
+  - T1547.001
+  - T1082
+  - T1005
+  - T1027
+  - T1564
+- family: LockBit 3.0
+  aliases:
+  - LockBit Black
+  - LockBit 3.0
+  - LockBit Green
+  description: C-based ransomware with code lineage from BlackMatter/DarkSide. Requires a -pass command-line
+    argument to decrypt the main payload routine (environment keying). Uses XOR key 0x4506DFCA for string
+    decryption and a BlackMatter-derived API hashing algorithm with NOT+XOR finalization (constant 0x29009fe6).
+    Supports AES-256, ChaCha20, or RSA-2048 encryption with intermittent encryption mode.
+  source_url: null
+  api_hash:
+    algorithm: blackmatter_derived
+    seed: null
+    case_sensitive: false
+    formula: Hashes API names per DLL, finalizes with NOT operation followed by XOR against 0x29009fe6
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.9
+  config:
+    encryption: xor
+    key_length: 4
+    structure: pass_argument_decryption
+    structure_description: Configuration heavily encrypted and compressed within the binary. Requires
+      -pass command-line argument to decrypt the main payload routine. String obfuscation uses XOR
+      with key 0x4506DFCA to decrypt Win32 API names. Config contains RSA public key, services/processes
+      to terminate, language exclusion list.
+    location:
+      section: .text
+      offset_range: null
+    parsed_fields:
+    - RSA public key
+    - Services to terminate
+    - Processes to terminate
+    - Excluded file extensions
+    - Excluded directories
+    - Ransom note template
+    - Language exclusion list
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names:
+    - -pass
+    confidence_weight: 0.3
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    string_xor_key: 0x4506DFCA
+    api_hash_xor_constant: 0x29009fe6
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: lockbit3_string_xor_key
+      hex: CA DF 06 45
+    - name: lockbit3_api_hash_xor
+      hex: E6 9F 00 29
+    string_patterns: []
+    confidence_weight: 0.9
+  references:
+  - url: https://www.trendmicro.com/en_us/research/22/g/lockbit-ransomware-group-augments-its-latest-variant--lockbit-3-.html
+    title: 'Trend Micro: LockBit 3.0 with BlackMatter Capabilities'
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-075a
+    title: 'CISA AA23-075A: LockBit 3.0'
+  - url: https://attack.mitre.org/software/S1202/
+    title: 'MITRE ATT&CK: LockBit S1202'
+  mitre_attack:
+  - T1027
+  - T1059.003
+  - T1486
+  - T1490
+  - T1489
+  - T1082
+  - T1057
+  - T1047
+- family: BlackCat
+  aliases:
+  - ALPHV
+  - Noberus
+  - Sphynx
+  description: First major Rust-based ransomware (November 2021). Cross-platform (Windows PE, Linux ELF,
+    ESXi). Requires mandatory --access-token argument for config decryption and execution gating. JSON
+    configuration embedded in binary with configurable AES or ChaCha20 encryption. Sphynx (v2) was a
+    complete rewrite with enhanced evasion.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes
+    key_length: null
+    structure: embedded_json_access_token
+    structure_description: JSON configuration embedded within the binary, encrypted at rest. Decrypted
+      at runtime using the --access-token (32-character key). Config contains RSA public key,
+      services/processes to terminate, excluded folders/files/extensions, ransom note text, encryption
+      mode selection (AES vs ChaCha20).
+    location:
+      section: embedded
+      offset_range: null
+    parsed_fields:
+    - extension (random per campaign)
+    - public_key (RSA)
+    - kill_services
+    - kill_processes
+    - exclude_directory_names
+    - exclude_file_names
+    - exclude_file_extensions
+    - ransom_note
+    - encryption_mode
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - smb
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names:
+    - --access-token
+    - -s
+    - -d
+    - -f
+    - -c
+    - --propagated
+    - --no-net
+    - --no-wall
+    confidence_weight: 0.5
+  compilation:
+    compiler: rust
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - exe
+    - elf
+    rich_header: false
+    confidence_weight: 0.6
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - --access-token
+    - extension
+    - public_key
+    - kill_services
+    - kill_processes
+    confidence_weight: 0.8
+  references:
+  - url: https://www.cloudsek.com/blog/technical-analysis-of-alphv-blackcat-ransomware
+    title: 'CloudSEK: Technical Analysis of ALPHV/BlackCat'
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-353a
+    title: 'CISA AA23-353A: ALPHV Blackcat'
+  - url: https://attack.mitre.org/software/S1068/
+    title: 'MITRE ATT&CK: BlackCat S1068'
+  mitre_attack:
+  - T1486
+  - T1490
+  - T1489
+  - T1485
+  - T1078
+  - T1059.001
+  - T1021.002
+  - T1529
+- family: Akira
+  aliases:
+  - Akira_v2
+  - Megazord
+  - Howling Scorpius
+  description: C++ ransomware using Boost ASIO for multithreading, spdlog for logging, ADVobfuscator for
+    string obfuscation, and Nettle for crypto. Megazord variant (Aug 2023) and Akira_v2 (April 2024) are
+    Rust rewrites. Uses ChaCha20 for file encryption with RSA key wrapping. Early versions had a PRNG
+    vulnerability (nanosecond timestamp seed) enabling decryption.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: chacha20
+    key_length: 32
+    structure: advobfuscator_strings
+    structure_description: String encryption via ADVobfuscator (compile-time string obfuscation).
+      Encryption parameters passed via command-line arguments. RSA public key embedded for ChaCha20
+      key wrapping. Creates runtime log file with pattern Log-%d-%m-%Y-%H-%M-%S.
+    location:
+      section: .rdata
+      offset_range: null
+    parsed_fields:
+    - RSA public key
+    - Target paths
+    - Excluded paths
+    - Encryption percentage
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - -p
+    - -s
+    - --encryption_path
+    - -n
+    - -remote
+    - -localonly
+    - --exclude
+    confidence_weight: 0.4
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - exe
+    - elf
+    rich_header: true
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - .akira
+    - .powerranges
+    - .akiranew
+    - DbgLog.sys
+    - ADVobfuscator
+    - spdlog
+    confidence_weight: 0.85
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa24-109a
+    title: 'CISA AA24-109A: Akira Ransomware'
+  - url: https://unit42.paloaltonetworks.com/threat-assessment-howling-scorpius-akira-ransomware/
+    title: 'Unit42: Howling Scorpius Threat Assessment'
+  - url: https://attack.mitre.org/software/S1129/
+    title: 'MITRE ATT&CK: Akira S1129'
+  mitre_attack:
+  - T1486
+  - T1490
+  - T1106
+  - T1190
+  - T1059.001
+  - T1003.001
+  - T1048
+  - T1021.001
+- family: Black Basta
+  aliases:
+  - BlackBasta
+  description: C++ ransomware using ChaCha20 for file encryption with RSA-4096 key wrapping. Uses
+    ADVobfuscator for stack-based string obfuscation with single-byte XOR. Deploys SystemBC as Tor
+    proxy for C2 tunneling. Known mutex 'dsajdhas.0' and wallpaper file 'dlaksjdoiwq.jpg'.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: chacha20
+    key_length: 32
+    structure: embedded_rsa_pubkey
+    structure_description: Embedded RSA-4096 public key compiled into the executable. Desktop wallpaper
+      image (dlaksjdoiwq.jpg) created in %Temp% directory. Registry key HKEY_CLASSES_ROOT\.<ext>
+      created with ICO file path. ADVobfuscator single-byte XOR for string deobfuscation.
+    location:
+      section: .rdata
+      offset_range: null
+    parsed_fields:
+    - RSA-4096 public key
+    - File extension
+    - Ransom note text
+    - Excluded paths
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - https
+    - tor
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - -forcepath
+    confidence_weight: 0.3
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - exe
+    - elf
+    rich_header: true
+    confidence_weight: 0.3
+  constants:
+    mutex: dsajdhas.0
+    wallpaper_filename: dlaksjdoiwq.jpg
+    confidence_weight: 0.9
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - dsajdhas.0
+    - dlaksjdoiwq.jpg
+    - .basta
+    confidence_weight: 0.9
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa24-131a
+    title: 'CISA AA24-131A: Black Basta'
+  - url: https://www.kroll.com/en/insights/publications/cyber/black-basta-technical-analysis
+    title: 'Kroll: Black Basta Technical Analysis'
+  - url: https://unit42.paloaltonetworks.com/threat-assessment-black-basta-ransomware/
+    title: 'Unit42: Black Basta Threat Assessment'
+  mitre_attack:
+  - T1486
+  - T1490
+  - T1489
+  - T1059
+  - T1021
+  - T1078
+  - T1027
+  - T1082
+- family: Royal
+  aliases:
+  - BlackSuit
+  - Ignoble Scorpius
+  - Zeon
+  description: C++ ransomware using AES (via OpenSSL) for file encryption with RSA key wrapping. Rebranded
+    to BlackSuit in 2024. Uses intermittent encryption based on file size. Requires mandatory -name argument
+    (32-character victim ID). Known mutex 'Global\WLm87eV1oNRx6P3E4Cy9'. Linux variant compiled with GCC.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes
+    key_length: null
+    structure: cli_argument_config
+    structure_description: Configuration parameters passed via command-line arguments. Partial encryption
+      percentage configurable via -percentage. Embedded RSA public key for key wrapping. Files under
+      5245 MB fully encrypted; larger files use configurable percentage or default 50%.
+    location:
+      section: .rdata
+      offset_range: null
+    parsed_fields:
+    - RSA public key
+    - Victim ID (-name)
+    - Encryption percentage
+    - Target paths
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - -name
+    - -percentage
+    - -noprotect
+    - -disablesafeboot
+    - -local
+    - -network
+    - -delete
+    - -list
+    - -p
+    confidence_weight: 0.5
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - elf
+    rich_header: true
+    confidence_weight: 0.3
+  constants:
+    mutex: Global\WLm87eV1oNRx6P3E4Cy9
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - Global\WLm87eV1oNRx6P3E4Cy9
+    - .blacksuit
+    - README.BlackSuit.txt
+    confidence_weight: 0.9
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-061a
+    title: 'CISA AA23-061A: BlackSuit (Royal)'
+  - url: https://unit42.paloaltonetworks.com/threat-assessment-blacksuit-ransomware-ignoble-scorpius/
+    title: 'Unit42: Ignoble Scorpius BlackSuit'
+  - url: https://www.trendmicro.com/en_us/research/23/e/investigating-blacksuit-ransomwares-similarities-to-royal.html
+    title: 'Trend Micro: BlackSuit Similarities to Royal'
+  mitre_attack:
+  - T1486
+  - T1490
+  - T1489
+  - T1082
+  - T1083
+  - T1059
+  - T1078
+  - T1190
+- family: Play
+  aliases:
+  - PlayCrypt
+  - Balloonfly
+  description: C++ ransomware recompiled per campaign (unique hashes per deployment). Uses AES-256 + RSA
+    hybrid encryption with intermittent encryption pattern (alternating 0x100000-byte encrypted/skipped
+    chunks). Appends .PLAY extension. Associated with PlusBrute custom brute-force tool.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-256
+    key_length: 32
+    structure: per_build_embedded
+    structure_description: RSA public key handle and AES/RNG provider handles stored in internal structure.
+      Configuration baked into each recompiled binary. Random AES key and IV generated per file via
+      Windows CryptoAPI RNG. Intermittent encryption with alternating 0x100000-byte chunks.
+    location:
+      section: .rdata
+      offset_range: null
+    parsed_fields:
+    - RSA public key
+    - File extension (.PLAY)
+    - Excluded paths
+    confidence_weight: 0.6
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    intermittent_chunk_size: 0x100000
+    confidence_weight: 0.7
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - .PLAY
+    confidence_weight: 0.7
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-352a
+    title: 'CISA AA23-352A: Play Ransomware'
+  - url: https://chuongdong.com/reverse%20engineering/2022/09/03/PLAYRansomware/
+    title: 'Chuong Dong: PLAY Ransomware Reverse Engineering'
+  - url: https://attack.mitre.org/groups/G1040/
+    title: 'MITRE ATT&CK: Play G1040'
+  mitre_attack:
+  - T1486
+  - T1078
+  - T1190
+  - T1133
+  - T1021
+  - T1059
+- family: Rhysida
+  aliases:
+  - Rhysida Ransomware
+  description: Ransomware compiled with MinGW GNU 6.3.0 using LibTomCrypt library. Uses ChaCha20 with
+    256-bit key for file encryption and RSA-4096 for key wrapping. Had a PRNG vulnerability (execution
+    time nanoseconds as seed) enabling decryption until patched. Multi-threaded with thread count
+    equal to CPU processor count.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: chacha20
+    key_length: 32
+    structure: runtime_generated
+    structure_description: Encryption parameters generated at runtime via LibTomCrypt PRNG. No elaborate
+      embedded config; behavior controlled by command-line arguments. PRNG seeded from execution time
+      (nanoseconds), generating 80 bytes of random data per file (first 48 bytes = key + IV).
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - RSA-4096 public key
+    - Target directory
+    - Self-deletion flag
+    confidence_weight: 0.6
+  network:
+    protocols:
+    - tor
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - -d
+    - -sr
+    confidence_weight: 0.3
+  compilation:
+    compiler: mingw
+    linker: gcc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.5
+  constants:
+    chacha20_expand_constant_0: 0x61707865
+    chacha20_expand_constant_1: 0x3320646e
+    chacha20_expand_constant_2: 0x79622d32
+    chacha20_expand_constant_3: 0x6b206574
+    confidence_weight: 0.8
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: chacha20_expand_32byte_k
+      hex: 65 78 70 61 6E 64 20 33 32 2D 62 79 74 65 20 6B
+    string_patterns:
+    - .rhysida
+    - LibTomCrypt
+    confidence_weight: 0.85
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-319a
+    title: 'CISA AA23-319A: Rhysida Ransomware'
+  - url: https://www.sentinelone.com/anthology/rhysida/
+    title: 'SentinelOne: Rhysida Analysis'
+  - url: https://arxiv.org/pdf/2402.06440
+    title: 'arXiv: Method for Decrypting Rhysida'
+  mitre_attack:
+  - T1486
+  - T1490
+  - T1059
+  - T1059.001
+  - T1078
+  - T1190
+  - T1021
+- family: Medusa Ransomware
+  aliases:
+  - Medusa
+  - Medusa RaaS
+  description: C++ ransomware (distinct from MedusaLocker). Uses AES-256 for file encryption with
+    RSA-2048/4096 key management. String decryption via XOR with single-byte key 0x2E. Terminates
+    280+ Windows services and processes. Known mutex '8761ABBD-7F85-42EE-B272-A76179687C63'.
+    Primary encryptor binary named 'gaze.exe'.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: 1
+    structure: xor_encrypted_strings
+    structure_description: Strings XOR-encrypted with single-byte key 0x2E. Process names and service
+      lists embedded in binary. Ransom note template embedded. Supports 11 command-line arguments
+      for controlling encryption scope, thread count, and behavior.
+    location:
+      section: .rdata
+      offset_range: null
+    parsed_fields:
+    - RSA public key
+    - Services to terminate (280+)
+    - Processes to terminate
+    - File extension (.MEDUSA)
+    - Ransom note text
+    confidence_weight: 0.75
+  network:
+    protocols:
+    - https
+    - tor
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - -d
+    - -f
+    - -i
+    - -k
+    - -n
+    - -p
+    - -s
+    - -t
+    - -v
+    - -w
+    - -V
+    confidence_weight: 0.4
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    mutex: 8761ABBD-7F85-42EE-B272-A76179687C63
+    string_xor_key: 0x2E
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: medusa_xor_key
+      hex: 2E
+    string_patterns:
+    - 8761ABBD-7F85-42EE-B272-A76179687C63
+    - gaze.exe
+    - .MEDUSA
+    - '!!!!READ_ME_MEDUSA!!!'
+    confidence_weight: 0.9
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa25-071a
+    title: 'CISA AA25-071A: Medusa Ransomware'
+  - url: https://unit42.paloaltonetworks.com/medusa-ransomware-escalation-new-leak-site/
+    title: 'Unit42: Medusa Ransomware Escalation'
+  - url: https://attack.mitre.org/software/S1244/
+    title: 'MITRE ATT&CK: Medusa S1244'
+  mitre_attack:
+  - T1486
+  - T1489
+  - T1490
+  - T1059
+  - T1078
+  - T1190
+- family: RansomHub
+  aliases:
+  - RansomHub
+  - Cyclops
+  - Knight
+  description: Go-based ransomware (Windows/Linux) with C++ ESXi variant. Code overlap with BlackCat/Knight.
+    Uses Curve25519 ECDH + AES hybrid encryption with intermittent encryption (0x100000-byte chunks
+    skipping 0x200000 bytes). Requires mandatory -pass argument (32-byte passphrase) for config
+    decryption. File extension derived from first 6 chars of Curve25519 public key.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes
+    key_length: 32
+    structure: pass_argument_decryption
+    structure_description: Embedded encrypted configuration decrypted at runtime using -pass argument
+      (32-byte passphrase). Config contains file extensions/names/folders to avoid, processes and
+      services to terminate, compromised login accounts. File extension derived from first 6 characters
+      of Curve25519 public key.
+    location:
+      section: embedded
+      offset_range: null
+    parsed_fields:
+    - Curve25519 public key
+    - Excluded extensions
+    - Excluded directories
+    - Services to terminate
+    - Processes to terminate
+    - Login credentials
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - -pass
+    - -safeboot
+    - -safeboot-instance
+    confidence_weight: 0.4
+  compilation:
+    compiler: go
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - exe
+    - elf
+    rich_header: false
+    confidence_weight: 0.4
+  constants:
+    intermittent_encrypt_size: 0x100000
+    intermittent_skip_size: 0x200000
+    confidence_weight: 0.7
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - -pass
+    - -safeboot
+    confidence_weight: 0.6
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa24-242a
+    title: 'CISA AA24-242A: RansomHub'
+  - url: https://www.trendmicro.com/vinfo/us/security/news/ransomware-spotlight/ransomware-spotlight-ransomhub
+    title: 'Trend Micro: RansomHub Spotlight'
+  - url: https://attack.mitre.org/software/S1212/
+    title: 'MITRE ATT&CK: RansomHub S1212'
+  mitre_attack:
+  - T1486
+  - T1190
+  - T1566
+  - T1110.003
+  - T1047
+  - T1059.001
+  - T1078
+- family: Clop
+  aliases:
+  - Cl0p
+  - TA505
+  - FIN11
+  - Lace Tempest
+  description: C++ ransomware associated with supply-chain exploitation campaigns (MOVEit, Cleo MFT).
+    Uses AES with per-file random key encrypted by embedded RSA-1024 public key. Notable for variable
+    mutex names (e.g., 'MoneyP#666', 'Clop^_-', 'Fany-Fany-6-6-6') and burst operational pattern
+    (dormant periods followed by mass exploitation).
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes
+    key_length: null
+    structure: embedded_rsa_pubkey
+    structure_description: Embedded 1024-bit RSA public key (unique per victim). AES with random per-file
+      key encrypted by RSA. Shellcode unpacking to resolve APIs (GetProcAddress, VirtualAlloc).
+      Skips system files (.dll, .exe, .sys) to keep OS operational.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - RSA-1024 public key
+    - Excluded extensions
+    - Ransom note text
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - runrun
+    confidence_weight: 0.4
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - MoneyP#666
+    - Clop^_-
+    - Fany-Fany-6-6-6
+    - .Clop
+    - .CIOP
+    - .C_L_O_P
+    - runrun
+    confidence_weight: 0.9
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-158a
+    title: 'CISA AA23-158A: CL0P MOVEit'
+  - url: https://www.mcafee.com/blogs/other-blogs/mcafee-labs/clop-ransomware/
+    title: 'McAfee: Clop Ransomware'
+  - url: https://attack.mitre.org/software/S0611/
+    title: 'MITRE ATT&CK: Clop S0611'
+  mitre_attack:
+  - T1486
+  - T1490
+  - T1489
+  - T1562
+  - T1070
+  - T1027
+  - T1190
+- family: Fog
+  aliases:
+  - Fog Ransomware
+  - Lost in the Fog
+  description: Ransomware using AES-256 for file encryption with RSA-2048 key wrapping. Creates debug
+    log file 'DbgLog.sys' in %AppData% with runtime status. Requires mandatory -id argument (6-character
+    value) for execution. Known for extremely fast attack timelines (initial access to full encryption
+    in under 2 hours). Primarily targets education sector via compromised VPN credentials.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-256
+    key_length: 32
+    structure: runtime_config
+    structure_description: Creates debug log file DbgLog.sys in %AppData% with runtime status and error
+      conditions. Symmetric key generated at runtime, encrypted with RSA-2048 public key. Requires -id
+      argument (6-character value) for execution.
+    location:
+      section: .rdata
+      offset_range: null
+    parsed_fields:
+    - RSA-2048 public key
+    - Victim ID (-id)
+    - Target paths
+    confidence_weight: 0.6
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - -id
+    - --offvm
+    confidence_weight: 0.3
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - exe
+    - elf
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - DbgLog.sys
+    - .FOG
+    - .FLOCKED
+    confidence_weight: 0.8
+  references:
+  - url: https://arcticwolf.com/resources/blog/lost-in-the-fog-a-new-ransomware-threat/
+    title: 'Arctic Wolf: Lost in the Fog'
+  - url: https://www.kroll.com/en/insights/publications/cyber/fog-ransomware-targets-higher-education
+    title: 'Kroll: Fog Ransomware Targets Higher Education'
+  - url: https://www.sentinelone.com/anthology/fog/
+    title: 'SentinelOne: Fog Ransomware'
+  mitre_attack:
+  - T1486
+  - T1490
+  - T1566
+  - T1027
+  - T1133
+  - T1078
+- family: INC Ransom
+  aliases:
+  - INC Ransomware
+  - GOLD IONIC
+  - Lynx
+  description: C++ ransomware using AES-128-CTR for file encryption with Curve25519 (Donna implementation)
+    for key exchange and SHA512 for key derivation. Supports fast/medium/slow encryption modes.
+    Multi-threaded with thread count equal to CPU cores * 4. Source code sold for ~$300K in March 2024.
+    Lynx ransomware is a derivative with 70%+ code overlap.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-128-ctr
+    key_length: 16
+    structure: embedded_ecc_pubkey
+    structure_description: ECC public key stored in Base64 format, decoded at runtime. Shared secret
+      generated via Curve25519, hashed with SHA512 to derive AES key. Ransom notes generated in both
+      .html and .txt formats. Each victim assigned a unique personal ID.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - ECC public key (Base64)
+    - Victim ID
+    - Encryption mode (fast/medium/slow)
+    - Excluded extensions
+    confidence_weight: 0.75
+  network:
+    protocols:
+    - tor
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.2
+  commands:
+    count_range: null
+    known_names:
+    - --file
+    - --dir
+    - --mode
+    confidence_weight: 0.4
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - exe
+    - elf
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    thread_multiplier: 4
+    confidence_weight: 0.5
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - .INC
+    - --mode
+    - fast
+    - medium
+    - slow
+    - Curve25519
+    confidence_weight: 0.75
+  references:
+  - url: https://www.halcyon.ai/threat-group/inc-ransom
+    title: 'Halcyon: INC Ransom'
+  - url: https://www.sentinelone.com/anthology/inc-ransom/
+    title: 'SentinelOne: INC Ransom Analysis'
+  - url: https://attack.mitre.org/software/S1139/
+    title: 'MITRE ATT&CK: INC Ransom S1139'
+  mitre_attack:
+  - T1486
+  - T1190
+  - T1566
+  - T1059
+  - T1078
+  - T1068
+  - T1027
+  - T1003
+  - T1021.001
+  - T1485
+- family: Rhadamanthys
+  aliases:
+  - Rhada
+  - RHY
+  description: C++ infostealer with multi-stage shellcode architecture and custom virtual machine (Q3VM)
+    for code virtualization. Loader config encrypted with RC4, main module uses AES derived from ECDH
+    (NIST P-256) shared secret. Magic bytes '!RHY' (0x59485221) identify config location. Features
+    AI-powered OCR for seed phrase extraction from images (v0.7+).
+  source_url: null
+  api_hash:
+    algorithm: ror13
+    seed: null
+    case_sensitive: false
+    formula: ROR-13 hashing for API resolution across shellcode stages. MPQ hashing for embedded component lookup.
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.7
+  config:
+    encryption: rc4
+    key_length: null
+    structure: shellcode_magic_bytes
+    structure_description: Config embedded in shellcode loader, located by scanning for magic bytes
+      '!RHY' (0x59485221) in versions up to 0.9.1, replaced with 0xBEEF in v0.9.2+. Structure is
+      magic_4B | flags | key_salt | c2_url_path. Main module decrypted via AES key derived from
+      SHA-1 hash of (ECDH shared secret + key_salt from config).
+    location:
+      section: shellcode
+      offset_range: null
+    parsed_fields:
+    - Magic bytes
+    - Flags
+    - Key salt (for AES)
+    - C2 URL path
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns:
+    - /admin/console/index.html
+    user_agent_patterns: []
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    magic_rhy: 0x59485221
+    magic_beef: 0xBEEF
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: rhadamanthys_magic_rhy
+      hex: 21 52 48 59
+    - name: rhadamanthys_magic_beef
+      hex: EF BE 00 00
+    string_patterns:
+    - XS1B
+    - XS2B
+    - Q3VM
+    confidence_weight: 0.9
+  references:
+  - url: https://research.checkpoint.com/2023/rhadamanthys-v0-5-0-a-deep-dive-into-the-stealers-components/
+    title: 'Check Point: Rhadamanthys v0.5.0 Deep Dive'
+  - url: https://research.checkpoint.com/2025/rhadamanthys-0-9-x-walk-through-the-updates/
+    title: 'Check Point: Rhadamanthys 0.9.x Updates'
+  - url: https://www.zscaler.com/blogs/security-research/technical-analysis-rhadamanthys-obfuscation-techniques
+    title: 'Zscaler: Rhadamanthys Obfuscation Techniques'
+  mitre_attack:
+  - T1027
+  - T1027.002
+  - T1027.007
+  - T1055
+  - T1082
+  - T1071.001
+  - T1573
+  - T1106
+  - T1005
+  - T1041
+- family: RisePro
+  aliases:
+  - Rise Pro
+  description: C++ infostealer often protected with VMProtect. Embeds legitimate DLLs (sqlite3.dll,
+    mozglue.dll, freebl3.dll) in cleartext within the PE and dumps them to the working directory at
+    runtime. Uses byte substitution tables shared with PrivateLoader plus XOR key 0x36 for message
+    obfuscation. Communicates over custom TCP protocol on port 50500.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: 1
+    structure: dynamic_from_c2
+    structure_description: Dynamic config received from C2 via /get_library (POST for DLL retrieval) and
+      /get_loader.php (next-stage payload config). Strings obfuscated with XOR (128-bit key blocks).
+      C2 messages use byte-substitution tables shared with PrivateLoader plus XOR key 0x36.
+    location:
+      section: dynamic
+      offset_range: null
+    parsed_fields:
+    - C2 address
+    - DLL download URLs
+    - Grabber configuration
+    - Loader configuration
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - tcp
+    - http
+    default_headers: []
+    uri_patterns:
+    - /get_library
+    - /get_loader.php
+    user_agent_patterns: []
+    confidence_weight: 0.7
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    xor_key: 0x36
+    tcp_port: 50500
+    confidence_weight: 0.8
+  dll_loading:
+    technique: embedded_dll_drop
+    loaded_dlls:
+    - sqlite3.dll
+    - mozglue.dll
+    - freebl3.dll
+    api_count_estimates: {}
+    confidence_weight: 0.85
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - sqlite3.dll
+    - mozglue.dll
+    - freebl3.dll
+    - /get_library
+    - /get_loader.php
+    confidence_weight: 0.85
+  references:
+  - url: https://blog.sekoia.io/new-risepro-stealer-distributed-by-the-prominent-privateloader/
+    title: 'Sekoia: New RisePro Stealer via PrivateLoader'
+  - url: https://any.run/cybersecurity-blog/risepro-malware-communication-analysis/
+    title: 'ANY.RUN: RisePro Communication Analysis'
+  - url: https://flashpoint.io/blog/risepro-stealer-and-pay-per-install-malware-privateloader/
+    title: 'Flashpoint: RisePro Stealer Returns'
+  mitre_attack:
+  - T1055
+  - T1027
+  - T1082
+  - T1005
+  - T1041
+  - T1071
+  - T1547
+- family: Mystic Stealer
+  aliases:
+  - Mystic
+  - MysticStealer
+  description: C-based infostealer with Python control panel. Uses polymorphic string obfuscation (unique
+    ADD/SUB/XOR per sample), hash-based import resolution, and custom binary TCP protocol. Handshake
+    identified by magic bytes 0x946F19B5 (LE B5 19 6F 94). C2 responds with 256-byte RC4 key for all
+    subsequent communications. Targets 40+ browsers and 70+ crypto wallet extensions.
+  source_url: null
+  api_hash:
+    algorithm: polymorphic_hash
+    seed: null
+    case_sensitive: false
+    formula: Hash-based import resolution with polymorphic algorithm unique per sample
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.5
+  config:
+    encryption: rc4
+    key_length: 256
+    structure: dynamic_from_c2
+    structure_description: Config received dynamically from C2 after handshake. No static config embedded.
+      Client sends magic bytes 0x946F19B5, C2 responds with 256 bytes used as RC4 key. Client then
+      encrypts MachineGUID (from SOFTWARE\Microsoft\Cryptography\MachineGuid) with RC4 and sends to C2.
+    location:
+      section: dynamic
+      offset_range: null
+    parsed_fields:
+    - MachineGUID
+    - C2 address
+    - Grabber config (from C2)
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - tcp
+    - http
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    handshake_magic: 0x946F19B5
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: mystic_handshake_magic
+      hex: B5 19 6F 94
+    string_patterns:
+    - SOFTWARE\Microsoft\Cryptography\MachineGuid
+    confidence_weight: 0.9
+  references:
+  - url: https://www.zscaler.com/blogs/security-research/mystic-stealer
+    title: 'Zscaler: Mystic Stealer'
+  - url: https://www.zscaler.com/blogs/security-research/mystic-stealer-revisited
+    title: 'Zscaler: Mystic Stealer Revisited'
+  - url: https://inquest.net/blog/mystic-stealer-new-kid-block/
+    title: 'InQuest: Mystic Stealer New Kid on the Block'
+  mitre_attack:
+  - T1027
+  - T1027.007
+  - T1055
+  - T1082
+  - T1005
+  - T1041
+  - T1071
+  - T1573.001
+  - T1539
+- family: WhiteSnake Stealer
+  aliases:
+  - WhiteSnake
+  - White Snake Stealer
+  description: .NET infostealer with cross-platform support (Windows/Linux). Data serialized as XML via
+    XmlSerializer, then gzip compressed, RC4 encrypted, and optionally RSA encrypted before exfiltration.
+    Primary C2 via Tor network (.onion addresses) with secondary exfiltration via Telegram bot API.
+    Known mutex 'kwnmsgyyay'. Features USB spreading capability.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: null
+    structure: dotnet_encrypted_strings
+    structure_description: Hardcoded encrypted strings in .NET binary decrypted at runtime via dedicated
+      string decryption function. Config includes C2 address, Telegram bot token, mutex name, feature
+      flags. Older variants use XOR string obfuscation, current use RC4. Data exfiltration chain is
+      XML serialization -> gzip -> RC4 -> optional RSA.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - C2 address (.onion)
+    - Telegram bot token
+    - Telegram chat ID
+    - Mutex name
+    - Feature flags
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - tor
+    - https
+    default_headers: []
+    uri_patterns:
+    - api.telegram.org/bot
+    user_agent_patterns: []
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: csharp
+    linker: null
+    architectures:
+    - x86
+    - AnyCPU
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants:
+    mutex: kwnmsgyyay
+    confidence_weight: 0.9
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - kwnmsgyyay
+    - XmlSerializer
+    - Win32_ComputerSystem
+    confidence_weight: 0.85
+  references:
+  - url: https://russianpanda.com/WhiteSnake-Stealer-Malware-Analysis
+    title: 'RussianPanda: WhiteSnake Stealer Analysis'
+  - url: https://cyble.com/blog/new-whitesnake-stealer-offered-for-sale-via-maas-model/
+    title: 'Cyble: New WhiteSnake Stealer'
+  - url: https://blog.sonicwall.com/en-us/2024/03/whitesnake-stealer-unveiling-the-latest-version-less-obfuscated-more-dangerous/
+    title: 'SonicWall: WhiteSnake Latest Version'
+  mitre_attack:
+  - T1027
+  - T1055
+  - T1056.001
+  - T1113
+  - T1005
+  - T1041
+  - T1071.001
+  - T1573
+  - T1547
+  - T1497
+  - T1091
+- family: Meduza Stealer
+  aliases:
+  - Meduza
+  - MeduzaStealer
+  description: C++ infostealer with Python control panel. Uses ChaCha20 encryption with Base64 encoding
+    for payload and config file encryption. Connects to C2 early (before data collection, unlike most
+    stealers). Exfiltrates Base64-encoded JSON over custom TCP protocol. Targets 95+ browser variants,
+    76 crypto wallet extensions, and 19 password managers including Windows Credential Manager/Vault.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: chacha20
+    key_length: 32
+    structure: chacha20_base64_config
+    structure_description: Config file encrypted with ChaCha20, then Base64-encoded. Decrypted in memory
+      at runtime. Contains C2 URLs, custom TCP ports, grabber max size, anti-VM/anti-debug flags,
+      build name, target file extensions. Early C2 connection behavior (connects before stealing).
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 URLs
+    - TCP port
+    - Grabber max size
+    - Anti-VM flag
+    - Anti-debug flag
+    - Build name
+    - Target file extensions
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns: []
+    confidence_weight: 0.5
+  references:
+  - url: https://www.splunk.com/en_us/blog/security/meduza-stealer-analysis.html
+    title: 'Splunk: Meduza Stealer Analysis'
+  - url: https://www.uptycs.com/blog/threat-research-report-team/what-is-meduza-stealer-and-how-does-it-work
+    title: 'Uptycs: Unmasking Meduza Stealer'
+  - url: https://foresiet.com/blog/meduza-stealer-analysis-features-c2-updates/
+    title: 'Foresiet: Meduza Stealer In-Depth Analysis'
+  mitre_attack:
+  - T1566
+  - T1204.002
+  - T1059
+  - T1562.001
+  - T1003
+  - T1539
+  - T1005
+  - T1041
+  - T1020
+- family: MetaStealer
+  aliases:
+  - META
+  - Meta Stealer
+  - META Infostealer
+  description: .NET infostealer derived from RedLine Stealer codebase. Config stored in static .NET class
+    with IP, ID, Message, and XOR Key fields. IP and ID fields are XOR-decrypted then double Base64-decoded.
+    Uses WCF (Windows Communication Foundation) with NetTCPBinding over net.tcp:// protocol for C2.
+    Obfuscated with Confuser Core 1.6.0.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: null
+    structure: dotnet_static_fields_xor_b64
+    structure_description: Config stored in static .NET class with fields IP, ID, Message, XOR Key.
+      IP and ID are XOR-decrypted with hardcoded key, then double Base64-decoded. String obfuscation
+      uses runtime character-array construction (anti-YARA). Same decryption pattern as RedLine.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - IP (C2 address)
+    - ID (campaign identifier)
+    - Message
+    - XOR Key
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns:
+    - net.tcp://
+    user_agent_patterns: []
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: csharp
+    linker: null
+    architectures:
+    - x86
+    - AnyCPU
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - Confuser Core 1.6.0
+    - NetTCPBinding
+    - net.tcp://
+    - MSValue1
+    confidence_weight: 0.85
+  references:
+  - url: https://russianpanda.com/MetaStealer-Redline's-Doppelganger
+    title: "RussianPanda: MetaStealer - RedLine's Doppelganger"
+  - url: https://isc.sans.edu/diary/28522
+    title: 'SANS ISC: Windows MetaStealer Malware'
+  - url: https://quorumcyber.com/malware-reports/metastealer-stealerware/
+    title: 'Quorum Cyber: MetaStealer Stealware'
+  mitre_attack:
+  - T1059
+  - T1053
+  - T1027
+  - T1497
+  - T1055
+  - T1082
+  - T1005
+  - T1041
+  - T1547.001
+  - T1555.003
+- family: Atomic Stealer
+  aliases:
+  - AMOS
+  - Atomic macOS Stealer
+  - OSX.AtomicStealer
+  description: macOS infostealer targeting Keychain passwords, browser data, and crypto wallets. Earlier
+    versions written in Go, current in C++. Distributed as Mach-O universal binary (Intel x86_64 +
+    Apple Silicon arm64). Uses multi-key XOR string encryption with tiered key selection based on string
+    length. Prompts for credentials via AppleScript 'display dialog'. 2025 variant adds persistent
+    backdoor with C2 polling loop.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: null
+    structure: hidden_files_config
+    structure_description: Config details (C2 IP, username, bot ID) stored in hidden files in user home
+      directory. XOR-encrypted strings in binary for sensitive values using multi-key tiered scheme
+      (short strings use Key 0, medium use Keys 0-1, standard use Keys 0-3, long use Keys 0-5).
+    location:
+      section: embedded
+      offset_range: null
+    parsed_fields:
+    - C2 IP address
+    - Username
+    - Bot ID
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    default_headers: []
+    uri_patterns:
+    - /p2p
+    - /api/tasks/
+    - /contact
+    user_agent_patterns: []
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: clang
+    linker: null
+    architectures:
+    - x86_64
+    - arm64
+    formats:
+    - macho
+    rich_header: false
+    confidence_weight: 0.4
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - osascript -e "display dialog"
+    - Cookies.binarycookies
+    - NoteStore.sqlite
+    - /p2p
+    confidence_weight: 0.85
+  references:
+  - url: https://www.picussecurity.com/resource/blog/atomic-stealer-amos-macos-threat-analysis
+    title: 'Picus Security: Atomic Stealer 2024 Analysis'
+  - url: https://unit42.paloaltonetworks.com/macos-stealers-growing/
+    title: 'Unit42: macOS Stealers on the Rise'
+  - url: https://moonlock.com/amos-backdoor-persistent-access
+    title: 'Moonlock: AMOS Backdoor Persistent Access'
+  mitre_attack:
+  - T1059.002
+  - T1059.004
+  - T1027
+  - T1005
+  - T1555.001
+  - T1539
+  - T1041
+  - T1071.001
+  - T1113
+- family: StrelaStealer
+  aliases:
+  - Strela Stealer
+  - Strela
+  description: Native C/C++ 64-bit DLL infostealer extremely focused on email credential theft (Outlook
+    and Thunderbird). Compiled with Visual Studio 2008 with single export function named 'Entry'. Strings
+    encrypted with cyclic XOR using key containing 'strela'. Uses volume serial ID as HTTP User-Agent
+    for host fingerprinting. Geofenced to Germany, Spain, Italy, Ukraine. Associated with HIVE-0145 IAB.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: null
+    structure: cyclic_xor_strings
+    structure_description: String encryption via cyclic XOR with hardcoded key containing 'strela'.
+      Encoded core payload stored in DLL .data section, decrypted via custom XOR. C2 address embedded
+      in decrypted payload. Language identifiers hardcoded for geofencing.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 address
+    - Target languages/regions
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns:
+    - (volume serial ID as User-Agent)
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - dll
+    rich_header: true
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - strela
+    - StrelaDLLCompile
+    - Entry
+    - CryptUnprotectData
+    - logins.json
+    - key4.db
+    - GetKeyboardLayout
+    confidence_weight: 0.9
+  references:
+  - url: https://unit42.paloaltonetworks.com/strelastealer-campaign/
+    title: 'Unit42: Large-Scale StrelaStealer Campaign'
+  - url: https://attack.mitre.org/software/S1183/
+    title: 'MITRE ATT&CK: StrelaStealer S1183'
+  - url: https://cyble.com/blog/strela-stealer-targets-europe-stealthily-via-webdav/
+    title: 'Cyble: Strela Stealer via WebDAV'
+  mitre_attack:
+  - T1059.007
+  - T1059.001
+  - T1027
+  - T1140
+  - T1005
+  - T1041
+  - T1071.001
+  - T1614.001
+  - T1204.002
+- family: Snake Keylogger
+  aliases:
+  - 404 Keylogger
+  - KrakenKeylogger
+  - SnakeKeylogger
+  description: .NET keylogger/stealer with triple exfiltration channels (SMTP, FTP, Telegram). Payload
+    hidden in .RSRC section, AES-ECB encrypted. Recent variants delivered via AutoIt-compiled wrapper.
+    Uses process hollowing into InstallUtil.exe via RunPE technique. Targets 50+ applications including
+    browsers, email clients, and FTP clients.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-ecb
+    key_length: null
+    structure: rsrc_section_aes
+    structure_description: Payload hidden in .RSRC section, AES-ECB encrypted with key stored alongside
+      resource entry. AutoIt layer may add additional obfuscation. Config contains SMTP host/port/creds,
+      FTP host/creds, and Telegram bot token/chat ID as encrypted fields.
+    location:
+      section: .rsrc
+      offset_range: null
+    parsed_fields:
+    - SMTP host
+    - SMTP port
+    - SMTP credentials
+    - FTP host
+    - FTP credentials
+    - Telegram bot token
+    - Telegram chat ID
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - smtp
+    - ftp
+    - https
+    default_headers: []
+    uri_patterns:
+    - api.telegram.org/bot
+    user_agent_patterns: []
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: csharp
+    linker: null
+    architectures:
+    - x86
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - InstallUtil.exe
+    - api.telegram.org/bot
+    - GetThreadContext
+    - ZwUnmapViewOfSection
+    confidence_weight: 0.85
+  references:
+  - url: https://www.fortinet.com/blog/threat-research/deep-analysis-of-snake-keylogger-new-variant
+    title: 'Fortinet: Deep Analysis of Snake Keylogger'
+  - url: https://www.splunk.com/en_us/blog/security/under-the-hood-of-snakekeylogger-analyzing-its-loader-and-its-tactics-techniques-and-procedures.html
+    title: 'Splunk: Under the Hood of SnakeKeylogger'
+  - url: https://threatresearch.ext.hp.com/the-many-skins-of-snake-keylogger/
+    title: "HP Wolf Security: Snake Keylogger's Many Skins"
+  mitre_attack:
+  - T1056.001
+  - T1055.012
+  - T1113
+  - T1555.003
+  - T1005
+  - T1041
+  - T1071.001
+  - T1071.003
+  - T1547
+  - T1082
+- family: FormBook
+  aliases:
+  - Formbook
+  - XLoader
+  - X-Loader
+  description: C and x86 assembly infostealer/form grabber (FormBook pre-2020, XLoader post-2020 rebrand).
+    Uses CRC32 Bzip2 variant for API hashing with lowercased function names. Custom RC4 implementation
+    with 'positive unfold'. Generates decoy traffic to legitimate domains mixed with real C2 traffic.
+    NOPUSHEBP encrypted functions contain dynamically constructed decryption keys. Heavy anti-analysis
+    with virtualized code blocks.
+  source_url: null
+  api_hash:
+    algorithm: crc32_bzip2
+    seed: null
+    case_sensitive: false
+    formula: CRC32 Bzip2 variant (NOT standard CRC32B). Function names lowercased before hashing. Hashes stored RC4-encrypted.
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.9
+  config:
+    encryption: rc4
+    key_length: null
+    structure: multi_layer_encrypted
+    structure_description: Encrypted config blocks within binary. Real C2 and decoy C2 list stored
+      separately with different encryption. Decoy C2 decryption uses 5 DWORDs combined into 20-byte
+      seed XORed with hardcoded DWORD + 1-byte XOR key. XLoader v4.3+ adds additional RC4 layer with
+      convoluted key derivation. Mutex generated from SHA-1 of hardcoded bytes DF 0F EF 99 75 6B 12
+      A8 4D 50 plus current username (UTF-16), then RC4.
+    location:
+      section: .text
+      offset_range: null
+    parsed_fields:
+    - Real C2 server
+    - Decoy C2 list
+    - Mutex seed bytes
+    - RC4 keys
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: custom_asm
+    linker: null
+    architectures:
+    - x86
+    formats:
+    - exe
+    - dll
+    rich_header: false
+    confidence_weight: 0.3
+  constants:
+    mutex_seed: DF 0F EF 99 75 6B 12 A8 4D 50
+    patch_marker: 0x88888888
+    confidence_weight: 0.9
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: formbook_mutex_seed
+      hex: DF 0F EF 99 75 6B 12 A8 4D 50
+    - name: formbook_patch_marker
+      hex: 88 88 88 88
+    string_patterns: []
+    confidence_weight: 0.9
+  references:
+  - url: https://www.zscaler.com/blogs/security-research/technical-analysis-xloader-versions-6-and-7-part-1
+    title: 'Zscaler: XLoader Versions 6 and 7 Part 1'
+  - url: https://any.run/cybersecurity-blog/xloader-formbook-encryption-analysis-and-malware-decryption/
+    title: 'ANY.RUN: XLoader/FormBook Encryption Analysis'
+  - url: https://attack.mitre.org/software/S1207/
+    title: 'MITRE ATT&CK: XLoader S1207'
+  mitre_attack:
+  - T1055.012
+  - T1055
+  - T1056.001
+  - T1027
+  - T1027.002
+  - T1027.007
+  - T1027.009
+  - T1082
+  - T1071.001
+  - T1573.001
+  - T1113
+  - T1115
+  - T1555.003
+  - T1140
+- family: BumbleBee
+  aliases:
+  - COLDTRAIN
+  - Bumblebee Loader
+  description: Custom C++ loader used by initial access brokers since March 2022, linked to Conti/Quantum
+    ransomware. Uses RC4-encrypted config in .data section with cleartext key alongside encrypted C2 list
+    and campaign ID. Features APC injection (NtQueueApcThread) and reflective DLL loading via PowerSploit.
+    User-agent string 'bumblebee' doubles as RC4 key for network encryption in early versions.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: null
+    structure: data_section_rc4
+    structure_description: RC4 key stored as cleartext string in .data section alongside encrypted C2 list
+      and campaign ID. Newer variants use AES-256 for C2 traffic. User-agent string doubles as RC4 key
+      for network encryption. DGA generates 100 domains with 14 alphanumeric chars + .life/.org TLD.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 IP addresses
+    - Campaign ID (group_name)
+    - RC4 key
+    - Botnet ID
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns:
+    - /cgi-bin/req5
+    user_agent_patterns:
+    - bumblebee
+    confidence_weight: 0.7
+  commands:
+    count_range:
+    - 5
+    - 8
+    known_names:
+    - shi
+    - dij
+    - dex
+    - sdl
+    - ins
+    confidence_weight: 0.7
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - dll
+    - exe
+    - iso
+    rich_header: true
+    confidence_weight: 0.3
+  constants: null
+  dll_loading:
+    technique: apc_injection
+    loaded_dlls: []
+    api_count_estimates: {}
+    confidence_weight: 0.6
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - bumblebee
+    - PowerSploit
+    - Invoke-ReflectivePEInjection
+    - NtQueueApcThread
+    confidence_weight: 0.85
+  references:
+  - url: https://www.proofpoint.com/us/blog/threat-insight/bumblebee-is-still-transforming
+    title: 'Proofpoint: BumbleBee Is Still Transforming'
+  - url: https://www.cybereason.com/blog/threat-analysis-report-bumblebee-loader-the-high-road-to-enterprise-domain-control
+    title: 'Cybereason: BumbleBee Threat Analysis'
+  - url: https://blog.sekoia.io/bumblebee-a-new-trendy-loader-for-initial-access-brokers/
+    title: 'Sekoia: BumbleBee Loader for IABs'
+  mitre_attack:
+  - T1566.001
+  - T1059.001
+  - T1053.005
+  - T1548.002
+  - T1027
+  - T1055.004
+  - T1071.001
+  - T1573.001
+  - T1082
+  - T1568.002
+- family: GuLoader
+  aliases:
+  - CloudEyE
+  - CloudEye
+  - vbdropper
+  description: Highly evasive shellcode-based downloader using Vectored Exception Handler (VEH) for control
+    flow obfuscation. Shellcode encrypted with multi-byte XOR key. Downloads payloads from cloud services
+    (Google Drive, OneDrive). Uses modified DJB2 with XOR masking for API hashing (seed 5381). Anti-VM
+    scans entire process memory for VM-related strings.
+  source_url: null
+  api_hash:
+    algorithm: djb2_xor_masked
+    seed: 5381
+    case_sensitive: false
+    formula: hash = hash * 33 + char; final_hash = hash XOR hardcoded_dword
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.8
+  config:
+    encryption: xor
+    key_length: null
+    structure: shellcode_xor_encrypted
+    structure_description: Payload URL XOR-encrypted within shellcode. VBScript variant contains obfuscated
+      PowerShell that downloads and decrypts shellcode. NSIS variant embeds encrypted shellcode in
+      installer data. Downloads RATs from cloud hosting.
+    location:
+      section: shellcode
+      offset_range: null
+    parsed_fields:
+    - Payload download URL
+    - XOR decryption key
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns:
+    - /uc?export=download&id=
+    user_agent_patterns: []
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: nsis
+    linker: null
+    architectures:
+    - x86
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants:
+    djb2_seed: 5381
+    confidence_weight: 0.7
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: guloader_djb2_seed
+      hex: '15 13 00 00'
+    string_patterns:
+    - drive.google.com
+    - NtSetInformationThread
+    confidence_weight: 0.8
+  references:
+  - url: https://www.crowdstrike.com/en-us/blog/guloader-dissection-reveals-new-anti-analysis-techniques-and-code-injection-redundancy/
+    title: 'CrowdStrike: GuLoader Dissection'
+  - url: https://www.zscaler.com/blogs/security-research/technical-analysis-guloader-obfuscation-techniques
+    title: 'Zscaler: GuLoader Obfuscation Analysis'
+  - url: https://research.checkpoint.com/2023/cloud-based-malware-delivery-the-evolution-of-guloader/
+    title: 'Check Point: Evolution of GuLoader'
+  mitre_attack:
+  - T1027
+  - T1027.002
+  - T1140
+  - T1497.001
+  - T1055
+  - T1059.001
+  - T1204.002
+  - T1071.001
+  - T1102.001
+- family: SmokeLoader
+  aliases:
+  - Smoke Loader
+  - Dofoil
+  - Smoke
+  description: Modular bot and loader active since 2011. Stager injects main module into explorer.exe
+    using process hollowing. Uses dual RC4 keys (4-byte DWORD each) for request/response encryption.
+    Copies ntdll.dll to temp directory to bypass hooks. Version 2025 breaks compatibility with prior
+    network protocols.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: 4
+    structure: dual_rc4_keys
+    structure_description: Two separate 4-byte (DWORD) RC4 keys hardcoded in main module - one for
+      encrypting requests, one for decrypting responses. C2 URL structure is DWORD RC4 key + DWORD
+      CRC32b hash of URL + encrypted URL. Version field is 2 bytes (0x07E6=2022, 0x07E9=2025).
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - Request RC4 key
+    - Response RC4 key
+    - C2 URLs
+    - Version field
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    version_2025: 0x07E9
+    version_2022: 0x07E6
+    confidence_weight: 0.8
+  dll_loading:
+    technique: ntdll_copy_bypass
+    loaded_dlls:
+    - ntdll.dll
+    api_count_estimates: {}
+    confidence_weight: 0.7
+  yara_indicators:
+    hex_patterns:
+    - name: smokeloader_version_2025
+      hex: E9 07
+    string_patterns:
+    - explorer.exe
+    - NtCreateSection
+    - NtMapViewOfSection
+    - RtlCreateUserThread
+    confidence_weight: 0.8
+  references:
+  - url: https://www.zscaler.com/blogs/security-research/smokeloader-rises-ashes
+    title: 'Zscaler: SmokeLoader Version 2025'
+  - url: https://n1ght-w0lf.github.io/malware%20analysis/smokeloader/
+    title: 'n1ghtw0lf: Deep Analysis of SmokeLoader'
+  - url: https://attack.mitre.org/software/S0226/
+    title: 'MITRE ATT&CK: SmokeLoader S0226'
+  mitre_attack:
+  - T1055.012
+  - T1055
+  - T1497.001
+  - T1027
+  - T1071.001
+  - T1573.001
+  - T1082
+  - T1057
+  - T1518.001
+- family: SystemBC
+  aliases:
+  - Coroxy
+  - DroxiDat
+  description: C++ proxy bot and backdoor widely used by ransomware operators (Ryuk, Conti, DarkSide,
+    Black Basta) to set up SOCKS5 proxies for C2 traffic tunneling. Uses triple encryption for beacons
+    (XOR -> RC4 -> XOR) with a 40-byte hardcoded key. For each infected host, C2 opens a new TCP port
+    for SOCKS5 traffic.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor_rc4
+    key_length: 40
+    structure: xor_rc4_triple
+    structure_description: 40-byte hardcoded XOR key used for triple encryption of beacons (XOR then RC4
+      then XOR, all with same key). Structure is 40-byte key | 10 bytes padding | encrypted beacon.
+      XOR key leaks when encrypting null-byte PE section padding.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 server addresses
+    - DNS server addresses
+    - C2 port number
+    - SOCKS5 proxy port
+    - 40-byte XOR key
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - tcp
+    - socks5
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - BEGINDATA
+    - SOCKS5
+    - cmd.exe /c
+    confidence_weight: 0.75
+  references:
+  - url: https://www.bitsight.com/blog/systembc-multipurpose-proxy-bot-still-breathes
+    title: 'Bitsight: SystemBC Multipurpose Proxy Bot'
+  - url: https://www.proofpoint.com/us/threat-insight/post/systembc-christmas-july-socks5-malware-and-exploit-kits
+    title: 'Proofpoint: SystemBC SOCKS5 Analysis'
+  - url: https://labs.withsecure.com/publications/prelude-to-ransomware-systembc
+    title: 'WithSecure: Prelude to Ransomware SystemBC'
+  mitre_attack:
+  - T1090
+  - T1090.003
+  - T1573.001
+  - T1071
+  - T1105
+  - T1059.003
+  - T1547.001
+  - T1082
+- family: PrivateLoader
+  aliases:
+  - ruzki
+  - ruzki PPI
+  description: C++ pay-per-install loader distributing up to 5000 infections per day. Uses SIMD PXOR
+    instructions (XMM registers) for string decryption. Employs dead drop resolvers - 3 hardcoded URLs
+    where first two return plaintext C2 address, third returns XOR-encrypted response. Shares byte
+    substitution tables with RisePro stealer.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: null
+    structure: simd_pxor_strings
+    structure_description: Stack strings decrypted using SIMD PXOR instruction with XMM registers
+      (hex opcode 66 0F EF). Dead drop resolver pattern with 3 hardcoded URLs. Main C2 decryption
+      uses single-byte XOR key (e.g., 0x9D). Some variants packed with VMProtect.
+    location:
+      section: .text
+      offset_range: null
+    parsed_fields:
+    - Dead drop resolver URLs (3)
+    - C2 address (from resolver)
+    - XOR key
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: privateloader_simd_pxor
+      hex: 66 0F EF
+    string_patterns:
+    - WinHttpOpen
+    - WinHttpConnect
+    - WinHttpSendRequest
+    confidence_weight: 0.75
+  references:
+  - url: https://www.bitsight.com/blog/tracking-privateloader-malware-distribution-service
+    title: 'Bitsight: Tracking PrivateLoader'
+  - url: https://www.zscaler.com/blogs/security-research/peeking-privateloader
+    title: 'Zscaler: Peeking into PrivateLoader'
+  - url: https://www.intel471.com/blog/privateloader-malware
+    title: 'Intel471: PrivateLoader First Step in Malware'
+  mitre_attack:
+  - T1102.001
+  - T1027
+  - T1140
+  - T1071.001
+  - T1105
+  - T1059
+  - T1497.001
+- family: Latrodectus
+  aliases:
+  - IceNova
+  - Unidentified 111
+  - Lotus
+  description: Loader believed to be the successor to IcedID, developed by Lunar Spider. First observed
+    November 2023. Uses RC4 with 64-byte Base64-encoded key for C2 traffic encryption. String obfuscation
+    (v1.4+) via AES-256-CTR with hardcoded key and per-string 16-byte IV. Campaign ID generated via
+    FNV hash algorithm (e.g., 'Wiski' -> 0x24e7ce9e).
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: 64
+    structure: rc4_base64_config
+    structure_description: C2 traffic encrypted with RC4 (64-byte key, base64-encoded), then base64-encoded
+      before transmission. String obfuscation (v1.4+) uses AES-256-CTR with hardcoded AES key and
+      per-string 16-byte IV (first 16 bytes of each encrypted blob). Campaign ID via FNV hash.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 URLs
+    - Version
+    - Mission ID
+    - RC4 key
+    - AES key
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns:
+    - /test
+    - /live
+    user_agent_patterns: []
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    formats:
+    - dll
+    - exe
+    rich_header: true
+    confidence_weight: 0.3
+  constants:
+    fnv_hash_wiski: 0x24e7ce9e
+    confidence_weight: 0.85
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: latrodectus_fnv_hash
+      hex: 9E CE E7 24
+    string_patterns:
+    - /test
+    - /live
+    - Wiski
+    confidence_weight: 0.85
+  references:
+  - url: https://www.proofpoint.com/us/blog/threat-insight/latrodectus-spider-bytes-ice
+    title: 'Proofpoint: Latrodectus Spider Bytes Ice'
+  - url: https://www.bitsight.com/blog/latrodectus-are-you-coming-back
+    title: 'Bitsight: Latrodectus Are You Coming Back'
+  - url: https://www.vmray.com/latrodectus-a-year-in-the-making/
+    title: 'VMRay: Latrodectus A Year in the Making'
+  mitre_attack:
+  - T1071.001
+  - T1573.001
+  - T1027
+  - T1140
+  - T1082
+  - T1105
+  - T1053.005
+  - T1059.001
+  - T1041
+- family: BazarLoader
+  aliases:
+  - Bazar
+  - Team9 Loader
+  - Team9 Backdoor
+  - KEGTAP
+  - BEERBOT
+  description: Loader and backdoor from the TrickBot group (Wizard Spider), active since April 2020. Uses
+    Emercoin blockchain DNS (.bazar TLD) for C2 domain resolution via OpenNIC. C++ template metaprogramming
+    generates per-build unique encryption routines, making static signatures extremely difficult. Process
+    hollowing into svchost.exe for fileless execution.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: per_build_unique
+    key_length: null
+    structure: template_metaprogramming
+    structure_description: Per-string unique decryption routines generated via C++ template-based
+      metaprogramming. Each build produces unique encryption keys and patterns. C2 IP decryption
+      uses DNS A-record IP XOR with key 0xFE. C2 domains use .bazar TLD resolved via Emercoin
+      blockchain DNS through OpenNIC.
+    location:
+      section: .text
+      offset_range: null
+    parsed_fields:
+    - C2 domains (.bazar TLD)
+    - DNS resolver addresses
+    - XOR key (0xFE)
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - https
+    - tls
+    default_headers: []
+    uri_patterns:
+    - /cgi-bin/req5
+    user_agent_patterns: []
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.3
+  constants:
+    dns_xor_key: 0xFE
+    confidence_weight: 0.7
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - .bazar
+    - /cgi-bin/req5
+    - OpenNIC
+    confidence_weight: 0.75
+  references:
+  - url: https://cybersecurity.att.com/blogs/labs-research/trickbot-bazarloader-in-depth
+    title: 'AT&T: TrickBot BazarLoader In-Depth'
+  - url: https://www.cybereason.com/blog/a-bazar-of-tricks-following-team9s-development-cycles
+    title: 'Cybereason: A Bazar of Tricks'
+  - url: https://attack.mitre.org/software/S0534/
+    title: 'MITRE ATT&CK: Bazar S0534'
+  mitre_attack:
+  - T1055.012
+  - T1071.001
+  - T1573.002
+  - T1568.002
+  - T1027
+  - T1140
+  - T1082
+  - T1105
+  - T1547.001
+- family: ShadowPad
+  aliases:
+  - POISONPLUG
+  - ScatterBee
+  - ForcefulSentry
+  - PhantomDawn
+  description: Advanced modular backdoor in shellcode format used by Chinese APT groups (APT41, BRONZE
+    ATLAS/UNIVERSITY) since 2017. Successor to PlugX. Network data compressed with QuickLZ then encrypted
+    with generated AES key. Supports 6 C2 protocols (TCP, SSL, HTTP, HTTPS, UDP, DNS). Loaded via DLL
+    sideloading into legitimate executables. Plugin-based architecture with modules loaded as shellcode.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes
+    key_length: null
+    structure: custom_per_version
+    structure_description: Custom per-version decryption algorithm varies across variants (ScatterBee,
+      ForcefulSentry, PhantomDawn). String encryption via XOR with custom rand() function. Network data
+      compressed with QuickLZ then encrypted with generated AES key. DLL loader decrypts embedded
+      ShadowPad shellcode in memory.
+    location:
+      section: shellcode
+      offset_range: null
+    parsed_fields:
+    - C2 addresses
+    - C2 protocol (TCP/SSL/HTTP/HTTPS/UDP/DNS)
+    - Module list
+    - Encryption keys
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - tcp
+    - ssl
+    - http
+    - https
+    - udp
+    - dns
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names:
+    - Keylogger
+    - Screenshot
+    - File Manager
+    - Registry Manager
+    - Process Manager
+    - Remote Shell
+    - Network Discovery
+    - Plugin Loader
+    confidence_weight: 0.5
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - dll
+    - shellcode
+    rich_header: true
+    confidence_weight: 0.3
+  constants: null
+  dll_loading:
+    technique: dll_sideloading
+    loaded_dlls: []
+    api_count_estimates: {}
+    confidence_weight: 0.7
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - QuickLZ
+    - mscoree.dll
+    confidence_weight: 0.7
+  references:
+  - url: https://www.secureworks.com/research/shadowpad-malware-analysis
+    title: 'Secureworks: ShadowPad Malware Analysis'
+  - url: https://www.sentinelone.com/labs/shadowpad-a-masterpiece-of-privately-sold-malware-in-chinese-espionage/
+    title: 'SentinelOne: ShadowPad Masterpiece of Chinese Espionage'
+  - url: https://www.trendmicro.com/en_us/research/25/b/updated-shadowpad-malware-leads-to-ransomware-deployment.html
+    title: 'Trend Micro: Updated ShadowPad Leads to Ransomware'
+  mitre_attack:
+  - T1574.002
+  - T1055
+  - T1071
+  - T1573
+  - T1082
+  - T1012
+  - T1057
+  - T1056.001
+  - T1113
+  - T1005
+  - T1027
+  - T1195.002
+- family: Konni RAT
+  aliases:
+  - KONNI
+  - NOKKI
+  - Sanny
+  description: RAT attributed to North Korean APT37 (Reaper/ScarCruft), active since 2014. Unique
+    encryption approach where the AES decryption key is the Windows service name under which the malware
+    runs. File exfiltration uses AES with IV from QueryPerformanceCounter and filename as key. Targets
+    political organizations across Russia, East Asia, Europe, and Middle East.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes
+    key_length: null
+    structure: service_name_key
+    structure_description: AES encryption where the decryption key is the Windows service name under which
+      the malware runs. Different service names render the sample non-functional. Config files stored as
+      .ini files containing C2 address, AES-encrypted when dropped to disk. File exfiltration uses AES
+      with IV from QueryPerformanceCounter API.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 address
+    - Service name (AES key)
+    - Download URLs
+    - Exfiltration paths
+    confidence_weight: 0.75
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns:
+    - /weget/
+    - /weset/
+    - /weoff/
+    - /upload.php
+    - /download.php
+    user_agent_patterns: []
+    confidence_weight: 0.7
+  commands:
+    count_range: null
+    known_names:
+    - File Exfiltration
+    - Screenshot
+    - Keylogging
+    - Remote Shell
+    - File Download
+    - Process List
+    confidence_weight: 0.4
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - dll
+    - exe
+    rich_header: true
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - /weget/
+    - /weset/
+    - /weoff/
+    - upload.php
+    - download.php
+    - svchost.exe
+    - rundll32.exe
+    confidence_weight: 0.85
+  references:
+  - url: https://www.cyfirma.com/research/analysis-of-konni-rat-stealth-persistence-and-anti-analysis-techniques/
+    title: 'CYFIRMA: Konni RAT Analysis'
+  - url: https://www.malwarebytes.com/blog/threat-intelligence/2022/01/konni-evolves-into-stealthier-rat
+    title: 'Malwarebytes: KONNI Evolves Into Stealthier RAT'
+  - url: https://attack.mitre.org/software/S0356/
+    title: 'MITRE ATT&CK: KONNI S0356'
+  mitre_attack:
+  - T1059.001
+  - T1059.003
+  - T1547.001
+  - T1543.003
+  - T1056.001
+  - T1113
+  - T1005
+  - T1041
+  - T1071.001
+  - T1573.001
+  - T1082
+  - T1548.002
+- family: Amadey Bot
+  aliases:
+  - Amadey
+  - Amadey Stealer
+  description: Modular botnet and dropper written in C/C++, active since October 2018. Functions as
+    infostealer and payload delivery platform. Sends system info via cleartext HTTP POST with distinctive
+    parameter format. Drops credential stealer (cred64.dll) and clipper (clip64.dll) modules executed
+    via rundll32.exe. Mutex via CreateMutexA exits if return value is 0xB7 (already exists).
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: null
+    structure: xor_encoded_config
+    structure_description: Simple XOR encoding for config data. C2 URL, encoding key, module drop directory,
+      mutex, and version embedded in binary. Cleartext HTTP POST with system fingerprint parameters in
+      distinctive format.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 URL
+    - Encoding key
+    - Module drop directory
+    - Mutex
+    - Version
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    default_headers:
+    - Content-Type: application/x-www-form-urlencoded
+    uri_patterns:
+    - /index.php
+    - /Zu7JuNko/index.php
+    - /9fdN3gw/index.php
+    - /b2dkj3dk/index.php
+    user_agent_patterns: []
+    confidence_weight: 0.8
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    mutex_exists_code: 0xB7
+    confidence_weight: 0.6
+  dll_loading:
+    technique: rundll32_execution
+    loaded_dlls:
+    - cred64.dll
+    - clip64.dll
+    api_count_estimates: {}
+    confidence_weight: 0.8
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - cred64.dll
+    - clip64.dll
+    - id=%s&vs=%s&sd=%s&os=%s&bi=%s&ar=%s&pc=%s&un=%s&dm=%s&av=%s&lv=%s&og=%s
+    - rundll32.exe
+    confidence_weight: 0.9
+  references:
+  - url: https://www.splunk.com/en_us/blog/security/amadey-threat-analysis-and-detections.html
+    title: 'Splunk: Amadey Threat Analysis'
+  - url: https://attack.mitre.org/software/S1025/
+    title: 'MITRE ATT&CK: Amadey S1025'
+  - url: https://cyble.com/blog/the-rise-of-amadey-bot-a-growing-concern-for-internet-security/
+    title: 'Cyble: Rise of Amadey Bot'
+  mitre_attack:
+  - T1071.001
+  - T1041
+  - T1082
+  - T1059.001
+  - T1059.003
+  - T1547.001
+  - T1053.005
+  - T1105
+  - T1568.002
+  - T1518.001
+  - T1057
+- family: Raspberry Robin
+  aliases:
+  - Roshtyak
+  - QNAP Worm
+  - Storm-0856
+  description: Highly obfuscated worm attributed to Russian GRU unit 29155. Initially spreads via infected
+    USB/LNK files, uses msiexec.exe to download payload from compromised QNAP NAS devices. Multi-layer
+    packing with control flow flattening, Mixed Boolean-Arithmetic (MBA) obfuscation, and opaque
+    predicates. RC4 with 32-byte key for exploit storage. Tor-based C2 with 200+ domains. Anti-hook
+    detection checks first byte of APIs against 0xB8 (hooked) vs 0x48 (original x64).
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: 32
+    structure: multi_layer_packed
+    structure_description: Exploit storage encrypted with RC4 (32-byte key), only decrypted if target
+      system is vulnerable. Multi-layer packing with same obfuscation techniques per layer. Anti-hook
+      detection compares first byte of APIs to 0xB8 (expected for hooked) vs 0x48 (original x64).
+    location:
+      section: packed
+      offset_range: null
+    parsed_fields:
+    - C2 domains (200+)
+    - QNAP NAS addresses
+    - Exploit payloads
+    confidence_weight: 0.6
+  network:
+    protocols:
+    - tor
+    - http
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x64
+    - x86
+    formats:
+    - dll
+    - msi
+    - lnk
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    anti_hook_hooked_byte: 0xB8
+    anti_hook_original_byte: 0x48
+    confidence_weight: 0.7
+  dll_loading:
+    technique: dll_sideloading
+    loaded_dlls: []
+    api_count_estimates: {}
+    confidence_weight: 0.5
+  yara_indicators:
+    hex_patterns:
+    - name: raspberry_robin_antihook_check
+      hex: 80 38 B8
+    string_patterns:
+    - msiexec
+    - fodhelper.exe
+    confidence_weight: 0.75
+  references:
+  - url: https://research.checkpoint.com/2024/raspberry-robin-keeps-riding-the-wave-of-endless-1-days/
+    title: 'Check Point: Raspberry Robin Keeps Riding 1-Days'
+  - url: https://www.zscaler.com/blogs/security-research/unraveling-raspberry-robin-s-layers-analyzing-obfuscation-techniques-and
+    title: 'Zscaler: Unraveling Raspberry Robin Obfuscation'
+  - url: https://www.microsoft.com/en-us/security/blog/2022/10/27/raspberry-robin-worm-part-of-larger-ecosystem-facilitating-pre-ransomware-activity/
+    title: 'Microsoft: Raspberry Robin Pre-Ransomware Ecosystem'
+  mitre_attack:
+  - T1091
+  - T1218.007
+  - T1027
+  - T1027.009
+  - T1140
+  - T1497.001
+  - T1574.002
+  - T1548.002
+  - T1055
+  - T1570
+  - T1547.001
+  - T1090.003
+- family: TrickBot
+  aliases:
+  - Trickster
+  - TheTrick
+  - TrickLoader
+  description: Highly modular C++ banking trojan and malware platform, successor to Dyre, active since
+    September 2016. Operated by Wizard Spider (ITG23). Spawned BazarLoader and Anchor malware. Over 10
+    modules including web injects (injectDll), credential theft (pwgrab), SMB lateral movement (shareDll),
+    EternalBlue exploitation (tabDll), and DNS-based C2 (anchor_dns). Some modules compiled in Delphi.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes
+    key_length: null
+    structure: aes_xor_module_delivery
+    structure_description: Module delivery uses AES encryption, newer versions add XOR layer on top.
+      C2 data sent as Base64-encoded encrypted POST data. Bot config includes gtag (group tag), server
+      list, module configs. anchor_dns variant hides C2 in DNS traffic.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - gtag (group tag)
+    - Server list
+    - Module configs
+    - Version
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    - https
+    - dns
+    default_headers: []
+    uri_patterns:
+    - /mor1/
+    - /mor2/
+    - /ser1/
+    - /sin1/
+    - /anchor_dns/
+    user_agent_patterns: []
+    confidence_weight: 0.7
+  commands:
+    count_range:
+    - 10
+    - 15
+    known_names:
+    - injectDll
+    - pwgrab
+    - shareDll
+    - networkDll
+    - tabDll
+    - socks5Dll
+    - anchor_dns
+    - importDll
+    - rdpscanDll
+    - masrv
+    confidence_weight: 0.8
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - injectDll
+    - pwgrab
+    - shareDll
+    - networkDll
+    - tabDll
+    - socks5Dll
+    - anchor_dns
+    - /mor1/
+    - /mor2/
+    confidence_weight: 0.9
+  references:
+  - url: https://attack.mitre.org/software/S0266/
+    title: 'MITRE ATT&CK: TrickBot S0266'
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa21-076a
+    title: 'CISA: TrickBot Malware Advisory'
+  - url: https://securelist.com/trickbot-module-descriptions/104603/
+    title: 'Securelist: TrickBot Module Descriptions'
+  mitre_attack:
+  - T1185
+  - T1055
+  - T1071.001
+  - T1071.004
+  - T1573.001
+  - T1547.001
+  - T1021.002
+  - T1210
+  - T1003
+  - T1082
+  - T1057
+  - T1041
+- family: Ursnif
+  aliases:
+  - Gozi
+  - ISFB
+  - Gozi-ISFB
+  - Dreambot
+  - RM3
+  - LDR4
+  - CRM
+  description: One of the oldest banking trojans, based on leaked ISFB source code (2010). Uses Serpent-CBC
+    for C2 traffic encryption, RSA for key exchange, APLib for config compression, and CRC32 for API
+    hashing. Config stored in encrypted .bss section with ADDON_MAGIC marker (e.g., 'JJ' / 0x4A4A) to
+    locate config data. Dreambot variant adds DGA and Tor C2.
+  source_url: null
+  api_hash:
+    algorithm: crc32
+    seed: null
+    case_sensitive: true
+    formula: Standard CRC32 hash of API name strings
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.7
+  config:
+    encryption: serpent-cbc
+    key_length: null
+    structure: bss_section_addon_magic
+    structure_description: Config stored in encrypted .bss section, decrypted by final loader. Joiner
+      code uses ADDON_MAGIC marker (2-byte value, e.g., 0x4A4A / 'JJ') to locate config data. JJ
+      structure contains config blob address, config size, CRC32 hash of decoded config, XOR key for
+      decoding. APLib compression for config blobs. C2 traffic uses Serpent-CBC + base64 encoding.
+    location:
+      section: .bss
+      offset_range: null
+    parsed_fields:
+    - C2 server list
+    - RSA public key
+    - Config blob (APLib compressed)
+    - Serpent key
+    - Version/soft ID
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - http
+    - https
+    - tor
+    default_headers: []
+    uri_patterns:
+    - /images/
+    - /data.php
+    user_agent_patterns: []
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    addon_magic: 0x4A4A
+    c2_format: soft=%u&version=%u&user=%08x%08x%08x%08x
+    confidence_weight: 0.85
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: ursnif_addon_magic_jj
+      hex: 4A 4A
+    string_patterns:
+    - /images/
+    - serpent
+    - APLib
+    - soft=%u&version=%u&user=
+    confidence_weight: 0.85
+  references:
+  - url: https://www.sentinelone.com/labs/writing-malware-configuration-extractors-for-isfb-ursnif/
+    title: 'SentinelOne: Writing Config Extractors for ISFB/Ursnif'
+  - url: https://cloud.google.com/blog/topics/threat-intelligence/rm3-ldr4-ursnif-banking-fraud/
+    title: 'Mandiant: From RM3 to LDR4 Ursnif Evolution'
+  - url: https://attack.mitre.org/software/S0386/
+    title: 'MITRE ATT&CK: Ursnif S0386'
+  mitre_attack:
+  - T1185
+  - T1055
+  - T1055.012
+  - T1071.001
+  - T1573.001
+  - T1547.001
+  - T1082
+  - T1005
+  - T1056.001
+  - T1113
+  - T1041
+- family: Steaelite
+  aliases:
+  - StealElite
+  - Steaelite RAT
+  description: A Malware-as-a-Service (MaaS) remote access trojan written in VB.NET first spotted by
+    BlackFog in November 2025. Consolidates credential harvesting, data exfiltration, live surveillance,
+    ransomware, DDoS, and bot-killing into a single browser-based dashboard. Automatically harvests
+    browser-stored passwords, session cookies, and application tokens before operator interaction.
+    Supports USB spreading, keylogging, crypto clipper, and UAC bypass.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-256-cbc
+    key_length: 32
+    structure: dotnet_compiled_settings
+    structure_description: Config values compiled within the VB.NET binary and heavily obfuscated.
+      Contains C2 panel URLs, campaign IDs, and enabled modules. Decoder scripts use .NET reflection
+      to unpack the payload in memory and dump decrypted configuration strings.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - c2_panel_url
+    - campaign_id
+    - ransomware_enabled
+    - exfil_directory
+    - ddos_target
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - https
+    - wss
+    default_headers: []
+    uri_patterns:
+    - /impact
+    user_agent_patterns: []
+    confidence_weight: 0.75
+  commands:
+    count_range:
+    - 20
+    - 35
+    known_names:
+    - FILE_MANAGER_EXEC
+    - LIVE_STREAM_START
+    - DEPLOY_RANSOMWARE
+    - DDOS_START
+    - CREDENTIAL_DUMP
+    - KEYLOG_START
+    - UAC_BYPASS
+    - BOT_KILLER
+    - CRYPTO_CLIPPER
+    confidence_weight: 0.9
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - AnyCPU
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.9
+  constants:
+    default_port: 8443
+    url_path_pattern: /impact
+    confidence_weight: 0.8
+  dll_loading:
+    technique: dotnet_reflection
+    loaded_dlls:
+    - mscorlib.dll
+    - System.dll
+    - System.Management.dll
+    api_count_estimates: {}
+    confidence_weight: 0.85
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - buildAdminUrl()
+    - Steaelite
+    - /impact
+    confidence_weight: 0.85
+  references:
+  - url: https://www.blackfog.com/steaelite-rat-double-extortion-from-single-panel/
+    title: 'BlackFog: Steaelite RAT Enables Double Extortion from Single Panel'
+  - url: https://www.theregister.com/2026/02/27/double_extortion_whammy_steaelite_rat/
+    title: 'The Register: Steaelite RAT bundles data theft, ransomware'
+  - url: https://cybersecuritynews.com/steaelite-rat-fuels-new-wave/
+    title: 'CybersecurityNews: Steaelite RAT Double Extortion Threats'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1486
+  - T1071.001
+  - T1048
+  - T1091
+  - T1547.001
+- family: PromptLock
+  aliases:
+  - PromptLock Ransomware
+  - Filecoder.PromptLock.A
+  description: First documented AI-powered ransomware proof-of-concept, discovered by ESET in August
+    2025. Written in Go, it queries a locally hosted LLM (via Ollama API using gpt-oss:20b model) to
+    dynamically generate cross-platform Lua scripts at runtime for system enumeration, selective
+    exfiltration, and SPECK-128 encryption. Destructive encryption function exists in code but remains
+    inactive in early variants. Represents a paradigm shift where AI models orchestrate malware behavior.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: plaintext_prompts
+    key_length: null
+    structure: hardcoded_llm_prompts
+    structure_description: Does not use traditional encrypted config blocks. Stores hardcoded text prompts
+      fed into a local LLM via Ollama API. Researchers decode by extracting prompts and submitting them
+      to a local Ollama instance to capture the resulting malicious Lua payloads. Three main endpoints -
+      two for data exfiltration and one for Ollama API interaction.
+    location:
+      section: .rodata
+      offset_range: null
+    parsed_fields:
+    - llm_api_endpoint
+    - target_model (gpt-oss:20b)
+    - embedded_prompts
+    - speck_128_key_template
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - http
+    default_headers: []
+    uri_patterns:
+    - /api/chat
+    - /api/generate
+    - /backup/files
+    - /backup/scripts
+    user_agent_patterns: []
+    confidence_weight: 0.85
+  commands:
+    count_range:
+    - 5
+    - 10
+    known_names:
+    - Gather System Information
+    - File Upload via curl.exe
+    - Secure File Deletion via Generated Lua Script
+    - File Collection via Lua Script Generation
+    - Code Validation
+    confidence_weight: 0.95
+  compilation:
+    compiler: go
+    linker: null
+    architectures:
+    - x64
+    - arm64
+    formats:
+    - exe
+    - elf
+    - macho
+    rich_header: false
+    confidence_weight: 0.95
+  constants:
+    default_api_port: 11434
+    alternate_api_port: 8843
+    encryption_algorithm: SPECK-128
+    target_model: gpt-oss:20b
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: go_build_id_marker
+      hex: FF 20 47 6F 20 62 75 69 6C 64 20 49 44
+    string_patterns:
+    - main_generateRandomKeyHex
+    - main_hexkeyToLuaWords
+    - target_file_list
+    - gpt-oss:20b
+    - /api/generate
+    confidence_weight: 0.9
+  references:
+  - url: https://www.eset.com/gr-en/about/newsroom/press-releases-1/eset-discovers-promptlock-the-first-ai-powered-ransomware-1/
+    title: 'ESET: PromptLock, the first AI-powered ransomware'
+  - url: https://www.splunk.com/en_us/blog/artificial-intelligence/promptlock-llm-ransomware-security-analysis.html
+    title: 'Splunk: PromptLock PoC Ransomware Analysis'
+  mitre_attack:
+  - T1486
+  - T1059.006
+  - T1082
+  - T1102.002
+  - T1041
+- family: SesameOp
+  aliases:
+  - OpenAIAgent
+  - Netapi64
+  description: Highly stealthy espionage backdoor discovered by Microsoft DART in November 2025. Abuses
+    the legitimate OpenAI Assistants API as its sole C2 channel, disguising malicious traffic as normal
+    AI API calls to evade network detection. Two-component architecture - obfuscated .NET loader
+    (Netapi64.dll) and backdoor (OpenAIAgent.Netapi64). Uses AppDomainManager injection to persist
+    within legitimate host processes such as developer tools. Obfuscated with Eazfuscator.NET.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rsa_aes_hybrid
+    key_length: null
+    structure: heavily_obfuscated_dotnet
+    structure_description: Configuration (OpenAI API key, Assistant IDs) compiled into .NET DLL and
+      heavily obfuscated with Eazfuscator.NET. Payloads are Base64 encoded, Gzip compressed, and
+      asymmetrically encrypted. Decoders must extract the RSA key from memory to decrypt the Gzip
+      blob and reveal the JSON C2 instructions.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - openai_api_key
+    - assistant_id
+    - thread_id
+    - rsa_public_key
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - https
+    default_headers:
+    - 'Authorization: Bearer'
+    - 'OpenAI-Beta: assistants=v1'
+    uri_patterns:
+    - /v1/threads/
+    - /v1/assistants/
+    user_agent_patterns: []
+    confidence_weight: 0.95
+  commands:
+    count_range:
+    - 3
+    - 5
+    known_names:
+    - SLEEP
+    - Payload
+    - Result
+    confidence_weight: 0.95
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - AnyCPU
+    formats:
+    - dll
+    rich_header: false
+    confidence_weight: 0.8
+  constants:
+    placeholder_name: NAMEXXX
+    obfuscator: Eazfuscator.NET
+    compression_method: gzip
+    encoding_method: base64
+    confidence_weight: 0.9
+  dll_loading:
+    technique: appdomainmanager_injection
+    loaded_dlls:
+    - mscoree.dll
+    - Netapi64.dll
+    api_count_estimates: {}
+    confidence_weight: 0.95
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - Netapi64.dll
+    - OpenAIAgent.Netapi64
+    - NAMEXXX
+    - assistants=v1
+    - /v1/threads/
+    confidence_weight: 0.9
+  references:
+  - url: https://www.microsoft.com/en-us/security/blog/2025/11/03/sesameop-novel-backdoor-uses-openai-assistants-api-for-command-and-control/
+    title: 'Microsoft DART: SesameOp Novel backdoor uses OpenAI Assistants API'
+  - url: https://research.splunk.com/stories/sesameop/
+    title: 'Splunk: Analytics Story SesameOp'
+  mitre_attack:
+  - T1071.004
+  - T1574.014
+  - T1027
+  - T1140
+  - T1102.002
+- family: Aeternum C2
+  aliases:
+  - Aeternum Botnet Loader
+  - LenAI Aeternum
+  description: Native C++ botnet loader discovered by Qrator Labs that decentralizes its C2 infrastructure
+    using public smart contracts on the Polygon blockchain. Bots query public RPC endpoints to read
+    encrypted commands from the blockchain ledger, making traditional domain/IP takedowns impossible.
+    Operators deploy instructions via web dashboard to blockchain. Licensing at $200 for panel access
+    or $4000 for full C++ source. Only ~$1 of MATIC enables 100-150 command transactions.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: custom_aes
+    key_length: 32
+    structure: compiled_rpc_endpoints
+    structure_description: Binary contains hardcoded list of public Polygon RPC endpoints and malicious
+      smart contract address. Config extraction scripts carve .rdata section for the smart contract
+      address and hardcoded decryption key used to decode blockchain transaction payloads.
+    location:
+      section: .rdata
+      offset_range: null
+    parsed_fields:
+    - smart_contract_address
+    - rpc_endpoint_list
+    - decryption_key
+    - campaign_id
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - https
+    - rpc
+    default_headers: []
+    uri_patterns:
+    - /api/v1/kleenscan
+    user_agent_patterns: []
+    confidence_weight: 0.8
+  commands:
+    count_range:
+    - 5
+    - 15
+    known_names:
+    - DOWNLOAD_EXECUTE
+    - UPDATE_BOT
+    - UNINSTALL
+    - SLEEP_CHANGE
+    confidence_weight: 0.7
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.8
+  constants:
+    av_scanner_api: Kleenscan
+    blockchain_network: Polygon
+    native_token_used: MATIC
+    confidence_weight: 0.9
+  dll_loading:
+    technique: standard_pe_imports
+    loaded_dlls:
+    - wininet.dll
+    - crypt32.dll
+    - kernel32.dll
+    - advapi32.dll
+    api_count_estimates: {}
+    confidence_weight: 0.8
+  yara_indicators:
+    hex_patterns:
+    - name: aeternum_c2_routine
+      hex: 55 8B EC 83 EC ?? 53 56 57 8D 7D ?? B9 ?? ?? ?? ?? B8 ?? ?? ?? ?? F3 AB
+    string_patterns:
+    - polygon-rpc.com
+    - /api/v1/kleenscan
+    - Kleenscan
+    confidence_weight: 0.85
+  references:
+  - url: https://thehackernews.com/2026/02/aeternum-c2-botnet-stores-encrypted.html
+    title: 'The Hacker News: Aeternum C2 Botnet Stores Encrypted Commands on Polygon'
+  - url: https://www.infosecurity-magazine.com/news/aeternum-botnet-c2-polygon/
+    title: 'Infosecurity Magazine: Aeternum Botnet Shifts C2 to Polygon Blockchain'
+  mitre_attack:
+  - T1071.004
+  - T1102.002
+  - T1562.001
+  - T1027
+  - T1105

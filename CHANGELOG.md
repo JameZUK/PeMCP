@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Three C2 framework identification tools: `identify_c2_framework()`, `list_c2_signatures()`, `verify_c2_attribution()` — match binary indicators against a 33-family signature knowledge base (`pemcp/data/c2_signatures.yaml`) for automated C2 attribution with confidence scoring.
+- Three C2 framework identification tools: `identify_c2_framework()`, `list_c2_signatures()`, `verify_c2_attribution()` — match binary indicators against a 80-family signature knowledge base (`pemcp/data/c2_signatures.yaml`) for automated C2 attribution with confidence scoring.
 - `pemcp/constants.py` — pure constants module (no side effects, safe to import anywhere).
 - `pemcp/imports.py` — centralised optional library imports and availability flags.
 - `pemcp/py.typed` — PEP 561 marker for type checker support.
