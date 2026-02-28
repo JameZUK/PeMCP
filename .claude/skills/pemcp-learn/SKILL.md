@@ -48,6 +48,17 @@ they arise naturally, and checking comprehension through Socratic questioning.
   stupid — they're learning a complex field. Experts don't need basics repeated.
   Read the room.
 
+- **Prefer internal tools over scripts**: When teaching decryption, decoding,
+  data transformation, carving, or extraction, **always demonstrate with PeMCP's
+  built-in tools first** — especially the refinery family. `refinery_pipeline`
+  can chain multiple operations in a single call (e.g., `"b64 | aes -k KEY |
+  xor KEY2"`), replacing what would otherwise be a multi-step Python script.
+  Internal tools are reproducible (logged in tool history, so learners can
+  review what was done), discoverable (learners can reuse them independently),
+  and safer (no external code execution). Only fall back to writing Python
+  scripts when no internal tool can accomplish the task, and explicitly explain
+  why the fallback is necessary.
+
 ## Session Initialisation
 
 At the start of every learning session:
@@ -378,6 +389,13 @@ At the start of a session that involves a binary:
 
 - **Don't use jargon to sound smart.** Use the simplest accurate language
   for the learner's level.
+
+- **Don't write Python scripts when an internal tool exists.** If
+  `refinery_pipeline`, `refinery_xor`, `refinery_decrypt`, `refinery_codec`,
+  or any other built-in tool can do the job, use it. Writing a script to
+  XOR-decode a blob when `refinery_xor()` exists teaches the wrong habit —
+  it hides the operation behind opaque code instead of showing the learner a
+  reusable, discoverable tool. Scripts are a last resort, not a default.
 
 ## Supporting References
 
