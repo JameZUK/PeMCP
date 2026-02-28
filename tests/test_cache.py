@@ -207,3 +207,30 @@ class TestCacheCorruptEntry:
             f.write(b"this is not gzip data")
 
         assert cache.get(sha, "/test.exe") is None
+
+
+# ---------------------------------------------------------------------------
+# Meta file handling
+# ---------------------------------------------------------------------------
+
+class TestCacheMetaHandling:
+    def test_corrupt_meta_json(self, cache_dir):
+        """Cache should handle corrupt meta.json gracefully."""
+        meta_file = cache_dir / "meta.json"
+        meta_file.write_text("{{invalid json}}")
+        c = AnalysisCache(max_size_mb=10, enabled=True)
+        # Should not crash — _load_meta returns {}
+        data = {"mode": "pe", "test": True}
+        assert c.put("dd" * 32, data, "/test.exe") is True
+
+    def test_meta_save_error(self, cache, cache_dir, monkeypatch):
+        """Cache survives when meta file cannot be written."""
+        import pemcp.cache as cache_mod
+        orig_meta = cache_mod.META_FILE
+        monkeypatch.setattr("pemcp.cache.META_FILE",
+                            cache_dir / "nonexistent_subdir" / "meta.json")
+        # put should still succeed (data written, meta save fails gracefully)
+        data = {"mode": "pe", "test": True}
+        # This exercises the OSError path in _save_meta
+        cache.put("ee" * 32, data, "/test.exe")
+        monkeypatch.setattr("pemcp.cache.META_FILE", orig_meta)
