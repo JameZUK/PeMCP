@@ -6,7 +6,9 @@ description: >
   auditing, C2 config extraction, unpacking, deobfuscation, and threat intelligence.
   Triggers on: binary, malware, PE, ELF, Mach-O, shellcode, firmware, analyze,
   analyse, reverse engineer, decompile, unpack, triage, IOC, C2, implant, dropper,
-  loader, packer, obfuscation, exploit, vulnerability, capa, yara, refinery.
+  loader, packer, obfuscation, exploit, vulnerability, capa, yara, refinery,
+  CTF, capture the flag, forensics, incident response, IR, APT, ransomware,
+  stealer, RAT, backdoor, rootkit, bootkit, DFIR.
 ---
 
 # PeMCP Binary Analysis Skill
@@ -37,6 +39,12 @@ phases, adapting depth and tool selection to the analysis goal.
 - **Trust PeMCP's built-in guidance**: When tools error, PeMCP returns enriched
   error messages with actionable next steps and alternative tool suggestions.
   Follow those hints rather than guessing at workarounds.
+- **Handle tool limits gracefully**: MCP responses are capped at 64KB and will be
+  auto-truncated. Use pagination parameters (`offset`, `limit`) for large results.
+  Angr analyses timeout at 300s — if a decompilation times out, try a simpler
+  function first or use `get_annotated_disassembly()` as a lighter alternative.
+  When `get_function_map()` returns too many results, increase selectivity with
+  the `limit` parameter.
 
 ## Role & Adaptive Goal Detection
 
@@ -78,11 +86,32 @@ Adapt tool selection and reporting to the detected goal throughout the session.
 
 4. Check `list_samples()` if the user hasn't specified a file.
 
+**Library availability matrix**: Based on `get_config()` results, identify which
+phases degrade when libraries are missing:
+
+| Library Missing | Impact | Alternatives |
+|---|---|---|
+| angr | No decompilation (Phase 4 Tier 1-2) | Use `get_annotated_disassembly()`, `disassemble_at_address()` |
+| capa | No capability mapping | Rely on `get_focused_imports()` + `get_strings_summary()` |
+| FLOSS | No decoded strings | Use `find_and_decode_encoded_strings()` + `extract_strings_from_binary()` |
+| Qiling | No full binary emulation | Use Speakeasy (`emulate_pe_with_windows_apis()`) |
+| Speakeasy | No PE emulation | Use Qiling or angr `emulate_function_execution()` |
+| binary-refinery | No refinery tools | Use built-in deobfuscation tools |
+| lief | Reduced multi-format support | Use format-specific tools (`elf_analyze`, etc.) |
+
+**Host vs container mode**: If `get_config()` shows host execution (no Docker):
+- Sample paths will be local filesystem paths, not `/samples`
+- Output paths must be user-specified (no `/output` mount)
+- Qiling rootfs may not be available — check `qiling_setup_check()` before emulation
+- Speakeasy/Unipacker venvs may not exist
+
 ## Phase 1: Identify
 
 Establish what we're looking at. One or two calls maximum.
 
 1. **Load**: `open_file(file_path)` — returns format detection, quick indicators, hashes.
+   If the file was previously analyzed and `open_file` returns `session_context`, use
+   `get_analyzed_file_summary()` for a quick recap instead of running full triage again.
 2. **Triage**: `get_triage_report(compact=True)` — ~2KB assessment covering:
    - Packing assessment (entropy, PEiD, import count, section anomalies)
    - Digital signature status
@@ -91,14 +120,14 @@ Establish what we're looking at. One or two calls maximum.
    - Network IOCs (IPs, URLs, domains, registry paths)
    - Risk score and risk level
    - Context-aware suggested next tools
-3. **Format-specific** (if not PE):
+3. **Classification**: `classify_binary_purpose()` — what kind of binary is this?
+4. **Format-specific** (if not PE):
    - ELF: `elf_analyze()`, optionally `elf_dwarf_info()`
    - Mach-O: `macho_analyze()`
    - .NET: `dotnet_analyze()`, `parse_dotnet_metadata()`
    - Go: `go_analyze()`
    - Rust: `rust_analyze()`
    - Unknown: `detect_binary_format()`
-4. **Classification**: `classify_binary_purpose()` — what kind of binary is this?
 5. **Reputation** (malware goals, risk_score >= 4): `get_virustotal_report_for_loaded_file()`
 
 **Decision point**: If packing is detected (likely_packed=true, max_section_entropy > 7.2,
@@ -151,33 +180,44 @@ at the payload's nature.
 
 ## Phase 3: Map
 
-Build a mental model of the binary's structure and capabilities.
+Build a mental model of the binary's structure and capabilities. Select and order
+tools based on the analysis goal:
 
-1. **Imports**: `get_focused_imports()` — security-relevant imports categorized by
-   threat behavior (networking, process injection, crypto, persistence, anti-analysis).
-   Only use `get_pe_data(key='imports')` if you need the full unfiltered list.
+| Goal | Recommended Order |
+|------|-------------------|
+| **Malware triage** | Imports → Strings → Capabilities → Synthesize |
+| **Deep RE** | Functions → Imports → Structure → Strings → Crypto → Capabilities → Embedded → Synthesize |
+| **Vulnerability audit** | Functions → Imports → Strings (format strings) → Structure → Synthesize |
+| **Firmware/embedded** | Crypto → Strings → Imports → Embedded → Functions → Synthesize |
+| **Threat intel** | Strings → Capabilities → Imports → Embedded → Synthesize |
 
-2. **Strings**: `get_strings_summary()` — categorized string intelligence (URLs, IPs,
-   paths, registry keys, mutexes, crypto markers). NOT raw string dumps.
-   - For deeper string analysis: `get_top_sifted_strings()` (ML-ranked relevance)
-   - For FLOSS decoded strings: `get_floss_analysis_info()`
+Use as needed based on goal:
 
-3. **Functions**: `get_function_map(limit=30)` — functions ranked by interestingness,
-   grouped by purpose. This is your decompilation priority list.
+- **Imports**: `get_focused_imports()` — security-relevant imports categorized by
+  threat behavior (networking, process injection, crypto, persistence, anti-analysis).
+  Only use `get_pe_data(key='imports')` if you need the full unfiltered list.
 
-4. **Capabilities**: `get_capa_analysis_info()` — ATT&CK technique mappings.
-   Use `get_capa_rule_match_details(rule_name)` for specific rule deep-dives.
+- **Strings**: `get_strings_summary()` — categorized string intelligence (URLs, IPs,
+  paths, registry keys, mutexes, crypto markers). NOT raw string dumps.
+  - For deeper string analysis: `get_top_sifted_strings()` (ML-ranked relevance)
+  - For FLOSS decoded strings: `get_floss_analysis_info()`
 
-5. **Crypto**: `identify_crypto_algorithm()` — detects crypto constants, algorithm
-   signatures (AES, RC4, ChaCha20, RSA, custom XOR).
+- **Functions**: `get_function_map(limit=30)` — functions ranked by interestingness,
+  grouped by purpose. This is your decompilation priority list.
 
-6. **Structure**: `get_cross_reference_map(function_addresses=[...])` — call
-   relationships between key functions in a single call.
+- **Capabilities**: `get_capa_analysis_info()` — ATT&CK technique mappings.
+  Use `get_capa_rule_match_details(rule_name)` for specific rule deep-dives.
 
-7. **Embedded content**: `scan_for_embedded_files()` — detect nested PE, ZIP, PDF,
-   scripts, certificates embedded within the binary.
+- **Crypto**: `identify_crypto_algorithm()` — detects crypto constants, algorithm
+  signatures (AES, RC4, ChaCha20, RSA, custom XOR).
 
-8. **Synthesize**: `get_analysis_digest()` — aggregate findings so far before deep dive.
+- **Structure**: `get_cross_reference_map(function_addresses=[...])` — call
+  relationships between key functions in a single call.
+
+- **Embedded content**: `scan_for_embedded_files()` — detect nested PE, ZIP, PDF,
+  scripts, certificates embedded within the binary.
+
+- **Synthesize**: `get_analysis_digest()` — aggregate findings so far before deep dive.
 
 ## Phase 4: Deep Dive
 
@@ -187,6 +227,18 @@ with a deep dive, specifying which functions or areas look most interesting.
 Continue autonomously only after the user confirms.
 
 Progressive depth — use the minimum tier needed to answer your question.
+
+**Scaling considerations**:
+- **Large binaries (>10MB)**: Avoid `get_full_analysis_results()`. Use targeted
+  `get_pe_data(key=...)`. Angr CFG recovery may be slow — start with specific
+  functions, not whole-binary analysis.
+- **Many functions (>1000)**: Use `get_function_map(limit=20)` to focus on the most
+  interesting. Don't attempt to decompile exhaustively.
+- **Angr timeout**: If decompilation times out, try: (1) a smaller function first to
+  verify angr works, (2) `get_annotated_disassembly()` as a disassembly-only fallback,
+  (3) increasing timeout if the function is genuinely large and important.
+- **Emulation limits**: Qiling/Speakeasy may not terminate for complex binaries. Always
+  set a `timeout` parameter. Check results even on partial execution.
 
 ### Tier 1: Static Analysis (start here)
 - `decompile_function_with_angr(address)` — C-like pseudocode
@@ -296,20 +348,51 @@ add_note(content="""C2 config extraction chain:
 
 ## Phase 6: Research
 
-When analysis reveals an unknown family, encoding, or technique:
-See [online-research.md](online-research.md) for full methodology.
+When automated extraction (Phase 5) fails to recover a config or payload, and you
+have a family name or behavioral signature to work with, research public analysis
+to find a decoding approach.
 
+**When to enter this phase**: Automated `extract_config_automated()` returned no
+results, refinery auto-decrypt failed, and at least one of these is true:
+- VT detections or behavioral patterns suggest a known family
+- YARA matches indicate a specific malware family
+- String patterns or capa rules point to a named threat
+
+**What to extract from research**:
+1. **Algorithm** — what cipher or encoding protects the config (AES-CBC, RC4, XOR,
+   Base64, custom)
+2. **Data location** — where the encrypted config lives (PE resource, .data section
+   offset, .NET field, overlay, registry key)
+3. **Key source** — where the decryption key comes from (hardcoded bytes at offset,
+   PBKDF2 from password, first N bytes of the blob, derived from PE timestamp)
+
+**Research workflow**:
 1. **Identify** the family from strings, YARA, VT detections, or behavioral patterns
 2. **Search** for public analysis reports and decoder scripts
-3. **Read and understand** the decoder logic — identify: algorithm, data location, key source
-4. **Translate** decoder operations to PeMCP tool equivalents
+3. **Read and understand** the decoder logic — map it to the three elements above
+4. **Translate** decoder operations to PeMCP tool equivalents (see
+   [online-research.md](online-research.md) for the full translation table and
+   workflow examples)
 5. **Execute** using PeMCP tools and validate results
 6. **Document** findings with `add_note()`
 
-**CRITICAL**: NEVER execute downloaded scripts directly. Always read, understand,
-and translate to PeMCP tool calls.
+**Safety rules**:
+- **NEVER** execute downloaded scripts directly — not in PeMCP, not in a shell
+- Always read, understand, and translate to PeMCP tool calls
+- Verify tool output against expected format before trusting decoded results
 
 ## Phase 7: Report
+
+**When to conclude** — don't continue to deeper phases if the goal has been met:
+
+| Goal | Done when... |
+|------|-------------|
+| **Malware triage** | Risk verdict established with evidence, IOCs extracted, capabilities confirmed |
+| **Deep RE** | All functions of interest decompiled and annotated, data flows traced |
+| **Vulnerability audit** | Attack surface mapped, unsafe patterns catalogued, mitigations assessed |
+| **Firmware/embedded** | Crypto inventory complete, secrets extracted, protocols identified |
+| **Threat intel** | Family attributed, C2 extracted, IOCs structured, YARA written |
+| **Comparison** | Diffs documented, behavioral changes identified |
 
 ### Default: Findings Summary
 
@@ -371,8 +454,11 @@ behavioral changes between versions.
 Note-taking rules are in **Operating principles** above — follow them strictly.
 Additional context management:
 
-1. **Every 3-5 tool calls**: call `get_analysis_digest()` to refresh your understanding
-   of accumulated findings. This aggregates notes, triage data, and coverage stats.
+1. **At phase transitions**: Call `get_analysis_digest()` between phases (e.g.,
+   Phase 3→4, Phase 4→5), after any unexpected finding that changes the analysis
+   direction, and before generating the final summary. Do NOT call it on a fixed
+   cadence within a phase — it adds overhead without value when you are building
+   context sequentially.
 
 2. **Note categories**: Use `category="tool_result"` for tool output findings,
    `"ioc"` for indicators, `"hypothesis"` for theories to test, `"manual"` for
@@ -455,9 +541,23 @@ When analysis reveals embedded shellcode:
 3. Use `qiling_memory_search()` post-emulation to find next-stage URLs or configs
 4. If the shellcode drops a PE, extract it and `open_file()` for full analysis
 
+**Session scale**: When analyzing many files (>5 in a session), notes and session
+data accumulate. If the session becomes sluggish or context is getting large, use
+`export_project()` to save progress, then start a fresh session with
+`import_project()`.
+
+## Cache Interaction
+
+- After patching a binary with `patch_binary_memory()` or `save_patched_binary()`,
+  call `reanalyze_loaded_pe_file()` to refresh results. The cache serves the
+  pre-patch analysis otherwise.
+- If results seem stale or inconsistent, check `get_cache_stats()` and use
+  `remove_cached_analysis(sha256)` to evict the stale entry.
+- Cache persists across container restarts via the `~/.pemcp` volume mount.
+
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 171-tool catalog by use case
-- [c2-extraction.md](c2-extraction.md) — C2 config decoding patterns by malware family
-- [unpacking-guide.md](unpacking-guide.md) — Packer identification and unpacking pipelines
-- [online-research.md](online-research.md) — Safe online research and decoder translation
+- [tooling-reference.md](tooling-reference.md) — Complete 171-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [c2-extraction.md](c2-extraction.md) — Family-specific C2 extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach
+- [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
+- [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to PeMCP tool calls
