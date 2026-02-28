@@ -147,21 +147,30 @@ Suppose VT identifies the sample as "AsyncRAT" and `extract_config_automated()` 
    translate to PeMCP tool calls. Downloaded code may be malicious, backdoored,
    or destructive.
 
-2. **Verify output** — after decryption/decoding, validate that results look like
+2. **NEVER write Python scripts when internal tools exist** — the entire point of
+   research is to understand the algorithm, then execute it with PeMCP's built-in
+   tools. If a decoder does `base64 → AES-CBC → XOR`, translate that to
+   `refinery_pipeline(pipeline="b64 | aes -m cbc -k KEY | xor KEY2")` — not a
+   Python script that reimplements the same logic. Internal tool calls are logged
+   in tool history, reproducible, and auditable. Scripts are opaque and
+   unreviewable. Only write a script when no combination of internal tools can
+   accomplish the task, and document why in an `add_note()` call.
+
+3. **Verify output** — after decryption/decoding, validate that results look like
    legitimate config data (valid IPs, URLs, port numbers). Garbage output means
    wrong key or algorithm.
 
-3. **Cross-reference** — compare extracted config against multiple sources. If two
+4. **Cross-reference** — compare extracted config against multiple sources. If two
    independent analyses describe different algorithms, investigate which applies
    to your specific sample version.
 
-4. **Version awareness** — malware families evolve. A decoder for AsyncRAT 0.5.7B
+5. **Version awareness** — malware families evolve. A decoder for AsyncRAT 0.5.7B
    may not work for 0.5.8. Check version indicators in the binary against the
    decoder's target version.
 
-5. **Document your sources** — note which blog/report/tool informed your extraction
+6. **Document your sources** — note which blog/report/tool informed your extraction
    approach: `add_note(content="Extraction based on: <URL>", category="manual")`
 
-6. **Prefer PeMCP's automated tools first** — always try `extract_config_automated()`
+7. **Prefer PeMCP's automated tools first** — always try `extract_config_automated()`
    and `refinery_auto_decrypt()` before manual research. They may handle it without
    any external knowledge.

@@ -36,6 +36,16 @@ phases, adapting depth and tool selection to the analysis goal.
   immediately. When you discover any finding, call `add_note()` to record it. This
   is non-negotiable — notes are how context survives across a long session and how
   the final digest and report are built.
+- **Prefer internal tools over scripts**: For all data transformation —
+  decryption, decoding, decompression, carving, extraction, deobfuscation —
+  **always use PeMCP's built-in tools first**. The refinery family is
+  particularly powerful: `refinery_pipeline` chains multiple operations in a
+  single call (e.g., `"b64 | aes -k KEY | xor KEY2"`), replacing multi-step
+  Python scripts entirely. Other key tools: `refinery_xor`, `refinery_decrypt`,
+  `refinery_auto_decrypt`, `refinery_codec`, `refinery_decompress`,
+  `refinery_carve`, `refinery_regex_extract`. Only write Python scripts as an
+  absolute last resort when no internal tool can accomplish the task — and
+  document why the fallback was necessary in a note.
 - **Trust PeMCP's built-in guidance**: When tools error, PeMCP returns enriched
   error messages with actionable next steps and alternative tool suggestions.
   Follow those hints rather than guessing at workarounds.
@@ -378,6 +388,10 @@ results, refinery auto-decrypt failed, and at least one of these is true:
 
 **Safety rules**:
 - **NEVER** execute downloaded scripts directly — not in PeMCP, not in a shell
+- **NEVER** write a Python script when a PeMCP tool can do the job — translate
+  decoder logic to internal tool calls, especially `refinery_pipeline` for
+  multi-step operations. Scripts hide operations behind opaque code; tool calls
+  are logged, reproducible, and auditable.
 - Always read, understand, and translate to PeMCP tool calls
 - Verify tool output against expected format before trusting decoded results
 
