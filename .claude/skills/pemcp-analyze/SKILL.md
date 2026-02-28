@@ -221,10 +221,10 @@ Use as needed based on goal:
 - **Crypto**: `identify_crypto_algorithm()` — detects crypto constants, algorithm
   signatures (AES, RC4, ChaCha20, RSA, custom XOR).
 
-- **C2 Attribution**: `identify_c2_framework()` — match API hash algorithm/seed,
-  config encryption, constants, and YARA indicators against the C2 signatures
+- **Malware Attribution**: `identify_malware_family()` — match API hash algorithm/seed,
+  config encryption, constants, and YARA indicators against the malware signatures
   knowledge base. Call this as soon as you identify an API hash function or
-  config encryption pattern. Use `list_c2_signatures()` to review available
+  config encryption pattern. Use `list_malware_signatures()` to review available
   families and their fingerprints.
 
 - **Structure**: `get_cross_reference_map(function_addresses=[...])` — call
@@ -334,15 +334,15 @@ For manual decoding when automated extraction fails:
 ### C2 Attribution (before extraction)
 Before extracting a C2 config, **always verify the family attribution**:
 
-1. `identify_c2_framework()` with all available evidence (hash algorithm, seed,
+1. `identify_malware_family()` with all available evidence (hash algorithm, seed,
    hash constants, config encryption, compiler, constants, matched strings)
-2. `verify_c2_attribution(family=<top candidate>)` to confirm the match
+2. `verify_malware_attribution(family=<top candidate>)` to confirm the match
 3. Only then follow the family-specific extraction recipe
 
 **Why this matters**: Different C2 frameworks share techniques (e.g., DJB2
 hashing used by both Havoc and AdaptixC2, ROR13 used by both Cobalt Strike and
 BRc4). Without checking discriminating indicators like hash seeds and specific
-constants, you will misattribute. The `verify_c2_attribution()` tool catches
+constants, you will misattribute. The `verify_malware_attribution()` tool catches
 these errors before they propagate into your report.
 
 ### C2 Config Patterns
@@ -477,7 +477,7 @@ vulnerabilities, buffer overflow candidates, hardening assessment, mitigations.
 **Firmware/embedded**: Crypto inventory, hardcoded credentials, communication protocols,
 update mechanisms, debug interfaces.
 
-**Threat intel**: Family attribution (verified via `verify_c2_attribution()`),
+**Threat intel**: Family attribution (verified via `verify_malware_attribution()`),
 C2 infrastructure, campaign indicators, YARA signatures, MITRE ATT&CK mapping,
 IOC export in STIX/OpenIOC format. Attribution must cite the specific evidence
 that confirmed the family (hash seed, constants, config structure) — never
@@ -595,6 +595,6 @@ data accumulate. If the session becomes sluggish or context is getting large, us
 ## Supporting References
 
 - [tooling-reference.md](tooling-reference.md) — Complete 175-tool catalog with "Use When" and "Prefer/Avoid" guidance
-- [c2-extraction.md](c2-extraction.md) — Family-specific C2 extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_c2_framework()` and `verify_c2_attribution()` before following any family-specific recipe.
+- [c2-extraction.md](c2-extraction.md) — Family-specific C2 extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to PeMCP tool calls
