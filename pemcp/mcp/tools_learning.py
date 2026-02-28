@@ -475,7 +475,7 @@ async def get_learning_suggestions(
     # Find incomplete modules in target tiers
     incomplete_modules: List[Dict[str, Any]] = []
     modules_seen: set = set()
-    for cid, info in _CONCEPT_CATALOG.items():
+    for _cid, info in _CONCEPT_CATALOG.items():
         if info["tier"] not in target_tiers:
             continue
         mid = info["module"]
@@ -530,7 +530,6 @@ async def get_learning_suggestions(
 
     # Generate contextual advice
     total_mastered = sum(1 for c in concepts.values() if c.get("level") == "mastered")
-    total = len(_CONCEPT_CATALOG)
     if total_mastered == 0:
         suggestions["advice"] = (
             "Welcome to reverse engineering! Start with Module 1.1 (Binary Basics) "
