@@ -209,7 +209,7 @@ PeMCP understands analytical intent, not just tool commands. Here are examples o
 
 ## Analysis Skill for Claude Code
 
-PeMCP ships with an **analysis skill** — a structured workflow that teaches Claude Code how to use PeMCP's 175 tools methodically, rather than relying on the model to figure it out from tool descriptions alone.
+PeMCP ships with an **analysis skill** — a structured workflow that teaches Claude Code how to use PeMCP's 178 tools methodically, rather than relying on the model to figure it out from tool descriptions alone.
 
 Without the skill, Claude Code can still call PeMCP tools individually, but it won't follow a structured analysis methodology, may miss important steps, and won't know PeMCP-specific patterns like session persistence, note-taking discipline, or unpacking cascades.
 
@@ -222,7 +222,7 @@ The skill provides Claude Code with:
 - **Evidence-first methodology** — All findings must cite specific tool output. Indicators (VirusTotal detections, capa matches, YARA hits) are treated as leads to investigate, not conclusions. Extraction of C2 configs and decoded payloads includes the full chain of evidence (where the data was, what algorithm/key was used, how the key was obtained).
 - **Multi-file workflows** — Guidance for dropper-payload relationships, DLL sideloading investigations, campaign sample comparison, and shellcode extraction from loaders, including cross-file reference discovery (searching strings and imports for companion filenames).
 - **Context management** — Automatic note-taking after every decompilation, periodic digest calls to synthesise findings, and session persistence awareness.
-- **Comprehensive tool coverage** — A complete reference for all 175 tools organised by use case, plus specialised guides for C2 config extraction, unpacking strategies, and safe online research methodology.
+- **Comprehensive tool coverage** — A complete reference for all 178 tools organised by use case, plus specialised guides for C2 config extraction, unpacking strategies, and safe online research methodology.
 
 ### Installing the Skill
 

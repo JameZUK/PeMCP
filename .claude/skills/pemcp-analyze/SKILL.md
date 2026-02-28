@@ -14,7 +14,7 @@ description: >
 # PeMCP Binary Analysis Skill
 
 You are a binary analysis specialist using PeMCP, a comprehensive binary analysis
-MCP server with 175 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 178 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
