@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-PeMCP exposes **175 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters — see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+PeMCP exposes **178 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters — see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 ---
 
@@ -381,6 +381,14 @@ The real power of PeMCP's Binary Refinery integration emerges when tools are cha
 | `extract_steganography` | Detect data hidden after image EOF markers (PNG IEND, JPEG FFD9, GIF trailer), BMP size mismatches, and PE overlay data. Returns payload entropy, magic bytes, and extraction hints. Paginated (default limit 10). |
 | `parse_custom_container` | Parse binary data following common malware container patterns: `delimiter_size_payload`, `size_payload`, or `fixed_chunks`. Auto-detects delimiters and chunk sizes with entropy analysis. Paginated (default limit 20). |
 | `extract_config_automated` | Extract potential C2 configuration data using regex patterns — IPs, URLs, domains, registry keys, file paths, mutexes, and base64-encoded config blobs. Auto-saves significant findings as notes. Paginated (default limit 20). |
+
+## C2 Framework Identification (3 tools)
+
+| Tool | Description |
+|---|---|
+| `identify_c2_framework` | Match observed binary indicators (API hash algorithm/seed, config encryption, constants, YARA patterns, compiler, network headers, DLL names, command count) against a 33-family signature knowledge base. Returns ranked candidates with confidence scores, per-category match breakdowns, and extraction guidance. |
+| `list_c2_signatures` | Browse the C2 signatures knowledge base. Returns a summary of all known families (name, aliases, hash algorithm/seed, config encryption, compiler, source URL) or full fingerprint details for a specific family. |
+| `verify_c2_attribution` | Verify a claimed C2 attribution by checking each piece of evidence against the knowledge base entry for a specific family. Returns a pass/fail verdict per evidence point and an overall CONFIRMED/PARTIAL_MATCH/UNLIKELY/INCONCLUSIVE verdict. Essential for avoiding misattribution between similar frameworks (e.g. AdaptixC2 vs Havoc). |
 
 ## IOC Export (1 tool)
 

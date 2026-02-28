@@ -40,7 +40,7 @@ pemcp/
 │   ├── server.py       # MCP server setup + tool decorator
 │   ├── _format_helpers.py
 │   ├── _input_helpers.py
-│   └── tools_*.py      # MCP tool modules (175 tools)
+│   └── tools_*.py      # MCP tool modules (178 tools)
 ├── parsers/            # PE/FLOSS/capa/signature parsers
 ├── cli/                # CLI output formatting
 └── ...
