@@ -28,6 +28,10 @@ joblib>=1.2
 numpy>=1.24
 rapidfuzz>=3.0
 
+# --- Data Serialization ---
+# YAML parsing (C2 signature knowledge base)
+PyYAML>=6.0
+
 # --- Signatures, Cryptography & Scanning ---
 yara-python>=4.3
 signify>=0.7

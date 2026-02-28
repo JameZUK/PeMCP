@@ -6,5 +6,8 @@
 pefile>=2024.8.26
 networkx>=3.0
 
+# YAML parsing (C2 signature knowledge base, imported at startup)
+PyYAML>=6.0
+
 # Server infrastructure (used by pemcp.mcp.server at import time)
 mcp[cli]>=1.0
