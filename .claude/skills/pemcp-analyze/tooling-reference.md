@@ -1,6 +1,6 @@
 # PeMCP Tool Reference
 
-Complete catalog of all 175 MCP tools organized by use case.
+Complete catalog of all 178 MCP tools organized by use case.
 Source files: `pemcp/mcp/tools_*.py`
 
 ---
@@ -335,6 +335,14 @@ Source files: `pemcp/mcp/tools_*.py`
 | `get_cache_stats` | Check disk cache usage statistics | — |
 | `clear_analysis_cache` | Clear entire analysis cache | — |
 | `remove_cached_analysis` | Remove specific cached analysis | `sha256` |
+
+## C2 Framework Identification
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `identify_c2_framework` | After decompiling API hash routines, finding config encryption, or identifying distinctive constants — matches evidence against 33-family knowledge base | `hash_algorithm`, `hash_seed`, `hash_constants`, `config_encryption`, `config_pattern`, `compiler`, `command_count`, `network_headers`, `network_uris`, `constants`, `dll_names`, `matched_strings`, `matched_hex_patterns` |
+| `list_c2_signatures` | To browse known C2 families and their fingerprints before analysis, or review a specific family's full indicator profile | `family` (optional — omit for summary of all families) |
+| `verify_c2_attribution` | After `identify_c2_framework()` returns a candidate — confirms attribution with per-evidence pass/fail verdicts. Catches misattribution between similar frameworks | `family` (required), plus same evidence params as `identify_c2_framework` |
 
 ## Entropy Analysis
 
