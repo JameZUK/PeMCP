@@ -1,0 +1,791 @@
+"""MCP tools for C2 framework identification and attribution.
+
+Matches observed binary indicators (API hash algorithms, config encryption
+patterns, constants, YARA indicators) against a curated knowledge base of
+known C2 framework fingerprints to identify the likely C2 family.
+"""
+import asyncio
+import yaml
+
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+
+from pemcp.config import state, logger, Context
+from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+
+
+# ---------------------------------------------------------------------------
+#  Knowledge base loading
+# ---------------------------------------------------------------------------
+
+_SIGNATURES_PATH = Path(__file__).resolve().parent.parent / "data" / "c2_signatures.yaml"
+
+_kb_cache: Optional[Dict[str, Any]] = None
+
+
+def _load_knowledge_base() -> Dict[str, Any]:
+    """Load and cache the C2 signatures YAML knowledge base."""
+    global _kb_cache
+    if _kb_cache is not None:
+        return _kb_cache
+    if not _SIGNATURES_PATH.exists():
+        raise FileNotFoundError(
+            f"C2 signatures knowledge base not found at {_SIGNATURES_PATH}. "
+            "Ensure pemcp/data/c2_signatures.yaml exists."
+        )
+    with open(_SIGNATURES_PATH, "r") as f:
+        _kb_cache = yaml.safe_load(f)
+    return _kb_cache
+
+
+def _get_families() -> List[Dict[str, Any]]:
+    """Return the list of family entries from the knowledge base."""
+    kb = _load_knowledge_base()
+    return kb.get("families", [])
+
+
+def _find_family(name: str) -> Optional[Dict[str, Any]]:
+    """Find a family by name or alias (case-insensitive)."""
+    name_lower = name.lower()
+    for family in _get_families():
+        if family.get("family", "").lower() == name_lower:
+            return family
+        for alias in family.get("aliases", []):
+            if alias.lower() == name_lower:
+                return family
+    return None
+
+
+# ---------------------------------------------------------------------------
+#  Evidence matchers — each returns {score, weight, matches, mismatches}
+# ---------------------------------------------------------------------------
+
+def _match_api_hash(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score API hash evidence against a family entry."""
+    family_api = family.get("api_hash")
+    if not family_api:
+        return {"score": 0.0, "weight": 0.0, "matches": [], "mismatches": []}
+
+    weight = family_api.get("confidence_weight", 0.5)
+    matches: List[str] = []
+    mismatches: List[str] = []
+    match_count = 0
+    check_count = 0
+
+    ev_algorithm = evidence.get("hash_algorithm")
+    if ev_algorithm:
+        check_count += 1
+        if ev_algorithm.lower() == family_api.get("algorithm", "").lower():
+            matches.append(f"Algorithm: {ev_algorithm}")
+            match_count += 1
+        else:
+            mismatches.append(
+                f"Algorithm: expected {family_api.get('algorithm')}, got {ev_algorithm}"
+            )
+
+    ev_seed = evidence.get("hash_seed")
+    if ev_seed is not None:
+        check_count += 1
+        family_seed = family_api.get("seed")
+        if family_seed is not None and int(ev_seed) == int(family_seed):
+            matches.append(f"Seed: {ev_seed}")
+            match_count += 1
+        else:
+            mismatches.append(f"Seed: expected {family_seed}, got {ev_seed}")
+
+    ev_constants = evidence.get("hash_constants") or {}
+    known = family_api.get("known_hashes") or {}
+    for api_name, ev_value in ev_constants.items():
+        check_count += 1
+        ev_int = int(str(ev_value), 0) if isinstance(ev_value, str) else int(ev_value)
+        if api_name in known:
+            kb_int = int(known[api_name])
+            if ev_int == kb_int:
+                matches.append(f"Hash {api_name}: {hex(ev_int)}")
+                match_count += 1
+            else:
+                mismatches.append(
+                    f"Hash {api_name}: expected {hex(kb_int)}, got {hex(ev_int)}"
+                )
+
+    score = (match_count / check_count * weight) if check_count > 0 else 0.0
+    return {"score": round(score, 4), "weight": weight, "matches": matches, "mismatches": mismatches}
+
+
+def _match_config(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score config evidence against a family entry."""
+    family_config = family.get("config")
+    if not family_config:
+        return {"score": 0.0, "weight": 0.0, "matches": [], "mismatches": []}
+
+    weight = family_config.get("confidence_weight", 0.5)
+    matches: List[str] = []
+    mismatches: List[str] = []
+    match_count = 0
+    check_count = 0
+
+    ev_encryption = evidence.get("config_encryption")
+    if ev_encryption:
+        check_count += 1
+        if ev_encryption.lower() == family_config.get("encryption", "").lower():
+            matches.append(f"Config encryption: {ev_encryption}")
+            match_count += 1
+        else:
+            mismatches.append(
+                f"Config encryption: expected {family_config.get('encryption')}, got {ev_encryption}"
+            )
+
+    ev_pattern = evidence.get("config_pattern")
+    if ev_pattern:
+        check_count += 1
+        kb_structure = family_config.get("structure", "")
+        if ev_pattern.lower() in kb_structure.lower() or kb_structure.lower() in ev_pattern.lower():
+            matches.append(f"Config structure: {ev_pattern}")
+            match_count += 1
+        else:
+            mismatches.append(
+                f"Config structure: expected '{kb_structure}', got '{ev_pattern}'"
+            )
+
+    score = (match_count / check_count * weight) if check_count > 0 else 0.0
+    return {"score": round(score, 4), "weight": weight, "matches": matches, "mismatches": mismatches}
+
+
+def _match_compilation(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score compilation evidence against a family entry."""
+    family_comp = family.get("compilation")
+    if not family_comp:
+        return {"score": 0.0, "weight": 0.0, "matches": [], "mismatches": []}
+
+    weight = family_comp.get("confidence_weight", 0.3)
+    matches: List[str] = []
+    mismatches: List[str] = []
+    match_count = 0
+    check_count = 0
+
+    ev_compiler = evidence.get("compiler")
+    if ev_compiler:
+        check_count += 1
+        if ev_compiler.lower() == family_comp.get("compiler", "").lower():
+            matches.append(f"Compiler: {ev_compiler}")
+            match_count += 1
+        else:
+            mismatches.append(
+                f"Compiler: expected {family_comp.get('compiler')}, got {ev_compiler}"
+            )
+
+    score = (match_count / check_count * weight) if check_count > 0 else 0.0
+    return {"score": round(score, 4), "weight": weight, "matches": matches, "mismatches": mismatches}
+
+
+def _match_network(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score network evidence against a family entry."""
+    family_net = family.get("network")
+    if not family_net:
+        return {"score": 0.0, "weight": 0.0, "matches": [], "mismatches": []}
+
+    weight = family_net.get("confidence_weight", 0.5)
+    matches: List[str] = []
+    mismatches: List[str] = []
+    match_count = 0
+    check_count = 0
+
+    ev_headers = evidence.get("network_headers") or []
+    kb_headers = family_net.get("default_headers") or []
+    for header in ev_headers:
+        check_count += 1
+        if any(header.lower() in h.lower() for h in kb_headers):
+            matches.append(f"Network header: {header}")
+            match_count += 1
+
+    ev_uris = evidence.get("network_uris") or []
+    kb_uris = family_net.get("uri_patterns") or []
+    for uri in ev_uris:
+        check_count += 1
+        if uri in kb_uris:
+            matches.append(f"URI pattern: {uri}")
+            match_count += 1
+
+    score = (match_count / check_count * weight) if check_count > 0 else 0.0
+    return {"score": round(score, 4), "weight": weight, "matches": matches, "mismatches": mismatches}
+
+
+def _match_constants(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score constants evidence against a family entry."""
+    family_const = family.get("constants")
+    if not family_const:
+        return {"score": 0.0, "weight": 0.0, "matches": [], "mismatches": []}
+
+    weight = family_const.get("confidence_weight", 0.5)
+    matches: List[str] = []
+    mismatches: List[str] = []
+    match_count = 0
+    check_count = 0
+
+    ev_constants = evidence.get("constants") or {}
+    for key, ev_value in ev_constants.items():
+        if key == "confidence_weight":
+            continue
+        check_count += 1
+        if key in family_const:
+            kb_value = family_const[key]
+            try:
+                ev_int = int(str(ev_value), 0) if isinstance(ev_value, str) else ev_value
+                kb_int = int(str(kb_value), 0) if isinstance(kb_value, str) else kb_value
+                if ev_int == kb_int:
+                    matches.append(f"Constant {key}: {ev_value}")
+                    match_count += 1
+                else:
+                    mismatches.append(f"Constant {key}: expected {kb_value}, got {ev_value}")
+            except (ValueError, TypeError):
+                if str(ev_value).lower() == str(kb_value).lower():
+                    matches.append(f"Constant {key}: {ev_value}")
+                    match_count += 1
+                else:
+                    mismatches.append(f"Constant {key}: expected {kb_value}, got {ev_value}")
+
+    score = (match_count / check_count * weight) if check_count > 0 else 0.0
+    return {"score": round(score, 4), "weight": weight, "matches": matches, "mismatches": mismatches}
+
+
+def _match_dll_loading(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score DLL loading evidence against a family entry."""
+    family_dll = family.get("dll_loading")
+    if not family_dll:
+        return {"score": 0.0, "weight": 0.0, "matches": [], "mismatches": []}
+
+    weight = family_dll.get("confidence_weight", 0.5)
+    matches: List[str] = []
+    mismatches: List[str] = []
+    match_count = 0
+    check_count = 0
+
+    ev_dlls = evidence.get("dll_names") or []
+    kb_dlls = [d.lower() for d in (family_dll.get("loaded_dlls") or [])]
+    for dll in ev_dlls:
+        check_count += 1
+        if dll.lower() in kb_dlls:
+            matches.append(f"DLL: {dll}")
+            match_count += 1
+
+    score = (match_count / check_count * weight) if check_count > 0 else 0.0
+    return {"score": round(score, 4), "weight": weight, "matches": matches, "mismatches": mismatches}
+
+
+def _match_commands(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score command evidence against a family entry."""
+    family_cmd = family.get("commands")
+    if not family_cmd:
+        return {"score": 0.0, "weight": 0.0, "matches": [], "mismatches": []}
+
+    weight = family_cmd.get("confidence_weight", 0.3)
+    matches: List[str] = []
+    mismatches: List[str] = []
+    match_count = 0
+    check_count = 0
+
+    ev_count = evidence.get("command_count")
+    if ev_count is not None:
+        count_range = family_cmd.get("count_range")
+        if count_range and len(count_range) == 2:
+            check_count += 1
+            if count_range[0] <= ev_count <= count_range[1]:
+                matches.append(f"Command count {ev_count} in range [{count_range[0]}-{count_range[1]}]")
+                match_count += 1
+            else:
+                mismatches.append(
+                    f"Command count {ev_count} outside range [{count_range[0]}-{count_range[1]}]"
+                )
+
+    score = (match_count / check_count * weight) if check_count > 0 else 0.0
+    return {"score": round(score, 4), "weight": weight, "matches": matches, "mismatches": mismatches}
+
+
+def _match_yara(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score YARA indicator evidence against a family entry."""
+    family_yara = family.get("yara_indicators")
+    if not family_yara:
+        return {"score": 0.0, "weight": 0.0, "matches": [], "mismatches": []}
+
+    weight = family_yara.get("confidence_weight", 0.5)
+    matches: List[str] = []
+    match_count = 0
+    check_count = 0
+
+    ev_strings = evidence.get("matched_strings") or []
+    kb_strings = family_yara.get("string_patterns") or []
+    for s in ev_strings:
+        check_count += 1
+        if any(s.lower() in ks.lower() or ks.lower() in s.lower() for ks in kb_strings):
+            matches.append(f"YARA string: {s}")
+            match_count += 1
+
+    ev_hex = evidence.get("matched_hex_patterns") or []
+    kb_hex = family_yara.get("hex_patterns") or []
+    for h in ev_hex:
+        check_count += 1
+        h_clean = h.lower().replace(" ", "")
+        if any(h_clean in kh.get("hex", "").lower().replace(" ", "") for kh in kb_hex):
+            matches.append(f"YARA hex: {h}")
+            match_count += 1
+
+    score = (match_count / check_count * weight) if check_count > 0 else 0.0
+    return {"score": round(score, 4), "weight": weight, "matches": matches, "mismatches": []}
+
+
+# All matchers in evaluation order
+_MATCHERS = [
+    ("api_hash", _match_api_hash),
+    ("config", _match_config),
+    ("compilation", _match_compilation),
+    ("network", _match_network),
+    ("constants", _match_constants),
+    ("dll_loading", _match_dll_loading),
+    ("commands", _match_commands),
+    ("yara_indicators", _match_yara),
+]
+
+
+def _score_family(evidence: Dict[str, Any], family: Dict[str, Any]) -> Dict[str, Any]:
+    """Score a single family against all provided evidence."""
+    category_scores: Dict[str, Any] = {}
+    total_score = 0.0
+    total_weight = 0.0
+    all_matches: List[str] = []
+    all_mismatches: List[str] = []
+
+    for category, matcher in _MATCHERS:
+        result = matcher(evidence, family)
+        if result["weight"] > 0 and (result["matches"] or result["mismatches"]):
+            category_scores[category] = result
+            total_score += result["score"]
+            total_weight += result["weight"]
+            all_matches.extend(result["matches"])
+            all_mismatches.extend(result["mismatches"])
+
+    normalized = round(total_score / total_weight, 4) if total_weight > 0 else 0.0
+
+    return {
+        "family": family["family"],
+        "aliases": family.get("aliases", []),
+        "description": family.get("description", ""),
+        "score": normalized,
+        "raw_score": round(total_score, 4),
+        "max_possible_score": round(total_weight, 4),
+        "total_matches": len(all_matches),
+        "total_mismatches": len(all_mismatches),
+        "matches": all_matches,
+        "mismatches": all_mismatches,
+        "category_scores": category_scores,
+    }
+
+
+def _confidence_label(score: float) -> str:
+    """Return a human-readable confidence label for a score."""
+    if score >= 0.9:
+        return "HIGH"
+    if score >= 0.6:
+        return "MEDIUM"
+    if score >= 0.3:
+        return "LOW"
+    return "NEGLIGIBLE"
+
+
+# ---------------------------------------------------------------------------
+#  Tool 1: identify_c2_framework
+# ---------------------------------------------------------------------------
+
+@tool_decorator
+async def identify_c2_framework(
+    ctx: Context,
+    hash_algorithm: Optional[str] = None,
+    hash_seed: Optional[int] = None,
+    hash_constants: Optional[Dict[str, str]] = None,
+    config_pattern: Optional[str] = None,
+    config_encryption: Optional[str] = None,
+    compiler: Optional[str] = None,
+    command_count: Optional[int] = None,
+    network_headers: Optional[List[str]] = None,
+    network_uris: Optional[List[str]] = None,
+    constants: Optional[Dict[str, Any]] = None,
+    dll_names: Optional[List[str]] = None,
+    matched_strings: Optional[List[str]] = None,
+    matched_hex_patterns: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Identifies the C2 framework family by matching observed
+    binary indicators against the C2 signatures knowledge base. Returns ranked
+    candidates with confidence scores, matched/unmatched evidence, and
+    extraction guidance.
+
+    When to use: After decompiling API hash resolution routines, identifying
+    config encryption patterns, or finding distinctive constants/strings.
+    Provide as many evidence parameters as available for best accuracy.
+
+    High-confidence indicators (provide these first):
+      - hash_algorithm + hash_seed: API hash algorithm and seed value
+      - hash_constants: Verified {api_name: hash_value} pairs
+      - matched_strings / matched_hex_patterns: YARA indicator matches
+
+    Supporting indicators (strengthen attribution):
+      - config_encryption: Config cipher (rc4, aes-256-ctr, xor_single_byte)
+      - config_pattern: Config structure description
+      - compiler: Compiler toolchain (mingw, msvc, go)
+      - constants: Named constants found in binary
+      - dll_names: DLLs loaded via hash resolution
+      - network_headers / network_uris: C2 protocol indicators
+      - command_count: Number of command handlers
+
+    Next steps: Use verify_c2_attribution() to double-check the top result.
+    Then follow the family-specific extraction recipe in c2-extraction.md.
+
+    Args:
+        ctx: MCP Context.
+        hash_algorithm: API hash algorithm name (e.g. "djb2", "djb2_modified", "ror13").
+        hash_seed: API hash algorithm seed/initial value.
+        hash_constants: Dict of {api_name: hash_value_as_hex_or_int}.
+        config_pattern: Config structure pattern (e.g. "size_4B_le | ciphertext | rc4_key_16B").
+        config_encryption: Config encryption algorithm (e.g. "rc4", "aes-256-ctr").
+        compiler: Compiler toolchain (e.g. "mingw", "msvc", "go").
+        command_count: Approximate number of command handler functions.
+        network_headers: HTTP headers used in C2 communication.
+        network_uris: URI paths used in C2 communication.
+        constants: Dict of {constant_name: value} found in binary.
+        dll_names: DLL names loaded via hash-based resolution.
+        matched_strings: Strings matched by YARA or string search.
+        matched_hex_patterns: Hex byte patterns matched by YARA.
+    """
+    await ctx.info("Identifying C2 framework from provided evidence...")
+
+    # Build evidence dict from parameters
+    evidence: Dict[str, Any] = {}
+    if hash_algorithm is not None:
+        evidence["hash_algorithm"] = hash_algorithm
+    if hash_seed is not None:
+        evidence["hash_seed"] = hash_seed
+    if hash_constants:
+        evidence["hash_constants"] = hash_constants
+    if config_pattern is not None:
+        evidence["config_pattern"] = config_pattern
+    if config_encryption is not None:
+        evidence["config_encryption"] = config_encryption
+    if compiler is not None:
+        evidence["compiler"] = compiler
+    if command_count is not None:
+        evidence["command_count"] = command_count
+    if network_headers:
+        evidence["network_headers"] = network_headers
+    if network_uris:
+        evidence["network_uris"] = network_uris
+    if constants:
+        evidence["constants"] = constants
+    if dll_names:
+        evidence["dll_names"] = dll_names
+    if matched_strings:
+        evidence["matched_strings"] = matched_strings
+    if matched_hex_patterns:
+        evidence["matched_hex_patterns"] = matched_hex_patterns
+
+    if not evidence:
+        return await _check_mcp_response_size(ctx, {
+            "status": "error",
+            "error": "No evidence provided. Supply at least one indicator parameter.",
+            "next_steps": [
+                "Decompile the API hash resolution function and provide hash_algorithm + hash_seed",
+                "Check config encryption with identify_crypto_algorithm()",
+                "Search for known strings with search_for_specific_strings()",
+            ],
+        }, "identify_c2_framework")
+
+    def _run_matching():
+        families = _get_families()
+        results = []
+        for family in families:
+            result = _score_family(evidence, family)
+            if result["total_matches"] > 0:
+                results.append(result)
+        results.sort(key=lambda r: (r["score"], r["raw_score"]), reverse=True)
+        return results
+
+    candidates = await asyncio.to_thread(_run_matching)
+
+    # Build response
+    evidence_summary = {k: v for k, v in evidence.items() if v is not None}
+
+    if not candidates:
+        return await _check_mcp_response_size(ctx, {
+            "status": "no_match",
+            "evidence_provided": evidence_summary,
+            "candidates": [],
+            "message": "No C2 families matched the provided evidence.",
+            "next_steps": [
+                "Verify your evidence values are correct (check endianness, hex format)",
+                "Try providing different evidence types",
+                "list_c2_signatures() to see all known families and their indicators",
+                "This may be a custom or unknown C2 framework",
+            ],
+        }, "identify_c2_framework")
+
+    # Trim verbose category_scores from lower-ranked candidates
+    ranked = []
+    for i, c in enumerate(candidates):
+        entry = {
+            "rank": i + 1,
+            "family": c["family"],
+            "aliases": c["aliases"],
+            "confidence": _confidence_label(c["score"]),
+            "score": c["score"],
+            "total_matches": c["total_matches"],
+            "total_mismatches": c["total_mismatches"],
+            "matches": c["matches"],
+            "mismatches": c["mismatches"],
+        }
+        if i == 0:
+            entry["description"] = c["description"]
+            entry["category_scores"] = c["category_scores"]
+        ranked.append(entry)
+
+    top = candidates[0]
+    next_steps = [
+        f"verify_c2_attribution(family='{top['family']}', ...) to confirm attribution",
+    ]
+    # Find family entry for extraction guidance
+    family_entry = _find_family(top["family"])
+    if family_entry and family_entry.get("references"):
+        ref = family_entry["references"][0]
+        next_steps.append(f"Reference: {ref.get('title', ref.get('url', ''))}")
+    next_steps.append("Follow the family-specific extraction recipe in c2-extraction.md")
+
+    return await _check_mcp_response_size(ctx, {
+        "status": "identified" if top["score"] >= 0.6 else "possible_match",
+        "evidence_provided": evidence_summary,
+        "candidates": ranked,
+        "next_steps": next_steps,
+    }, "identify_c2_framework")
+
+
+# ---------------------------------------------------------------------------
+#  Tool 2: list_c2_signatures
+# ---------------------------------------------------------------------------
+
+@tool_decorator
+async def list_c2_signatures(
+    ctx: Context,
+    family: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Browse the C2 framework signatures knowledge base. Returns
+    a summary of all known families, or full details for a specific family.
+
+    When to use: To check which C2 frameworks are in the knowledge base, or to
+    review the full fingerprint profile for a specific framework before analysis.
+
+    Next steps: Use identify_c2_framework() with evidence from your analysis.
+
+    Args:
+        ctx: MCP Context.
+        family: Optional family name or alias to get full details. If None,
+                returns a summary list of all families.
+    """
+    await ctx.info("Loading C2 signatures knowledge base...")
+
+    kb = _load_knowledge_base()
+    families = kb.get("families", [])
+
+    if family:
+        entry = _find_family(family)
+        if not entry:
+            available = [f.get("family", "?") for f in families]
+            return await _check_mcp_response_size(ctx, {
+                "status": "not_found",
+                "error": f"Family '{family}' not found in knowledge base.",
+                "available_families": available,
+            }, "list_c2_signatures")
+
+        return await _check_mcp_response_size(ctx, {
+            "status": "ok",
+            "family": entry,
+        }, "list_c2_signatures")
+
+    # Summary mode
+    summaries = []
+    for f in families:
+        api_hash = f.get("api_hash") or {}
+        config = f.get("config") or {}
+        known_hashes = api_hash.get("known_hashes") or {}
+        summaries.append({
+            "family": f.get("family", "?"),
+            "aliases": f.get("aliases", []),
+            "description": (f.get("description", "")[:120] + "...") if len(f.get("description", "")) > 120 else f.get("description", ""),
+            "api_hash_algorithm": api_hash.get("algorithm"),
+            "api_hash_seed": api_hash.get("seed"),
+            "known_hash_count": len(known_hashes),
+            "config_encryption": config.get("encryption"),
+            "compiler": (f.get("compilation") or {}).get("compiler"),
+            "source_url": f.get("source_url"),
+        })
+
+    return await _check_mcp_response_size(ctx, {
+        "status": "ok",
+        "schema_version": kb.get("schema_version", "?"),
+        "family_count": len(families),
+        "families": summaries,
+    }, "list_c2_signatures")
+
+
+# ---------------------------------------------------------------------------
+#  Tool 3: verify_c2_attribution
+# ---------------------------------------------------------------------------
+
+@tool_decorator
+async def verify_c2_attribution(
+    ctx: Context,
+    family: str,
+    hash_algorithm: Optional[str] = None,
+    hash_seed: Optional[int] = None,
+    hash_constants: Optional[Dict[str, str]] = None,
+    config_pattern: Optional[str] = None,
+    config_encryption: Optional[str] = None,
+    compiler: Optional[str] = None,
+    command_count: Optional[int] = None,
+    network_headers: Optional[List[str]] = None,
+    network_uris: Optional[List[str]] = None,
+    constants: Optional[Dict[str, Any]] = None,
+    dll_names: Optional[List[str]] = None,
+    matched_strings: Optional[List[str]] = None,
+    matched_hex_patterns: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Verifies a claimed C2 attribution by checking each piece
+    of evidence against the knowledge base entry for the specified family.
+    Returns a pass/fail verdict for each evidence point.
+
+    When to use: After identify_c2_framework() returns a candidate, or when
+    you want to double-check a manual attribution before finalising your report.
+    This is the "measure twice, cut once" step for C2 attribution.
+
+    IMPORTANT: Always verify attributions. The AdaptixC2/Havoc analysis showed
+    that similar techniques (DJB2 hashing, MinGW compilation) can lead to
+    misattribution without checking specific constants like hash seeds.
+
+    Next steps: If verification passes, proceed with family-specific config
+    extraction. If it fails, re-run identify_c2_framework() with corrected
+    evidence, or investigate further.
+
+    Args:
+        ctx: MCP Context.
+        family: The C2 family name to verify against (e.g. "AdaptixC2 Beacon").
+        hash_algorithm: API hash algorithm name.
+        hash_seed: API hash algorithm seed/initial value.
+        hash_constants: Dict of {api_name: hash_value}.
+        config_pattern: Config structure pattern.
+        config_encryption: Config encryption algorithm.
+        compiler: Compiler toolchain.
+        command_count: Number of command handlers.
+        network_headers: HTTP headers used in C2.
+        network_uris: URI paths used in C2.
+        constants: Named constants found in binary.
+        dll_names: DLLs loaded via hash resolution.
+        matched_strings: Strings matched by YARA.
+        matched_hex_patterns: Hex byte patterns matched by YARA.
+    """
+    await ctx.info(f"Verifying attribution: {family}")
+
+    entry = _find_family(family)
+    if not entry:
+        available = [f.get("family", "?") for f in _get_families()]
+        return await _check_mcp_response_size(ctx, {
+            "status": "error",
+            "error": f"Family '{family}' not found in knowledge base.",
+            "available_families": available,
+        }, "verify_c2_attribution")
+
+    # Build evidence
+    evidence: Dict[str, Any] = {}
+    if hash_algorithm is not None:
+        evidence["hash_algorithm"] = hash_algorithm
+    if hash_seed is not None:
+        evidence["hash_seed"] = hash_seed
+    if hash_constants:
+        evidence["hash_constants"] = hash_constants
+    if config_pattern is not None:
+        evidence["config_pattern"] = config_pattern
+    if config_encryption is not None:
+        evidence["config_encryption"] = config_encryption
+    if compiler is not None:
+        evidence["compiler"] = compiler
+    if command_count is not None:
+        evidence["command_count"] = command_count
+    if network_headers:
+        evidence["network_headers"] = network_headers
+    if network_uris:
+        evidence["network_uris"] = network_uris
+    if constants:
+        evidence["constants"] = constants
+    if dll_names:
+        evidence["dll_names"] = dll_names
+    if matched_strings:
+        evidence["matched_strings"] = matched_strings
+    if matched_hex_patterns:
+        evidence["matched_hex_patterns"] = matched_hex_patterns
+
+    if not evidence:
+        return await _check_mcp_response_size(ctx, {
+            "status": "error",
+            "error": "No evidence provided to verify.",
+        }, "verify_c2_attribution")
+
+    def _run_verification():
+        result = _score_family(evidence, entry)
+
+        # Build per-check verdicts
+        checks: List[Dict[str, Any]] = []
+        for m in result["matches"]:
+            checks.append({"check": m, "verdict": "PASS"})
+        for m in result["mismatches"]:
+            checks.append({"check": m, "verdict": "FAIL"})
+
+        # Overall verdict
+        if result["total_mismatches"] == 0 and result["total_matches"] > 0:
+            verdict = "CONFIRMED"
+        elif result["total_mismatches"] > 0 and result["total_matches"] > result["total_mismatches"]:
+            verdict = "PARTIAL_MATCH"
+        elif result["total_mismatches"] > 0 and result["total_matches"] <= result["total_mismatches"]:
+            verdict = "UNLIKELY"
+        else:
+            verdict = "INCONCLUSIVE"
+
+        return {
+            "verdict": verdict,
+            "score": result["score"],
+            "checks": checks,
+            "total_matches": result["total_matches"],
+            "total_mismatches": result["total_mismatches"],
+            "category_scores": result["category_scores"],
+        }
+
+    verification = await asyncio.to_thread(_run_verification)
+
+    # Build next steps based on verdict
+    next_steps: List[str] = []
+    if verification["verdict"] == "CONFIRMED":
+        next_steps.append(f"Attribution confirmed. Follow {entry['family']} extraction recipe in c2-extraction.md")
+        next_steps.append(f"add_note(content='C2 Attribution: {entry['family']} (verified)', category='ioc')")
+    elif verification["verdict"] in ("PARTIAL_MATCH", "UNLIKELY"):
+        next_steps.append("Check mismatched evidence values carefully (endianness, hex format)")
+        next_steps.append("identify_c2_framework() with all evidence to see alternative candidates")
+        if entry.get("references"):
+            ref = entry["references"][0]
+            next_steps.append(f"Cross-reference with: {ref.get('title', ref.get('url', ''))}")
+    else:
+        next_steps.append("Gather more evidence before attributing")
+        next_steps.append("list_c2_signatures() to review available indicators")
+
+    return await _check_mcp_response_size(ctx, {
+        "status": "ok",
+        "family": entry["family"],
+        "family_description": entry.get("description", ""),
+        "verification": verification,
+        "evidence_provided": evidence,
+        "next_steps": next_steps,
+    }, "verify_c2_attribution")

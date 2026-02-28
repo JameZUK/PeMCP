@@ -1,0 +1,2865 @@
+schema_version: '1.0'
+families:
+- family: AdaptixC2 Beacon
+  aliases:
+  - Adaptix Beacon
+  - AdaptixC2 Agent
+  description: Native PE beacon agent for the AdaptixC2 open-source red-team framework. Compiled with MinGW/GCC. Uses RC4-encrypted
+    config in .rdata, modified DJB2 hashing for API resolution, and WinINet-based HTTP/S C2 communication.
+  source_url: https://github.com/Adaptix-Framework/AdaptixC2
+  api_hash:
+    algorithm: djb2_modified
+    seed: 1572
+    case_sensitive: false
+    formula: hash = hash * 33 + tolower(char)
+    known_hashes:
+      NtFlushInstructionCache: 2443273630
+      VirtualAlloc: 1674470262
+      GetProcAddress: 407841502
+      LoadLibraryA: 291098874
+      GetAdaptersInfo: 2704762724
+      NtQueryInformationProcess: 1756615393
+    module_hashes:
+      KERNEL32.DLL: 2067039764
+      ntdll.dll: 26892780
+    confidence_weight: 0.95
+  config:
+    encryption: rc4
+    key_length: 16
+    structure: size_4B_le | ciphertext | rc4_key_16B
+    structure_description: First 4 bytes (LE) = size of encrypted data. Followed by that many bytes of RC4 ciphertext. Final
+      16 bytes of the total blob are the RC4 key.
+    location:
+      section: .rdata
+      offset_range:
+      - 0
+      - 99
+    parsed_fields:
+    - agent_type (4B LE)
+    - ssl (1B)
+    - server_count (4B LE)
+    - servers (string + 2B port, repeated)
+    - http_method (string)
+    - uri_path (string)
+    - parameter (string)
+    - user_agent (string)
+    - http_headers (string)
+    - kill_date (string)
+    - working_time (string)
+    - sleep (4B LE, seconds)
+    - jitter (4B LE, percent)
+    - retry_count (4B LE)
+    - download_chunk_size (4B LE)
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - http
+    - https
+    default_headers:
+    - X-Beacon-Id
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.6
+  commands:
+    count_range:
+    - 30
+    - 35
+    known_names:
+    - CAT
+    - CD
+    - CP
+    - DISKS
+    - DOWNLOAD
+    - EXEC_BOF
+    - GETUID
+    - JOBS_LIST
+    - JOBS_KILL
+    - LINK
+    - LS
+    - MV
+    - MKDIR
+    - PIVOT_EXEC
+    - PROFILE
+    - PS_LIST
+    - PS_KILL
+    - PS_RUN
+    - PWD
+    - REV2SELF
+    - RM
+    - SHELL_START
+    - SHELL_WRITE
+    - TERMINATE
+    - TUNNEL_CREATE
+    - TUNNEL_CLOSE
+    - UNLINK
+    - UPLOAD
+    - SAVEMEMORY
+    confidence_weight: 0.5
+  compilation:
+    compiler: mingw
+    linker: gcc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    - shellcode
+    rich_header: false
+    confidence_weight: 0.3
+  constants:
+    download_chunk_size: 102400
+    savememory_command_id: 8993
+    confidence_weight: 0.7
+  dll_loading:
+    technique: char_by_char_stack_construction
+    loaded_dlls:
+    - Iphlpapi.dll
+    - Advapi32.dll
+    - msvcrt.dll
+    - Ws2_32.dll
+    api_count_estimates:
+      KERNEL32: 80
+      NTDLL: 16
+      Ws2_32: 18
+      Advapi32: 6
+    confidence_weight: 0.7
+  yara_indicators:
+    hex_patterns:
+    - name: adaptix_virtualalloc_hash
+      hex: 76 63 CE 63
+    - name: adaptix_getadapters_hash
+      hex: 64 67 37 A1
+    - name: adaptix_ntflush_hash
+      hex: 9E 65 A1 91
+    - name: adaptix_ntquery_hash
+      hex: E1 D2 B3 68
+    string_patterns:
+    - savememory
+    confidence_weight: 0.95
+  references:
+  - url: https://unit42.paloaltonetworks.com/adaptixc2-post-exploitation-framework/
+    title: 'Unit42: AdaptixC2 Post-Exploitation Framework'
+  - url: https://github.com/Adaptix-Framework/AdaptixC2
+    title: AdaptixC2 GitHub Repository
+  - url: https://github.com/av-gantimurov/adaptixc2-extractor
+    title: AdaptixC2 Config Extractor
+  mitre_attack:
+  - T1129
+  - T1027
+  - T1071.001
+  - T1573.001
+  - T1106
+  - T1082
+- family: AdaptixC2 Gopher
+  aliases:
+  - Adaptix Gopher
+  - Adaptix Go Agent
+  description: Go-based agent for the AdaptixC2 framework. Uses AES-128-GCM encrypted config with msgpack serialization.
+  source_url: https://github.com/Adaptix-Framework/AdaptixC2
+  api_hash: null
+  config:
+    encryption: aes-128-gcm
+    key_length: 16
+    structure: aes_key_16B | nonce_12B | ciphertext
+    structure_description: First 16 bytes are the AES-128 key, next 12 bytes are the GCM nonce, remainder is the GCM ciphertext.
+      Decrypted output is msgpack-serialized.
+    location:
+      section: embedded
+      offset_range: null
+    parsed_fields:
+    - C2 servers
+    - ports
+    - protocol settings
+    - sleep intervals
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - http
+    - https
+    - tcp
+    - smb
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.2
+  compilation:
+    compiler: go
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.4
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - msgpack:"job_id"
+    - msgpack:"acp"
+    - gopher
+    confidence_weight: 0.85
+  references:
+  - url: https://unit42.paloaltonetworks.com/adaptixc2-post-exploitation-framework/
+    title: 'Unit42: AdaptixC2 Post-Exploitation Framework'
+  - url: https://github.com/av-gantimurov/adaptixc2-extractor
+    title: AdaptixC2 Config Extractor
+  mitre_attack:
+  - T1027
+  - T1071.001
+  - T1573.001
+- family: Agent Tesla
+  aliases:
+  - AgentTesla
+  - Negasteal
+  - ASTesla
+  - OriginLogger
+  description: .NET info-stealer/keylogger. Config stored as static string fields in a settings class, encrypted with AES-256-CBC
+    (or XOR in older variants). Exfiltrates via SMTP, FTP, Telegram, or HTTP POST.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: aes-256-cbc
+    key_length: 32
+    structure: dotnet_static_fields_aes
+    structure_description: Config values stored as static string fields in a .NET class (often named Settings, Connection,
+      or obfuscated). Fields are Base64-encoded, then AES-256-CBC encrypted. Key is hardcoded in the same class or derived
+      from a password string. Older variants use single-byte XOR instead.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - SMTP host
+    - SMTP port
+    - SMTP user
+    - SMTP password
+    - FTP host
+    - FTP user
+    - FTP password
+    - Telegram bot token
+    - Telegram chat ID
+    - Exfil timer interval (ms)
+    - Persistence method
+    - Screenshot interval
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - smtp
+    - ftp
+    - http
+    - telegram_api
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns:
+    - Mozilla/5.0
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - anycpu
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - smtp.gmail.com
+    - smtp.yandex.com
+    - api.telegram.org/bot
+    - ScreenshotTimer
+    - KeyLoggerString
+    - GetOutlookPasswords
+    confidence_weight: 0.7
+  references:
+  - url: https://www.fortinet.com/blog/threat-research/agent-tesla-variant-spread-by-crafted-excel-document
+    title: 'Fortinet: Agent Tesla Variant Analysis'
+  - url: https://any.run/malware-trends/agent-tesla
+    title: 'ANY.RUN: Agent Tesla Malware Trends'
+  mitre_attack:
+  - T1056.001
+  - T1555
+  - T1071.003
+  - T1041
+  - T1113
+- family: AsyncRAT
+  aliases:
+  - Async RAT
+  - AsyncClient
+  description: Open-source .NET RAT. Config stored in encrypted static fields in Settings class. Uses AES-256-CBC with PBKDF2-derived
+    key (50,000 iterations). Supports keylogging, screen capture, file management, and plugin loading.
+  source_url: https://github.com/NYAN-x-CAT/AsyncRAT-C-Sharp
+  api_hash: null
+  config:
+    encryption: aes-256-cbc
+    key_length: 32
+    structure: dotnet_settings_class_pbkdf2
+    structure_description: 'Settings class contains static fields: Ports, Hosts, Version, Install, MTX, Pastebin, Anti, BDOS,
+      Group, Hwid, Serversignature, ServerCertificate. Each field is Base64 string decrypted via AES-256-CBC. Key derived
+      from hardcoded password using PBKDF2 with salt=BFEB1E56FBCD973BB219022430A57843003D5644D21E62B9D4F180E7E6C33941 and
+      iterations=50000.'
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - Hosts (C2 addresses)
+    - Ports
+    - Version
+    - Install (bool)
+    - InstallFolder
+    - InstallFile
+    - MTX (mutex)
+    - Pastebin
+    - Anti (anti-analysis bool)
+    - BDOS (anti-DoS bool)
+    - Group
+    - ServerCertificate
+    - ServerSignature
+    confidence_weight: 0.95
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 15
+    - 30
+    known_names:
+    - sendFile
+    - savelog
+    - webcam
+    - keylogger
+    - chat
+    - dos
+    - plugin
+    - reportWindow
+    confidence_weight: 0.5
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - anycpu
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants:
+    pbkdf2_iterations: 50000
+    default_salt_hex: BFEB1E56FBCD973BB219022430A57843003D5644D21E62B9D4F180E7E6C33941
+    confidence_weight: 0.9
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - AsyncClient
+    - Pastebin
+    - ABORIG
+    - ServerSignature
+    - get_Anti
+    - get_BDOS
+    confidence_weight: 0.8
+  references:
+  - url: https://github.com/NYAN-x-CAT/AsyncRAT-C-Sharp
+    title: AsyncRAT GitHub Repository
+  - url: https://www.trendmicro.com/en_us/research/23/l/analyzing-asyncrat-code.html
+    title: 'Trend Micro: Analyzing AsyncRAT'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1547.001
+  - T1059.003
+  - T1573.001
+- family: Brute Ratel C4
+  aliases:
+  - BRc4
+  - Brute Ratel
+  - Badger
+  - BOLDBADGER
+  description: Commercial adversary simulation tool. Agent (Badger) uses RC4-encrypted config (Base64-wrapped pre-v1.3), direct/indirect
+    syscalls for API calls, and supports HTTP/S, DNS over HTTPS (DoH), and SMB transports. Designed for EDR evasion.
+  source_url: null
+  api_hash:
+    algorithm: ror13
+    seed: 0
+    case_sensitive: true
+    formula: hash = ror13(hash) + char (pre-v1.3 only; removed in v1.3 Resurgence)
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.3
+  config:
+    encryption: rc4
+    key_length: 8
+    structure: rc4_key_8B | rc4_encrypted_pe | base64_config_400B
+    structure_description: 'Pre-v1.3: 8-byte RC4 key followed by RC4-encrypted reflective DLL (PE header stomped), then 400
+      bytes of Base64-encoded config. Post-v1.3: binary format with per-build random RC4 key, no Base64.'
+    location:
+      section: shellcode
+      offset_range: null
+    parsed_fields:
+    - C2 server URL
+    - Auth password
+    - Encryption key
+    - User-Agent
+    - Pipe name (SMB)
+    - URI path
+    - Cookie config
+    - Sleep interval
+    - Jitter
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - http
+    - https
+    - doh
+    - smb
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x64
+    formats:
+    - exe
+    - dll
+    - shellcode
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    default_rc4_key_v1_2: bYXJm/3#M?:XyMBF
+    checkin_command: chkin
+    dll_export_name: bruteloader
+    dll_module_name: bhttp_x64.dll
+    syscall_detect_opcode: 49 89 CA
+    confidence_weight: 0.8
+  dll_loading:
+    technique: indirect_syscalls_eat_parsing
+    loaded_dlls:
+    - ntdll.dll
+    api_count_estimates: {}
+    confidence_weight: 0.5
+  yara_indicators:
+    hex_patterns:
+    - name: brc4_config_block
+      hex: 50 48 B8 ?? ?? ?? ?? ?? ?? ?? ?? 50 68
+    - name: brc4_split_marker
+      hex: 50 48 B8 ?? ?? ?? ?? ?? ?? ?? ?? 50 48 B8
+    string_patterns:
+    - bruteloader
+    - bhttp_x64.dll
+    - chkin
+    confidence_weight: 0.7
+  references:
+  - url: https://unit42.paloaltonetworks.com/brute-ratel-c4-tool/
+    title: 'Unit42: Brute Ratel C4 Red Teaming Tool Being Abused'
+  - url: https://www.splunk.com/en_us/blog/security/deliver-a-strike-by-reversing-a-badger-brute-ratel-detection-and-analysis.html
+    title: 'Splunk: Reversing a Badger - Brute Ratel Detection and Analysis'
+  - url: https://blog.spookysec.net/analyzing-brc4-badgers/
+    title: 'SpookySec: Analyzing a Brute Ratel Badger'
+  mitre_attack:
+  - T1106
+  - T1055
+  - T1071.001
+  - T1071.004
+  - T1573.001
+- family: Cobalt Strike Beacon
+  aliases:
+  - CobaltStrike
+  - CS Beacon
+  - Cobeacon
+  description: Commercial adversary simulation beacon. Uses ROR13 hash-based API resolution in shellcode stagers, XOR-encrypted
+    TLV config in .data section, and RSA+AES encrypted C2 communications. Highly configurable via Malleable C2 profiles.
+  source_url: null
+  api_hash:
+    algorithm: ror13
+    seed: 0
+    case_sensitive: false
+    formula: hash = ror13(hash) + char; DLL hash (uppercase Unicode) + API hash (ASCII) combined
+    known_hashes:
+      LoadLibraryA: 119961420
+      GetProcAddress: 2081291434
+      VirtualAlloc: 3847464024
+      VirtualProtect: 2034681371
+    module_hashes: {}
+    confidence_weight: 0.9
+  config:
+    encryption: xor_single_byte
+    key_length: 1
+    structure: xor_encoded_4096B_tlv
+    structure_description: '4096-byte (0x1000) config block in .data section, XOR-encoded with a single byte key. CS v3 uses
+      key 0x69, CS v4 uses key 0x2e. After decryption, data is TLV format: index (2B) + type (2B) + length (2B) + value (variable).'
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - 'BeaconType (idx 0x01, short): 0=HTTP, 1=HTTPS, 8=DNS'
+    - Port (idx 0x02, short)
+    - SleepTime (idx 0x03, int, ms)
+    - Jitter (idx 0x05, short, percent)
+    - PublicKey (idx 0x07, blob, 256B RSA)
+    - C2Server (idx 0x08, blob, 256B comma-separated)
+    - UserAgent (idx 0x09, blob, 128B)
+    - PostURI (idx 0x0A, blob, 64B)
+    - PipeName (idx 0x0F, blob, 128B)
+    - Watermark (idx 0x25, int, 4B license ID)
+    confidence_weight: 0.95
+  network:
+    protocols:
+    - http
+    - https
+    - dns
+    - smb
+    default_headers: []
+    uri_patterns:
+    - /submit.php
+    - /ca
+    - /dpixel
+    - /__utm.gif
+    - /pixel.gif
+    - /g.pixel
+    - /dot.gif
+    - /updates.rss
+    - /fwlink
+    - /ga.js
+    - /IE9CompatViewList.xml
+    user_agent_patterns:
+    - Mozilla/5.0 (compatible; MSIE
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    - shellcode
+    - service_exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    config_size: 4096
+    xor_key_v3: 105
+    xor_key_v4: 46
+    metadata_magic: 48879
+    config_start_marker: 00 01 00 01 00 02
+    stager_checksum8_x86: 92
+    stager_checksum8_x64: 93
+    confidence_weight: 0.9
+  dll_loading:
+    technique: reflective_dll_injection
+    loaded_dlls:
+    - wininet.dll
+    - ws2_32.dll
+    api_count_estimates: {}
+    confidence_weight: 0.3
+  yara_indicators:
+    hex_patterns:
+    - name: cs_shellcode_entry
+      hex: FC E8 ?? ?? ?? ?? 60
+    - name: cs_config_start_marker
+      hex: 00 01 00 01 00 02
+    - name: cs_xor_key_v4_block
+      hex: 2E 2E 2E 2E 2E 2E 2E 2E
+    - name: cs_xor_key_v3_block
+      hex: 69 69 69 69 69 69 69 69
+    string_patterns:
+    - ReflectiveLoader
+    - '%02d/%02d/%02d %02d:%02d:%02d'
+    - Started service %s on %s
+    confidence_weight: 0.9
+  references:
+  - url: https://www.elastic.co/security-labs/extracting-cobalt-strike-beacon-configurations
+    title: 'Elastic: Extracting Cobalt Strike Beacon Configurations'
+  - url: https://www.sentinelone.com/labs/the-anatomy-of-an-apt-attack-and-cobaltstrike-beacons-encoded-configuration/
+    title: 'SentinelOne: Anatomy of CobaltStrike Beacon''s Encoded Configuration'
+  - url: https://github.com/JPCERTCC/aa-tools/blob/master/cobaltstrikescan.py
+    title: 'JPCERT: CobaltStrike Config Scanner'
+  mitre_attack:
+  - T1059.003
+  - T1071.001
+  - T1573.002
+  - T1055
+  - T1620
+  - T1106
+- family: Covenant Grunt
+  aliases:
+  - Covenant
+  - Grunt
+  - GruntHTTP
+  - GruntSMB
+  description: .NET C2 framework. Grunt implant uses AES-256-CBC + RSA-2048 hybrid encryption. JSON-formatted messages with
+    GUID-based task tracking. Supports HTTP, SMB, and bridge listeners.
+  source_url: https://github.com/cobbr/Covenant
+  api_hash: null
+  config:
+    encryption: aes-256-cbc_rsa-2048
+    key_length: 32
+    structure: dotnet_compiled_constants
+    structure_description: Config compiled into .NET Grunt binary as constants. Contains C2 URL, CovenantCertHash, GUID, delay,
+      jitter, connect attempts, and kill date. AES-256-CBC used for message encryption, RSA-2048 for initial key exchange.
+      Messages are JSON-serialized GruntTasking objects.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - CovenantURI (C2 URL)
+    - CovenantCertHash
+    - GUID (implant identifier)
+    - Delay (sleep)
+    - JitterPercent
+    - ConnectAttempts
+    - KillDate
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - http
+    - https
+    - smb
+    default_headers: []
+    uri_patterns:
+    - /en-us/test.html
+    - /en-us/docs.html
+    user_agent_patterns:
+    - Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names:
+    - Assembly
+    - ShellCmd
+    - PowerShell
+    - Upload
+    - Download
+    - ChangeDirectory
+    - ListDirectory
+    - ProcessList
+    confidence_weight: 0.5
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - anycpu
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - GruntHTTP
+    - GruntSMB
+    - CovenantURI
+    - CovenantCertHash
+    - GruntTasking
+    confidence_weight: 0.85
+  references:
+  - url: https://github.com/cobbr/Covenant
+    title: Covenant GitHub Repository
+  mitre_attack:
+  - T1059.001
+  - T1071.001
+  - T1573.001
+  - T1573.002
+  - T1055
+- family: DarkComet
+  aliases:
+  - DarkComet RAT
+  - Fynloski
+  - DarkKomet
+  description: Legacy RAT with GUI builder. Config stored in PE resource named 'DCDATA' (or numbered resource), RC4-encrypted
+    with a key derived from version string. Identified by '#KCMDDC' command prefix and distinctive string patterns.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: null
+    structure: pe_resource_rc4_version_keyed
+    structure_description: Config stored in PE resource named 'DCDATA' (or RT_RCDATA with numeric ID). RC4-encrypted with
+      key derived from version string (e.g., '#KCMDDC4#-890' for DarkComet v4.x). Decrypted config is newline-separated key=value
+      pairs.
+    location:
+      section: pe_resource
+      offset_range: null
+    parsed_fields:
+    - GENCODE (campaign/mutex)
+    - MUTEX
+    - SID (campaign ID)
+    - FWB (firewall bypass)
+    - NETDATA (C2 host:port)
+    - OFFLINEK (offline keylogger)
+    - MESSION
+    - FAKEMSG settings
+    - PERESSION (persistence)
+    - EDESSION
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 50
+    - 80
+    known_names:
+    - '#CYCMDDC'
+    - '#KCMDDC'
+    - '#CYCMDFM'
+    - '#KCMDFM'
+    - '#CYCMDAUD'
+    - '#KCMDAUD'
+    confidence_weight: 0.7
+  compilation:
+    compiler: delphi
+    linker: delphi
+    architectures:
+    - x86
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.4
+  constants:
+    command_prefix: '#KCMDDC'
+    resource_name: DCDATA
+    version_key_pattern: '#KCMDDC<version>#-<variant>'
+    confidence_weight: 0.9
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - '#KCMDDC'
+    - DCDATA
+    - DarkComet
+    - DarkCometRAT
+    - GENCODE
+    - NETDATA
+    confidence_weight: 0.9
+  references:
+  - url: https://www.trendmicro.com/vinfo/us/threat-encyclopedia/malware/darkcomet
+    title: 'Trend Micro: DarkComet Analysis'
+  - url: https://attack.mitre.org/software/S0334/
+    title: 'MITRE ATT&CK: DarkComet'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1125
+  - T1059.003
+  - T1547.001
+- family: DarkGate
+  aliases:
+  - DarkGate Loader
+  - DarkGate MaaS
+  description: Delphi-compiled loader/RAT sold as MaaS. Uses custom Base64 alphabet for config encoding. Often delivered via
+    AutoIt scripts (AU3!EA06 magic). Config contains C2 URLs, flags, and campaign settings.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: custom_base64
+    key_length: null
+    structure: custom_base64_config_block
+    structure_description: Config encoded with custom Base64 alphabet (non-standard character set). Decoded config contains
+      numbered key=value pairs. C2 URLs, port, and feature flags. AutoIt dropper variant has config in AU3 script body.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 URL(s)
+    - C2 port
+    - Campaign ID
+    - Anti-VM flag
+    - Persistence method
+    - Crypto-mining flag
+    - hVNC flag
+    - Keylogger flag
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 15
+    - 30
+    known_names:
+    - hVNC
+    - RDP
+    - keylog
+    - crypto_mine
+    - privilege_escalation
+    - file_steal
+    confidence_weight: 0.5
+  compilation:
+    compiler: delphi
+    linker: delphi
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: false
+    confidence_weight: 0.4
+  constants:
+    autoit_magic: AU3!EA06
+    confidence_weight: 0.85
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: darkgate_autoit_magic
+      hex: 41 55 33 21 45 41 30 36
+    string_patterns:
+    - AU3!EA06
+    - DarkGate
+    confidence_weight: 0.8
+  references:
+  - url: https://www.trellix.com/en-us/about/newsroom/stories/research/darkgate-loader-delivers-via-microsoft-teams.html
+    title: 'Trellix: DarkGate Loader Analysis'
+  - url: https://any.run/malware-trends/darkgate
+    title: 'ANY.RUN: DarkGate Malware Trends'
+  mitre_attack:
+  - T1059.010
+  - T1027
+  - T1547.001
+  - T1071.001
+  - T1055
+- family: DeimosC2
+  aliases:
+  - Deimos C2
+  - Deimos
+  description: Open-source Go-based C2 framework. Uses RSA/AES-256 hybrid encryption. Supports HTTP, HTTPS, TCP, DoH, and
+    QUIC transports. Go binary with embedded RSA public key and C2 configuration.
+  source_url: https://github.com/DeimosC2/DeimosC2
+  api_hash: null
+  config:
+    encryption: rsa_aes-256
+    key_length: 32
+    structure: go_embedded_config
+    structure_description: Config compiled into Go agent binary. Contains C2 URL, RSA public key for key exchange, and transport
+      settings. AES-256 session key negotiated via RSA during initial handshake.
+    location:
+      section: go_data
+      offset_range: null
+    parsed_fields:
+    - C2 URL
+    - RSA public key
+    - Transport protocol
+    - Sleep interval
+    - Jitter
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    - https
+    - tcp
+    - doh
+    - quic
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names:
+    - shell
+    - download
+    - upload
+    - fileBrowser
+    - pivot
+    confidence_weight: 0.4
+  compilation:
+    compiler: go
+    linker: null
+    architectures:
+    - x86
+    - x64
+    - arm
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.4
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - github.com/DeimosC2/DeimosC2
+    - DeimosC2
+    confidence_weight: 0.85
+  references:
+  - url: https://github.com/DeimosC2/DeimosC2
+    title: DeimosC2 GitHub Repository
+  mitre_attack:
+  - T1071.001
+  - T1573.001
+  - T1573.002
+  - T1572
+- family: Emotet
+  aliases:
+  - Geodo
+  - Heodo
+  - Mealybug
+  description: Modular banking trojan turned malware distribution platform. C2 list stored as XOR-encrypted (IP, port) pairs
+    in .data section. Uses ECDH key exchange, AES-encrypted protobuf C2 protocol, and Zlib-compressed payloads.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor
+    key_length: 4
+    structure: data_section_xor_ip_port_pairs
+    structure_description: 'C2 list encrypted with DWORD XOR key in .data section. After decryption, data is an array of structs:
+      IP address (4 bytes, big-endian) + port (2 bytes, big-endian). Modern Emotet (v5/epoch4+) uses protobuf-serialized messages
+      + AES-256-CBC encryption for C2 comms.'
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 IP addresses (array)
+    - C2 ports (array)
+    - Encryption keys (ECDH public)
+    - Bot ID generation parameters
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    eck1_magic: ECK1
+    ecs1_magic: ECS1
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: emotet_eck1_magic
+      hex: 45 43 4B 31
+    - name: emotet_ecs1_magic
+      hex: 45 43 53 31
+    string_patterns:
+    - ECK1
+    - ECS1
+    confidence_weight: 0.9
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa20-280a
+    title: 'CISA: Emotet Malware Advisory'
+  - url: https://www.trendmicro.com/vinfo/us/threat-encyclopedia/malware/emotet
+    title: 'Trend Micro: Emotet Threat Encyclopedia'
+  mitre_attack:
+  - T1059.005
+  - T1027
+  - T1071.001
+  - T1573.001
+  - T1547.001
+- family: Gh0st RAT
+  aliases:
+  - Gh0stRAT
+  - Ghost RAT
+  - Gh0st
+  description: Chinese-origin RAT with leaked source code, leading to many variants. Identified by 5-byte magic header ('Gh0st'
+    or variant) in network traffic, Zlib-compressed packets, and 13-byte packet header structure.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: plaintext
+    key_length: null
+    structure: embedded_strings
+    structure_description: C2 config typically stored as plaintext or lightly obfuscated strings in .data section. Contains
+      C2 IP/domain and port. Many variants modify the magic header but keep the protocol structure.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 host:port
+    - Service name
+    - Service display name
+    - Service description
+    - Connection password
+    confidence_weight: 0.6
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 50
+    - 80
+    known_names:
+    - CYCMD_CYCMDSESSION
+    - CYCMD_CYCLRSCREEN
+    - CYCMD_CYCFILEMANAGER
+    - CYCMD_CYCAUDIO
+    - CYCMD_CYCVIDEO
+    confidence_weight: 0.5
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    default_magic: Gh0st
+    magic_length: 5
+    packet_header_size: 13
+    compression: zlib
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: gh0st_magic
+      hex: 47 68 30 73 74
+    string_patterns:
+    - Gh0st
+    - Gh0st Update
+    confidence_weight: 0.9
+  references:
+  - url: https://attack.mitre.org/software/S0032/
+    title: 'MITRE ATT&CK: Gh0st RAT'
+  - url: https://www.trendmicro.com/vinfo/us/threat-encyclopedia/malware/gh0st
+    title: 'Trend Micro: Gh0st RAT'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1125
+  - T1059.003
+  - T1071.001
+- family: Havoc Demon
+  aliases:
+  - Havoc
+  - Havoc C2
+  - Demon Agent
+  description: Open-source C2 framework agent. Uses DJB2 hashing (seed 5381, toupper) for API resolution via PEB walking,
+    AES-256-CTR for C2 traffic encryption, and RC4 (SystemFunction032) for sleep obfuscation. Compiled with MinGW cross-compiler.
+  source_url: https://github.com/HavocFramework/Havoc
+  api_hash:
+    algorithm: djb2
+    seed: 5381
+    case_sensitive: false
+    formula: hash = ((hash << 5) + hash) + toupper(char)
+    known_hashes:
+      GetProcAddress: 3738157503
+      LoadLibraryW: 3070701553
+      VirtualAllocEx: 1467333972
+      VirtualProtect: 3898036237
+      GetModuleHandleA: 3641237976
+      LdrLoadDll: 2655349315
+      LdrGetProcedureAddress: 4243024822
+      NtAllocateVirtualMemory: 4152604908
+      NtProtectVirtualMemory: 1357457544
+      NtCreateThreadEx: 2937638832
+      NtClose: 1087825565
+      RtlAllocateHeap: 1005145178
+      RtlRandomEx: 2131895541
+      WinHttpOpen: 1631497445
+      WinHttpConnect: 2178992157
+      WinHttpSendRequest: 2000277734
+      AmsiScanBuffer: 3132346414
+      SystemFunction032: 3851192325
+    module_hashes:
+      kernel32.dll: 2916294128
+      ntdll.dll: 1894127443
+    confidence_weight: 0.95
+  config:
+    encryption: aes-256-ctr
+    key_length: 32
+    structure: embedded_aes_encrypted_blob
+    structure_description: Config is built by the teamserver Packager and AES-256-CTR encrypted before embedding in the agent
+      binary. The key and IV are generated per-build.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 listeners (host, port, URI array)
+    - User-Agent string
+    - HTTP headers
+    - Sleep interval
+    - Jitter percentage
+    - Injection SpawnTo x64/x86
+    - Kill date
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - http
+    - https
+    - smb
+    default_headers:
+    - 'X-Havoc: true'
+    - 'X-Havoc-Agent: Demon'
+    uri_patterns: []
+    user_agent_patterns:
+    - Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36
+    confidence_weight: 0.7
+  commands:
+    count_range:
+    - 20
+    - 30
+    known_names:
+    - CHECKIN
+    - COMMAND_NOJOB
+    - COMMAND_ASSEMBLY_INLINE_EXECUTE
+    - COMMAND_ASSEMBLY_LIST_VERSIONS
+    - COMMAND_PROC
+    - COMMAND_INJECT
+    - COMMAND_TRANSFER
+    - COMMAND_SOCKET
+    - COMMAND_KERBEROS
+    - COMMAND_TOKEN
+    - COMMAND_PIVOT
+    - COMMAND_JOB
+    - COMMAND_NET
+    confidence_weight: 0.5
+  compilation:
+    compiler: mingw
+    linker: gcc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    - service_exe
+    - shellcode
+    rich_header: false
+    confidence_weight: 0.3
+  constants:
+    packet_magic: 3735928559
+    demon_initialize_cmd: 99
+    max_request_length: 3145728
+    sleep_obf_ekko: 1
+    sleep_obf_zilean: 2
+    sleep_obf_foliage: 3
+    default_sleep: 2
+    default_jitter: 50
+    packet_header_size: 20
+    confidence_weight: 0.7
+  dll_loading:
+    technique: peb_walking_hash
+    loaded_dlls:
+    - winhttp.dll
+    - advapi32.dll
+    - ntdll.dll
+    api_count_estimates: {}
+    confidence_weight: 0.4
+  yara_indicators:
+    hex_patterns:
+    - name: havoc_packet_magic
+      hex: DE AD BE EF
+    string_patterns:
+    - X-Havoc
+    - X-Havoc-Agent
+    - X-IsHavocFramework
+    confidence_weight: 0.8
+  references:
+  - url: https://github.com/HavocFramework/Havoc
+    title: Havoc Framework GitHub Repository
+  - url: https://www.zscaler.com/blogs/security-research/havoc-across-cyberspace
+    title: 'Zscaler: Havoc Across the Cyberspace'
+  - url: https://havocframework.com/docs/profiles
+    title: 'Havoc Framework Documentation: Profiles'
+  mitre_attack:
+  - T1106
+  - T1055
+  - T1071.001
+  - T1573.001
+  - T1134
+  - T1620
+- family: IcedID
+  aliases:
+  - BokBot
+  - IcedID BokBot
+  description: Banking trojan and malware loader. Initial loader contacts hardcoded C2 to retrieve encrypted payload. Uses
+    RC4 encryption, steganographic config in PNG images, and mimics Google Analytics cookie format in C2 beaconing.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: null
+    structure: png_steganography_rc4
+    structure_description: Config hidden in PNG image using steganography. Encrypted payload appended after PNG EOF or embedded
+      in pixel data. RC4-encrypted. Initial loader config may be embedded directly in binary with C2 URL and campaign ID.
+    location:
+      section: embedded
+      offset_range: null
+    parsed_fields:
+    - C2 domains
+    - Campaign ID
+    - Bot ID generation algorithm
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - https
+    default_headers:
+    - 'Cookie: __gads=<campaign_id>; _gat=<bot_id>; _ga=<data>; _u=<data>; __io=<data>; _gid=<data>'
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.8
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - __gads=
+    - _gat=
+    - _ga=
+    - photo.png
+    - update.png
+    confidence_weight: 0.7
+  references:
+  - url: https://www.proofpoint.com/us/threat-insight/post/banking-trojan-icedid-targets-us-financial-institutions
+    title: 'Proofpoint: IcedID Banking Trojan'
+  - url: https://www.group-ib.com/blog/icedid/
+    title: 'Group-IB: IcedID Analysis'
+  mitre_attack:
+  - T1027
+  - T1071.001
+  - T1573.001
+  - T1055
+  - T1547.001
+- family: Lumma Stealer
+  aliases:
+  - LummaC2
+  - Lumma
+  - LummaC2 Stealer
+  description: C/C++ info-stealer sold as MaaS. Uses MurmurHash2 (seed 0x20) for string hashing and ChaCha20 for config encryption.
+    Steals browser data, crypto wallets, and credentials. Frequent updates with evolving obfuscation.
+  source_url: null
+  api_hash:
+    algorithm: murmurhash2
+    seed: 32
+    case_sensitive: false
+    formula: MurmurHash2 with seed 0x20 (32)
+    known_hashes: {}
+    module_hashes: {}
+    confidence_weight: 0.8
+  config:
+    encryption: chacha20
+    key_length: 32
+    structure: embedded_chacha20_config
+    structure_description: Config encrypted with ChaCha20. Key and nonce embedded in binary. Decrypted config contains C2
+      URLs, build ID, and feature flags. Some variants use XOR with multi-byte key for initial layer.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 URLs (multiple)
+    - Build ID
+    - Stealer targets (browsers, wallets, etc.)
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns:
+    - /api
+    - /c2conf
+    user_agent_patterns: []
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    murmurhash2_seed: 32
+    confidence_weight: 0.8
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - LummaC2
+    - Lumma
+    confidence_weight: 0.6
+  references:
+  - url: https://www.sekoia.io/en/blog/lummac2-malware-analysis/
+    title: 'Sekoia: LummaC2 Malware Analysis'
+  - url: https://any.run/malware-trends/lumma
+    title: 'ANY.RUN: Lumma Malware Trends'
+  mitre_attack:
+  - T1555
+  - T1539
+  - T1005
+  - T1041
+  - T1027
+- family: Merlin
+  aliases:
+  - Merlin C2
+  - Merlin Agent
+  description: Go-based C2 framework supporting HTTP/2, HTTP/3 (QUIC), and h2c transports. Uses JWE (PBES2_HS512_A256KW) for
+    message encryption and OPAQUE PAKE for authentication. Go binary with distinctive protocol negotiation.
+  source_url: https://github.com/Ne0nd0g/merlin
+  api_hash: null
+  config:
+    encryption: jwe_pbes2
+    key_length: null
+    structure: go_compiled_config
+    structure_description: Config compiled into Go agent binary. Contains C2 URL, PSK, protocol selection, padding size, sleep,
+      jitter, and kill date. Messages encrypted with JWE (JSON Web Encryption) using PBES2-HS512-A256KW key wrapping.
+    location:
+      section: go_data
+      offset_range: null
+    parsed_fields:
+    - URL (C2 address)
+    - PSK (pre-shared key)
+    - Protocol (h2, hq, http3)
+    - Sleep
+    - Jitter
+    - Padding
+    - KillDate
+    - MaxRetry
+    confidence_weight: 0.75
+  network:
+    protocols:
+    - http2
+    - http3
+    - h2c
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns:
+    - Go-http-client/2.0
+    confidence_weight: 0.6
+  commands:
+    count_range: null
+    known_names:
+    - cd
+    - download
+    - execute-assembly
+    - invoke-assembly
+    - ls
+    - pwd
+    - upload
+    - shell
+    - run
+    confidence_weight: 0.4
+  compilation:
+    compiler: go
+    linker: null
+    architectures:
+    - x86
+    - x64
+    - arm
+    - arm64
+    formats:
+    - exe
+    - dll
+    rich_header: false
+    confidence_weight: 0.4
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - github.com/Ne0nd0g/merlin
+    - OPAQUE
+    - PBES2-HS512-A256KW
+    confidence_weight: 0.9
+  references:
+  - url: https://github.com/Ne0nd0g/merlin
+    title: Merlin C2 GitHub Repository
+  - url: https://merlin-c2.readthedocs.io/en/latest/
+    title: Merlin C2 Documentation
+  mitre_attack:
+  - T1071.001
+  - T1573.001
+  - T1572
+  - T1027
+- family: Metasploit Meterpreter
+  aliases:
+  - Meterpreter
+  - MSF Payload
+  - Metasploit Stager
+  description: Metasploit Framework's advanced payload. Uses ROR13 API hashing in stagers (identical algorithm to Cobalt Strike).
+    Differentiated by URI checksum algorithm (checksum8 values), TLV command protocol, and AES-256 transport encryption.
+  source_url: https://github.com/rapid7/metasploit-framework
+  api_hash:
+    algorithm: ror13
+    seed: 0
+    case_sensitive: false
+    formula: hash = ror13(hash) + char; DLL hash (uppercase Unicode) + API hash (ASCII)
+    known_hashes:
+      LoadLibraryA: 119961420
+      CreateThread: 369977400
+      GetTempPathA: 502446202
+      VirtualAlloc: 3847464024
+      VirtualFree: 806301451
+      VirtualProtect: 2034681371
+      ExitProcess: 1453503984
+      GetProcAddress: 2081291434
+      InternetOpenA: 2809747002
+      InternetConnectA: 3332344151
+      HttpOpenRequestA: 992892395
+      HttpSendRequestA: 2065172013
+      InternetReadFile: 3800667666
+      WSAStartup: 7045161
+      WSASocketA: 3772714986
+      connect: 1635034521
+      recv: 1606998274
+      closesocket: 1632464501
+      ExitThread: 170532320
+      WaitForSingleObject: 1612547848
+      RtlExitUserThread: 795499265
+    module_hashes:
+      kernel32.dll: 2460948186
+      ws2_32.dll: 7045161
+      wininet.dll: 91546919
+    confidence_weight: 0.9
+  config:
+    encryption: aes-256-cbc
+    key_length: 32
+    structure: tlv_packet_protocol
+    structure_description: 'Stager config embedded in shellcode: C2 host/port hardcoded in stager. Once meterpreter loads,
+      it uses TLV (type-length-value) packet protocol. Transport encryption is AES-256-CBC with key exchanged during session
+      setup. URI checksum8 algorithm: sum of ASCII bytes mod 256 = 92 (x86) or 93 (x64).'
+    location:
+      section: shellcode
+      offset_range: null
+    parsed_fields:
+    - LHOST (C2 address)
+    - LPORT (C2 port)
+    - TransportURI
+    - SessionExpirationTimeout
+    - SessionCommunicationTimeout
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - tcp
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns:
+    - Mozilla/4.0 (compatible; MSIE 6.0; Windows NT 5.1)
+    confidence_weight: 0.4
+  commands:
+    count_range: null
+    known_names:
+    - stdapi_sys_config_getuid
+    - stdapi_fs_ls
+    - stdapi_sys_process_execute
+    - core_channel_open
+    - core_loadlib
+    confidence_weight: 0.5
+  compilation:
+    compiler: various
+    linker: null
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    - shellcode
+    - elf
+    - macho
+    rich_header: false
+    confidence_weight: 0.1
+  constants:
+    stager_checksum8_x86: 92
+    stager_checksum8_x64: 93
+    tlv_type_result: 262144
+    confidence_weight: 0.85
+  dll_loading:
+    technique: reflective_dll_injection
+    loaded_dlls:
+    - metsrv.dll
+    api_count_estimates: {}
+    confidence_weight: 0.5
+  yara_indicators:
+    hex_patterns:
+    - name: msf_shellcode_hash_block
+      hex: FC E8 82 00 00 00
+    - name: msf_reverse_tcp_stub
+      hex: 6A 00 53 56 68 ?? ?? ?? ?? 68
+    string_patterns:
+    - metsrv.dll
+    - ReflectiveLoader
+    - stdapi_
+    - core_channel_
+    confidence_weight: 0.85
+  references:
+  - url: https://github.com/rapid7/metasploit-framework
+    title: Metasploit Framework GitHub Repository
+  - url: https://docs.metasploit.com/docs/using-metasploit/intermediate/how-payloads-work.html
+    title: 'Metasploit: How Payloads Work'
+  mitre_attack:
+  - T1059.003
+  - T1055
+  - T1071.001
+  - T1573.001
+  - T1620
+- family: Mythic Apollo
+  aliases:
+  - Apollo Agent
+  - Mythic C2 Apollo
+  description: .NET agent for the Mythic C2 framework. Uses AES-256 PSK for initial comms and RSA-4096 EKE (Encrypted Key
+    Exchange) for session key negotiation. JSON-based message format with UUID-based tasking.
+  source_url: https://github.com/MythicAgents/Apollo
+  api_hash: null
+  config:
+    encryption: aes-256
+    key_length: 32
+    structure: dotnet_embedded_json_config
+    structure_description: Config embedded in .NET binary as JSON or compiled constants. Contains callback host, callback
+      port, PSK (pre-shared key) for AES-256 initial encryption, and sleep/jitter parameters. RSA-4096 EKE used for session
+      key establishment after initial checkin.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - callback_host (C2 URL)
+    - callback_port
+    - PSK (AES-256 pre-shared key)
+    - sleep_interval
+    - jitter
+    - kill_date
+    - encrypted_exchange_check
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 30
+    - 50
+    known_names:
+    - shell
+    - upload
+    - download
+    - execute_assembly
+    - inject
+    - screenshot
+    - keylog
+    - ls
+    - cd
+    - pwd
+    - cat
+    - jobs
+    - jobkill
+    - net_localgroup_members
+    confidence_weight: 0.5
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - x64
+    - anycpu
+    formats:
+    - exe
+    - dll
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - Apollo
+    - MythicAgent
+    - callback_host
+    - encrypted_exchange_check
+    confidence_weight: 0.7
+  references:
+  - url: https://github.com/MythicAgents/Apollo
+    title: Mythic Apollo Agent GitHub Repository
+  - url: https://docs.mythic-c2.net/
+    title: Mythic C2 Documentation
+  mitre_attack:
+  - T1059.003
+  - T1055
+  - T1071.001
+  - T1573.001
+  - T1106
+- family: NanoCore
+  aliases:
+  - NanoCore RAT
+  - Nancrat
+  description: .NET RAT with plugin architecture. Config encrypted with DES-CBC, key derived from a GUID string via PBKDF2.
+    Supports plugin-based extensibility with modules for keylogging, surveillance, and credential theft.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: des-cbc
+    key_length: 8
+    structure: dotnet_resource_des_pbkdf2
+    structure_description: Config stored as .NET embedded resource, encrypted with DES-CBC. Key derived from a GUID string
+      using PBKDF2 (Rfc2898DeriveBytes). Decrypted config contains C2 hosts, port, connection settings, and plugin configuration.
+    location:
+      section: dotnet_resource
+      offset_range: null
+    parsed_fields:
+    - PrimaryConnectionHost (C2 address)
+    - ConnectionPort
+    - BackupConnectionHost
+    - Mutex
+    - Version
+    - BuildDate
+    - GroupName
+    - UseCustomDNS
+    - PrimaryDNSServer
+    - DefaultGroup
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names:
+    - SurveillancePlugin
+    - SecurityPlugin
+    - NetworkPlugin
+    - ToolsPlugin
+    - FileBrowserPlugin
+    confidence_weight: 0.5
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - anycpu
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - NanoCore
+    - NanoCoreBase
+    - SurveillancePlugin
+    - NanoCore.ClientPlugin
+    - PrimaryConnectionHost
+    confidence_weight: 0.85
+  references:
+  - url: https://www.fortiguard.com/encyclopedia/virus/nanocore-rat
+    title: 'FortiGuard: NanoCore RAT Analysis'
+  - url: https://unit42.paloaltonetworks.com/unit42-compromised-wordpress-sites-used-to-spread-nanocore-rat/
+    title: 'Unit42: NanoCore RAT Distribution'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1547.001
+  - T1573.001
+  - T1027
+- family: Nighthawk
+  aliases:
+  - Nighthawk C2
+  - MDSec Nighthawk
+  description: Commercial C2 implant by MDSec. Identified by custom PE sections (.profile, .detourc, .detourd) and YARA-verified
+    hex patterns. Uses advanced evasion techniques including syscall proxying.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: custom
+    key_length: null
+    structure: pe_custom_sections
+    structure_description: 'Config stored in custom PE sections: .profile contains the C2 profile configuration, .detourc/.detourd
+      contain hook and detour data. Encryption scheme is proprietary.'
+    location:
+      section: .profile
+      offset_range: null
+    parsed_fields:
+    - C2 servers
+    - Transport config
+    - Sleep/jitter settings
+    - Evasion config
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x64
+    formats:
+    - dll
+    - shellcode
+    rich_header: true
+    confidence_weight: 0.3
+  constants: null
+  dll_loading:
+    technique: syscall_proxying
+    loaded_dlls:
+    - ntdll.dll
+    api_count_estimates: {}
+    confidence_weight: 0.5
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - .profile
+    - .detourc
+    - .detourd
+    confidence_weight: 0.85
+  references:
+  - url: https://www.proofpoint.com/us/blog/threat-insight/nighthawk-and-coming-pentest-tool-likely-gain-threat-actor-notice
+    title: 'Proofpoint: Nighthawk C2 Analysis'
+  mitre_attack:
+  - T1055
+  - T1071.001
+  - T1573.001
+  - T1106
+- family: NjRAT
+  aliases:
+  - njRAT
+  - Bladabindi
+  - njW0rm
+  description: .NET RAT widely used since 2013. Config stored as plaintext or lightly obfuscated static fields. Uses a distinctive
+    pipe separator '|'|'|' in C2 communications. Supports keylogging, webcam, file management, remote shell.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: plaintext
+    key_length: null
+    structure: dotnet_static_fields_plaintext
+    structure_description: Config stored as plaintext static string fields in the main class. Fields include C2 host, port,
+      victim name, directory, registry key, mutex, and version. Some variants use Base64 encoding.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - Host (C2 address)
+    - Port
+    - Victim name/identifier
+    - Install directory
+    - Registry key name
+    - Mutex
+    - Version
+    - Install filename
+    - Spread to USB (bool)
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 15
+    - 25
+    known_names:
+    - kl
+    - proc
+    - rss
+    - CAP
+    - un
+    - up
+    - RG
+    - inf
+    - sc
+    - ret
+    - CAM
+    confidence_weight: 0.6
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - anycpu
+    - x86
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants:
+    field_separator: '|''|''|'
+    confidence_weight: 0.9
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: njrat_separator
+      hex: 7C 27 7C 27 7C
+    string_patterns:
+    - '|''|''|'
+    - njRAT
+    - njq8
+    - netsh firewall add allowedprogram
+    confidence_weight: 0.9
+  references:
+  - url: https://www.trendmicro.com/en_us/research/17/d/njrat-malware-analysis.html
+    title: 'Trend Micro: njRAT Malware Analysis'
+  - url: https://any.run/malware-trends/njrat
+    title: 'ANY.RUN: njRAT Malware Trends'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1547.001
+  - T1059.003
+  - T1091
+- family: PikaBot
+  aliases:
+  - PikaBot Loader
+  description: 'Modular loader with anti-analysis capabilities. Uses dual-layer encryption: RC4 for outer layer, AES-CBC for
+    inner config data. Heavy anti-debugging and anti-VM checks. Multi-component: loader + core module.'
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4_aes-cbc
+    key_length: null
+    structure: dual_layer_rc4_aes
+    structure_description: 'Config encrypted with dual layers: RC4 outer encryption, then AES-CBC for inner config data. Config
+      contains C2 URLs, campaign ID, and anti-analysis settings. Stored in .data or .rdata section.'
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 URLs (multiple)
+    - Campaign ID
+    - Bot version
+    - Anti-analysis flags
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 5
+    - 15
+    known_names:
+    - cmd_exec
+    - inject
+    - download_exec
+    - self_destroy
+    confidence_weight: 0.4
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - PikaBot
+    confidence_weight: 0.6
+  references:
+  - url: https://www.zscaler.com/blogs/security-research/pikabot-malware-analysis
+    title: 'Zscaler: PikaBot Malware Analysis'
+  - url: https://any.run/malware-trends/pikabot
+    title: 'ANY.RUN: PikaBot Malware Trends'
+  mitre_attack:
+  - T1055
+  - T1027
+  - T1071.001
+  - T1547.001
+- family: PlugX
+  aliases:
+  - PlugX RAT
+  - ShadowPad
+  - THOR
+  - Korplug
+  - DestroyRAT
+  description: Modular RAT associated with Chinese APT groups. Config encrypted with XOR+RC4+LZNT1 compression. Identified
+    by 'PLUG' magic (0x504C5547) in decrypted config header. ShadowPad is a related/successor platform.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: xor_rc4_lznt1
+    key_length: null
+    structure: multi_layer_xor_rc4_lznt1
+    structure_description: 'Config encrypted with multi-layer scheme: XOR → RC4 → LZNT1 decompression. Decrypted config starts
+      with PLUG magic (0x504C5547). Contains structured fields for C2 servers, protocols, install path, and campaign ID. Config
+      typically located in .data section or as a separate file loaded via DLL side-loading.'
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 servers (up to 4)
+    - C2 ports
+    - Protocol (HTTP/TCP/UDP/ICMP/DNS)
+    - Campaign ID
+    - Mutex
+    - Install directory
+    - Service name
+    - DLL side-load target
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - http
+    - tcp
+    - udp
+    - icmp
+    - dns
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns:
+    - Mozilla/4.0 (compatible; MSIE 6.0;
+    confidence_weight: 0.4
+  commands:
+    count_range:
+    - 30
+    - 50
+    known_names:
+    - Disk
+    - Screen
+    - Process
+    - Service
+    - Shell
+    - Telnet
+    - Portmap
+    - SQL
+    - Keylog
+    - Nethood
+    - Option
+    confidence_weight: 0.5
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    plug_magic: PLUG
+    plug_magic_hex: 504C5547
+    confidence_weight: 0.95
+  dll_loading:
+    technique: dll_side_loading
+    loaded_dlls: []
+    api_count_estimates: {}
+    confidence_weight: 0.6
+  yara_indicators:
+    hex_patterns:
+    - name: plugx_magic
+      hex: 50 4C 55 47
+    string_patterns:
+    - PLUG
+    - boot.ldr
+    - RWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
+    confidence_weight: 0.85
+  references:
+  - url: https://attack.mitre.org/software/S0013/
+    title: 'MITRE ATT&CK: PlugX'
+  - url: https://www.sophos.com/en-us/medialibrary/pdfs/technical-papers/plugx-payload-extraction.pdf
+    title: 'Sophos: PlugX Payload Extraction'
+  mitre_attack:
+  - T1574.002
+  - T1055
+  - T1071.001
+  - T1027
+  - T1059.003
+- family: Poison Ivy
+  aliases:
+  - PoisonIvy
+  - PIVY
+  - Darkmoon
+  description: Legacy RAT widely used by APT groups. Uses Camellia-256-ECB encryption with password-derived key. Default password
+    is 'admin', default port 3460. Config and C2 comms use the same Camellia cipher.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: camellia-256-ecb
+    key_length: 32
+    structure: pe_embedded_camellia
+    structure_description: 'Config encrypted with Camellia-256-ECB. Key derived from password string (default: ''admin'')
+      padded/hashed to 32 bytes. Config is a fixed-size struct containing C2 host, port, password, ID, group, and mutex.'
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 host:port
+    - 'Password (default: admin)'
+    - Active setup key/ID
+    - Group name
+    - Mutex
+    - Campaign identifier
+    confidence_weight: 0.85
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    default_password: admin
+    default_port: 3460
+    confidence_weight: 0.8
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - PIVY
+    - Poison Ivy
+    - admin
+    confidence_weight: 0.6
+  references:
+  - url: https://attack.mitre.org/software/S0012/
+    title: 'MITRE ATT&CK: Poison Ivy'
+  - url: https://www.fireeye.com/blog/threat-research/2014/01/pivy-assessing-damage-and-extracting-intel.html
+    title: 'FireEye: PIVY - Assessing Damage and Extracting Intel'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1059.003
+  - T1573.001
+  - T1055
+- family: PoshC2
+  aliases:
+  - PoshC2 Implant
+  - PoshC2 Dropper
+  description: Open-source C2 framework with PowerShell and C# implants. Uses AES-256 encryption for C2 communications. Identified
+    by specific PowerShell patterns, hardcoded key material, and YARA-verified indicators.
+  source_url: https://github.com/nettitude/PoshC2
+  api_hash: null
+  config:
+    encryption: aes-256
+    key_length: 32
+    structure: powershell_or_dotnet_embedded
+    structure_description: Config embedded in PowerShell script or .NET dropper. Contains C2 URLs, AES key, kill date, sleep,
+      jitter, and user agent. PowerShell variant has config as variable assignments; C# variant has compiled constants.
+    location:
+      section: script_or_dotnet
+      offset_range: null
+    parsed_fields:
+    - C2 URLs (comma-separated)
+    - AES key (Base64)
+    - Kill date
+    - Sleep interval
+    - Jitter
+    - User-Agent
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names:
+    - loadmodule
+    - get-screenshotmulti
+    - inject-shellcode
+    - get-keystrokes
+    - sharphound
+    - safetydump
+    confidence_weight: 0.5
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - anycpu
+    formats:
+    - exe
+    - ps1
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - PoshC2
+    - $key=
+    - Get-Webclient
+    - Beacon
+    - cookie_name
+    confidence_weight: 0.8
+  references:
+  - url: https://github.com/nettitude/PoshC2
+    title: PoshC2 GitHub Repository
+  - url: https://poshc2.readthedocs.io/en/latest/
+    title: PoshC2 Documentation
+  mitre_attack:
+  - T1059.001
+  - T1059.003
+  - T1071.001
+  - T1573.001
+  - T1055
+- family: QakBot
+  aliases:
+  - Qbot
+  - QuakBot
+  - Pinkslipbot
+  description: Banking trojan and malware loader active since 2008. Config stored in PE resources (IDs 3/311 or 118/524),
+    RC4-encrypted with SHA1/SHA256-derived keys. Campaign IDs (bb, obama, azd) track distribution campaigns.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: null
+    structure: pe_resource_rc4_sha_key
+    structure_description: 'Config stored in PE resources with specific IDs: resource ''3''/''311'' or ''118''/''524''. RC4-encrypted
+      with key derived from SHA1 or SHA256 hash of hardcoded strings. Resource ''3''/''118'' contains C2 config, resource
+      ''311''/''524'' contains the campaign ID and timestamp.'
+    location:
+      section: pe_resource
+      offset_range: null
+    parsed_fields:
+    - C2 IP:port pairs (up to 150)
+    - Campaign ID (bb, obama, azd, etc.)
+    - Bot ID generation parameters
+    - Timestamp/version
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 15
+    - 25
+    known_names:
+    - stager
+    - update
+    - config
+    - system_info
+    - exec
+    confidence_weight: 0.4
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    resource_ids_v1:
+    - '3'
+    - '311'
+    resource_ids_v2:
+    - '118'
+    - '524'
+    known_campaign_ids:
+    - bb
+    - obama
+    - azd
+    - aa
+    - tok
+    confidence_weight: 0.9
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - qbot
+    - stager_1
+    confidence_weight: 0.6
+  references:
+  - url: https://www.cisa.gov/news-events/cybersecurity-advisories/aa23-095a
+    title: 'CISA: QakBot Malware Advisory'
+  - url: https://www.elastic.co/security-labs/qbot-malware-analysis
+    title: 'Elastic: QakBot Malware Analysis'
+  mitre_attack:
+  - T1055
+  - T1027
+  - T1071.001
+  - T1547.001
+  - T1059.003
+- family: Quasar RAT
+  aliases:
+  - QuasarRAT
+  - xRAT
+  - Quasar
+  description: Open-source .NET RAT. Similar architecture to AsyncRAT — Settings class with AES-encrypted fields and PBKDF2
+    key derivation. Supports remote desktop, keylogging, file management, reverse proxy, and registry editor.
+  source_url: https://github.com/quasar/Quasar
+  api_hash: null
+  config:
+    encryption: aes-256-cbc
+    key_length: 32
+    structure: dotnet_settings_class_pbkdf2
+    structure_description: 'Settings class with static fields encrypted using AES-256-CBC. Key derived from hardcoded password
+      via PBKDF2. Fields: VERSION, HOSTS, RECONNECTDELAY, DIRECTORY, SUBDIRECTORY, INSTALLNAME, MUTEX, STARTUPKEY, TAG, LOGDIRECTORYNAME,
+      SERVERSIGNATURE, SERVERCERTIFICATESTR.'
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - HOSTS (C2 addresses:port)
+    - VERSION
+    - RECONNECTDELAY
+    - DIRECTORY
+    - SUBDIRECTORY
+    - INSTALLNAME
+    - MUTEX
+    - STARTUPKEY
+    - TAG (campaign tag)
+    - LOGDIRECTORYNAME
+    - SERVERSIGNATURE
+    - SERVERCERTIFICATESTR
+    confidence_weight: 0.9
+  network:
+    protocols:
+    - tcp
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 20
+    - 40
+    known_names:
+    - DoShellExecute
+    - DoDownloadAndExecute
+    - DoUploadAndExecute
+    - GetDesktop
+    - DoKeyloggerStart
+    - GetPasswords
+    - GetProcesses
+    - DoVisitWebsite
+    - DoClientUpdate
+    - DoClientUninstall
+    confidence_weight: 0.6
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - anycpu
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - Quasar.Client
+    - Quasar.Common
+    - RECONNECTDELAY
+    - SERVERSIGNATURE
+    - DoShellExecute
+    - GetDesktop
+    confidence_weight: 0.85
+  references:
+  - url: https://github.com/quasar/Quasar
+    title: Quasar RAT GitHub Repository
+  - url: https://www.volexity.com/blog/2022/06/15/driftingcloud-zero-day-sophos-firewall-exploitation-and-an-insidious-breach/
+    title: 'Volexity: QuasarRAT in APT Campaign'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1547.001
+  - T1021.001
+  - T1055
+- family: Raccoon v2
+  aliases:
+  - Raccoon Stealer v2
+  - RecordBreaker
+  - Raccoon2
+  description: C/C++ info-stealer (v2 rewrite of original Raccoon). Uses RC4+Base64 for config/comms encryption. Identified
+    by 'Record' User-Agent and specific mutex value. Steals browser data, wallets, and application credentials.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4_base64
+    key_length: null
+    structure: embedded_rc4_base64
+    structure_description: Config embedded in binary, encrypted with RC4 and Base64-encoded. Contains C2 URLs and RC4 key
+      for C2 communications. C2 responses are also RC4+Base64 encoded.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 URLs
+    - RC4 key for comms
+    - Bot ID
+    - Config ID
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - http
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns:
+    - Record
+    confidence_weight: 0.8
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    mutex: '8724643052'
+    user_agent: Record
+    confidence_weight: 0.9
+  dll_loading:
+    technique: runtime_dll_download
+    loaded_dlls:
+    - nss3.dll
+    - sqlite3.dll
+    api_count_estimates: {}
+    confidence_weight: 0.6
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - '8724643052'
+    - Record
+    confidence_weight: 0.8
+  references:
+  - url: https://www.sekoia.io/en/blog/raccoon-stealer-v2-analysis/
+    title: 'Sekoia: Raccoon Stealer v2 Analysis'
+  - url: https://any.run/malware-trends/raccoon
+    title: 'ANY.RUN: Raccoon Malware Trends'
+  mitre_attack:
+  - T1555
+  - T1539
+  - T1005
+  - T1041
+  - T1027
+- family: RedLine Stealer
+  aliases:
+  - RedLine
+  - RedLineStealer
+  description: .NET info-stealer sold as MaaS. Config contains C2 IP:port and BuildID. Uses Base64+XOR encoding for config
+    strings. Communicates via .NET Remoting (net.tcp:// WCF protocol) with SOAP-serialized messages.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: base64_xor
+    key_length: null
+    structure: dotnet_fields_base64_xor
+    structure_description: Config stored as static fields in .NET class. Values are Base64-encoded strings, optionally XOR-encrypted.
+      Contains C2 IP:port and BuildID. Some variants store config as embedded .NET resources.
+    location:
+      section: dotnet_class
+      offset_range: null
+    parsed_fields:
+    - C2 IP:port (net.tcp:// URL)
+    - BuildID
+    - GrabBrowsers (bool)
+    - GrabFTP (bool)
+    - GrabWallets (bool)
+    - GrabSteam (bool)
+    - GrabTelegram (bool)
+    - GrabVPN (bool)
+    confidence_weight: 0.8
+  network:
+    protocols:
+    - net.tcp
+    - http
+    default_headers: []
+    uri_patterns:
+    - net.tcp://
+    user_agent_patterns: []
+    confidence_weight: 0.7
+  commands:
+    count_range: null
+    known_names:
+    - ScanningArgs
+    - CommandLineUpdate
+    - DownloadAndEx
+    - OpenUpdate
+    confidence_weight: 0.5
+  compilation:
+    compiler: dotnet
+    linker: null
+    architectures:
+    - anycpu
+    - x86
+    formats:
+    - exe
+    rich_header: false
+    confidence_weight: 0.3
+  constants: null
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - net.tcp://
+    - ScanningArgs
+    - GrabBrowsers
+    - GrabFTP
+    - GrabWallets
+    - BuildID
+    confidence_weight: 0.75
+  references:
+  - url: https://www.trendmicro.com/vinfo/us/security/news/cybercrime-and-digital-threats/redline-stealer-a-new-info-stealer
+    title: 'Trend Micro: RedLine Stealer Analysis'
+  - url: https://any.run/malware-trends/redline
+    title: 'ANY.RUN: RedLine Malware Trends'
+  mitre_attack:
+  - T1555
+  - T1539
+  - T1528
+  - T1005
+  - T1041
+- family: Remcos
+  aliases:
+  - Remcos RAT
+  - RemcosRAT
+  description: Commercial RAT (marketed as 'Remote Control & Surveillance'). Config stored as RC4-encrypted blob in PE resource
+    named 'SETTINGS' (or 'RCData'). Key is first N bytes of the resource. Fields separated by 0x7C1F1E1E7C delimiter.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4
+    key_length: null
+    structure: pe_resource_rc4_delimited
+    structure_description: Config stored in PE resource (RT_RCDATA) named 'SETTINGS'. First N bytes (typically 1-16, version-dependent)
+      are the RC4 key. Remaining bytes are RC4-encrypted config. Decrypted config uses 0x7C1F1E1E7C (|\x1f\x1e\x1e|) as field
+      separator. Null bytes separate sub-fields.
+    location:
+      section: pe_resource
+      offset_range: null
+    parsed_fields:
+    - C2 host:port (multiple supported)
+    - Password
+    - Mutex
+    - Install path
+    - Keylog settings
+    - Screenshot settings
+    - Audio recording settings
+    - Assigned name/campaign ID
+    - Install flag
+    confidence_weight: 0.95
+  network:
+    protocols:
+    - tcp
+    - tls
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range:
+    - 40
+    - 60
+    known_names:
+    - keylog_online
+    - keylog_offline
+    - screenrec
+    - audio
+    - webcam
+    - filemgr
+    - procmgr
+    - regedit
+    - clipper
+    - socks5
+    confidence_weight: 0.5
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    - dll
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    config_separator_hex: 7C1F1E1E7C
+    confidence_weight: 0.95
+  dll_loading: null
+  yara_indicators:
+    hex_patterns:
+    - name: remcos_field_separator
+      hex: 7C 1F 1E 1E 7C
+    string_patterns:
+    - Remcos
+    - remcos.exe
+    - Breaking-Security.Net
+    - SETTINGS
+    confidence_weight: 0.9
+  references:
+  - url: https://www.fortinet.com/blog/threat-research/latest-remcos-rat-phishing
+    title: 'Fortinet: Remcos RAT Analysis'
+  - url: https://any.run/malware-trends/remcos
+    title: 'ANY.RUN: Remcos Malware Trends'
+  mitre_attack:
+  - T1056.001
+  - T1113
+  - T1125
+  - T1547.001
+  - T1573.001
+- family: Sliver
+  aliases:
+  - Sliver C2
+  - Sliver Implant
+  - BishopFox Sliver
+  description: Open-source Go-based C2 framework by BishopFox. Supports mTLS, WireGuard, HTTP/S, and DNS transports. Implants
+    are compiled Go binaries with embedded protobuf-serialized configs. No hash-based API resolution.
+  source_url: https://github.com/BishopFox/sliver
+  api_hash: null
+  config:
+    encryption: age_encryption
+    key_length: null
+    structure: protobuf_serialized
+    structure_description: Implant config is protobuf-serialized and encrypted with age (X25519-based) before embedding. Contains
+      C2 endpoints, transport settings, and implant metadata.
+    location:
+      section: go_data
+      offset_range: null
+    parsed_fields:
+    - C2 endpoints (server, lport)
+    - Transport protocol (mtls, wg, http, dns)
+    - Implant name
+    - Reconnect interval
+    - Max connection errors
+    - Poll timeout
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - mtls
+    - wireguard
+    - http
+    - https
+    - dns
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns:
+    - Go-http-client
+    confidence_weight: 0.5
+  commands:
+    count_range: null
+    known_names:
+    - RevToSelfReq
+    - ScreenshotReq
+    - IfconfigReq
+    - SideloadReq
+    - InvokeMigrateReq
+    - KillSessionReq
+    - ImpersonateReq
+    - NamedPipesReq
+    confidence_weight: 0.6
+  compilation:
+    compiler: go
+    linker: null
+    architectures:
+    - x86
+    - x64
+    - arm
+    - arm64
+    formats:
+    - exe
+    - dll
+    - shellcode
+    rich_header: false
+    confidence_weight: 0.4
+  constants:
+    default_mtls_port: 8888
+    default_wg_port: 51820
+    confidence_weight: 0.3
+  dll_loading: null
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - RevToSelfReq
+    - ScreenshotReq
+    - IfconfigReq
+    - SideloadReq
+    - InvokeMigrateReq
+    - msgpack:"job_id"
+    - github.com/bishopfox/sliver
+    confidence_weight: 0.95
+  references:
+  - url: https://github.com/BishopFox/sliver
+    title: Sliver GitHub Repository
+  - url: https://www.ncsc.gov.uk/files/Advisory%20Further%20TTPs%20associated%20with%20SVR%20cyber%20actors.pdf
+    title: 'NCSC UK: Further TTPs associated with SVR cyber actors'
+  - url: https://www.cybereason.com/blog/sliver-c2-leveraged-by-many-threat-actors
+    title: 'Cybereason: Sliver C2 Leveraged by Many Threat Actors'
+  mitre_attack:
+  - T1071.001
+  - T1071.004
+  - T1573.002
+  - T1572
+  - T1027
+- family: StealC
+  aliases:
+  - StealC Stealer
+  description: C/C++ info-stealer based on Vidar/Raccoon codebases. Uses RC4+Base64 encoding for C2 communications. Anti-sandbox
+    checks look for 'HAL9TH' computer name and 'JohnDoe' username. Steals browser data and wallets.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: rc4_base64
+    key_length: null
+    structure: c2_delivered_config_rc4
+    structure_description: Initial C2 URL embedded in binary (plaintext or RC4+Base64). Full config received from C2 as RC4+Base64
+      response. Contains steal targets, DLL dependencies to download, and feature flags.
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - C2 URL
+    - RC4 key
+    - Steal targets (from C2 response)
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants:
+    anti_sandbox_computer: HAL9TH
+    anti_sandbox_user: JohnDoe
+    confidence_weight: 0.9
+  dll_loading:
+    technique: runtime_dll_download
+    loaded_dlls:
+    - freebl3.dll
+    - mozglue.dll
+    - nss3.dll
+    - softokn3.dll
+    - sqlite3.dll
+    api_count_estimates: {}
+    confidence_weight: 0.7
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - HAL9TH
+    - JohnDoe
+    - freebl3.dll
+    - nss3.dll
+    confidence_weight: 0.85
+  references:
+  - url: https://blog.sekoia.io/stealc-a-copycat-of-vidar-and-raccoon-infostealers-gaining-in-popularity-part-1/
+    title: 'Sekoia: StealC Analysis'
+  - url: https://any.run/malware-trends/stealc
+    title: 'ANY.RUN: StealC Malware Trends'
+  mitre_attack:
+  - T1555
+  - T1539
+  - T1005
+  - T1041
+  - T1497.001
+- family: Vidar
+  aliases:
+  - Vidar Stealer
+  description: C++ info-stealer, fork of Arkei. Uses dead-drop resolvers (social media profiles) for C2 URL retrieval. Downloads
+    DLL dependencies at runtime. Config received from C2 as plaintext after initial beacon.
+  source_url: null
+  api_hash: null
+  config:
+    encryption: plaintext
+    key_length: null
+    structure: c2_delivered_config
+    structure_description: 'Initial C2 URL embedded as plaintext or lightly obfuscated string. Uses dead-drop resolvers: C2
+      URL stored in social media profiles (Steam, Telegram, Mastodon). Full config received from C2 server as plaintext response
+      containing steal targets and settings.'
+    location:
+      section: .data
+      offset_range: null
+    parsed_fields:
+    - Dead-drop URLs (social media profiles)
+    - C2 domain (from dead-drop)
+    - Profile ID
+    - Steal targets (from C2 response)
+    confidence_weight: 0.7
+  network:
+    protocols:
+    - http
+    - https
+    default_headers: []
+    uri_patterns: []
+    user_agent_patterns: []
+    confidence_weight: 0.3
+  commands:
+    count_range: null
+    known_names: []
+    confidence_weight: 0.1
+  compilation:
+    compiler: msvc
+    linker: msvc
+    architectures:
+    - x86
+    - x64
+    formats:
+    - exe
+    rich_header: true
+    confidence_weight: 0.2
+  constants: null
+  dll_loading:
+    technique: runtime_dll_download
+    loaded_dlls:
+    - freebl3.dll
+    - mozglue.dll
+    - nss3.dll
+    - softokn3.dll
+    - vcruntime140.dll
+    - msvcp140.dll
+    api_count_estimates: {}
+    confidence_weight: 0.85
+  yara_indicators:
+    hex_patterns: []
+    string_patterns:
+    - freebl3.dll
+    - mozglue.dll
+    - nss3.dll
+    - softokn3.dll
+    - steamcommunity.com/profiles/
+    confidence_weight: 0.8
+  references:
+  - url: https://www.team-cymru.com/post/vidar-stealer-analysis
+    title: 'Team Cymru: Vidar Stealer Analysis'
+  - url: https://any.run/malware-trends/vidar
+    title: 'ANY.RUN: Vidar Malware Trends'
+  mitre_attack:
+  - T1555
+  - T1539
+  - T1102
+  - T1041
+  - T1005
