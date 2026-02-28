@@ -3,7 +3,7 @@ name: pemcp-learn
 description: >
   Interactive reverse engineering tutor using PeMCP. Teaches binary analysis
   concepts from beginner to expert, adapting to the learner's level. Guides
-  users through hands-on analysis or structured lessons using PeMCP's 171
+  users through hands-on analysis or structured lessons using PeMCP's 175
   tools as the teaching platform.
   Triggers on: teach, learn, tutorial, lesson, explain, guide, how does,
   what is, reverse engineering tutorial, RE tutorial, binary analysis tutorial,
@@ -385,7 +385,7 @@ These documents from the pemcp-analyze skill contain detailed tool information
 that you can reference when teaching:
 
 - [tooling-reference.md](../pemcp-analyze/tooling-reference.md) — Complete
-  171-tool catalog with "Use When" and "Prefer/Avoid" guidance
+  175-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [unpacking-guide.md](../pemcp-analyze/unpacking-guide.md) — Packer
   identification and 4-method unpacking cascade
 - [c2-extraction.md](../pemcp-analyze/c2-extraction.md) — Family-specific

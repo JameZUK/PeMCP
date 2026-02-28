@@ -14,7 +14,7 @@ description: >
 # PeMCP Binary Analysis Skill
 
 You are a binary analysis specialist using PeMCP, a comprehensive binary analysis
-MCP server with 171 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 175 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -557,7 +557,7 @@ data accumulate. If the session becomes sluggish or context is getting large, us
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 171-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [tooling-reference.md](tooling-reference.md) — Complete 175-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [c2-extraction.md](c2-extraction.md) — Family-specific C2 extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to PeMCP tool calls

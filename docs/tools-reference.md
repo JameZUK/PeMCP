@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-PeMCP exposes **171 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters — see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+PeMCP exposes **175 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters — see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 ---
 
@@ -470,3 +470,14 @@ Notes and tool history are the primary mechanism for preserving analysis context
 | `get_analysis_timeline` | Merge tool history with notes into a single chronological timeline. Paginated (default limit 20). |
 | `export_project` | Export session (analysis + notes + history + optionally the binary) as `.pemcp_project.tar.gz`. |
 | `import_project` | Import a previously exported project archive. |
+
+## Learner Progress Tracking (4 tools)
+
+These tools support the [learning skill](claude-code.md#learning-skill-for-claude-code), tracking learner progress across sessions. They are called automatically by the tutor but can also be invoked directly.
+
+| Tool | Description |
+|---|---|
+| `get_learner_profile` | Retrieve the learner's progress profile — current tier, concept mastery counts, module completion percentages, and session statistics. |
+| `update_concept_mastery` | Record mastery of a concept at a given level (`introduced`, `practiced`, `understood`, `mastered`). Accepts optional notes. |
+| `get_learning_suggestions` | Get personalised learning suggestions based on current mastery and optional focus area. Returns recommended modules, concepts to revisit, and next steps. |
+| `reset_learner_profile` | Reset the learner profile to start fresh. Requires `confirm=true` to execute. |
