@@ -64,6 +64,7 @@ import pemcp.mcp.tools_ioc
 import pemcp.mcp.tools_unpack
 import pemcp.mcp.tools_diff
 import pemcp.mcp.tools_workflow
+import pemcp.mcp.tools_learning
 # Only register refinery tools when binary-refinery is installed.
 # When absent this saves ~20 tool definitions from the MCP catalog,
 # avoiding wasted context tokens for tools that would fail at runtime.
