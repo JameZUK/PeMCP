@@ -1,6 +1,6 @@
 # PeMCP Tool Reference
 
-Complete catalog of all 171 MCP tools organized by use case.
+Complete catalog of all 175 MCP tools organized by use case.
 Source files: `pemcp/mcp/tools_*.py`
 
 ---
