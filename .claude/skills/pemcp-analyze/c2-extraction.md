@@ -10,14 +10,14 @@ Guide for extracting command-and-control configurations from malware using PeMCP
 tools to confirm which framework you are dealing with:
 
 ```
-1. identify_c2_framework(hash_algorithm=..., hash_seed=..., hash_constants=...,
+1. identify_malware_family(hash_algorithm=..., hash_seed=..., hash_constants=...,
      config_encryption=..., compiler=..., matched_strings=...)
    → Returns ranked candidates with confidence scores
 
-2. verify_c2_attribution(family="<top candidate>", hash_seed=..., ...)
+2. verify_malware_attribution(family="<top candidate>", hash_seed=..., ...)
    → Confirms or rejects the attribution with per-check verdicts
 
-3. list_c2_signatures(family="<name>")
+3. list_malware_signatures(family="<name>")
    → View full fingerprint profile for extraction guidance
 ```
 
@@ -345,8 +345,8 @@ When the malware family is unknown, use this systematic approach:
 
 ### Step 1: Identify the Framework
 ```
-1. identify_c2_framework()            → match any available evidence against KB
-2. list_c2_signatures()               → browse known families and their fingerprints
+1. identify_malware_family()           → match any available evidence against KB
+2. list_malware_signatures()           → browse known families and their fingerprints
    If a match is found with HIGH confidence, skip to Step 5 below
    and follow the family-specific recipe.
 ```
@@ -366,7 +366,7 @@ When the malware family is unknown, use this systematic approach:
 2. decompile_function_with_angr()      → decompile suspect functions
 3. get_reaching_definitions()          → trace key/IV sources
 4. get_backward_slice()               → trace encrypted data source
-   After identifying the algorithm and key, re-run identify_c2_framework()
+   After identifying the algorithm and key, re-run identify_malware_family()
    with the new evidence — you may now match a known family.
 ```
 
@@ -384,7 +384,7 @@ When the malware family is unknown, use this systematic approach:
 
 ### Step 5: Verify Attribution and Parse
 ```
-1. verify_c2_attribution(family=...)   → confirm family before reporting
+1. verify_malware_attribution(family=...)   → confirm family before reporting
 2. refinery_extract_iocs()             → extract IOCs from decrypted data
 3. refinery_extract_domains()          → pull domains
 4. Validate: do extracted IPs/domains make sense? Are ports valid?
