@@ -15,6 +15,8 @@ Source files: `pemcp/mcp/tools_*.py`
 | `get_function_map(limit=100)` | `get_function_map(limit=20-30)` | Too many functions overwhelms context; start small, expand if needed |
 | Calling `get_analysis_digest()` repeatedly | Call at phase transitions | Digest has overhead; use it strategically |
 | `get_notes()` to check findings | `get_analysis_digest()` | Digest aggregates notes with triage data and coverage |
+| `get_hex_dump()` + `refinery_xor(data_hex=...)` | `refinery_xor(file_offset=..., length=...)` | Single step; avoids hex-encoding large blobs |
+| Extracting payload without `output_path` | `refinery_xor/pipeline/carve(..., output_path=...)` | Saves to disk AND registers as artifact with hashes and type detection |
 
 ---
 
@@ -178,7 +180,7 @@ Source files: `pemcp/mcp/tools_*.py`
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
 | `refinery_codec` | Encode/decode (base64, hex, url, utf8, etc.) | `data`, `operation`, `codec` |
-| `refinery_xor` | XOR with known key | `data`, `key` |
+| `refinery_xor` | XOR with known key; can read slices from loaded file and save output | `data_hex` or `file_offset`+`length`, `key_hex`, `output_path` |
 | `refinery_auto_decrypt` | Auto-detect and decrypt XOR/SUB patterns | `data` |
 | `refinery_decompress` | Decompress gzip/bzip2/lz4/zlib/lzma | `data`, `algorithm` |
 | `refinery_hash` | Compute MD5/SHA1/SHA256/ssdeep/imphash | `data`, `algorithm` |
@@ -196,7 +198,7 @@ Source files: `pemcp/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `refinery_carve` | Carve embedded files from binary data | `data`, `pattern` |
+| `refinery_carve` | Carve embedded files from binary data; save carved items to disk | `data`, `pattern`, `output_path` |
 | `refinery_extract` | Extract from archives/containers | `data`, `format` |
 | `refinery_regex_extract` | Extract data matching regex patterns | `data`, `pattern` |
 | `refinery_regex_replace` | Find and replace with regex | `data`, `pattern`, `replacement` |
@@ -228,7 +230,7 @@ Source files: `pemcp/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `refinery_pipeline` | Chain multiple refinery operations | `data`, `pipeline` |
+| `refinery_pipeline` | Chain multiple refinery operations; can read from file offset and save output | `data_hex` or `file_offset`+`length`, `steps`, `output_path` |
 | `refinery_list_units` | List all available refinery units | `category` (optional) |
 
 ## Payload & Config Extraction
@@ -325,8 +327,8 @@ Source files: `pemcp/mcp/tools_*.py`
 |------|----------|----------------|
 | `generate_analysis_report` | Generate comprehensive formatted report | `format` |
 | `auto_name_sample` | Generate descriptive filename from findings | — |
-| `export_project` | Export portable project archive | `output_path` |
-| `import_project` | Import a project archive | `project_path` |
+| `export_project` | Export portable project archive (includes artifacts up to 50 MB) | `output_path` |
+| `import_project` | Import a project archive (restores artifacts to ~/.pemcp/imported/artifacts/) | `project_path` |
 
 ## Cache Management
 

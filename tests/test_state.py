@@ -294,6 +294,119 @@ class TestSessionManagement:
 # StateProxy
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Artifact management
+# ---------------------------------------------------------------------------
+
+class TestArtifacts:
+    def test_register_artifact(self):
+        s = AnalyzerState()
+        art = s.register_artifact(
+            path="/tmp/test.bin",
+            sha256="abc123",
+            md5="def456",
+            size=1024,
+            source_tool="refinery_xor",
+            description="Test artifact",
+            detected_type="pe",
+        )
+        assert art["path"] == "/tmp/test.bin"
+        assert art["sha256"] == "abc123"
+        assert art["md5"] == "def456"
+        assert art["size"] == 1024
+        assert art["source_tool"] == "refinery_xor"
+        assert art["description"] == "Test artifact"
+        assert art["detected_type"] == "pe"
+        assert art["id"].startswith("art_")
+        assert "created_at" in art
+
+    def test_register_returns_copy(self):
+        s = AnalyzerState()
+        art = s.register_artifact("/tmp/a.bin", "sha", "md5", 10, "tool", "desc")
+        art["path"] = "modified"
+        # Original should be unchanged
+        assert s.artifacts[0]["path"] == "/tmp/a.bin"
+
+    def test_get_artifacts_all(self):
+        s = AnalyzerState()
+        s.register_artifact("/a", "s1", "m1", 10, "tool_a", "desc a")
+        s.register_artifact("/b", "s2", "m2", 20, "tool_b", "desc b")
+        arts = s.get_artifacts()
+        assert len(arts) == 2
+
+    def test_get_artifacts_filtered(self):
+        s = AnalyzerState()
+        s.register_artifact("/a", "s1", "m1", 10, "tool_a", "desc a")
+        s.register_artifact("/b", "s2", "m2", 20, "tool_b", "desc b")
+        s.register_artifact("/c", "s3", "m3", 30, "tool_a", "desc c")
+        arts = s.get_artifacts(source_tool="tool_a")
+        assert len(arts) == 2
+        assert all(a["source_tool"] == "tool_a" for a in arts)
+
+    def test_get_artifacts_returns_copies(self):
+        s = AnalyzerState()
+        s.register_artifact("/a", "s1", "m1", 10, "tool", "desc")
+        arts = s.get_artifacts()
+        arts[0]["path"] = "modified"
+        assert s.artifacts[0]["path"] == "/a"
+
+    def test_get_all_artifacts_snapshot(self):
+        s = AnalyzerState()
+        s.register_artifact("/a", "s1", "m1", 10, "tool", "desc")
+        s.register_artifact("/b", "s2", "m2", 20, "tool", "desc")
+        snap = s.get_all_artifacts_snapshot()
+        assert len(snap) == 2
+        # Verify it's a copy
+        snap[0]["path"] = "modified"
+        assert s.artifacts[0]["path"] == "/a"
+
+    def test_clear_artifacts(self):
+        s = AnalyzerState()
+        s.register_artifact("/a", "s1", "m1", 10, "tool", "desc")
+        s.register_artifact("/b", "s2", "m2", 20, "tool", "desc")
+        count = s.clear_artifacts()
+        assert count == 2
+        assert s.artifacts == []
+        assert s._artifacts_counter == 0
+
+    def test_clear_empty_artifacts(self):
+        s = AnalyzerState()
+        count = s.clear_artifacts()
+        assert count == 0
+
+    def test_artifact_ids_are_unique(self):
+        s = AnalyzerState()
+        art1 = s.register_artifact("/a", "s1", "m1", 10, "tool", "desc")
+        art2 = s.register_artifact("/b", "s2", "m2", 20, "tool", "desc")
+        assert art1["id"] != art2["id"]
+
+    def test_artifact_without_detected_type(self):
+        s = AnalyzerState()
+        art = s.register_artifact("/a", "s1", "m1", 10, "tool", "desc")
+        assert art["detected_type"] is None
+
+    def test_thread_safety(self):
+        """Concurrent artifact registrations should not corrupt state."""
+        s = AnalyzerState()
+        errors = []
+
+        def register(n):
+            try:
+                for i in range(50):
+                    s.register_artifact(f"/t{n}_{i}", f"s{n}_{i}", f"m{n}_{i}", i, "tool", "desc")
+            except Exception as e:
+                errors.append(e)
+
+        threads = [threading.Thread(target=register, args=(t,)) for t in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors
+        assert len(s.artifacts) == 200  # 4 threads × 50 artifacts
+
+
 class TestStateProxy:
     def test_proxy_delegates_to_current_state(self):
         proxy = StateProxy()

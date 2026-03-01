@@ -99,8 +99,8 @@ Where does the decryption key come from?
 
 | Decoder Operation | PeMCP Tool |
 |-------------------|------------|
-| `open(file, 'rb').read()` | `get_hex_dump(offset, length)` |
-| `xor(data, key)` | `refinery_xor(data, key)` |
+| `open(file, 'rb').read()[offset:offset+length]` | `refinery_xor(file_offset="0x...", length=N)` or `get_hex_dump(offset, length)` |
+| `xor(data, key)` | `refinery_xor(file_offset=..., key_hex=..., output_path=...)` |
 | `AES.new(key, mode, iv).decrypt()` | `refinery_decrypt(algorithm="aes-cbc", key, iv)` |
 | `RC4(key).decrypt(data)` | `refinery_decrypt(algorithm="rc4", key)` |
 | `base64.b64decode()` | `refinery_codec(operation="decode", codec="b64")` |
@@ -114,8 +114,9 @@ Where does the decryption key come from?
 | Read PE overlay | `refinery_pe_operations(operation="overlay")` |
 | Regex replace in string | `refinery_regex_replace(pattern, replacement)` |
 | Decompress aPLib | `refinery_decompress(algorithm="aplib")` |
-| Carve embedded PE | `refinery_carve(pattern="MZ")` |
-| Multi-step pipeline | `refinery_pipeline(pipeline="b64 | aes -k KEY | xor KEY2")` |
+| Carve embedded PE | `refinery_carve(pattern="MZ", output_path="/output/carved.bin")` |
+| Multi-step pipeline | `refinery_pipeline(steps=["b64", "aes:KEY", "xor:KEY2"], output_path=...)` |
+| Save decoded output | Use `output_path` param on `refinery_xor`/`pipeline`/`carve` |
 
 ## Workflow Example
 

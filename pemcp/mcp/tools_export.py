@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from pemcp.config import state, logger, Context, analysis_cache
+from pemcp.constants import MAX_TOTAL_ARTIFACT_EXPORT_SIZE
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded
 from pemcp.cache import CACHE_DIR
 from pemcp.utils import _safe_env_int
@@ -71,6 +72,8 @@ async def export_project(
     sha256 = hashes.get("sha256", "unknown")
     original_filename = os.path.basename(state.filepath) if state.filepath else "unknown"
 
+    artifacts_snapshot = state.get_all_artifacts_snapshot()
+
     # Build manifest
     manifest = {
         "pemcp_version": PEMCP_VERSION,
@@ -84,6 +87,7 @@ async def export_project(
         "binary_included": include_binary and state.filepath is not None and os.path.isfile(state.filepath),
         "notes_count": len(state.get_all_notes_snapshot()),
         "tool_history_count": len(state.get_tool_history_snapshot()),
+        "artifacts_count": len(artifacts_snapshot),
     }
 
     # Build the cache wrapper (same format as disk cache)
@@ -99,6 +103,7 @@ async def export_project(
         "pe_data": {k: v for k, v in state.pe_data.items() if k != "filepath"},
         "notes": state.get_all_notes_snapshot(),
         "tool_history": state.get_tool_history_snapshot(),
+        "artifacts": artifacts_snapshot,
     }
 
     await ctx.info(f"Creating project archive: {abs_output}")
@@ -107,6 +112,9 @@ async def export_project(
     output_dir = os.path.dirname(abs_output)
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
+
+    artifacts_included = 0
+    artifacts_total_size = 0
 
     with tarfile.open(abs_output, "w:gz") as tar:
         # Add manifest.json
@@ -129,6 +137,24 @@ async def export_project(
             tar.add(binary_path, arcname=binary_name)
             await ctx.info(f"Binary included: {original_filename}")
 
+        # Add artifact files
+        for artifact in artifacts_snapshot:
+            art_path = artifact.get("path", "")
+            art_size = artifact.get("size", 0)
+            if not art_path or not os.path.isfile(art_path):
+                logger.warning("Artifact file not found, skipping: %s", art_path)
+                continue
+            if artifacts_total_size + art_size > MAX_TOTAL_ARTIFACT_EXPORT_SIZE:
+                logger.warning(
+                    "Artifact export size limit reached (%d MB). Skipping: %s",
+                    MAX_TOTAL_ARTIFACT_EXPORT_SIZE // (1024 * 1024), art_path,
+                )
+                continue
+            arcname = f"artifacts/{os.path.basename(art_path)}"
+            tar.add(art_path, arcname=arcname)
+            artifacts_included += 1
+            artifacts_total_size += art_size
+
     archive_size = os.path.getsize(abs_output)
     await ctx.info(f"Project exported: {archive_size / 1024:.1f} KB")
 
@@ -139,6 +165,8 @@ async def export_project(
         "binary_included": manifest["binary_included"],
         "notes_count": manifest["notes_count"],
         "tool_history_count": manifest["tool_history_count"],
+        "artifacts_count": artifacts_included,
+        "artifacts_total_size_kb": round(artifacts_total_size / 1024, 1),
         "sha256": sha256,
     }
 
@@ -181,6 +209,7 @@ async def import_project(
     wrapper = None
     binary_data = None
     binary_name = None
+    artifact_files = {}  # basename -> bytes
 
     # Extract archive contents
     with tarfile.open(abs_path, "r:gz") as tar:
@@ -238,6 +267,17 @@ async def import_project(
                         binary_data = bf.read()
                     break
 
+        # Read artifact files
+        artifact_prefix = "artifacts/"
+        for member in tar.getmembers():
+            if member.name.startswith(artifact_prefix) and member.isfile():
+                art_basename = os.path.basename(member.name[len(artifact_prefix):])
+                if not art_basename:
+                    continue
+                af = tar.extractfile(member)
+                if af:
+                    artifact_files[art_basename] = af.read()
+
     sha256 = manifest.get("sha256", "").lower()
 
     # Store the analysis data in the cache
@@ -271,6 +311,7 @@ async def import_project(
         "mode": manifest.get("mode"),
         "notes_count": manifest.get("notes_count", 0),
         "tool_history_count": manifest.get("tool_history_count", 0),
+        "artifacts_count": manifest.get("artifacts_count", 0),
         "binary_included": manifest.get("binary_included", False),
     }
 
@@ -305,5 +346,34 @@ async def import_project(
             "cached by SHA256 — they will be restored when the matching "
             "binary is opened with open_file."
         )
+
+    # Extract artifact files
+    if artifact_files:
+        artifacts_dir = IMPORT_DIR / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        extracted_artifacts = 0
+        for art_basename, art_data in artifact_files.items():
+            art_dest = artifacts_dir / art_basename
+            art_dest.write_bytes(art_data)
+            extracted_artifacts += 1
+
+        # Update artifact metadata paths in the wrapper to point to extracted locations
+        wrapper_artifacts = wrapper.get("artifacts", [])
+        for art_meta in wrapper_artifacts:
+            old_basename = os.path.basename(art_meta.get("path", ""))
+            if old_basename and old_basename in artifact_files:
+                art_meta["path"] = str(artifacts_dir / old_basename)
+        wrapper["artifacts"] = wrapper_artifacts
+
+        # Re-write the updated wrapper to cache
+        if sha256 and len(sha256) == 64:
+            cache_entry_path = CACHE_DIR / sha256[:2] / f"{sha256}.json.gz"
+            if cache_entry_path.exists():
+                with gzip.open(cache_entry_path, "wt", encoding="utf-8") as f:
+                    json.dump(wrapper, f)
+
+        result["artifacts_extracted"] = extracted_artifacts
+        result["artifacts_dir"] = str(artifacts_dir)
+        await ctx.info(f"Extracted {extracted_artifacts} artifact(s) to: {artifacts_dir}")
 
     return result

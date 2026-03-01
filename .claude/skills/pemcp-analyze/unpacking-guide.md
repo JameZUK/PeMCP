@@ -165,8 +165,11 @@ Payload stored after the PE boundary, decrypted at runtime.
 1. refinery_pe_operations(operation="overlay")     → extract overlay data
 2. analyze_entropy_by_offset()                     → confirm encryption
 3. Decompile the overlay-reading function
-4. Recover key from code → refinery_decrypt() or refinery_xor()
-5. refinery_carve() on decrypted overlay          → extract embedded PE/payload
+4. Recover key from code → decrypt directly from file offset:
+   refinery_xor(file_offset="0x...", length=N, key_hex="...",
+     output_path="/output/decrypted_overlay.bin")
+5. refinery_carve(output_path="/output/carved_payload.bin")
+   → carve embedded PE/payload and save as artifact
 ```
 
 ### .NET Obfuscators (ConfuserEx, .NET Reactor, Dotfuscator)
@@ -187,11 +190,13 @@ Packed binary that decrypts and executes shellcode in memory.
 
 ```
 1. Decompile the entry function → identify allocation + decryption + execution
-2. Get encrypted shellcode: get_hex_dump(offset, length)
-3. Identify encryption: get_reaching_definitions() on decryption routine
-4. Decrypt: refinery_xor() or refinery_decrypt()
-5. Analyze shellcode: emulate_shellcode_with_qiling() or emulate_shellcode_with_speakeasy()
-6. Search shellcode memory: qiling_memory_search() for next-stage URLs/IPs
+2. Identify encryption: get_reaching_definitions() on decryption routine
+3. Decrypt and save directly from file:
+   refinery_xor(file_offset="0x...", length=N, key_hex="...",
+     output_path="/output/shellcode.bin")
+   → reads from file, decrypts, saves to disk as artifact
+4. Analyze shellcode: emulate_shellcode_with_qiling() or emulate_shellcode_with_speakeasy()
+5. Search shellcode memory: qiling_memory_search() for next-stage URLs/IPs
 ```
 
 ### VirtualAlloc + WriteProcessMemory (Process Hollowing)

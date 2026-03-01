@@ -13,7 +13,9 @@ from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from pemcp.mcp._refinery_helpers import (
     _require_refinery, _hex_to_bytes, _bytes_to_hex, _safe_decode,
-    _get_file_data, _MAX_INPUT_SIZE_SMALL as _MAX_INPUT_SIZE,
+    _get_file_data, _get_data_from_hex_or_file_with_offset,
+    _write_output_and_register_artifact,
+    _MAX_INPUT_SIZE_SMALL as _MAX_INPUT_SIZE,
     _MAX_OUTPUT_ITEMS,
 )
 
@@ -230,11 +232,14 @@ async def refinery_xor(
     operation: str = "apply",
     data_hex: Optional[str] = None,
     key_hex: Optional[str] = None,
+    file_offset: Optional[str] = None,
+    length: Optional[int] = None,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """XOR operations via Binary Refinery.
 
     Operations:
-    - 'apply': XOR data with a key (requires data_hex and key_hex).
+    - 'apply': XOR data with a key (requires key_hex, plus data from data_hex or file_offset/length).
     - 'guess_key': Auto-guess the XOR key using statistical analysis.
 
     Args:
@@ -242,6 +247,9 @@ async def refinery_xor(
         operation: (str) 'apply' or 'guess_key'. Default 'apply'.
         data_hex: (Optional[str]) Data as hex. For guess_key, if None uses loaded file.
         key_hex: (Optional[str]) XOR key as hex (required for 'apply').
+        file_offset: (Optional[str]) Offset into loaded file (e.g. '0x3B80'). Alternative to data_hex.
+        length: (Optional[int]) Number of bytes to read from file_offset.
+        output_path: (Optional[str]) Save decoded output to this path and register as artifact.
 
     Returns:
         Dictionary with XOR result or guessed key + preview.
@@ -253,9 +261,11 @@ async def refinery_xor(
         return {"error": f"Unknown operation '{operation}'.", "supported": ["apply", "guess_key"]}
 
     if op == "apply":
-        if not data_hex or not key_hex:
-            return {"error": "'apply' requires both data_hex and key_hex parameters."}
-        data = _hex_to_bytes(data_hex)
+        if not key_hex:
+            return {"error": "'apply' requires the key_hex parameter."}
+        if not data_hex and file_offset is None:
+            return {"error": "'apply' requires data_hex or file_offset to specify input data."}
+        data = _get_data_from_hex_or_file_with_offset(data_hex, file_offset, length)
         key = _hex_to_bytes(key_hex)
         if len(data) > _MAX_INPUT_SIZE:
             raise RuntimeError(f"Input too large ({len(data)} bytes).")
@@ -267,7 +277,8 @@ async def refinery_xor(
             return data | xor(key) | bytes
 
         result = await asyncio.to_thread(_run_apply)
-        return await _check_mcp_response_size(ctx, {
+
+        response: Dict[str, Any] = {
             "operation": op,
             "key_hex": key.hex(),
             "key_length": len(key),
@@ -275,13 +286,28 @@ async def refinery_xor(
             "output_size": len(result),
             "output_hex": _bytes_to_hex(result),
             "output_text": _safe_decode(result)[:2000],
-        }, "refinery_xor")
+        }
+
+        if output_path:
+            desc = f"XOR-decoded data (key={key.hex()}"
+            if file_offset is not None:
+                desc += f", offset={file_offset}"
+            if length is not None:
+                desc += f", length={length}"
+            desc += ")"
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                output_path, result, "refinery_xor", desc,
+            )
+            response["artifact"] = artifact_meta
+
+        return await _check_mcp_response_size(ctx, response, "refinery_xor")
 
     # op == "guess_key"
     if data_hex:
         data = _hex_to_bytes(data_hex)
     else:
-        data = _get_file_data()
+        data = _get_data_from_hex_or_file_with_offset(None, file_offset, length)
 
     if len(data) > _MAX_INPUT_SIZE:
         data = data[:_MAX_INPUT_SIZE]
@@ -489,6 +515,7 @@ async def refinery_carve(
     data_hex: Optional[str] = None,
     decode: bool = True,
     limit: int = 20,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Carve embedded patterns or files from data via Binary Refinery.
 
@@ -504,6 +531,7 @@ async def refinery_carve(
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
         decode: (bool) Auto-decode carved patterns. Default True.
         limit: (int) Max items. Default 50.
+        output_path: (Optional[str]) Save carved items to disk. For multiple items, appends _N suffix.
 
     Returns:
         Dictionary with carved data blobs or file metadata.
@@ -594,6 +622,7 @@ async def refinery_carve(
         mod = importlib.import_module(mod_path)
         unit_cls = getattr(mod, cls_name)
         results = []
+        raw_items = []
         for chunk in data | unit_cls():
             raw = bytes(chunk)
             results.append({
@@ -602,18 +631,38 @@ async def refinery_carve(
                 "md5": hashlib.md5(raw).hexdigest(),
                 "preview_hex": raw[:64].hex(),
             })
+            raw_items.append(raw)
             if len(results) >= limit:
                 break
-        return results
+        return results, raw_items
 
-    results = await asyncio.to_thread(_run_files)
-    return await _check_mcp_response_size(ctx, {
+    results, raw_items = await asyncio.to_thread(_run_files)
+
+    response: Dict[str, Any] = {
         "operation": op,
         "file_type": ftype,
         "files_found": len(results),
         "data_size": len(data),
         "results": results,
-    }, "refinery_carve")
+    }
+
+    if output_path and raw_items:
+        artifacts = []
+        for i, raw in enumerate(raw_items):
+            if len(raw_items) == 1:
+                item_path = output_path
+            else:
+                base, ext = os.path.splitext(output_path)
+                item_path = f"{base}_{i}{ext}"
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                item_path, raw, "refinery_carve",
+                f"Carved {ftype.upper()} file #{i} ({len(raw)} bytes)",
+            )
+            artifacts.append(artifact_meta)
+        response["artifacts"] = artifacts
+
+    return await _check_mcp_response_size(ctx, response, "refinery_carve")
 
 
 # ===================================================================
@@ -852,8 +901,11 @@ async def refinery_hash(
 @tool_decorator
 async def refinery_pipeline(
     ctx: Context,
-    data_hex: str,
-    steps: List[str],
+    data_hex: Optional[str] = None,
+    steps: Optional[List[str]] = None,
+    file_offset: Optional[str] = None,
+    length: Optional[int] = None,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute a multi-step Binary Refinery transformation pipeline.
 
@@ -862,15 +914,22 @@ async def refinery_pipeline(
 
     Args:
         ctx: MCP Context.
-        data_hex: (str) Input data as hex.
+        data_hex: (Optional[str]) Input data as hex. If None, uses file_offset/length or loaded file.
         steps: (List[str]) Ordered list of transformation steps.
+        file_offset: (Optional[str]) Offset into loaded file (e.g. '0x3B80'). Alternative to data_hex.
+        length: (Optional[int]) Number of bytes to read from file_offset.
+        output_path: (Optional[str]) Save final pipeline output to this path and register as artifact.
 
     Returns:
         Dictionary with final result and per-step size tracking.
     """
     _require_refinery("refinery_pipeline")
 
-    data = _hex_to_bytes(data_hex)
+    if not steps:
+        return {"error": "No pipeline steps provided. Pass a list of step strings."}
+    steps = list(steps)
+
+    data = _get_data_from_hex_or_file_with_offset(data_hex, file_offset, length)
     if len(data) > _MAX_INPUT_SIZE:
         raise RuntimeError(f"Input too large ({len(data)} bytes).")
 
@@ -930,13 +989,26 @@ async def refinery_pipeline(
         return current, step_log
 
     result, step_log = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+
+    response: Dict[str, Any] = {
         "steps_executed": len(steps),
         "step_log": step_log,
         "final_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }, "refinery_pipeline")
+    }
+
+    if output_path:
+        desc = f"Pipeline output ({' | '.join(steps)})"
+        if file_offset is not None:
+            desc += f" from offset {file_offset}"
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, result, "refinery_pipeline", desc,
+        )
+        response["artifact"] = artifact_meta
+
+    return await _check_mcp_response_size(ctx, response, "refinery_pipeline")
 
 
 # ===================================================================

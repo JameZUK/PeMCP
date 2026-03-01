@@ -57,6 +57,7 @@ ruff check pemcp/ tests/ \
 - **Response truncation**: `_check_mcp_response_size()` auto-truncates responses over 64KB. Always call it before returning large results.
 - **`tool_decorator`**: Wraps every MCP tool — handles session activation, heartbeat, history recording, and error enrichment.
 - **Notes system**: `add_note()` categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `manual`.
+- **Artifacts system**: `state.register_artifact()` tracks extracted files (path, hashes, source tool, type detection). Artifacts persist via cache alongside notes/tool_history, and are included in `export_project` / `import_project` archives. Constants: `MAX_ARTIFACT_FILE_SIZE` (100 MB), `MAX_TOTAL_ARTIFACT_EXPORT_SIZE` (50 MB).
 
 ## Docker
 

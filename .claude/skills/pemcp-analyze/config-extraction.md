@@ -41,7 +41,9 @@ accessed early in execution (near entry point or DllMain).
 
 ```
 Detection:  analyze_entropy_by_offset() → look for high-entropy islands in .data
-Extraction: get_hex_dump() → refinery_xor(key) or refinery_auto_decrypt()
+Extraction: refinery_xor(file_offset="0x...", length=N, key_hex="...",
+              output_path="/output/decrypted_config.bin")
+            → reads directly from loaded file, decrypts, saves to disk as artifact
 Validation: refinery_extract_iocs() on decrypted output
 ```
 
@@ -372,14 +374,17 @@ When the malware family is unknown, use this systematic approach:
 
 ### Step 4: Extract and Decrypt
 ```
-1. get_hex_dump(offset, length)        → extract raw encrypted data
-2. Apply appropriate decryption:
-   - refinery_xor()                    → XOR (single or multi-byte)
+1. Use file_offset + length to read directly from the loaded binary:
+   - refinery_xor(file_offset="0x...", length=N, key_hex="...",
+       output_path="/output/decrypted.bin")
+   - refinery_pipeline(file_offset="0x...", length=N,
+       steps=["xor:41", "zl"], output_path="/output/decoded.bin")
+2. Or for hex-input workflows:
    - refinery_decrypt()                → AES/RC4/DES/ChaCha20
    - refinery_auto_decrypt()           → auto-detect simple ciphers
    - refinery_decompress()             → if compressed after decryption
    - refinery_codec()                  → Base64/hex decode
-3. refinery_pipeline()                 → chain operations if multi-layer
+3. Always use output_path to save extracted payloads as artifacts
 ```
 
 ### Step 5: Verify Attribution and Parse

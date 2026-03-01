@@ -73,6 +73,11 @@ class AnalyzerState:
         self._history_lock = threading.Lock()
         self.tool_history: List[Dict[str, Any]] = []
 
+        # Artifacts (extracted files, persisted per-binary via cache)
+        self._artifacts_lock = threading.Lock()
+        self._artifacts_counter: int = 0
+        self.artifacts: List[Dict[str, Any]] = []
+
         # Previous session context (populated from cache on open_file)
         self.previous_session_history: List[Dict[str, Any]] = []
 
@@ -257,6 +262,52 @@ class AnalyzerState:
         """Thread-safe snapshot of history for cache persistence."""
         with self._history_lock:
             return list(self.tool_history)
+
+    # ------------------------------------------------------------------
+    #  Artifact accessors
+    # ------------------------------------------------------------------
+
+    def register_artifact(self, path: str, sha256: str, md5: str,
+                          size: int, source_tool: str, description: str,
+                          detected_type: Optional[str] = None) -> Dict[str, Any]:
+        """Thread-safe artifact registration. Returns the new artifact dict."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        with self._artifacts_lock:
+            self._artifacts_counter += 1
+            artifact: Dict[str, Any] = {
+                "id": f"art_{int(now.timestamp())}_{self._artifacts_counter}",
+                "path": path,
+                "sha256": sha256,
+                "md5": md5,
+                "size": size,
+                "source_tool": source_tool,
+                "description": description,
+                "detected_type": detected_type,
+                "created_at": now.isoformat(),
+            }
+            self.artifacts.append(artifact)
+            return dict(artifact)
+
+    def get_artifacts(self, source_tool: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Thread-safe filtered read of artifacts. Returns copies."""
+        with self._artifacts_lock:
+            result = [dict(a) for a in self.artifacts]
+        if source_tool:
+            result = [a for a in result if a.get("source_tool") == source_tool]
+        return result
+
+    def get_all_artifacts_snapshot(self) -> List[Dict[str, Any]]:
+        """Thread-safe snapshot of all artifacts for cache persistence."""
+        with self._artifacts_lock:
+            return [dict(a) for a in self.artifacts]
+
+    def clear_artifacts(self) -> int:
+        """Thread-safe clear of all artifacts. Returns count removed."""
+        with self._artifacts_lock:
+            count = len(self.artifacts)
+            self.artifacts = []
+            self._artifacts_counter = 0
+            return count
 
     # ------------------------------------------------------------------
     #  Angr state

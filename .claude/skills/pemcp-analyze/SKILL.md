@@ -309,15 +309,33 @@ Pull out IOCs, configs, and encoded data.
 - `auto_extract_crypto_keys()` — extract embedded crypto keys
 
 ### Binary Refinery Operations
-For manual decoding when automated extraction fails:
-- `refinery_xor(data, key)` — XOR decryption with known key
+For manual decoding when automated extraction fails. Key tools now support
+`file_offset` (hex offset into loaded file, e.g. `"0x3B80"`), `length` (bytes
+to read), and `output_path` (save decoded output to disk as a session artifact):
+
+- `refinery_xor(operation, key_hex, file_offset, length, output_path)` — XOR
+  decryption with known key; `file_offset`/`length` read directly from the loaded
+  binary, `output_path` saves the result and registers it as a session artifact
 - `refinery_decrypt(data, algorithm, key)` — AES/RC4/DES/ChaCha20 decryption
 - `refinery_auto_decrypt(data)` — auto-detect and decrypt XOR/SUB patterns
 - `refinery_decompress(data, algorithm)` — gzip/bzip2/lz4/zlib decompression
-- `refinery_pipeline(data, pipeline)` — chain multiple refinery operations
-- `refinery_carve(data, pattern)` — carve out embedded files/payloads
+- `refinery_pipeline(steps, file_offset, length, output_path)` — chain multiple
+  refinery operations; accepts file offset input and saves final output as artifact
+- `refinery_carve(data, pattern, output_path)` — carve out embedded files/payloads;
+  `output_path` saves all carved items to disk as artifacts
 - `refinery_regex_extract(data, pattern)` — regex-based data extraction
 - `refinery_codec(data, operation, codec)` — encoding/decoding (base64, hex, etc.)
+
+**Prefer `file_offset`/`length` over `get_hex_dump()` + `data_hex`** when working
+with embedded payloads — it's a single step instead of two, avoids hex-encoding
+large blobs, and produces cleaner tool history.
+
+**Always use `output_path`** when extracting payloads, decrypted configs, or carved
+files that need further analysis. The file is written to disk AND registered as a
+session artifact with hashes and file type detection. Artifacts are:
+- Included in `export_project()` archives (up to 50 MB total)
+- Persisted in cache — restored on next `open_file()` of the same binary
+- Tracked in session state — use `get_artifacts()` to list them
 
 ### .NET-Specific Extraction
 - `refinery_dotnet(data, operation)` — .NET resource/metadata extraction
@@ -374,6 +392,7 @@ add_note(content="""C2 config extraction chain:
   the CryptImportKey call in sub_401830)
 - Decrypted with: refinery_decrypt(algorithm="rc4", key=<hex>)
 - Result: 4 C2 URLs, validated as syntactically correct with plausible TLDs
+- Artifact: saved to /output/decrypted_config.bin (artifact_id: art_1709300000_1)
 """, category="ioc")
 
 ## Phase 6: Research
@@ -458,9 +477,10 @@ After the summary, offer the user two follow-up options:
    `auto_name_sample()` for a descriptive filename.
 
 2. **Session export**: "Would you like to export this session as a portable archive?"
-   If yes → `export_project()` — saves all notes, history, findings, and cached
-   analysis as a self-contained archive that can be imported later with
-   `import_project()`.
+   If yes → `export_project()` — saves all notes, history, findings, extracted
+   artifacts, and cached analysis as a self-contained archive that can be imported
+   later with `import_project()`. Artifacts (extracted payloads, decoded configs)
+   are included up to 50 MB total.
 
 ### Goal-Adapted Detail (when full report is requested)
 
@@ -501,9 +521,10 @@ Additional context management:
    `"ioc"` for indicators, `"hypothesis"` for theories to test, `"manual"` for
    analyst observations.
 
-3. **Session persistence**: Notes, history, and cache persist across container restarts
-   via the `~/.pemcp` volume mount. When reopening a previously analyzed file, the
-   session context is automatically restored.
+3. **Session persistence**: Notes, history, artifacts, and cache persist across
+   container restarts via the `~/.pemcp` volume mount. When reopening a previously
+   analyzed file, the session context (including artifact metadata) is automatically
+   restored.
 
 4. **Tool history**: Use `get_tool_history()` to review what has already been run.
    Use `get_progress_overview()` to see coverage gaps.
@@ -542,14 +563,16 @@ orchestrator first, then its dependencies/payloads.
 ### Dropper + Payload
 When a dropper extracts or decrypts a payload during analysis:
 1. Complete the dropper analysis through to extraction (Phases 0-5)
-2. Note the extraction method and relationship: `add_note("Drops payload via
+2. When extracting the payload, use `output_path` to save it as an artifact:
+   e.g., `refinery_xor(file_offset="0x3B80", length=103935, key_hex="42",
+   output_path="/output/payload.bin")` — this writes the file AND registers it
+3. Note the extraction method and relationship: `add_note("Drops payload via
    resource decryption (RC4, key from .rdata)", category="tool_result")`
-3. Search for references to the payload filename in the dropper's strings and
+4. Search for references to the payload filename in the dropper's strings and
    decompiled code to understand how it is loaded/executed
-4. If the payload was written to `/output` or extracted to disk, `close_file()`
-   the dropper and `open_file()` the payload
-5. Analyse the payload as a fresh binary (Phases 1-7)
-6. In the final summary, present both files together with their relationship
+5. `close_file()` the dropper and `open_file()` the extracted payload artifact
+6. Analyse the payload as a fresh binary (Phases 1-7)
+7. In the final summary, present both files together with their relationship
 
 ### Bundled Dependencies (DLL Sideloading, Config Files)
 When the user provides a binary alongside DLLs, data files, or configs:
@@ -572,7 +595,9 @@ When comparing related samples (variants, updates, different builds):
 
 ### Shellcode Extracted from a Loader
 When analysis reveals embedded shellcode:
-1. Extract the shellcode bytes using the appropriate method (refinery, hex dump, etc.)
+1. Extract the shellcode bytes using `file_offset`/`length`/`output_path`:
+   e.g., `refinery_xor(file_offset="0x1000", length=4096, key_hex="FF",
+   output_path="/output/shellcode.bin")` — saves and registers as artifact
 2. Emulate directly with `emulate_shellcode_with_qiling()` or
    `emulate_shellcode_with_speakeasy()` — no need to switch files
 3. Use `qiling_memory_search()` post-emulation to find next-stage URLs or configs

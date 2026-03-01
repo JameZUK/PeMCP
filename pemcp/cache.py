@@ -206,14 +206,15 @@ class AnalysisCache:
         return pe_data
 
     def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str,
-            notes: Optional[list] = None, tool_history: Optional[list] = None) -> bool:
+            notes: Optional[list] = None, tool_history: Optional[list] = None,
+            artifacts: Optional[list] = None) -> bool:
         """
         Store a ``pe_data`` dict in the cache.  Returns True on success.
 
-        Optionally includes session notes and tool history alongside the
-        analysis data.  The gzip compression runs outside the lock to
-        avoid blocking concurrent callers during the (potentially slow)
-        compression step.
+        Optionally includes session notes, tool history, and artifacts
+        alongside the analysis data.  The gzip compression runs outside
+        the lock to avoid blocking concurrent callers during the
+        (potentially slow) compression step.
         """
         if not self.enabled:
             return False
@@ -241,6 +242,7 @@ class AnalysisCache:
             "pe_data": {k: v for k, v in pe_data.items() if k != "filepath"},
             "notes": notes or [],
             "tool_history": tool_history or [],
+            "artifacts": artifacts or [],
         }
 
         # Compress OUTSIDE the lock — this can be slow for large analyses
@@ -377,12 +379,14 @@ class AnalysisCache:
         return {
             "notes": wrapper.get("notes", []),
             "tool_history": wrapper.get("tool_history", []),
+            "artifacts": wrapper.get("artifacts", []),
         }
 
     def update_session_data(self, sha256: str,
                             notes: Optional[list] = None,
-                            tool_history: Optional[list] = None) -> bool:
-        """Update notes and/or tool_history for an existing cache entry.
+                            tool_history: Optional[list] = None,
+                            artifacts: Optional[list] = None) -> bool:
+        """Update notes, tool_history, and/or artifacts for an existing cache entry.
 
         Reads the gzip wrapper, replaces the specified keys, and writes
         it back atomically.  Returns True on success.
@@ -403,6 +407,8 @@ class AnalysisCache:
                     wrapper["notes"] = notes
                 if tool_history is not None:
                     wrapper["tool_history"] = tool_history
+                if artifacts is not None:
+                    wrapper["artifacts"] = artifacts
                 tmp = entry_path.with_suffix(".tmp")
                 with gzip.open(tmp, "wt", encoding="utf-8") as f:
                     json.dump(wrapper, f)

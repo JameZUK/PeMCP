@@ -34,6 +34,10 @@ YARA_REVERSINGLABS_SUBDIR = "reversinglabs"
 YARA_COMMUNITY_ZIP_URL = "https://github.com/Yara-Rules/rules/archive/refs/heads/master.zip"
 YARA_COMMUNITY_SUBDIR = "community"
 
+# --- Artifact Limits ---
+MAX_ARTIFACT_FILE_SIZE = 100 * 1024 * 1024        # 100 MB per artifact
+MAX_TOTAL_ARTIFACT_EXPORT_SIZE = 50 * 1024 * 1024  # 50 MB total in exports
+
 # --- FLOSS Fallback Constants ---
 MIN_STR_LEN_FALLBACK_FLOSS = 4
 
