@@ -38,6 +38,7 @@ htmlcov/
 capa_rules_store/
 samples/
 qiling-rootfs/
+output/
 
 # OS files
 .DS_Store
