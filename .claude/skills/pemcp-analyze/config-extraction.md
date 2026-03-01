@@ -1,13 +1,13 @@
-# C2 Configuration Extraction Patterns
+# Malware Configuration Extraction Patterns
 
-Guide for extracting command-and-control configurations from malware using PeMCP tools.
+Guide for extracting configurations from malware using PeMCP tools.
 
 ---
 
-## Step 0: Identify the C2 Framework First
+## Step 0: Identify the Malware Family First
 
-**Before following any family-specific recipe below**, use the C2 identification
-tools to confirm which framework you are dealing with:
+**Before following any family-specific recipe below**, use the malware family
+identification tools to confirm which family you are dealing with:
 
 ```
 1. identify_malware_family(hash_algorithm=..., hash_seed=..., hash_constants=...,

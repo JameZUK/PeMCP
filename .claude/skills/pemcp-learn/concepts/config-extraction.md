@@ -1,4 +1,4 @@
-# Concept Reference: C2 Configuration Extraction
+# Concept Reference: Malware Configuration Extraction
 
 Advanced tier reference for Module 3.4. This file is drawn from by the teaching
 skill during guided analysis — it is not shown directly to learners.
@@ -258,6 +258,6 @@ A successful decryption operation that produces random-looking bytes is not a
 successful extraction. Always validate: are the domains plausible? Are the ports
 reasonable? Does the struct parse cleanly? If not, revisit the algorithm or key.
 
-**Reference**: See [c2-extraction.md](../pemcp-analyze/c2-extraction.md) in the
+**Reference**: See [config-extraction.md](../pemcp-analyze/config-extraction.md) in the
 pemcp-analyze skill for family-specific extraction recipes and worked examples
 for known malware families.

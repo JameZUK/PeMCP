@@ -345,8 +345,8 @@ BRc4). Without checking discriminating indicators like hash seeds and specific
 constants, you will misattribute. The `verify_malware_attribution()` tool catches
 these errors before they propagate into your report.
 
-### C2 Config Patterns
-See [c2-extraction.md](c2-extraction.md) for family-specific extraction strategies.
+### Malware Config Patterns
+See [config-extraction.md](config-extraction.md) for family-specific extraction strategies.
 
 ### Documenting the Extraction Chain
 
@@ -595,6 +595,6 @@ data accumulate. If the session becomes sluggish or context is getting large, us
 ## Supporting References
 
 - [tooling-reference.md](tooling-reference.md) — Complete 175-tool catalog with "Use When" and "Prefer/Avoid" guidance
-- [c2-extraction.md](c2-extraction.md) — Family-specific C2 extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
+- [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to PeMCP tool calls

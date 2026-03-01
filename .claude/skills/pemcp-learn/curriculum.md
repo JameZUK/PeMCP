@@ -436,7 +436,7 @@ dynamic analysis, and anti-analysis techniques.
 
 ---
 
-### Module 3.4: C2 Configuration Extraction
+### Module 3.4: Malware Configuration Extraction
 
 **Prerequisites**: `crypto_constants`, `key_identification`, `emulation_vs_execution`
 **Concepts**: `c2_config_patterns`, `config_storage`, `encryption_layers`,
@@ -466,7 +466,7 @@ dynamic analysis, and anti-analysis techniques.
 4. Trace the key: where is it stored? How is it loaded?
 5. Manually decrypt using refinery tools and validate the result
 
-**Reference**: [c2-extraction.md](../pemcp-analyze/c2-extraction.md)
+**Reference**: [config-extraction.md](../pemcp-analyze/config-extraction.md)
 
 ---
 

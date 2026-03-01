@@ -267,7 +267,7 @@ IDs, prerequisites, tools, and exercises. The concept reference files in the
 - 3.1: Data Flow Analysis → [data-flow.md](concepts/data-flow.md)
 - 3.2: Emulation & Dynamic Analysis → [emulation-dynamic.md](concepts/emulation-dynamic.md)
 - 3.3: Anti-Analysis Techniques → [anti-analysis.md](concepts/anti-analysis.md)
-- 3.4: C2 Config Extraction → [c2-extraction.md](concepts/c2-extraction.md)
+- 3.4: Malware Config Extraction → [config-extraction.md](concepts/config-extraction.md)
 
 **Tier 4 — Expert** (professional RE experience):
 - 4.1: Advanced Unpacking → [advanced-unpacking.md](concepts/advanced-unpacking.md)
@@ -406,7 +406,7 @@ that you can reference when teaching:
   175-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [unpacking-guide.md](../pemcp-analyze/unpacking-guide.md) — Packer
   identification and 4-method unpacking cascade
-- [c2-extraction.md](../pemcp-analyze/c2-extraction.md) — Family-specific
-  C2 extraction recipes
+- [config-extraction.md](../pemcp-analyze/config-extraction.md) — Family-specific
+  malware config extraction recipes
 - [online-research.md](../pemcp-analyze/online-research.md) — Safe research
   methodology for unknown families

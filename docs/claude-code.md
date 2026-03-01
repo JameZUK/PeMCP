@@ -239,7 +239,7 @@ You should see:
 ```
 SKILL.md              # Core workflow — phases, operating principles, goal detection
 tooling-reference.md  # Complete 175-tool catalog by use case
-c2-extraction.md      # C2 config decoding patterns by malware family
+config-extraction.md  # Config decoding patterns by malware family
 unpacking-guide.md    # Packer identification and unpacking pipelines
 online-research.md    # Safe online research and decoder translation
 ```
@@ -299,7 +299,7 @@ The skill runs autonomously through Phases 0-3 (environment discovery, identific
 |------|---------|
 | [`SKILL.md`](../.claude/skills/pemcp-analyze/SKILL.md) | Core workflow orchestration — operating principles, 8 analysis phases, goal detection, reporting format, multi-file workflows, context management |
 | [`tooling-reference.md`](../.claude/skills/pemcp-analyze/tooling-reference.md) | Complete catalog of all 175 MCP tools organised by use case with brief descriptions and key parameters |
-| [`c2-extraction.md`](../.claude/skills/pemcp-analyze/c2-extraction.md) | C2 config storage patterns, family-specific extraction strategies (Agent Tesla, AsyncRAT, Cobalt Strike, Emotet, Remcos, AdaptixC2, etc.), generic unknown-family approach, validation checklist |
+| [`config-extraction.md`](../.claude/skills/pemcp-analyze/config-extraction.md) | Malware config storage patterns, family-specific extraction strategies (Agent Tesla, AsyncRAT, Cobalt Strike, Emotet, Remcos, AdaptixC2, etc.), generic unknown-family approach, validation checklist |
 | [`unpacking-guide.md`](../.claude/skills/pemcp-analyze/unpacking-guide.md) | Packer identification indicators, 5-method unpacking cascade (auto → orchestrated → emulation-based → emulation analysis → manual OEP), special cases for multi-layer packing, .NET obfuscators, shellcode loaders |
 | [`online-research.md`](../.claude/skills/pemcp-analyze/online-research.md) | When and how to research online, search query patterns, read-and-understand methodology, decoder operation → PeMCP tool translation table, safety rules |
 
