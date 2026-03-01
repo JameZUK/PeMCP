@@ -7,13 +7,23 @@ skill during guided analysis — it is not shown directly to learners.
 
 ## Core Concept
 
-Anti-analysis techniques are code constructs that malware authors add to hinder
+Anti-analysis techniques are code constructs deliberately added to hinder
 reverse engineering, debugging, and automated analysis. They fall into three
 broad categories: anti-debug (detect/prevent debuggers), anti-VM (detect virtual
 machines and sandboxes), and obfuscation (make code harder to understand even
-when you can see it). Understanding these techniques is necessary both for
-bypassing them during analysis and for recognising them as indicators of
-malicious intent — legitimate software rarely needs to detect debuggers.
+when you can see it). Understanding these techniques is necessary for bypassing
+them during analysis.
+
+**Critical distinction — intentional vs incidental**: The mere presence of an
+API in the import table does not constitute an anti-analysis technique. Many
+APIs flagged by analysis tools have entirely legitimate uses in compiler
+runtimes, standard libraries, and application frameworks. An anti-analysis
+technique requires **deliberate code** that checks a condition and **alters
+execution flow** based on the result (e.g., "if debugger detected, exit" or
+"if timing delta exceeds threshold, decrypt with wrong key"). An API that
+simply appears in the IAT because the language runtime uses it is not
+anti-analysis — it is a normal import. See the "False Positives from Compiler
+Runtimes" section below for common examples.
 
 ## Anti-Debug Techniques
 
@@ -238,6 +248,82 @@ Detects API hash resolution patterns and attempts to resolve the hash values
 to known API names using common hashing algorithms.
 ```
 
+## False Positives from Compiler Runtimes
+
+Analysis tools (capa, YARA, import classifiers) flag APIs by capability — what
+they *can* be used for. But many flagged APIs appear in binaries for completely
+benign reasons. Before labelling any API as "anti-analysis", verify that the
+binary contains **deliberate detection code** (a check + conditional branch),
+not just a runtime import.
+
+### Common false positives
+
+| API | Flagged as | Benign explanation |
+|-----|-----------|-------------------|
+| `IsDebuggerPresent` | anti-debug | **Rust** stdlib (`std::panicking`) checks this to decide whether to break into debugger or print a backtrace on panic. **Delphi** VCL and **.NET** CLR use it similarly. Present in the IAT of virtually every Rust/Delphi/.NET Windows binary. |
+| `QueryPerformanceCounter` | timing anti-debug | **Rust** `std::time::Instant` on Windows. **Go** `time.Now()`. Used by async runtimes (tokio, .NET ThreadPool) for scheduling. Present in any binary that measures elapsed time. |
+| `GetTickCount` / `GetTickCount64` | timing anti-debug | Standard timer API. Used by HTTP clients for timeouts, by GUI frameworks for animation, by logging for timestamps. |
+| `NtTerminateProcess` | anti-analysis / evasion | Reflective loaders hook this to intercept process exit and clean up loaded payloads. Commercial packers (EMERITA, Themida) use it for graceful teardown. Also used by crash reporters. |
+| `VirtualProtect` | self-modifying code | Required by any loader that maps PE sections — code sections need PAGE_EXECUTE_READ, data sections need PAGE_READWRITE. Standard runtime behavior, not self-modification. |
+| `VirtualAlloc` | injection / shellcode | Required for any dynamic memory allocation beyond the heap. Used by JIT compilers (.NET, Java), memory-mapped I/O, large buffer allocation. |
+| `CreateProcessW` | execution | Used by any application that launches subprocesses — build tools, archive extractors (7z), package managers, shell utilities. |
+
+### How to distinguish intentional anti-debug from incidental imports
+
+An API import alone is never sufficient evidence. Look for the **usage pattern**:
+
+**Intentional anti-debug** (real technique):
+```c
+if (IsDebuggerPresent()) {
+    ExitProcess(0);  // or: decrypt with wrong key, or: jump to decoy code
+}
+```
+The API result is checked and execution flow changes based on it. The code is
+in user-written functions, not deep inside runtime initialization.
+
+**Incidental import** (false positive):
+```c
+// Language runtimes — these are NOT anti-debug, they are developer tooling:
+
+// Rust std::panicking — decides debugger break vs backtrace on panic
+if (IsDebuggerPresent()) { DebugBreak(); } else { print_backtrace(); }
+
+// Delphi VCL — raises debug notification on exception
+if (IsDebuggerPresent()) { OutputDebugString(exception_info); }
+
+// .NET CLR — managed debugger attach detection during startup
+// Go runtime — similar panic/crash handling logic
+
+// C/C++ with MSVC CRT — _CrtDbgReport checks debugger presence
+if (IsDebuggerPresent()) { __debugbreak(); }
+```
+The API is called by the language runtime or standard library for developer
+convenience. It does not alter the program's functional behavior or evade
+analysis. This applies to **any language and runtime**, not just the examples
+above — always check whether a flagged API is in user code or runtime code.
+
+**Key questions to ask**:
+1. Is the API called in user code or in a compiler/runtime library function?
+2. Does the result control a branch that changes the program's core behavior?
+3. Are there multiple layered checks (API + PEB + timing) suggesting deliberate
+   anti-analysis? A single runtime import is not a "technique".
+
+### YARA rule false positives
+
+YARA rules that match on byte patterns (instruction sequences, constants) rather
+than strings can produce false positives on compiled code. Common examples:
+- Behavioral rules (e.g., `android_meterpreter`, `antisb_threatExpert`) matching
+  coincidental byte sequences in compiled binaries of any language
+- Crypto-detection rules matching legitimate TLS/crypto libraries (ChaCha20 in
+  rustls/BoringSSL, AES-NI in OpenSSL/mbedTLS/WolfSSL, RC4 in legacy HTTP stacks)
+- Network capability rules matching standard HTTP client libraries (hyper,
+  WinHTTP, libcurl, Boost.Beast)
+
+Always verify YARA matches by checking the matched offset — is it in user code
+or in a known library? If the match is inside a crypto library, TLS
+implementation, or HTTP framework, it is infrastructure code, not malware.
+This applies regardless of the language the binary was written in.
+
 ## Detection and Bypass Strategies
 
 | Technique | Detection tool | Bypass strategy |
@@ -266,14 +352,35 @@ to known API names using common hashing algorithms.
   access. Why would the author use both?"
   (Leads to: defence in depth — API hooking bypasses one, direct PEB access
   catches the other)
+- "This Rust binary imports IsDebuggerPresent. Is that anti-debug?"
+  (Leads to: not necessarily — Rust's panic handler imports it to decide
+  whether to break into a debugger or print a backtrace. Check whether the
+  call site is in user code with a defensive branch, or in the stdlib. An
+  import alone is not a technique.)
 
 ## Common Mistakes
 
 ### Assuming anti-analysis means the binary is malicious
 
 Some commercial software uses anti-debug and anti-VM for DRM and license
-enforcement. Anti-analysis is a strong indicator of malicious intent, but it
-is not definitive proof. Consider the full picture.
+enforcement. Commercial packers and protectors (Themida, VMProtect, EMERITA,
+ASProtect) employ techniques that look identical to malware anti-analysis
+when viewed through automated tooling. And as described in "False Positives
+from Compiler Runtimes" above, many APIs flagged as anti-analysis are simply
+part of the language runtime. A confirmed anti-analysis technique is a data
+point, not a verdict — consider the full picture.
+
+### Parroting tool labels without verification
+
+When `get_focused_imports()` categorises an API as "anti_analysis" or a YARA
+rule matches "anti_debug", these are **classification hints**, not confirmed
+findings. The tools categorise by capability (what an API *can* do), not by
+intent (what the developer *meant* it to do). Before reporting any API or
+YARA match as an anti-analysis technique, verify the usage: decompile the
+calling function, check whether the result controls a defensive branch, and
+determine whether the code is in user-written logic or a runtime library.
+Reporting `IsDebuggerPresent` as "anti-debug" in a Rust binary without
+checking is a false positive — and undermines the credibility of the analysis.
 
 ### Focusing on bypass before understanding
 

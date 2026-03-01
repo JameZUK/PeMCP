@@ -32,6 +32,41 @@ phases, adapting depth and tool selection to the analysis goal.
   need to decompile the relevant function and confirm the behaviour. A VT score of
   50/70 means engines flagged it; you still need to find the malicious functionality.
   Always corroborate indicators with direct evidence from the binary itself.
+- **Fair and contextual interpretation**: Analysis tools classify APIs and behaviors
+  by **capability** (what they *can* do), not by **intent** (what the developer
+  *meant* them to do). Before reporting any finding as suspicious or malicious,
+  determine whether it reflects deliberate adversarial intent or is an artifact of
+  the compiler, runtime, framework, or packer mechanics:
+  - **Compiler/runtime artifacts**: Many flagged APIs are imported by language
+    runtimes, not by the developer's code. Examples: `IsDebuggerPresent` in
+    Rust stdlib (panic handler), Delphi VCL, .NET CLR, and Go runtime;
+    `QueryPerformanceCounter` in any binary that measures time (async runtimes,
+    HTTP clients, GUI frameworks); `VirtualProtect` in any loader (section
+    permissions); `VirtualAlloc` in JIT compilers (.NET, Java) and large-buffer
+    allocators; `CreateProcessW` in any tool that launches subprocesses.
+    These are normal imports — not anti-analysis techniques. An API is only
+    "anti-analysis" when user-written code checks its result and alters
+    execution flow defensively.
+  - **Packer/loader mechanics**: Minimal imports, dynamic API resolution, PEB
+    access, reflective loading, NtTerminateProcess hooking — these are
+    **functional requirements** of any loader or packer, not anti-analysis
+    techniques. A reflective loader has few imports because it doesn't need
+    more. It resolves APIs at runtime because that's how loading works. Label
+    these as "loader mechanics" or "packer behavior", not "anti-analysis".
+  - **Commercial protectors**: EMERITA, Themida, VMProtect, ASProtect,
+    Enigma Protector, and similar products are legitimate commercial software
+    protection tools. Their techniques (code signing, packing, import
+    minimisation, runtime loading) are product features, not indicators of
+    malicious intent. Identify the protector and note it as such.
+  - **YARA false positives**: Rules matching byte patterns (not strings) can
+    fire on compiled code coincidentally. Always check the matched offset —
+    is it in user code or in a known library? Crypto-detection rules commonly
+    match legitimate TLS implementations (ChaCha20, AES). Behavioral rules
+    can match compiler-generated instruction sequences. Verify before reporting.
+  - **Framing language**: Use precise language. Say "the binary imports X" (fact),
+    not "the binary uses anti-analysis technique X" (interpretation) unless you
+    have confirmed deliberate defensive use. Say "the loader resolves APIs
+    dynamically" (mechanism), not "the binary hides its imports" (intent).
 - **Note everything**: After every decompilation, call `auto_note_function(address)`
   immediately. When you discover any finding, call `add_note()` to record it. This
   is non-negotiable — notes are how context survives across a long session and how
@@ -214,6 +249,11 @@ Use as needed based on goal:
 - **Imports**: `get_focused_imports()` — security-relevant imports categorized by
   threat behavior (networking, process injection, crypto, persistence, anti-analysis).
   Only use `get_pe_data(key='imports')` if you need the full unfiltered list.
+  **Important**: These categories reflect capability, not confirmed intent. Before
+  reporting imports as suspicious, consider the binary's compiler and runtime — Rust,
+  Go, .NET, and Delphi binaries routinely import APIs that get flagged as
+  "anti_analysis" or "execution" as part of their standard runtime. Cross-reference
+  with the binary's detected language/framework before drawing conclusions.
 
 - **Strings**: `get_strings_summary()` — categorized string intelligence (URLs, IPs,
   paths, registry keys, mutexes, crypto markers). NOT raw string dumps.
@@ -509,6 +549,23 @@ After the summary, offer the user two follow-up options:
 **Malware triage**: Verdict (MALICIOUS/SUSPICIOUS/BENIGN) + evidence summary (what
 was confirmed, not just what indicators flagged) + IOC table (hashes, network,
 host-based) + validated capabilities with the functions/code that implement them.
+The verdict must be based on **confirmed behaviors**, not on tool labels or raw
+indicator counts. Specifically:
+- Do not cite runtime imports as evidence of anti-analysis unless you confirmed
+  deliberate defensive use. APIs like IsDebuggerPresent, QueryPerformanceCounter,
+  VirtualAlloc, and VirtualProtect appear in the standard runtimes of Rust, Go,
+  .NET, Delphi, C++, and many other languages and frameworks.
+- Do not cite packer/loader mechanics (minimal imports, dynamic resolution,
+  reflective loading) as evidence of evasion — they are how packers and loaders
+  work. Describe the mechanism, not an assumed intent.
+- Do not cite YARA matches without verifying what was matched and where — byte
+  pattern rules frequently fire on compiler-generated code, crypto libraries,
+  and coincidental instruction sequences.
+- Identify the compiler, runtime, language, and packer early, and factor them
+  into every subsequent assessment. An API flagged as "anti_analysis" that comes
+  from the language's standard library is not evidence of anything.
+- If a binary is packed with a known commercial protector, note the protector by
+  name and do not treat its standard behavior as suspicious.
 
 **Deep RE**: Technical findings organized by function/module. Call graphs, data flows,
 algorithm descriptions, annotated decompilation highlights.

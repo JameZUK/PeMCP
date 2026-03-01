@@ -38,6 +38,24 @@ The packed binary is essentially a self-extracting container. The stub is the on
 code that exists in cleartext. Everything else — the real code, the real strings,
 the real imports — is hidden inside the compressed/encrypted payload.
 
+### Loader Mechanics Are Not Anti-Analysis
+
+Packer stubs exhibit behaviors that analysis tools flag as suspicious: minimal
+imports, dynamic API resolution, PEB access, VirtualAlloc/VirtualProtect calls,
+reflective loading, and sometimes NtTerminateProcess hooking. These are
+**functional requirements of any loader** — the stub needs these APIs to do its
+job. They are not anti-analysis techniques and should not be reported as such.
+
+A reflective loader has few imports because it only needs enough to bootstrap the
+loading process. It resolves APIs dynamically because that is literally how PE
+loading works — the Windows loader does the same thing, just earlier in the
+process. It calls VirtualProtect to set correct section permissions on the loaded
+payload. These are mechanics, not evasion.
+
+When analysing a packed binary, describe what the stub *does* (decompresses,
+loads, resolves imports) rather than what it *could be used for* (evasion,
+anti-analysis). The distinction matters for producing fair, accurate analysis.
+
 ### Identifying Packed Binaries
 
 Several indicators signal packing. No single indicator is conclusive, but multiple
