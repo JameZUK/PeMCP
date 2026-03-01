@@ -411,7 +411,7 @@ async def open_file(
             "status": "success",
             "filepath": abs_path,
             "internal_path": path_info["internal_path"],
-            "external_path": path_info["external_path"],
+            "external_path": path_info.get("external_path") or "",
             "mode": mode,
             "loaded_from_cache": _loaded_from_cache,
             "analyses_skipped": skip_list if skip_list else "none",
@@ -507,7 +507,7 @@ async def close_file(ctx: Context) -> Dict[str, str]:
         "status": "success",
         "message": f"File '{closed_path}' closed and analysis data cleared.",
         "internal_path": closed_path_info["internal_path"],
-        "external_path": closed_path_info["external_path"],
+        "external_path": closed_path_info.get("external_path") or "",
     }
 
 
