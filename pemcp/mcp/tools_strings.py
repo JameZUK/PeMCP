@@ -464,10 +464,105 @@ async def get_capa_analysis_info(ctx: Context,
     return await _check_mcp_response_size(ctx, data_to_send, "get_capa_analysis_info", limit_info_str)
 
 
+_MAX_BATCH_CAPA_RULES = 20
+
+
+def _process_single_capa_rule(all_rules_dict, rule_id, address_limit, address_offset=0,
+                              detail_limit_per_address=None, selected_feature_fields=None,
+                              feature_value_string_limit=None):
+    """Process match details for a single capa rule. Returns result dict (sync)."""
+    current_addr_offset = address_offset or 0
+    empty_pagination = {
+        'offset': current_addr_offset, 'limit': address_limit,
+        'current_items_count': 0, 'total_addresses_for_rule': 0,
+    }
+
+    if rule_id not in all_rules_dict:
+        return {"error": f"Rule ID '{rule_id}' not found.", "rule_id": rule_id,
+                "matches_data": {}, "address_pagination": empty_pagination}
+
+    original_rule_details = all_rules_dict[rule_id]
+    original_matches_field = original_rule_details.get('matches')
+
+    standardized_matches_dict = {}
+
+    if isinstance(original_matches_field, dict):
+        for addr_val, details_list in original_matches_field.items():
+            addr_str_key = hex(addr_val) if isinstance(addr_val, int) else str(addr_val)
+            standardized_matches_dict[addr_str_key] = details_list
+    elif isinstance(original_matches_field, list):
+        for item in original_matches_field:
+            if isinstance(item, list) and len(item) == 2:
+                addr_obj, detail_obj = item[0], item[1]
+                if isinstance(addr_obj, dict) and "value" in addr_obj:
+                    addr_val = addr_obj["value"]
+                    addr_str_key = hex(addr_val) if isinstance(addr_val, int) else str(addr_val)
+                    if addr_str_key not in standardized_matches_dict:
+                        standardized_matches_dict[addr_str_key] = []
+                    standardized_matches_dict[addr_str_key].append(detail_obj)
+
+    all_match_addresses_items = list(standardized_matches_dict.items())
+    total_addresses_for_rule = len(all_match_addresses_items)
+    paginated_address_items = all_match_addresses_items[current_addr_offset:current_addr_offset + address_limit]
+
+    processed_matches_data = {}
+    for addr_key_str, original_addr_details_list_for_addr in paginated_address_items:
+        details_list_copy = copy.deepcopy(original_addr_details_list_for_addr)
+
+        if not isinstance(details_list_copy, list):
+            processed_matches_data[addr_key_str] = [{"error": "Match details structure error."}]
+            continue
+
+        processed_addr_details = []
+        num_details_to_process = len(details_list_copy)
+
+        if detail_limit_per_address is not None:
+            if detail_limit_per_address == 0:
+                processed_matches_data[addr_key_str] = []
+                continue
+            num_details_to_process = min(len(details_list_copy), detail_limit_per_address)
+
+        for i in range(num_details_to_process):
+            detail_item = details_list_copy[i]
+
+            if isinstance(detail_item, dict) and 'feature' in detail_item and \
+               isinstance(detail_item['feature'], dict):
+                feature_obj = detail_item['feature']
+
+                if selected_feature_fields is not None:
+                    feature_obj = {
+                        f_key: feature_obj[f_key]
+                        for f_key in selected_feature_fields
+                        if f_key in feature_obj
+                    }
+
+                if 'value' in feature_obj and isinstance(feature_obj['value'], str) and \
+                   feature_value_string_limit is not None:
+                    feat_val_str = feature_obj['value']
+                    if len(feat_val_str) > feature_value_string_limit:
+                        feature_obj['value'] = feat_val_str[:feature_value_string_limit] + "... (truncated)"
+
+                detail_item['feature'] = feature_obj
+
+            processed_addr_details.append(detail_item)
+
+        processed_matches_data[addr_key_str] = processed_addr_details
+
+    pagination_info = {
+        'offset': current_addr_offset, 'limit': address_limit,
+        'current_items_count': len(processed_matches_data),
+        'total_addresses_for_rule': total_addresses_for_rule,
+    }
+
+    return {"rule_id": rule_id, "matches_data": processed_matches_data,
+            "address_pagination": pagination_info}
+
+
 @tool_decorator
 async def get_capa_rule_match_details(ctx: Context,
-                                      rule_id: str,
-                                      address_limit: int,
+                                      rule_id: str = "",
+                                      rule_ids: Optional[List[str]] = None,
+                                      address_limit: int = 5,
                                       address_offset: Optional[int] = 0,
                                       detail_limit_per_address: Optional[int] = None,
                                       selected_feature_fields: Optional[List[str]] = None,
@@ -484,8 +579,10 @@ async def get_capa_rule_match_details(ctx: Context,
 
     Args:
         ctx: The MCP Context object.
-        rule_id: (str) Mandatory. The ID/name of the rule to fetch matches for.
-        address_limit: (int) Mandatory. Max number of match addresses to return. Must be positive.
+        rule_id: (str) The ID/name of the rule to fetch matches for. Required unless rule_ids is provided.
+        rule_ids: (Optional[List[str]]) Batch mode: list of rule IDs to fetch matches
+            for in one call. Up to 20 items. Returns results keyed by rule_id.
+        address_limit: (int) Max number of match addresses to return per rule. Must be positive. Default 5.
         address_offset: (Optional[int]) Starting index for paginating match addresses. Defaults to 0.
         detail_limit_per_address: (Optional[int]) Limits feature match details per address. None for no limit.
         selected_feature_fields: (Optional[List[str]]) Specific fields from 'feature' object (e.g., ["type", "value"]).
@@ -493,16 +590,15 @@ async def get_capa_rule_match_details(ctx: Context,
 
     Returns:
         Dict with "rule_id", "matches_data" (address-keyed dict), "address_pagination", and optionally "error".
+        In batch mode: {"batch_results": {rule_id: {...}, ...}, "total": N, "succeeded": M}
     Raises:
         RuntimeError: If no Capa analysis data is found.
         ValueError: If parameters are invalid, or if the response size exceeds the server limit.
     """
-    await ctx.info(f"Request for 'capa_rule_match_details'. RuleID: {rule_id}, AddressLimit: {address_limit}, AddressOffset: {address_offset}, "
-                   f"DetailLimitPerAddr: {detail_limit_per_address}, SelectedFeatFields: {selected_feature_fields}, "
-                   f"FeatureValStrLimit: {feature_value_string_limit}")
-
-    if not rule_id: raise ValueError("Parameter 'rule_id' is mandatory.")
-    if not (isinstance(address_limit, int) and address_limit > 0): raise ValueError("'address_limit' must be positive.")
+    if not rule_id and not rule_ids:
+        raise ValueError("Either 'rule_id' or 'rule_ids' must be provided.")
+    if not (isinstance(address_limit, int) and address_limit > 0):
+        raise ValueError("'address_limit' must be positive.")
     for param_name, param_val in [
         ('address_offset', address_offset),
         ('detail_limit_per_address', detail_limit_per_address),
@@ -519,123 +615,61 @@ async def get_capa_rule_match_details(ctx: Context,
     capa_full_results = capa_data_block.get('results')
     capa_status = capa_data_block.get("status", "Unknown")
 
-    current_addr_offset = 0
-    if address_offset is not None: current_addr_offset = address_offset
-
-    empty_address_pagination = {
-        'offset': current_addr_offset, 'limit': address_limit,
-        'current_items_count': 0, 'total_addresses_for_rule': 0
-    }
-
     if (capa_status != "Analysis complete (adapted workflow)" and capa_status != "Analysis complete") or not capa_full_results:
-        error_data_details: Dict[str, Any] = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}",
-                        "rule_id": rule_id, "matches_data": {}, "address_pagination": empty_address_pagination}
+        error_data: Dict[str, Any] = {"error": f"Capa analysis not complete/results missing. Status: {capa_status}"}
         capa_hint = capa_data_block.get("hint")
         if capa_hint:
-            error_data_details["hint"] = capa_hint
+            error_data["hint"] = capa_hint
         capa_error_detail = capa_data_block.get("error")
         if capa_error_detail:
-            error_data_details["error_detail"] = capa_error_detail
-        return await _check_mcp_response_size(ctx, error_data_details, "get_capa_rule_match_details", "parameters like 'address_limit'")
-
+            error_data["error_detail"] = capa_error_detail
+        return await _check_mcp_response_size(ctx, error_data, "get_capa_rule_match_details", "parameters like 'address_limit'")
 
     all_rules_dict = capa_full_results.get('rules', {})
-    if rule_id not in all_rules_dict:
-        data_to_send = {"error": f"Rule ID '{rule_id}' not found.",
-                        "rule_id": rule_id, "matches_data": {}, "address_pagination": empty_address_pagination}
-        return await _check_mcp_response_size(ctx, data_to_send, "get_capa_rule_match_details", "parameters like 'address_limit'")
 
+    # ── Batch mode ──
+    if rule_ids is not None:
+        items = list(rule_ids[:_MAX_BATCH_CAPA_RULES])
+        await ctx.info(f"Batch capa rule details: {len(items)} rules, address_limit={address_limit}")
 
-    original_rule_details = all_rules_dict[rule_id]
-    original_matches_field = original_rule_details.get('matches')
+        batch_results: Dict[str, Any] = {}
+        succeeded = 0
+        for rid in items:
+            try:
+                entry = _process_single_capa_rule(
+                    all_rules_dict, rid, address_limit, address_offset,
+                    detail_limit_per_address, selected_feature_fields,
+                    feature_value_string_limit,
+                )
+                batch_results[rid] = entry
+                if "error" not in entry:
+                    succeeded += 1
+            except Exception as e:
+                batch_results[rid] = {"error": str(e)}
 
-    standardized_matches_dict = {}
+        response: Dict[str, Any] = {
+            "batch_results": batch_results,
+            "total": len(batch_results),
+            "succeeded": succeeded,
+            "failed": len(batch_results) - succeeded,
+        }
+        return await _check_mcp_response_size(ctx, response, "get_capa_rule_match_details",
+                                               "parameters like 'address_limit' or 'detail_limit_per_address'")
 
-    if isinstance(original_matches_field, dict):
-        for addr_val, details_list in original_matches_field.items():
-            addr_str_key = hex(addr_val) if isinstance(addr_val, int) else str(addr_val)
-            standardized_matches_dict[addr_str_key] = details_list
+    # ── Single-rule mode (original behaviour) ──
+    if not rule_id:
+        raise ValueError("Parameter 'rule_id' is mandatory when 'rule_ids' is not provided.")
 
-    elif isinstance(original_matches_field, list):
-        await ctx.info(f"Matches for rule '{rule_id}' is a list. Attempting to standardize.")
-        for item in original_matches_field:
-            if isinstance(item, list) and len(item) == 2:
-                addr_obj, detail_obj = item[0], item[1]
-                if isinstance(addr_obj, dict) and "value" in addr_obj:
-                    addr_val = addr_obj["value"]
-                    addr_str_key = hex(addr_val) if isinstance(addr_val, int) else str(addr_val)
+    await ctx.info(f"Request for 'capa_rule_match_details'. RuleID: {rule_id}, AddressLimit: {address_limit}, AddressOffset: {address_offset}, "
+                   f"DetailLimitPerAddr: {detail_limit_per_address}, SelectedFeatFields: {selected_feature_fields}, "
+                   f"FeatureValStrLimit: {feature_value_string_limit}")
 
-                    if addr_str_key not in standardized_matches_dict:
-                        standardized_matches_dict[addr_str_key] = []
-                    standardized_matches_dict[addr_str_key].append(detail_obj)
-                else:
-                    await ctx.warning(f"Skipping item in matches list for rule '{rule_id}': address object malformed. Item: {str(item)[:100]}")
-            else:
-                await ctx.warning(f"Skipping item in matches list for rule '{rule_id}': item not a pair. Item: {str(item)[:100]}")
-    elif original_matches_field is None:
-        await ctx.info(f"Matches data for rule '{rule_id}' was None. No address-specific matches.")
-    else:
-        await ctx.warning(f"Matches data for rule '{rule_id}' is unexpected type '{type(original_matches_field).__name__}'. Treating as no matches.")
+    data_to_send = _process_single_capa_rule(
+        all_rules_dict, rule_id, address_limit, address_offset,
+        detail_limit_per_address, selected_feature_fields, feature_value_string_limit,
+    )
 
-    all_match_addresses_items = list(standardized_matches_dict.items())
-    total_addresses_for_rule = len(all_match_addresses_items)
-
-    paginated_address_items = all_match_addresses_items[current_addr_offset : current_addr_offset + address_limit]
-
-    processed_matches_data = {}
-    for addr_key_str, original_addr_details_list_for_addr in paginated_address_items:
-        details_list_copy = copy.deepcopy(original_addr_details_list_for_addr)
-
-        if not isinstance(details_list_copy, list):
-            processed_matches_data[addr_key_str] = [{"error": "Match details structure error after standardization."}]
-            continue
-
-        processed_addr_details_for_this_addr = []
-        num_details_to_process = len(details_list_copy)
-
-        if detail_limit_per_address is not None:
-            if detail_limit_per_address == 0:
-                processed_matches_data[addr_key_str] = []
-                continue
-            num_details_to_process = min(len(details_list_copy), detail_limit_per_address)
-
-        for i in range(num_details_to_process):
-            detail_item_processed = details_list_copy[i]
-
-            if isinstance(detail_item_processed, dict) and 'feature' in detail_item_processed and \
-               isinstance(detail_item_processed['feature'], dict):
-
-                feature_obj_for_processing = detail_item_processed['feature']
-
-                if selected_feature_fields is not None:
-                    feature_obj_for_processing = {
-                        f_key: feature_obj_for_processing[f_key]
-                        for f_key in selected_feature_fields
-                        if f_key in feature_obj_for_processing
-                    }
-
-                if 'value' in feature_obj_for_processing and \
-                   isinstance(feature_obj_for_processing['value'], str) and \
-                   feature_value_string_limit is not None:
-                    feat_val_str = feature_obj_for_processing['value']
-                    if len(feat_val_str) > feature_value_string_limit:
-                        feature_obj_for_processing['value'] = feat_val_str[:feature_value_string_limit] + "... (truncated)"
-
-                detail_item_processed['feature'] = feature_obj_for_processing
-
-            processed_addr_details_for_this_addr.append(detail_item_processed)
-
-        processed_matches_data[addr_key_str] = processed_addr_details_for_this_addr
-
-    address_pagination_info = {
-        'offset': current_addr_offset,
-        'limit': address_limit,
-        'current_items_count': len(processed_matches_data),
-        'total_addresses_for_rule': total_addresses_for_rule
-    }
-
-    await ctx.info(f"Returning match details for rule '{rule_id}'. Addresses on page: {len(processed_matches_data)} of {total_addresses_for_rule}.")
-    data_to_send = {"rule_id": rule_id, "matches_data": processed_matches_data, "address_pagination": address_pagination_info}
+    await ctx.info(f"Returning match details for rule '{rule_id}'. Addresses: {data_to_send.get('address_pagination', {}).get('current_items_count', 0)}.")
     limit_info_str = "parameters like 'address_limit', 'address_offset', or 'detail_limit_per_address'"
     return await _check_mcp_response_size(ctx, data_to_send, "get_capa_rule_match_details", limit_info_str)
 
@@ -1350,10 +1384,70 @@ async def search_yara_custom(
 #  get_string_at_va
 # ===================================================================
 
+_MAX_BATCH_STRING_VA = 50
+
+
+def _extract_ascii(data: bytes) -> str:
+    end = data.find(b'\x00')
+    if end == -1:
+        end = len(data)
+    return data[:end].decode('ascii', errors='replace')
+
+
+def _extract_utf16(data: bytes) -> str:
+    for i in range(0, len(data) - 1, 2):
+        if data[i] == 0 and data[i + 1] == 0:
+            return data[:i].decode('utf-16-le', errors='replace')
+    return data.decode('utf-16-le', errors='replace')
+
+
+def _extract_string_at_va(pe, filepath: str, va: int, max_length: int, encoding: str) -> Dict[str, Any]:
+    """Core logic to extract a string at a single VA. Returns result dict."""
+    try:
+        offset = pe.get_offset_from_rva(va - pe.OPTIONAL_HEADER.ImageBase)
+    except Exception:
+        return {"error": f"Could not resolve VA {hex(va)} to a file offset."}
+
+    try:
+        with open(filepath, "rb") as f:
+            f.seek(offset)
+            raw = f.read(max_length)
+    except Exception as e:
+        return {"error": f"Failed to read at offset {offset}: {e}"}
+
+    result: Dict[str, Any] = {
+        "virtual_address": hex(va),
+        "file_offset": hex(offset),
+    }
+
+    if encoding == "auto":
+        ascii_str = _extract_ascii(raw)
+        utf16_str = _extract_utf16(raw)
+        ascii_printable = sum(1 for c in ascii_str if c.isprintable())
+        utf16_printable = sum(1 for c in utf16_str if c.isprintable())
+        if utf16_printable > ascii_printable and len(utf16_str) > 1:
+            result["string"] = utf16_str
+            result["encoding"] = "utf-16-le"
+        else:
+            result["string"] = ascii_str
+            result["encoding"] = "ascii"
+    elif encoding == "utf16le":
+        result["string"] = _extract_utf16(raw)
+        result["encoding"] = "utf-16-le"
+    else:
+        result["string"] = _extract_ascii(raw)
+        result["encoding"] = "ascii"
+
+    result["length"] = len(result["string"])
+    result["hex_preview"] = raw[:32].hex()
+    return result
+
+
 @tool_decorator
 async def get_string_at_va(
     ctx: Context,
     virtual_address: str = "",
+    virtual_addresses: Optional[List[str]] = None,
     max_length: int = 256,
     encoding: str = "auto",
 ) -> Dict[str, Any]:
@@ -1367,74 +1461,48 @@ async def get_string_at_va(
     Args:
         ctx: The MCP Context object.
         virtual_address: (str) Virtual address as hex string (e.g. '0x401000').
+        virtual_addresses: (Optional[List[str]]) Batch mode: list of hex VA strings
+            to extract in one call. Up to 50 items. Returns results keyed by address.
         max_length: (int) Maximum bytes to read (default 256).
         encoding: (str) 'ascii', 'utf16le', or 'auto' (tries both).
     """
-    await ctx.info(f"Extracting string at VA {virtual_address}")
     _check_pe_loaded("get_string_at_va")
-
-    if not virtual_address:
-        raise ValueError("virtual_address is required (e.g. '0x401000').")
-
-    from pemcp.mcp._input_helpers import _parse_int_param
-    va = _parse_int_param(virtual_address, "virtual_address")
 
     pe = state.pe_object
     if pe is None:
         return {"error": "PE object not available. This tool requires a PE file."}
 
-    # Resolve VA to file offset
-    try:
-        offset = pe.get_offset_from_rva(va - pe.OPTIONAL_HEADER.ImageBase)
-    except Exception:
-        return {"error": f"Could not resolve VA {hex(va)} to a file offset. Check that the address is valid."}
+    from pemcp.mcp._input_helpers import _parse_int_param
 
-    # Read raw bytes from file
-    try:
-        with open(state.filepath, "rb") as f:
-            f.seek(offset)
-            raw = f.read(max_length)
-    except Exception as e:
-        return {"error": f"Failed to read at offset {offset}: {e}"}
+    # ── Batch mode ──
+    if virtual_addresses is not None:
+        items = list(virtual_addresses[:_MAX_BATCH_STRING_VA])
+        await ctx.info(f"Batch extracting strings at {len(items)} VAs")
 
-    results: Dict[str, Any] = {
-        "virtual_address": hex(va),
-        "file_offset": hex(offset),
-    }
+        batch_results: Dict[str, Any] = {}
+        succeeded = 0
+        for va_str in items:
+            try:
+                va = _parse_int_param(va_str, "virtual_address")
+                entry = _extract_string_at_va(pe, state.filepath, va, max_length, encoding)
+                batch_results[hex(va)] = entry
+                if "error" not in entry:
+                    succeeded += 1
+            except Exception as e:
+                batch_results[va_str] = {"error": str(e)}
 
-    def _extract_ascii(data: bytes) -> str:
-        end = data.find(b'\x00')
-        if end == -1:
-            end = len(data)
-        return data[:end].decode('ascii', errors='replace')
+        response: Dict[str, Any] = {
+            "batch_results": batch_results,
+            "total": len(batch_results),
+            "succeeded": succeeded,
+        }
+        return await _check_mcp_response_size(ctx, response, "get_string_at_va")
 
-    def _extract_utf16(data: bytes) -> str:
-        # Find null terminator (two zero bytes on even boundary)
-        for i in range(0, len(data) - 1, 2):
-            if data[i] == 0 and data[i + 1] == 0:
-                return data[:i].decode('utf-16-le', errors='replace')
-        return data.decode('utf-16-le', errors='replace')
+    # ── Single-address mode (original behaviour) ──
+    await ctx.info(f"Extracting string at VA {virtual_address}")
 
-    if encoding == "auto":
-        ascii_str = _extract_ascii(raw)
-        utf16_str = _extract_utf16(raw)
-        # Prefer the longer readable string
-        ascii_printable = sum(1 for c in ascii_str if c.isprintable())
-        utf16_printable = sum(1 for c in utf16_str if c.isprintable())
-        if utf16_printable > ascii_printable and len(utf16_str) > 1:
-            results["string"] = utf16_str
-            results["encoding"] = "utf-16-le"
-        else:
-            results["string"] = ascii_str
-            results["encoding"] = "ascii"
-    elif encoding == "utf16le":
-        results["string"] = _extract_utf16(raw)
-        results["encoding"] = "utf-16-le"
-    else:
-        results["string"] = _extract_ascii(raw)
-        results["encoding"] = "ascii"
+    if not virtual_address:
+        raise ValueError("virtual_address is required (e.g. '0x401000').")
 
-    results["length"] = len(results["string"])
-    results["hex_preview"] = raw[:32].hex()
-
-    return results
+    va = _parse_int_param(virtual_address, "virtual_address")
+    return _extract_string_at_va(pe, state.filepath, va, max_length, encoding)

@@ -46,6 +46,14 @@ phases, adapting depth and tool selection to the analysis goal.
   `refinery_carve`, `refinery_regex_extract`. Only write Python scripts as an
   absolute last resort when no internal tool can accomplish the task — and
   document why the fallback was necessary in a note.
+  - **Common anti-pattern**: writing a Python RC4/XOR/AES script when
+    `refinery_pipeline` or `refinery_decrypt` already supports the algorithm.
+  - **Batch mode**: When you need to decrypt/decode multiple blobs (e.g.,
+    95 Base64+RC4 config entries), use `data_hex_list` in `refinery_pipeline`
+    instead of writing Python loops or calling the tool 95 times. Similarly,
+    `get_string_at_va(virtual_addresses=[...])`,
+    `auto_note_function(function_addresses=[...])`, and
+    `get_capa_rule_match_details(rule_ids=[...])` accept batch lists.
 - **Trust PeMCP's built-in guidance**: When tools error, PeMCP returns enriched
   error messages with actionable next steps and alternative tool suggestions.
   Follow those hints rather than guessing at workarounds.
@@ -336,6 +344,20 @@ session artifact with hashes and file type detection. Artifacts are:
 - Included in `export_project()` archives (up to 50 MB total)
 - Persisted in cache — restored on next `open_file()` of the same binary
 - Tracked in session state — use `get_artifacts()` to list them
+
+### Batch Operations
+
+Several tools support batch mode to avoid repeated single-item calls:
+
+| Tool | Batch Parameter | Cap | Use Case |
+|------|----------------|-----|----------|
+| `refinery_pipeline` | `data_hex_list` | 100 | Decrypt/decode many blobs with the same pipeline (e.g., 95 Base64+RC4 config entries) |
+| `get_string_at_va` | `virtual_addresses` | 50 | Extract strings at multiple VAs from decompilation/disassembly output |
+| `auto_note_function` | `function_addresses` | 20 | Auto-note many functions after batch decompilation |
+| `get_capa_rule_match_details` | `rule_ids` | 20 | Get match details for multiple capa rules at once |
+
+Batch results include per-item error isolation — individual failures don't fail
+the batch. Each response includes `total`, `succeeded`, and `failed` counts.
 
 ### .NET-Specific Extraction
 - `refinery_dotnet(data, operation)` — .NET resource/metadata extraction

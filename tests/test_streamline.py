@@ -301,6 +301,41 @@ class TestAutoNoteFunction:
         assert "auto_summary" in result
         assert "note_id" in result
 
+    def test_batch_mode_creates_multiple_notes(self, mock_ctx):
+        from pemcp.mcp.tools_notes import auto_note_function
+        result = _run(auto_note_function.__wrapped__(
+            mock_ctx,
+            function_addresses=["0x401000", "0x402000", "0x403000"],
+        ))
+        assert "batch_results" in result
+        assert result["total"] == 3
+        assert result["succeeded"] == 3
+        assert result["failed"] == 0
+        for entry in result["batch_results"]:
+            assert "note_id" in entry
+            assert "auto_summary" in entry
+
+    def test_batch_mode_custom_summary_rejected(self, mock_ctx):
+        from pemcp.mcp.tools_notes import auto_note_function
+        result = _run(auto_note_function.__wrapped__(
+            mock_ctx,
+            function_addresses=["0x401000"],
+            custom_summary="Should be rejected",
+        ))
+        assert "error" in result
+
+    def test_single_mode_unchanged_with_address_alias(self, mock_ctx):
+        from pemcp.mcp.tools_notes import auto_note_function
+        result = _run(auto_note_function.__wrapped__(
+            mock_ctx,
+            address="0x401000",
+            custom_summary="Test via alias",
+        ))
+        assert result["auto_summary"] == "Test via alias"
+        assert result["address"] == "0x401000"
+        # Should NOT have batch_results key
+        assert "batch_results" not in result
+
 
 # ===================================================================
 # Analysis Digest

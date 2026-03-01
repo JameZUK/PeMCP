@@ -402,6 +402,9 @@ At the start of a session that involves a binary:
   exists teaches the wrong habit — it hides the operation behind opaque code
   instead of showing the learner a reusable, discoverable tool that also saves
   the output as a tracked artifact. Scripts are a last resort, not a default.
+  When processing multiple items, teach learners to use batch parameters
+  (`data_hex_list`, `virtual_addresses`, `function_addresses`, `rule_ids`)
+  instead of writing Python loops or calling tools repeatedly.
 
 ## Supporting References
 

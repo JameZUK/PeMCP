@@ -964,10 +964,69 @@ async def refinery_hash(
 #  10. TRANSFORMATION PIPELINE
 # ===================================================================
 
+_PIPELINE_UNIT_MAP = {
+    "b64": ("refinery.units.encoding.b64", "b64", {}),
+    "hex": ("refinery.units.encoding.hex", "hex", {}),
+    "b32": ("refinery.units.encoding.b32", "b32", {}),
+    "b85": ("refinery.units.encoding.b85", "b85", {}),
+    "url": ("refinery.units.encoding.url", "url", {}),
+    "esc": ("refinery.units.encoding.esc", "esc", {}),
+    "u16": ("refinery.units.encoding.u16", "u16", {}),
+    "zl": ("refinery.units.compression.zl", "zl", {}),
+    "bz2": ("refinery.units.compression.bz2", "bz2", {}),
+    "lzma": ("refinery.units.compression.lz", "lzma", {}),
+    "lz4": ("refinery.units.compression.lz4", "lz4", {}),
+    "decompress": ("refinery.units.compression.decompress", "decompress", {}),
+    "rot": ("refinery.units.crypto.cipher.rot", "rot", {}),
+}
+
+_MAX_BATCH_PIPELINE = 100
+
+
+def _run_pipeline_single(data: bytes, steps: list) -> tuple:
+    """Execute a pipeline on a single data blob. Returns (result_bytes, step_log)."""
+    import importlib
+    current = data
+    step_log = [{"step": "input", "size": len(current)}]
+
+    for step_str in steps:
+        parts = step_str.split(":")
+        unit_name = parts[0].lower()
+
+        if unit_name == "xor":
+            from refinery.units.blockwise.xor import xor
+            key = bytes.fromhex(parts[1]) if len(parts) > 1 else b"\x00"
+            current = current | xor(key) | bytes
+        elif unit_name in ("rc4", "aes", "des", "blowfish", "chacha", "salsa"):
+            mod_path = f"refinery.units.crypto.cipher.{unit_name}"
+            mod = importlib.import_module(mod_path)
+            unit_cls = getattr(mod, unit_name)
+            kwargs = {}
+            if len(parts) > 1:
+                kwargs["key"] = bytes.fromhex(parts[1])
+            if len(parts) > 2:
+                kwargs["mode"] = parts[2].upper()
+            if len(parts) > 3:
+                kwargs["iv"] = bytes.fromhex(parts[3])
+            current = current | unit_cls(**kwargs) | bytes
+        elif unit_name in _PIPELINE_UNIT_MAP:
+            mod_path, cls_name, kwargs = _PIPELINE_UNIT_MAP[unit_name]
+            mod = importlib.import_module(mod_path)
+            unit_cls = getattr(mod, cls_name)
+            current = current | unit_cls(**kwargs) | bytes
+        else:
+            raise ValueError(f"Unknown pipeline unit: '{unit_name}'")
+
+        step_log.append({"step": step_str, "size": len(current)})
+
+    return current, step_log
+
+
 @tool_decorator
 async def refinery_pipeline(
     ctx: Context,
     data_hex: Optional[str] = None,
+    data_hex_list: Optional[List[str]] = None,
     steps: Optional[List[str]] = None,
     file_offset: Optional[str] = None,
     length: Optional[int] = None,
@@ -981,6 +1040,10 @@ async def refinery_pipeline(
     Args:
         ctx: MCP Context.
         data_hex: (Optional[str]) Input data as hex. If None, uses file_offset/length or loaded file.
+        data_hex_list: (Optional[List[str]]) Batch mode: list of hex-encoded inputs to
+            process through the same pipeline steps. Up to 100 items. Cannot be combined
+            with file_offset or output_path. Example: batch Base64+RC4 decrypt of 95
+            config blobs using steps=["b64", "rc4:<key_hex>"].
         steps: (List[str]) Ordered list of transformation steps.
         file_offset: (Optional[str]) Offset into loaded file (e.g. '0x3B80'). Alternative to data_hex.
         length: (Optional[int]) Number of bytes to read from file_offset.
@@ -988,6 +1051,7 @@ async def refinery_pipeline(
 
     Returns:
         Dictionary with final result and per-step size tracking.
+        In batch mode: {"batch_results": [...], "steps": [...], "total": N, "succeeded": M, "failed": F}
     """
     _require_refinery("refinery_pipeline")
 
@@ -995,68 +1059,55 @@ async def refinery_pipeline(
         return {"error": "No pipeline steps provided. Pass a list of step strings."}
     steps = list(steps)
 
+    # ── Batch mode ──
+    if data_hex_list is not None:
+        if file_offset is not None:
+            return {"error": "file_offset is not supported in batch mode. Pass data via data_hex_list only."}
+        if output_path is not None:
+            return {"error": "output_path is not supported in batch mode. Process results individually if file output is needed."}
+
+        items = list(data_hex_list[:_MAX_BATCH_PIPELINE])
+        await ctx.info(f"Batch pipeline: {len(items)} items through {len(steps)} steps ({' | '.join(steps)})")
+
+        def _run_batch():
+            results = []
+            for idx, item_hex in enumerate(items):
+                entry: Dict[str, Any] = {"index": idx, "input_preview": item_hex[:40]}
+                try:
+                    item_data = bytes.fromhex(item_hex)
+                    if len(item_data) > _MAX_INPUT_SIZE:
+                        entry["error"] = f"Input too large ({len(item_data)} bytes)."
+                    else:
+                        out, _log = _run_pipeline_single(item_data, steps)
+                        entry["output_hex"] = _bytes_to_hex(out)
+                        entry["output_text"] = _safe_decode(out)[:2000]
+                        entry["output_size"] = len(out)
+                except Exception as e:
+                    entry["error"] = str(e)
+                results.append(entry)
+            return results
+
+        batch_results = await asyncio.to_thread(_run_batch)
+        succeeded = sum(1 for r in batch_results if "error" not in r)
+        response: Dict[str, Any] = {
+            "batch_results": batch_results,
+            "steps": steps,
+            "total": len(batch_results),
+            "succeeded": succeeded,
+            "failed": len(batch_results) - succeeded,
+        }
+        return await _check_mcp_response_size(ctx, response, "refinery_pipeline")
+
+    # ── Single-item mode (original behaviour) ──
     data = _get_data_from_hex_or_file_with_offset(data_hex, file_offset, length)
     if len(data) > _MAX_INPUT_SIZE:
         raise RuntimeError(f"Input too large ({len(data)} bytes).")
 
     await ctx.info(f"Running {len(steps)}-step pipeline: {' | '.join(steps)}")
 
-    _UNIT_MAP = {
-        "b64": ("refinery.units.encoding.b64", "b64", {}),
-        "hex": ("refinery.units.encoding.hex", "hex", {}),
-        "b32": ("refinery.units.encoding.b32", "b32", {}),
-        "b85": ("refinery.units.encoding.b85", "b85", {}),
-        "url": ("refinery.units.encoding.url", "url", {}),
-        "esc": ("refinery.units.encoding.esc", "esc", {}),
-        "u16": ("refinery.units.encoding.u16", "u16", {}),
-        "zl": ("refinery.units.compression.zl", "zl", {}),
-        "bz2": ("refinery.units.compression.bz2", "bz2", {}),
-        "lzma": ("refinery.units.compression.lz", "lzma", {}),
-        "lz4": ("refinery.units.compression.lz4", "lz4", {}),
-        "decompress": ("refinery.units.compression.decompress", "decompress", {}),
-        "rot": ("refinery.units.crypto.cipher.rot", "rot", {}),
-    }
+    result, step_log = await asyncio.to_thread(_run_pipeline_single, data, steps)
 
-    def _run():
-        import importlib
-        current = data
-        step_log = [{"step": "input", "size": len(current)}]
-
-        for step_str in steps:
-            parts = step_str.split(":")
-            unit_name = parts[0].lower()
-
-            if unit_name == "xor":
-                from refinery.units.blockwise.xor import xor
-                key = bytes.fromhex(parts[1]) if len(parts) > 1 else b"\x00"
-                current = current | xor(key) | bytes
-            elif unit_name in ("rc4", "aes", "des", "blowfish", "chacha", "salsa"):
-                mod_path = f"refinery.units.crypto.cipher.{unit_name}"
-                mod = importlib.import_module(mod_path)
-                unit_cls = getattr(mod, unit_name)
-                kwargs = {}
-                if len(parts) > 1:
-                    kwargs["key"] = bytes.fromhex(parts[1])
-                if len(parts) > 2:
-                    kwargs["mode"] = parts[2].upper()
-                if len(parts) > 3:
-                    kwargs["iv"] = bytes.fromhex(parts[3])
-                current = current | unit_cls(**kwargs) | bytes
-            elif unit_name in _UNIT_MAP:
-                mod_path, cls_name, kwargs = _UNIT_MAP[unit_name]
-                mod = importlib.import_module(mod_path)
-                unit_cls = getattr(mod, cls_name)
-                current = current | unit_cls(**kwargs) | bytes
-            else:
-                raise ValueError(f"Unknown pipeline unit: '{unit_name}'")
-
-            step_log.append({"step": step_str, "size": len(current)})
-
-        return current, step_log
-
-    result, step_log = await asyncio.to_thread(_run)
-
-    response: Dict[str, Any] = {
+    response = {
         "steps_executed": len(steps),
         "step_log": step_log,
         "final_size": len(result),

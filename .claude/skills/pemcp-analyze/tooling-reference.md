@@ -17,6 +17,8 @@ Source files: `pemcp/mcp/tools_*.py`
 | `get_notes()` to check findings | `get_analysis_digest()` | Digest aggregates notes with triage data and coverage |
 | `get_hex_dump()` + `refinery_xor(data_hex=...)` | `refinery_xor(file_offset=..., length=...)` | Single step; avoids hex-encoding large blobs |
 | Extracting payload without `output_path` | `refinery_xor/pipeline/carve(..., output_path=...)` | Saves to disk AND registers as artifact with hashes and type detection |
+| Writing a Python crypto script (RC4, XOR, AES) | `refinery_pipeline` / `refinery_decrypt` | Internal tools are logged, reproducible, auditable |
+| Repeated single-item tool calls (e.g., 50× `get_string_at_va`) | Batch parameters (`data_hex_list`, `virtual_addresses`, `function_addresses`, `rule_ids`) | Single call, cleaner history, per-item error isolation |
 
 ---
 
