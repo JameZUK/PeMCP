@@ -82,7 +82,7 @@ For other installation methods (local Python, minimal install) and detailed conf
 | **[Installation Guide](docs/installation.md)** | Docker, local, and minimal installation; modes of operation; multi-format binary support |
 | **[Claude Code Integration](docs/claude-code.md)** | Setup via CLI and JSON config; analysis and learning skills; typical workflows and example queries |
 | **[Configuration](docs/configuration.md)** | API keys, analysis cache, and command-line options |
-| **[Tools Reference](docs/tools-reference.md)** | Complete catalog of all 175 MCP tools organised by category |
+| **[Tools Reference](docs/tools-reference.md)** | Complete catalog of all 178 MCP tools organised by category |
 | **[Scenarios & Comparisons](docs/scenarios.md)** | Five real-world analysis walkthroughs; PeMCP vs Ghidra, IDA Pro, CyberChef |
 | **[Architecture](docs/architecture.md)** | Package structure, design principles, pagination and result limits |
 | **[Security & Testing](docs/security.md)** | Path sandboxing, security measures, testing and CI/CD |

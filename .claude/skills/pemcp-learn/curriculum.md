@@ -508,7 +508,7 @@ complex unpacking, protocol analysis, YARA authoring, and campaign analysis.
 
 ### Module 4.2: Protocol Reverse Engineering
 
-**Prerequisites**: `decompiler_output`, `data_flow_analysis`, `emulation_vs_execution`
+**Prerequisites**: `decompiler_output`, `reaching_definitions`, `emulation_vs_execution`
 **Concepts**: `network_protocols`, `serialization_formats`, `command_dispatch`,
   `session_management`, `custom_encodings`
 

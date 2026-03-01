@@ -144,6 +144,7 @@ async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
     try:
         compile_time = datetime.datetime.fromtimestamp(timestamp, tz=datetime.timezone.utc).isoformat()
     except Exception:
+        logger.debug("get_pe_metadata: failed to parse compile timestamp %s", timestamp, exc_info=True)
         compile_time = "invalid"
 
     timestamp_suspicious = False
@@ -154,6 +155,7 @@ async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
     try:
         checksum_valid = pe.verify_checksum()
     except Exception:
+        logger.debug("get_pe_metadata: failed to verify checksum", exc_info=True)
         checksum_valid = None
 
     return {
@@ -235,6 +237,7 @@ async def extract_resources(ctx: Context, limit: int = 20) -> Dict[str, Any]:
                     preview = data[:64].hex()
                     entropy = shannon_entropy(data)
                 except Exception:
+                    logger.debug("extract_resources: failed to read resource data at RVA %s", hex(data_rva), exc_info=True)
                     preview = ""
                     entropy = 0.0
 
@@ -501,7 +504,7 @@ async def detect_format_strings(ctx: Context, limit: int = 20) -> Dict[str, Any]
                     likely_packed = True
                     break
         except Exception:
-            pass
+            logger.debug("detect_format_strings: failed to check section entropy for packing", exc_info=True)
     if likely_packed:
         result["warning"] = (
             "Binary appears packed or compressed. Format specifier matches "
@@ -567,7 +570,7 @@ async def detect_compression_headers(ctx: Context, limit: int = 30) -> Dict[str,
                     if sec:
                         section_name = sec.Name.decode('utf-8', 'ignore').strip('\x00')
                 except Exception:
-                    pass
+                    logger.debug("detect_compression_headers: failed to resolve section at offset %s", hex(idx), exc_info=True)
 
                 findings.append({
                     "offset": hex(idx),
@@ -632,6 +635,7 @@ async def deobfuscate_xor_multi_byte(
     try:
         dec_text = decrypted.decode('utf-8', 'ignore')
     except Exception:
+        logger.debug("deobfuscate_xor_multi_byte: UTF-8 decode failed, falling back to latin-1", exc_info=True)
         dec_text = decrypted.decode('latin-1', 'ignore')
 
     printable_ratio = sum(1 for c in dec_text if ' ' <= c <= '~' or c in '\n\r\t') / max(len(dec_text), 1)
@@ -807,7 +811,7 @@ async def detect_crypto_constants(ctx: Context, limit: int = 20) -> Dict[str, An
                     if sec:
                         section_name = sec.Name.decode('utf-8', 'ignore').strip('\x00')
                 except Exception:
-                    pass
+                    logger.debug("detect_crypto_constants: failed to resolve section at offset %s", hex(idx), exc_info=True)
                 findings.append({
                     "offset": hex(idx),
                     "algorithm": name,
@@ -996,7 +1000,7 @@ async def scan_for_api_hashes(
                     if sec:
                         section_name = sec.Name.decode('utf-8', 'ignore').strip('\x00')
                 except Exception:
-                    pass
+                    logger.debug("scan_for_api_hashes: failed to resolve section at offset %s", hex(i), exc_info=True)
                 matches.append({
                     "offset": hex(i),
                     "hash_value": hex(val),
@@ -1041,6 +1045,7 @@ async def get_import_hash_analysis(ctx: Context, compact: bool = False) -> Dict[
     try:
         imphash = pe.get_imphash()
     except Exception:
+        logger.debug("get_import_hash_analysis: failed to compute imphash", exc_info=True)
         imphash = None
 
     # Categorize imports

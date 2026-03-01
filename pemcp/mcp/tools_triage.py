@@ -1,4 +1,5 @@
 """MCP tool for comprehensive automated binary triage."""
+import asyncio
 import math
 import mmap
 import os
@@ -15,6 +16,7 @@ from pemcp.config import (
     PYELFTOOLS_AVAILABLE,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from pemcp.mcp._progress_bridge import ProgressBridge
 
 if PYELFTOOLS_AVAILABLE:
     from elftools.elf.elffile import ELFFile
@@ -1715,251 +1717,209 @@ async def get_triage_report(
 
     _check_pe_loaded("get_triage_report")
 
-    risk_score = 0  # Cumulative risk score (higher = more suspicious)
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
-    triage_report: Dict[str, Any] = {
-        "file_info": {},
-        "timestamp_analysis": {},
-        "packing_assessment": {},
-        "digital_signature": {},
-        "rich_header_summary": {},
-        "suspicious_imports": [],
-        "import_anomalies": {},
-        "suspicious_capabilities": [],
-        "network_iocs": {},
-        "section_anomalies": [],
-        "overlay_analysis": {},
-        "resource_anomalies": [],
-        "yara_matches": [],
-        "header_anomalies": [],
-        "tls_callbacks": {},
-        "security_mitigations": {},
-        "delay_load_risks": {},
-        "version_info_anomalies": {},
-        "dotnet_indicators": {},
-        "export_anomalies": {},
-        "high_value_strings": [],
-        "elf_security": {},
-        "macho_security": {},
-        "compiler_language": {},
-        "risk_score": 0,
-        "risk_level": "UNKNOWN",
-        "suggested_next_tools": [],
-    }
+    def _run_triage_sync() -> Dict[str, Any]:
+        """Run all CPU-intensive triage work in a worker thread."""
+        risk_score = 0
 
-    # ---------------------------------------------------------------
-    # 0. Basic file info
-    # ---------------------------------------------------------------
-    await ctx.report_progress(2, 100)
-    await ctx.info("[triage] Collecting file info...")
-    triage_report["file_info"] = _triage_file_info(indicator_limit)
-    analysis_mode = triage_report["file_info"]["mode"]
-    file_size = triage_report["file_info"]["file_size"]
+        triage_report: Dict[str, Any] = {
+            "file_info": {},
+            "timestamp_analysis": {},
+            "packing_assessment": {},
+            "digital_signature": {},
+            "rich_header_summary": {},
+            "suspicious_imports": [],
+            "import_anomalies": {},
+            "suspicious_capabilities": [],
+            "network_iocs": {},
+            "section_anomalies": [],
+            "overlay_analysis": {},
+            "resource_anomalies": [],
+            "yara_matches": [],
+            "header_anomalies": [],
+            "tls_callbacks": {},
+            "security_mitigations": {},
+            "delay_load_risks": {},
+            "version_info_anomalies": {},
+            "dotnet_indicators": {},
+            "export_anomalies": {},
+            "high_value_strings": [],
+            "elf_security": {},
+            "macho_security": {},
+            "compiler_language": {},
+            "risk_score": 0,
+            "risk_level": "UNKNOWN",
+            "suggested_next_tools": [],
+        }
 
-    # ---------------------------------------------------------------
-    # 0a. Timestamp Anomaly Detection
-    # ---------------------------------------------------------------
-    data, delta = _triage_timestamp_analysis(analysis_mode, indicator_limit)
-    triage_report["timestamp_analysis"] = data
-    risk_score += delta
+        # 0. Basic file info
+        bridge.report_progress(2, 100, force=True)
+        bridge.info("[triage] Collecting file info...")
+        triage_report["file_info"] = _triage_file_info(indicator_limit)
+        analysis_mode = triage_report["file_info"]["mode"]
+        file_size = triage_report["file_info"]["file_size"]
 
-    # ---------------------------------------------------------------
-    # 1. Packing Assessment
-    # ---------------------------------------------------------------
-    await ctx.report_progress(8, 100)
-    await ctx.info("[triage] Assessing packing...")
-    data, delta = _triage_packing_assessment(indicator_limit)
-    triage_report["packing_assessment"] = data
-    risk_score += delta
+        # 0a. Timestamp Anomaly Detection
+        data, delta = _triage_timestamp_analysis(analysis_mode, indicator_limit)
+        triage_report["timestamp_analysis"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 2. Digital Signature Assessment
-    # ---------------------------------------------------------------
-    data, delta = _triage_digital_signature(indicator_limit)
-    triage_report["digital_signature"] = data
-    risk_score += delta
-    sig_present = data["present"]
-    sig_signer = data["signer"]
+        # 1. Packing Assessment
+        bridge.report_progress(8, 100)
+        bridge.info("[triage] Assessing packing...")
+        data, delta = _triage_packing_assessment(indicator_limit)
+        triage_report["packing_assessment"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 2a. Rich Header Summary
-    # ---------------------------------------------------------------
-    data, delta = _triage_rich_header(analysis_mode, indicator_limit)
-    triage_report["rich_header_summary"] = data
-    risk_score += delta
+        # 2. Digital Signature Assessment
+        data, delta = _triage_digital_signature(indicator_limit)
+        triage_report["digital_signature"] = data
+        risk_score += delta
+        sig_present = data["present"]
+        sig_signer = data["signer"]
 
-    # ---------------------------------------------------------------
-    # 3. Suspicious Imports
-    # ---------------------------------------------------------------
-    await ctx.report_progress(20, 100)
-    await ctx.info("[triage] Analyzing imports...")
-    imports_result, delta = _triage_suspicious_imports(indicator_limit)
-    triage_report["suspicious_imports"] = imports_result["suspicious_imports"]
-    triage_report["suspicious_import_summary"] = imports_result["suspicious_import_summary"]
-    risk_score += delta
+        # 2a. Rich Header Summary
+        data, delta = _triage_rich_header(analysis_mode, indicator_limit)
+        triage_report["rich_header_summary"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 4. Capa Capabilities
-    # ---------------------------------------------------------------
-    await ctx.report_progress(28, 100)
-    await ctx.info("[triage] Checking capa capabilities...")
-    capa_data, delta, capa_status_info = _triage_capa_capabilities(indicator_limit)
-    triage_report["suspicious_capabilities"] = capa_data
-    risk_score += delta
-    if capa_status_info is not None:
-        triage_report["capa_status"] = capa_status_info
+        # 3. Suspicious Imports
+        bridge.report_progress(20, 100)
+        bridge.info("[triage] Analyzing imports...")
+        imports_result, delta = _triage_suspicious_imports(indicator_limit)
+        triage_report["suspicious_imports"] = imports_result["suspicious_imports"]
+        triage_report["suspicious_import_summary"] = imports_result["suspicious_import_summary"]
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 5. Network IOC Extraction
-    # ---------------------------------------------------------------
-    await ctx.report_progress(35, 100)
-    await ctx.info("[triage] Extracting network IOCs...")
-    all_string_values = _collect_all_string_values()
-    data, delta = _triage_network_iocs(indicator_limit, all_string_values)
-    triage_report["network_iocs"] = data
-    risk_score += delta
+        # 4. Capa Capabilities
+        bridge.report_progress(28, 100)
+        bridge.info("[triage] Checking capa capabilities...")
+        capa_data, delta, capa_status_info = _triage_capa_capabilities(indicator_limit)
+        triage_report["suspicious_capabilities"] = capa_data
+        risk_score += delta
+        if capa_status_info is not None:
+            triage_report["capa_status"] = capa_status_info
 
-    # ---------------------------------------------------------------
-    # 6. Section Anomalies
-    # ---------------------------------------------------------------
-    await ctx.report_progress(42, 100)
-    await ctx.info("[triage] Checking sections & overlays...")
-    sec_data, delta = _triage_section_anomalies(indicator_limit)
-    triage_report["section_anomalies"] = sec_data
-    risk_score += delta
+        # 5. Network IOC Extraction
+        bridge.report_progress(35, 100)
+        bridge.info("[triage] Extracting network IOCs...")
+        all_string_values = _collect_all_string_values()
+        data, delta = _triage_network_iocs(indicator_limit, all_string_values)
+        triage_report["network_iocs"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6a. Overlay / Appended Data Analysis
-    # ---------------------------------------------------------------
-    data, delta = _triage_overlay_analysis(indicator_limit, file_size)
-    triage_report["overlay_analysis"] = data
-    risk_score += delta
+        # 6. Section Anomalies
+        bridge.report_progress(42, 100)
+        bridge.info("[triage] Checking sections & overlays...")
+        sec_data, delta = _triage_section_anomalies(indicator_limit)
+        triage_report["section_anomalies"] = sec_data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6b. Import Anomalies
-    # ---------------------------------------------------------------
-    data, delta = _triage_import_anomalies(indicator_limit)
-    triage_report["import_anomalies"] = data
-    risk_score += delta
+        # 6a. Overlay / Appended Data Analysis
+        data, delta = _triage_overlay_analysis(indicator_limit, file_size)
+        triage_report["overlay_analysis"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6c. Resource Anomalies
-    # ---------------------------------------------------------------
-    res_data, delta = _triage_resource_anomalies(indicator_limit)
-    triage_report["resource_anomalies"] = res_data
-    risk_score += delta
+        # 6b. Import Anomalies
+        data, delta = _triage_import_anomalies(indicator_limit)
+        triage_report["import_anomalies"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6d. YARA Matches
-    # ---------------------------------------------------------------
-    await ctx.report_progress(55, 100)
-    await ctx.info("[triage] Running YARA rules...")
-    yara_data, delta = _triage_yara_matches(indicator_limit)
-    triage_report["yara_matches"] = yara_data
-    risk_score += delta
+        # 6c. Resource Anomalies
+        res_data, delta = _triage_resource_anomalies(indicator_limit)
+        triage_report["resource_anomalies"] = res_data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6e. Header Anomalies
-    # ---------------------------------------------------------------
-    hdr_data, delta = _triage_header_anomalies(indicator_limit)
-    triage_report["header_anomalies"] = hdr_data
-    risk_score += delta
+        # 6d. YARA Matches
+        bridge.report_progress(55, 100)
+        bridge.info("[triage] Running YARA rules...")
+        yara_data, delta = _triage_yara_matches(indicator_limit)
+        triage_report["yara_matches"] = yara_data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6f. TLS Callbacks
-    # ---------------------------------------------------------------
-    await ctx.report_progress(62, 100)
-    await ctx.info("[triage] Checking TLS & security mitigations...")
-    data, delta = _triage_tls_callbacks(indicator_limit)
-    triage_report["tls_callbacks"] = data
-    risk_score += delta
+        # 6e. Header Anomalies
+        hdr_data, delta = _triage_header_anomalies(indicator_limit)
+        triage_report["header_anomalies"] = hdr_data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6g. Security Mitigations
-    # ---------------------------------------------------------------
-    data, delta = _triage_security_mitigations(indicator_limit)
-    triage_report["security_mitigations"] = data
-    risk_score += delta
+        # 6f. TLS Callbacks
+        bridge.report_progress(62, 100)
+        bridge.info("[triage] Checking TLS & security mitigations...")
+        data, delta = _triage_tls_callbacks(indicator_limit)
+        triage_report["tls_callbacks"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6h. Delay-Load Suspicious API Detection
-    # ---------------------------------------------------------------
-    data, delta = _triage_delay_load_evasion(indicator_limit)
-    triage_report["delay_load_risks"] = data
-    risk_score += delta
+        # 6g. Security Mitigations
+        data, delta = _triage_security_mitigations(indicator_limit)
+        triage_report["security_mitigations"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6i. Version Info Anomaly Detection
-    # ---------------------------------------------------------------
-    data, delta = _triage_version_info(indicator_limit, sig_present, sig_signer)
-    triage_report["version_info_anomalies"] = data
-    risk_score += delta
+        # 6h. Delay-Load Suspicious API Detection
+        data, delta = _triage_delay_load_evasion(indicator_limit)
+        triage_report["delay_load_risks"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6j. .NET Assembly Detection
-    # ---------------------------------------------------------------
-    await ctx.report_progress(72, 100)
-    await ctx.info("[triage] Checking .NET, exports & platform features...")
-    data, delta = _triage_dotnet_indicators(indicator_limit)
-    triage_report["dotnet_indicators"] = data
-    risk_score += delta
+        # 6i. Version Info Anomaly Detection
+        data, delta = _triage_version_info(indicator_limit, sig_present, sig_signer)
+        triage_report["version_info_anomalies"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6k. Export Anomalies
-    # ---------------------------------------------------------------
-    data, delta = _triage_export_anomalies(indicator_limit)
-    triage_report["export_anomalies"] = data
-    risk_score += delta
+        # 6j. .NET Assembly Detection
+        bridge.report_progress(72, 100)
+        bridge.info("[triage] Checking .NET, exports & platform features...")
+        data, delta = _triage_dotnet_indicators(indicator_limit)
+        triage_report["dotnet_indicators"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6l. ELF Security Features
-    # ---------------------------------------------------------------
-    data, delta = _triage_elf_security(indicator_limit)
-    triage_report["elf_security"] = data
-    risk_score += delta
+        # 6k. Export Anomalies
+        data, delta = _triage_export_anomalies(indicator_limit)
+        triage_report["export_anomalies"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 6m. Mach-O Security Features
-    # ---------------------------------------------------------------
-    data, delta = _triage_macho_security(indicator_limit)
-    triage_report["macho_security"] = data
-    risk_score += delta
+        # 6l. ELF Security Features
+        data, delta = _triage_elf_security(indicator_limit)
+        triage_report["elf_security"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 7. High-Value String Indicators
-    # ---------------------------------------------------------------
-    await ctx.report_progress(82, 100)
-    await ctx.info("[triage] Ranking high-value strings...")
-    hvs_data, delta = _triage_high_value_strings(sifter_score_threshold, indicator_limit, all_string_values)
-    triage_report["high_value_strings"] = hvs_data
-    risk_score += delta
+        # 6m. Mach-O Security Features
+        data, delta = _triage_macho_security(indicator_limit)
+        triage_report["macho_security"] = data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 8. Compiler / Language Detection
-    # ---------------------------------------------------------------
-    lang_data, delta = _triage_compiler_language(all_string_values)
-    triage_report["compiler_language"] = lang_data
-    risk_score += delta
+        # 7. High-Value String Indicators
+        bridge.report_progress(82, 100)
+        bridge.info("[triage] Ranking high-value strings...")
+        hvs_data, delta = _triage_high_value_strings(sifter_score_threshold, indicator_limit, all_string_values)
+        triage_report["high_value_strings"] = hvs_data
+        risk_score += delta
 
-    # ---------------------------------------------------------------
-    # 9. Risk Score & Suggested Next Tools
-    # ---------------------------------------------------------------
-    await ctx.report_progress(92, 100)
-    await ctx.info("[triage] Computing risk score & recommendations...")
-    risk_data = _triage_risk_and_suggestions(risk_score, analysis_mode, triage_report)
-    triage_report["risk_score"] = risk_data["risk_score"]
-    triage_report["risk_level"] = risk_data["risk_level"]
-    triage_report["suggested_next_tools"] = risk_data["suggested_next_tools"]
+        # 8. Compiler / Language Detection
+        lang_data, delta = _triage_compiler_language(all_string_values)
+        triage_report["compiler_language"] = lang_data
+        risk_score += delta
 
-    # Cache for use by get_analysis_digest and other progressive tools
-    state._cached_triage = triage_report
+        # 9. Risk Score & Suggested Next Tools
+        bridge.report_progress(92, 100)
+        bridge.info("[triage] Computing risk score & recommendations...")
+        risk_data = _triage_risk_and_suggestions(risk_score, analysis_mode, triage_report)
+        triage_report["risk_score"] = risk_data["risk_score"]
+        triage_report["risk_level"] = risk_data["risk_level"]
+        triage_report["suggested_next_tools"] = risk_data["suggested_next_tools"]
 
-    # Persist triage in pe_data so it survives cache loads across sessions
-    if state.pe_data is not None:
-        state.pe_data['_cached_triage'] = triage_report
+        # Cache for use by get_analysis_digest and other progressive tools
+        state._cached_triage = triage_report
 
-    # Auto-save key triage findings as notes for the analysis digest
-    _auto_save_triage_notes(triage_report)
+        # Persist triage in pe_data so it survives cache loads across sessions
+        if state.pe_data is not None:
+            state.pe_data['_cached_triage'] = triage_report
+
+        # Auto-save key triage findings as notes for the analysis digest
+        _auto_save_triage_notes(triage_report)
+
+        return triage_report
+
+    triage_report = await asyncio.to_thread(_run_triage_sync)
 
     if compact:
         # Build compact summary: risk info + top findings as one-liners

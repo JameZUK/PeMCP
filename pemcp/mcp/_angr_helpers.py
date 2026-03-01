@@ -180,7 +180,7 @@ def _format_cc_info(func) -> Dict[str, Any]:
                 info["num_args"] = len(cc.args)
                 info["arg_details"] = [str(a) for a in cc.args[:8]]
         except Exception:
-            pass
+            logger.debug("_format_cc_info: failed to extract cc.args details", exc_info=True)
     proto = func.prototype
     if proto:
         try:
@@ -199,6 +199,6 @@ def _format_cc_info(func) -> Dict[str, Any]:
             info["has_return"] = func.has_return
             info["is_plt"] = getattr(func, 'is_plt', False)
         except Exception:
-            pass
+            logger.debug("_format_cc_info: failed to get heuristic func data", exc_info=True)
 
     return info

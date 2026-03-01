@@ -56,7 +56,7 @@ Once a family is identified, search for decoder information:
 ```
 "<family_name> malware analysis report"
 "<family_name> reverse engineering deep dive"
-"<family_name> technical analysis 2024 2025"
+"<family_name> technical analysis" (append the current year)
 ```
 
 ### Preferred Sources

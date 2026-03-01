@@ -157,8 +157,8 @@ Notes are associated with the analysis session and persist across file switches.
 Use them to track findings across samples:
 
 ```
-Tool: add_note(title="Sample 1 - v1.0", content="C2: 192.168.1.50:443, ...")
-Tool: add_note(title="Sample 2 - v1.1", content="C2: 10.0.0.100:8443, ...")
+Tool: add_note(content="Sample 1 - v1.0: C2: 192.168.1.50:443, ...", category="ioc")
+Tool: add_note(content="Sample 2 - v1.1: C2: 10.0.0.100:8443, ...", category="ioc")
 Tool: get_notes()  — retrieve all notes for cross-reference
 ```
 

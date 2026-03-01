@@ -78,7 +78,7 @@ Unit tests live in `tests/` and require only `requirements-ci.txt` + `requiremen
 pytest tests/integration/mcp_test_client.py -v
 ```
 
-Integration tests exercise all 175 MCP tools against a running PeMCP server.
+Integration tests exercise all 178 MCP tools against a running PeMCP server.
 
 ### Writing Tests
 

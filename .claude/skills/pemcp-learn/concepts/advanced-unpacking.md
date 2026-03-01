@@ -109,7 +109,7 @@ Layer 2 (after custom): Clean binary, normal entropy and imports
 ```
 
 ```
-Tool: add_note(title="Unpacking layers", content="...")
+Tool: add_note(content="Unpacking layers: ...", category="tool_result")
 
 Document each layer as you go. Multi-layer unpacking is error-prone, and
 notes prevent you from losing track of which layer you are working on.

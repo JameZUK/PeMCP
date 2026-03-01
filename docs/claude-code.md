@@ -238,7 +238,7 @@ You should see:
 
 ```
 SKILL.md              # Core workflow — phases, operating principles, goal detection
-tooling-reference.md  # Complete 175-tool catalog by use case
+tooling-reference.md  # Complete 178-tool catalog by use case
 config-extraction.md  # Config decoding patterns by malware family
 unpacking-guide.md    # Packer identification and unpacking pipelines
 online-research.md    # Safe online research and decoder translation
@@ -298,7 +298,7 @@ The skill runs autonomously through Phases 0-3 (environment discovery, identific
 | File | Purpose |
 |------|---------|
 | [`SKILL.md`](../.claude/skills/pemcp-analyze/SKILL.md) | Core workflow orchestration — operating principles, 8 analysis phases, goal detection, reporting format, multi-file workflows, context management |
-| [`tooling-reference.md`](../.claude/skills/pemcp-analyze/tooling-reference.md) | Complete catalog of all 175 MCP tools organised by use case with brief descriptions and key parameters |
+| [`tooling-reference.md`](../.claude/skills/pemcp-analyze/tooling-reference.md) | Complete catalog of all 178 MCP tools organised by use case with brief descriptions and key parameters |
 | [`config-extraction.md`](../.claude/skills/pemcp-analyze/config-extraction.md) | Malware config storage patterns, family-specific extraction strategies (Agent Tesla, AsyncRAT, Cobalt Strike, Emotet, Remcos, AdaptixC2, etc.), generic unknown-family approach, validation checklist |
 | [`unpacking-guide.md`](../.claude/skills/pemcp-analyze/unpacking-guide.md) | Packer identification indicators, 5-method unpacking cascade (auto → orchestrated → emulation-based → emulation analysis → manual OEP), special cases for multi-layer packing, .NET obfuscators, shellcode loaders |
 | [`online-research.md`](../.claude/skills/pemcp-analyze/online-research.md) | When and how to research online, search query patterns, read-and-understand methodology, decoder operation → PeMCP tool translation table, safety rules |
@@ -403,6 +403,6 @@ The learning skill uses 4 dedicated MCP tools to track learner progress across s
 | Tool | Description |
 |------|-------------|
 | `get_learner_profile` | Retrieve your progress profile — current tier, concept mastery counts, module completion percentages, and session statistics. |
-| `update_concept_mastery` | Record mastery of a concept at a given level (introduced, practiced, understood, mastered). Called by the tutor after covering a topic. |
+| `update_concept_mastery` | Record mastery of a concept at a given level (introduced, practiced, mastered). Called by the tutor after covering a topic. |
 | `get_learning_suggestions` | Get personalised suggestions for what to learn next, based on current mastery and optional focus area. |
 | `reset_learner_profile` | Reset your learner profile to start fresh. Requires explicit confirmation. |

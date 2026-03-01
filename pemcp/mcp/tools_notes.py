@@ -35,7 +35,9 @@ async def add_note(
     Args:
         ctx: The MCP Context object.
         content: (str) The note text content.
-        category: (str) Note category: 'general' (default), 'function', or 'tool_result'.
+        category: (str) Note category: 'general' (default), 'function', 'tool_result',
+            'ioc' (for IOC findings), 'hypothesis' (for unconfirmed theories),
+            or 'manual' (for manually researched findings).
         address: (Optional[str]) For 'function' notes: a hex address (e.g. '0x401000').
         tool_name: (Optional[str]) For 'tool_result' notes: the tool that produced the finding.
 
@@ -43,8 +45,9 @@ async def add_note(
         A dictionary with the created note including its ID.
     """
     _check_pe_loaded("add_note")
-    if category not in ("general", "function", "tool_result"):
-        raise ValueError(f"Invalid category '{category}'. Must be 'general', 'function', or 'tool_result'.")
+    valid_categories = ("general", "function", "tool_result", "ioc", "hypothesis", "manual")
+    if category not in valid_categories:
+        raise ValueError(f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}.")
 
     note = state.add_note(content=content, category=category, address=address, tool_name=tool_name)
     _persist_notes_to_cache()
@@ -69,7 +72,8 @@ async def get_notes(
 
     Args:
         ctx: The MCP Context object.
-        category: (Optional[str]) Filter by category: 'general', 'function', or 'tool_result'.
+        category: (Optional[str]) Filter by category: 'general', 'function', 'tool_result',
+            'ioc', 'hypothesis', or 'manual'.
         address: (Optional[str]) Filter by hex address (e.g. '0x401000').
         limit: (int) Maximum number of notes to return. Default: 50.
 
@@ -109,7 +113,8 @@ async def update_note(
         ctx: The MCP Context object.
         note_id: (str) The note ID (e.g. 'n_1708300000_1') returned by add_note.
         content: (Optional[str]) New note text content.
-        category: (Optional[str]) New category: 'general', 'function', or 'tool_result'.
+        category: (Optional[str]) New category: 'general', 'function', 'tool_result',
+            'ioc', 'hypothesis', or 'manual'.
         address: (Optional[str]) New hex address.
         tool_name: (Optional[str]) New associated tool name.
 
@@ -117,8 +122,9 @@ async def update_note(
         A dictionary with the updated note, or an error if not found.
     """
     _check_pe_loaded("update_note")
-    if category is not None and category not in ("general", "function", "tool_result"):
-        raise ValueError(f"Invalid category '{category}'. Must be 'general', 'function', or 'tool_result'.")
+    valid_categories = ("general", "function", "tool_result", "ioc", "hypothesis", "manual")
+    if category is not None and category not in valid_categories:
+        raise ValueError(f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}.")
 
     updated = state.update_note(
         note_id, content=content, category=category,

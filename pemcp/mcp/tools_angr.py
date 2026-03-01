@@ -454,6 +454,7 @@ async def emulate_function_execution(
                     )
                     ret_val = hex(final.solver.eval(getattr(final.regs, ret_reg)))
                 except Exception:
+                    logger.debug("emulate_function_execution: failed to resolve return value", exc_info=True)
                     ret_val = "unknown"
                 return {
                     "status": "success",
@@ -576,7 +577,9 @@ async def analyze_binary_loops(
                                 "blocks": block_count,
                                 "subloops": bool(loop.subloops)
                             })
-                    except Exception: continue
+                    except Exception:
+                        logger.debug("analyze_binary_loops: failed to process loop at %s", hex(loop.entry.addr) if hasattr(loop, 'entry') else 'unknown', exc_info=True)
+                        continue
 
                 state.set_angr_results(project, cfg, raw_loops, req_config)
             else:
@@ -881,6 +884,7 @@ async def get_function_complexity_list(
                 block_count = len(list(func.blocks))
             except Exception:
                 # Fallback if access fails
+                logger.debug("get_function_complexity_list: failed to count blocks for func at %s", hex(func.addr), exc_info=True)
                 block_count = 0
 
             if compact:
@@ -974,7 +978,7 @@ async def extract_function_constants(
                                 if len(str_candidate) > 3:
                                     strings.add(f"{str_candidate} (@ {hex(val)})")
                             except Exception:
-                                pass
+                                logger.debug("extract_function_constants: failed to read string at %s", hex(val), exc_info=True)
 
         # Format for output
         sorted_ints = sorted(list(integers))
@@ -1096,6 +1100,7 @@ async def scan_for_indirect_jumps(
                      })
             except Exception:
                 # Lifting failed or other error
+                logger.debug("scan_for_indirect_jumps: VEX lifting failed for block at %s", hex(block.addr), exc_info=True)
                 continue
 
         return {
@@ -1214,7 +1219,7 @@ async def get_cross_reference_map(
                             if current_depth < depth:
                                 _collect_callees(callee_addr, current_depth + 1)
                 except Exception:
-                    pass
+                    logger.debug("get_cross_reference_map: failed to collect callees for %s", hex(fn_addr), exc_info=True)
 
             _collect_callees(addr_used, 1)
 
@@ -1225,7 +1230,7 @@ async def get_cross_reference_map(
                     if caller_addr in state.angr_cfg.functions:
                         callers.append(state.angr_cfg.functions[caller_addr].name)
             except Exception:
-                pass
+                logger.debug("get_cross_reference_map: failed to collect callers for %s", hex(addr_used), exc_info=True)
 
             # String references
             strings_referenced = []
@@ -1239,13 +1244,14 @@ async def get_cross_reference_map(
                                 if s not in strings_referenced:
                                     strings_referenced.append(s)
             except Exception:
-                pass
+                logger.debug("get_cross_reference_map: failed to collect string refs for %s", hex(addr_used), exc_info=True)
 
             # Complexity
             try:
                 block_count = len(list(func.blocks))
                 edge_count = func.graph.number_of_edges()
             except Exception:
+                logger.debug("get_cross_reference_map: failed to compute complexity for %s", hex(addr_used), exc_info=True)
                 block_count = 0
                 edge_count = 0
 
