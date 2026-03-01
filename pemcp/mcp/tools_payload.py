@@ -458,6 +458,164 @@ def _detect_fixed_chunk_size(data: bytes) -> Optional[int]:
 
 
 # ===================================================================
+#  Encrypted config scanner (signature-driven)
+# ===================================================================
+
+def _scan_encrypted_configs(data: bytes, bridge: ProgressBridge) -> List[Dict[str, Any]]:
+    """Scan for encrypted config blocks using malware_signatures.yaml metadata.
+
+    For families with ``config.encryption: xor_single_byte``, searches for runs
+    of repeated key bytes (the encrypted zero-padding pattern), XOR-decrypts
+    candidate blocks, and validates against known markers.
+
+    Returns a list of detected config blocks with family hint, key, offset,
+    and decrypted content preview.
+    """
+    from pathlib import Path
+    import yaml
+
+    sigs_path = Path(__file__).resolve().parent.parent / "data" / "malware_signatures.yaml"
+    if not sigs_path.exists():
+        return []
+
+    try:
+        with open(sigs_path, "r") as f:
+            kb = yaml.safe_load(f)
+    except Exception:
+        return []
+
+    families = kb.get("families", [])
+    results: List[Dict[str, Any]] = []
+
+    # If PE is loaded, try .data section first for faster scanning
+    data_section_range = None
+    if state.pe_object:
+        try:
+            for sec in state.pe_object.sections:
+                name = sec.Name.decode("utf-8", "ignore").rstrip("\x00")
+                if name == ".data":
+                    offset = sec.PointerToRawData
+                    size = sec.SizeOfRawData
+                    data_section_range = (offset, offset + size)
+                    break
+        except Exception:
+            pass
+
+    for family in families:
+        config_meta = family.get("config")
+        if not isinstance(config_meta, dict):
+            continue
+        if config_meta.get("encryption") != "xor_single_byte":
+            continue
+
+        family_name = family.get("family", "unknown")
+        constants = family.get("constants") or {}
+        if not isinstance(constants, dict):
+            continue
+
+        config_size = constants.get("config_size")
+        if not config_size or not isinstance(config_size, int):
+            continue
+
+        # Collect candidate XOR keys from constants (xor_key_*)
+        candidate_keys: List[int] = []
+        for k, v in constants.items():
+            if k.startswith("xor_key_") and isinstance(v, int) and 0 < v < 256:
+                candidate_keys.append(v)
+        if not candidate_keys:
+            continue
+
+        # Parse config_start_marker from hex string
+        marker_hex = constants.get("config_start_marker", "")
+        marker_bytes = b""
+        if isinstance(marker_hex, str) and marker_hex.strip():
+            try:
+                marker_bytes = bytes.fromhex(marker_hex.replace(" ", ""))
+            except ValueError:
+                pass
+
+        # Determine scan regions — prioritize .data section if available
+        scan_regions: List[bytes] = []
+        if data_section_range:
+            sec_start, sec_end = data_section_range
+            scan_regions.append(data[sec_start:sec_end])
+        scan_regions.append(data)  # Fallback to full file
+
+        for key in candidate_keys:
+            for region in scan_regions:
+                # Search for runs of repeated key bytes (encrypted null padding)
+                # A config block XOR'd with single-byte key will have runs of that
+                # key byte wherever the plaintext was null.
+                min_run = 16  # At least 16 consecutive key bytes
+                needle = bytes([key]) * min_run
+                search_start = 0
+                while search_start < len(region) - config_size:
+                    pos = region.find(needle, search_start)
+                    if pos == -1:
+                        break
+
+                    # Align to start of config block — scan backwards from the
+                    # run to find where the key-byte pattern begins
+                    block_start = pos
+                    while block_start > 0 and region[block_start - 1] == key:
+                        block_start -= 1
+                    # Ensure we have enough data for a full config block
+                    if block_start + config_size > len(region):
+                        search_start = pos + min_run
+                        continue
+
+                    candidate = region[block_start:block_start + config_size]
+                    decrypted = bytes(b ^ key for b in candidate)
+
+                    # Validate: check for marker in the first 16 bytes
+                    valid = False
+                    if marker_bytes and marker_bytes in decrypted[:16]:
+                        valid = True
+                    elif not marker_bytes:
+                        # No marker defined — check if decrypted looks structured
+                        # (low entropy first 32 bytes with some non-null content)
+                        first32 = decrypted[:32]
+                        non_null = sum(1 for b in first32 if b != 0)
+                        if 4 <= non_null <= 28:
+                            valid = True
+
+                    if valid:
+                        # Calculate the absolute offset in the original data
+                        if data_section_range and region is not data:
+                            abs_offset = block_start
+                        elif data_section_range and region is scan_regions[0]:
+                            abs_offset = data_section_range[0] + block_start
+                        else:
+                            abs_offset = block_start
+
+                        # ASCII preview: printable chars, dots for non-printable
+                        preview_bytes = decrypted[:128]
+                        ascii_preview = "".join(
+                            chr(b) if 32 <= b < 127 else "." for b in preview_bytes
+                        )
+
+                        results.append({
+                            "family_hint": family_name,
+                            "xor_key": key,
+                            "xor_key_hex": f"0x{key:02x}",
+                            "config_offset": abs_offset,
+                            "config_offset_hex": f"0x{abs_offset:x}",
+                            "config_size": config_size,
+                            "decrypted_hex": decrypted.hex(),
+                            "decrypted_preview": ascii_preview,
+                        })
+                        # Found a valid config for this key — stop scanning this region
+                        break
+
+                    search_start = pos + min_run
+
+                if results and results[-1].get("xor_key") == key:
+                    break  # Found config with this key, skip remaining regions
+
+    return results
+
+
+# ===================================================================
 #  Tool 3: extract_config_automated
 # ===================================================================
 
@@ -589,12 +747,17 @@ async def extract_config_automated(
                 if len(config["base64_blobs"]) >= limit:
                     break
 
-        bridge.report_progress(85, 100)
+        bridge.report_progress(75, 100)
+        bridge.info("Scanning for encrypted configs using known family signatures...")
+
+        encrypted_configs = _scan_encrypted_configs(data, bridge)
+
+        bridge.report_progress(95, 100)
         bridge.info("Finalizing config extraction...")
 
-        return config
+        return config, encrypted_configs
 
-    config = await asyncio.to_thread(_extract)
+    config, encrypted_configs = await asyncio.to_thread(_extract)
 
     # Count total IOCs
     total = sum(len(v) for v in config.values())
@@ -618,14 +781,35 @@ async def extract_config_automated(
         "total_indicators": total,
         "data_size": len(data),
     }
+    if encrypted_configs:
+        result["encrypted_configs"] = encrypted_configs
+        for ec in encrypted_configs:
+            try:
+                state.add_note(
+                    content=(
+                        f"[auto-config] Encrypted config detected: "
+                        f"{ec['family_hint']} (XOR key {ec['xor_key_hex']}, "
+                        f"offset {ec['config_offset_hex']}, {ec['config_size']} bytes)"
+                    ),
+                    category="tool_result",
+                    tool_name="extract_config_automated",
+                )
+                auto_noted += 1
+            except Exception:
+                pass
     if auto_noted:
         result["auto_noted"] = f"{auto_noted} IOC(s) auto-saved as notes."
-    if total > 0:
-        result["next_steps"] = [
+    if total > 0 or encrypted_configs:
+        next_steps = [
             "get_iocs_structured(format='json') — export all IOCs in structured format",
             "get_virustotal_report_for_loaded_file() — check file reputation",
             "add_note() — record significant C2 indicators",
         ]
+        if encrypted_configs:
+            next_steps.insert(0,
+                "Use get_hex_dump() or refinery_xor() on decrypted config to parse TLV/field structures"
+            )
+        result["next_steps"] = next_steps
     else:
         result["next_steps"] = [
             "Try brute_force_simple_crypto() if data appears encrypted",

@@ -235,21 +235,33 @@ async def refinery_xor(
     file_offset: Optional[str] = None,
     length: Optional[int] = None,
     output_path: Optional[str] = None,
+    key_start: Optional[int] = None,
+    key_step: Optional[int] = None,
+    key_max: Optional[int] = None,
+    key_wrap: Optional[int] = None,
 ) -> Dict[str, Any]:
     """XOR operations via Binary Refinery.
 
     Operations:
     - 'apply': XOR data with a key (requires key_hex, plus data from data_hex or file_offset/length).
     - 'guess_key': Auto-guess the XOR key using statistical analysis.
+    - 'rolling': Rolling XOR where key increments per byte (requires key_start,
+      plus data from data_hex or file_offset/length). Key starts at key_start,
+      increments by key_step (default 1) each byte, and wraps to key_wrap
+      (default 0) when it exceeds key_max (default 255).
 
     Args:
         ctx: MCP Context.
-        operation: (str) 'apply' or 'guess_key'. Default 'apply'.
+        operation: (str) 'apply', 'guess_key', or 'rolling'. Default 'apply'.
         data_hex: (Optional[str]) Data as hex. For guess_key, if None uses loaded file.
         key_hex: (Optional[str]) XOR key as hex (required for 'apply').
         file_offset: (Optional[str]) Offset into loaded file (e.g. '0x3B80'). Alternative to data_hex.
         length: (Optional[int]) Number of bytes to read from file_offset.
         output_path: (Optional[str]) Save decoded output to this path and register as artifact.
+        key_start: (Optional[int]) Initial key value for 'rolling' operation.
+        key_step: (Optional[int]) Key increment per byte for 'rolling'. Default 1.
+        key_max: (Optional[int]) Key wraps when exceeding this value for 'rolling'. Default 255.
+        key_wrap: (Optional[int]) Key resets to this value on wrap for 'rolling'. Default 0.
 
     Returns:
         Dictionary with XOR result or guessed key + preview.
@@ -257,8 +269,8 @@ async def refinery_xor(
     _require_refinery("refinery_xor")
 
     op = operation.lower()
-    if op not in ("apply", "guess_key"):
-        return {"error": f"Unknown operation '{operation}'.", "supported": ["apply", "guess_key"]}
+    if op not in ("apply", "guess_key", "rolling"):
+        return {"error": f"Unknown operation '{operation}'.", "supported": ["apply", "guess_key", "rolling"]}
 
     if op == "apply":
         if not key_hex:
@@ -290,6 +302,60 @@ async def refinery_xor(
 
         if output_path:
             desc = f"XOR-decoded data (key={key.hex()}"
+            if file_offset is not None:
+                desc += f", offset={file_offset}"
+            if length is not None:
+                desc += f", length={length}"
+            desc += ")"
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                output_path, result, "refinery_xor", desc,
+            )
+            response["artifact"] = artifact_meta
+
+        return await _check_mcp_response_size(ctx, response, "refinery_xor")
+
+    if op == "rolling":
+        if key_start is None:
+            return {"error": "'rolling' requires the key_start parameter."}
+        if not data_hex and file_offset is None:
+            return {"error": "'rolling' requires data_hex or file_offset to specify input data."}
+        data = _get_data_from_hex_or_file_with_offset(data_hex, file_offset, length)
+        if len(data) > _MAX_INPUT_SIZE:
+            raise RuntimeError(f"Input too large ({len(data)} bytes).")
+
+        step = key_step if key_step is not None else 1
+        kmax = key_max if key_max is not None else 255
+        kwrap = key_wrap if key_wrap is not None else 0
+
+        await ctx.info(f"Rolling XOR: start={key_start}, step={step}, max={kmax}, wrap={kwrap}, size={len(data)}")
+
+        def _run_rolling():
+            result = bytearray(len(data))
+            key = key_start
+            for i in range(len(data)):
+                result[i] = data[i] ^ (key & 0xFF)
+                key += step
+                if key > kmax:
+                    key = kwrap
+            return bytes(result)
+
+        result = await asyncio.to_thread(_run_rolling)
+
+        response: Dict[str, Any] = {
+            "operation": op,
+            "key_start": key_start,
+            "key_step": step,
+            "key_max": kmax,
+            "key_wrap": kwrap,
+            "input_size": len(data),
+            "output_size": len(result),
+            "output_hex": _bytes_to_hex(result),
+            "output_text": _safe_decode(result)[:2000],
+        }
+
+        if output_path:
+            desc = f"Rolling-XOR-decoded data (start={key_start}, step={step}, max={kmax}, wrap={kwrap}"
             if file_offset is not None:
                 desc += f", offset={file_offset}"
             if length is not None:

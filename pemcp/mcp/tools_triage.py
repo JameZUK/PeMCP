@@ -269,7 +269,10 @@ def _triage_packing_assessment(indicator_limit: int) -> Tuple[Dict[str, Any], in
     heuristic_names = [_to_name(m) for m in heuristic_matches if isinstance(m, (dict, str))]
     packer_names = ep_names + heuristic_names
     if packer_names:
-        risk_score += 4
+        if peid_data.get("reflective_loader_detected"):
+            risk_score += 1  # Reduced from 4 — likely false positive on reflective loader
+        else:
+            risk_score += 4
 
     # Known packer section names — strongest signal for packer identification
     PACKER_SECTION_NAMES = {'UPX0', 'UPX1', 'UPX2', '.aspack', '.adata', '.nsp0', '.nsp1',
@@ -358,6 +361,12 @@ def _triage_packing_assessment(indicator_limit: int) -> Tuple[Dict[str, Any], in
                 f"but top PEiD match is '{ranked_matches[0]['match']}'. "
                 f"Section names are generally more reliable."
             )
+
+    # Propagate reflective loader warning from PEiD scan
+    if peid_data.get("reflective_loader_detected"):
+        result["reflective_loader_detected"] = True
+        result["reflective_loader_indicators"] = peid_data.get("reflective_loader_indicators", [])
+        result["reflective_loader_warning"] = peid_data.get("reflective_loader_warning", "")
 
     return result, risk_score
 

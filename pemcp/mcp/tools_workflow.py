@@ -45,7 +45,7 @@ async def generate_analysis_report(
     # Gather all data sources
     triage = getattr(state, '_cached_triage', None) or {}
     notes = state.get_notes()
-    history = state.get_tool_history()
+    history = state.previous_session_history + state.get_tool_history()
 
     # Build report
     sections = []

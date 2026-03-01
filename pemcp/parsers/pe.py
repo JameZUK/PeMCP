@@ -520,6 +520,38 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
         peid_results["heuristic_matches"] = list(set(heuristic_matches_list))
 
     peid_results["ep_matches"] = list(set(peid_results["ep_matches"]))
+
+    # Detect reflective loaders to flag potential PEiD false positives.
+    # Reflective loaders (CS, Meterpreter, BRc4, custom) use modified MZ headers
+    # that are valid shellcode — PEiD packer signatures commonly false-positive on these.
+    reflective_indicators = []
+    try:
+        raw_data = pe.get_memory_mapped_image()[:6] if hasattr(pe, 'get_memory_mapped_image') else pe.__data__[:6]
+    except Exception:
+        raw_data = pe.__data__[:6] if hasattr(pe, '__data__') else b""
+    if raw_data[:4] == b"MZAR" or raw_data[:4] == b"MZRE":
+        header_sig = raw_data[:6].decode("ascii", "replace").rstrip("\x00")
+        reflective_indicators.append(f"Modified MZ header: {header_sig}")
+    # Check exports for ReflectiveLoader
+    try:
+        if hasattr(pe, 'DIRECTORY_ENTRY_EXPORT'):
+            for sym in pe.DIRECTORY_ENTRY_EXPORT.symbols:
+                name = sym.name.decode("ascii", "replace") if sym.name else ""
+                if "ReflectiveLoader" in name:
+                    reflective_indicators.append(f"Export: {name}")
+                    break
+    except Exception:
+        pass
+    if reflective_indicators and (peid_results.get("ep_matches") or peid_results.get("heuristic_matches")):
+        peid_results["reflective_loader_detected"] = True
+        peid_results["reflective_loader_indicators"] = reflective_indicators
+        peid_results["reflective_loader_warning"] = (
+            "PEiD packer detections may be false positives — this binary "
+            "has reflective loader characteristics (modified MZ header or "
+            "ReflectiveLoader export). Reflective loaders use non-standard "
+            "PE headers that commonly trigger packer signatures."
+        )
+
     return peid_results
 
 
