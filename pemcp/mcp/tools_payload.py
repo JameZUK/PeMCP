@@ -557,7 +557,12 @@ async def extract_config_automated(
                 break
 
         for match in _FILE_PATH_PATTERN.finditer(data):
-            entry = {"value": _safe_decode(match.group(0)), "offset": hex(match.start())}
+            raw = match.group(0)
+            # Skip paths with non-printable bytes (0x80-0xFF) — false
+            # positives from packed/encrypted data.
+            if any(b > 0x7E for b in raw):
+                continue
+            entry = {"value": _safe_decode(raw), "offset": hex(match.start())}
             config["file_paths"].append(entry)
             if len(config["file_paths"]) >= limit:
                 break
