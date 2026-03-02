@@ -232,7 +232,7 @@ Source files: `pemcp/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `refinery_pipeline` | Chain multiple refinery operations; can read from file offset and save output | `data_hex` or `file_offset`+`length`, `steps`, `output_path` |
+| `refinery_pipeline` | Chain multiple refinery operations (encoding, compression, crypto, slicing, bitwise, padding); supports batch mode (`data_hex_list` up to 100 items) and file offset input | `data_hex` or `file_offset`+`length`, `steps`, `output_path`, `data_hex_list` (batch) |
 | `refinery_list_units` | List all available refinery units | `category` (optional) |
 
 ## Payload & Config Extraction
@@ -244,6 +244,8 @@ Source files: `pemcp/mcp/tools_*.py`
 | `parse_custom_container` | Parse custom malware container formats | `format_hint` |
 | `scan_for_embedded_files` | Detect nested PE/ZIP/PDF/scripts | — |
 | `detect_compression_headers` | Find compression/archive headers in data | — |
+| `extract_config_for_family` | KB-driven config extraction for a confirmed malware family | `family`, `section_hint` (optional), `offset_hint` (optional) |
+| `parse_binary_struct` | Parse binary data according to a typed field schema (ints, strings, IPs) | `schema`, `data_hex` or `file_offset`+`length` |
 
 ## Unpacking
 
@@ -262,7 +264,7 @@ Source files: `pemcp/mcp/tools_*.py`
 | `get_iocs_structured` | Aggregate IOCs into STIX/OpenIOC/JSON | `format` |
 | `refinery_extract_iocs` | IOC extraction via refinery patterns | `data` |
 | `refinery_extract_domains` | Domain extraction from data | `data` |
-| `scan_for_api_hashes` | Find API hash constants | — |
+| `scan_for_api_hashes` | Scan for API hash constants used by shellcode/malware (ror13, djb2, crc32, fnv1a); supports `family_hint` for KB-driven config | `hash_algorithm`, `seed`, `family_hint`, `include_extended_db` |
 
 ## Binary Modification & Patching
 

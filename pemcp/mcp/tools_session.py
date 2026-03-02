@@ -449,6 +449,7 @@ _TOOLS_BY_PHASE = {
         ("extract_steganography", "Detect data hidden after image EOF markers."),
         ("analyze_entropy_by_offset", "Sliding-window entropy to find encrypted/packed regions."),
         ("scan_for_embedded_files", "Detect embedded PE, ZIP, ELF within the binary."),
+        ("scan_for_api_hashes", "Scan for API hash constants (ror13, djb2, crc32, fnv1a) used by shellcode/malware."),
     ],
     "deep-dive": [
         ("decompile_function_with_angr", "Decompile a function to pseudocode."),
@@ -462,6 +463,8 @@ _TOOLS_BY_PHASE = {
         ("try_all_unpackers", "Orchestrate multiple unpacking methods."),
         ("find_oep_heuristic", "Detect Original Entry Point of packed binaries."),
         ("diff_payloads", "Compare two binary payloads byte-by-byte."),
+        ("parse_binary_struct", "Parse binary data with a field schema (uint32, cstring, etc.)."),
+        ("extract_config_for_family", "KB-driven config extraction for a known malware family."),
     ],
     "context": [
         ("add_note", "Record a finding — essential for long analysis sessions."),

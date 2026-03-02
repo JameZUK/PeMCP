@@ -105,7 +105,7 @@ Where does the decryption key come from?
 | `RC4(key).decrypt(data)` | `refinery_decrypt(algorithm="rc4", key)` |
 | `base64.b64decode()` | `refinery_codec(operation="decode", codec="b64")` |
 | `zlib.decompress()` | `refinery_decompress(algorithm="zlib")` |
-| `struct.unpack()` | Parse hex dump output manually |
+| `struct.unpack(fmt, data)` | `parse_binary_struct(schema=[...], data_hex=...)` — define typed fields instead of format strings |
 | `re.findall(pattern, data)` | `refinery_regex_extract(pattern)` |
 | `hashlib.sha256(password)` | `refinery_hash(algorithm="sha256")` or `refinery_key_derive()` |
 | `PBKDF2(password, salt, iter)` | `refinery_key_derive(algorithm="pbkdf2")` |

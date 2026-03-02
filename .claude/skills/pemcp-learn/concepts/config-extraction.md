@@ -66,6 +66,18 @@ base or at a known position within a specific section. The struct layout is
 fixed per version: first 4 bytes = C2 address length, next N bytes = encrypted
 C2 address, next 2 bytes = port, etc.
 
+```
+Tool: parse_binary_struct(schema=[
+    {"name": "c2_addr_len", "type": "uint32_le"},
+    {"name": "c2_addr", "type": "bytes:64"},
+    {"name": "port", "type": "uint16_le"},
+    {"name": "server_ip", "type": "ipv4"}
+], file_offset="0x5000", length=128)
+
+Parses binary data according to typed field definitions. Supports: uint8-64
+(LE/BE), cstring, wstring, ipv4, bytes:N, padding:N.
+```
+
 ### Runtime-Only (Memory-Only Configs)
 
 The config is never stored as a discrete blob. Instead, individual values are
@@ -112,6 +124,16 @@ Tool: extract_config_automated()
 Attempts family-specific and generic extraction patterns. If this succeeds,
 validate the output and you may be done. If it fails or returns incomplete
 results, proceed to manual extraction.
+```
+
+If family is known, try the knowledge-base-driven extractor:
+
+```
+Tool: extract_config_for_family(family="<confirmed family>")
+
+Handles algorithm selection, key recovery, decryption, and parsing automatically
+using recipes from the malware signatures knowledge base. Falls back to generic
+extraction if no family-specific extractor exists.
 ```
 
 Manual approaches:
@@ -165,11 +187,7 @@ Tool: refinery_pipeline(steps)         — chain operations: base64 decode
 
 Example pipeline for a common pattern (base64 → XOR → config):
 ```
-refinery_pipeline(steps=[
-    {"operation": "base64_decode"},
-    {"operation": "xor", "key": "0x4D"},
-    {"operation": "decompress", "algorithm": "zlib"}
-])
+refinery_pipeline(steps=["b64", "xor:4D", "zl"])
 ```
 
 ### Step 5: Validate

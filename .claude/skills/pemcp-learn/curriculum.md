@@ -458,6 +458,9 @@ dynamic analysis, and anti-analysis techniques.
 - `refinery_pipeline()` — chain multiple decryption/decoding steps
 - `decompile_function_with_angr(address)` — read the decryption routine
 - `get_backward_slice(address, variable)` — trace key origin
+- `extract_config_for_family(family)` — KB-driven extraction for confirmed families
+- `parse_binary_struct(schema, data_hex)` — parse decrypted config structs
+- `scan_for_api_hashes()` — detect API hash resolution (evidence for family ID)
 
 **Suggested exercises**:
 1. Try automated extraction first — does it find a config?

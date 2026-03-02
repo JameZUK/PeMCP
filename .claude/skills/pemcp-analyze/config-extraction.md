@@ -31,6 +31,10 @@ accurate the attribution. High-confidence indicators: hash algorithm + seed,
 verified hash constants, YARA matches. Supporting indicators: config encryption,
 compiler, DLL names, network headers, command count.
 
+4. If the binary has minimal imports (suggesting dynamic API resolution), use
+   `scan_for_api_hashes()` to find hash constants and resolve them to API names.
+   The algorithm and seed are high-confidence evidence for `identify_malware_family()`.
+
 ---
 
 ## Common C2 Storage Patterns
@@ -76,7 +80,8 @@ section start. Common in builder-generated malware.
 ```
 Detection:  refinery_pe_operations(operation="overlay") to check for overlay data
             analyze_entropy_by_offset() for data past PE boundary
-Extraction: get_hex_dump(offset, length) → parse struct fields manually
+Extraction: parse_binary_struct(schema=[...], file_offset="0x...", length=N)
+            Or: get_hex_dump(offset, length) → manual inspection
             refinery_carve() if config has recognizable header
 ```
 
@@ -394,6 +399,9 @@ When the malware family is unknown, use this systematic approach:
 3. refinery_extract_domains()          → pull domains
 4. Validate: do extracted IPs/domains make sense? Are ports valid?
 5. add_note(content="C2 config: ...", category="ioc")
+   If a family was confirmed above, try the shortcut:
+6. extract_config_for_family(family=...)  → KB-driven automated extraction
+7. parse_binary_struct(schema=[...])      → parse decrypted config if it's a binary struct
 ```
 
 ---

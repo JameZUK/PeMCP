@@ -275,6 +275,12 @@ Use as needed based on goal:
   config encryption pattern. Use `list_malware_signatures()` to review available
   families and their fingerprints.
 
+- **API Hash Detection**: `scan_for_api_hashes()` — scan binary for DWORD values
+  matching known Windows API name hashes. Supports ror13, djb2, crc32, fnv1a
+  algorithms with configurable seeds. Use `family_hint` to auto-configure from
+  the knowledge base. When hash constants are found, feed the algorithm and seed
+  to `identify_malware_family()` for attribution.
+
 - **Structure**: `get_cross_reference_map(function_addresses=[...])` — call
   relationships between key functions in a single call.
 
@@ -321,6 +327,10 @@ Progressive depth — use the minimum tier needed to answer your question.
 - `get_value_set_analysis(address)` — pointer target tracking
 - `get_backward_slice(address, variable)` — trace data origin backward
 - `get_forward_slice(address, variable)` — trace data propagation forward
+- `parse_binary_struct(schema, data_hex)` — parse binary data according to a typed
+  field schema (uint8-64 LE/BE, cstring, wstring, ipv4, bytes:N, padding:N). Use
+  after decrypting config blobs to extract structured fields like C2 addresses,
+  ports, sleep timers, and encryption keys.
 
 ### Tier 3: Dynamic / Emulation (when static + data-flow aren't enough)
 - `emulate_function_execution(address, args)` — concrete function execution
@@ -355,6 +365,10 @@ Pull out IOCs, configs, and encoded data.
 - `get_iocs_structured()` — aggregate all IOCs into structured export formats
 - `find_and_decode_encoded_strings()` — decode Base64/hex/XOR obfuscated strings
 - `auto_extract_crypto_keys()` — extract embedded crypto keys
+- `extract_config_for_family(family)` — knowledge-base-driven config extraction for
+  a confirmed malware family. Handles algorithm selection, key recovery, decryption,
+  and struct parsing in one call. Use after `verify_malware_attribution()` confirms
+  the family. Falls back to generic extraction if no family-specific extractor exists.
 
 ### Binary Refinery Operations
 For manual decoding when automated extraction fails. Key tools now support
@@ -368,7 +382,11 @@ to read), and `output_path` (save decoded output to disk as a session artifact):
 - `refinery_auto_decrypt(data)` — auto-detect and decrypt XOR/SUB patterns
 - `refinery_decompress(data, algorithm)` — gzip/bzip2/lz4/zlib decompression
 - `refinery_pipeline(steps, file_offset, length, output_path)` — chain multiple
-  refinery operations; accepts file offset input and saves final output as artifact
+  refinery operations including encoding (b64, hex), compression (zl, lzma),
+  crypto (xor, rc4, aes), slicing (snip, chop, pick), bitwise (ror, rol, shl,
+  shr, and, or, not, add, sub), padding (pad, terminate), and utility (nop);
+  accepts file offset input, saves final output as artifact, supports batch mode
+  via `data_hex_list` (up to 100 items)
 - `refinery_carve(data, pattern, output_path)` — carve out embedded files/payloads;
   `output_path` saves all carved items to disk as artifacts
 - `refinery_regex_extract(data, pattern)` — regex-based data extraction
@@ -418,6 +436,10 @@ Before extracting a C2 config, **always verify the family attribution**:
    hash constants, config encryption, compiler, constants, matched strings)
 2. `verify_malware_attribution(family=<top candidate>)` to confirm the match
 3. Only then follow the family-specific extraction recipe
+4. Use `extract_config_for_family(family=<confirmed>)` for automated KB-driven
+   extraction, or follow the manual recipe in config-extraction.md
+5. Parse decrypted config structures with `parse_binary_struct(schema=[...])`
+   when the config is a binary struct (not plaintext)
 
 **Why this matters**: Different C2 frameworks share techniques (e.g., DJB2
 hashing used by both Havoc and AdaptixC2, ROR13 used by both Cobalt Strike and
