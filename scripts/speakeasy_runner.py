@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Standalone speakeasy runner -- invoked via subprocess from PeMCP.
+"""Standalone speakeasy runner -- invoked via subprocess from Arkana.
 
 Reads a JSON command from stdin, runs the requested speakeasy emulation,
 and writes a JSON result to stdout.

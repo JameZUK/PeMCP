@@ -7,8 +7,8 @@ pytest.importorskip("pefile", reason="pefile not installed")
 
 from unittest.mock import AsyncMock
 
-from pemcp.mcp.server import _check_mcp_response_size
-from pemcp.config import MAX_MCP_RESPONSE_SIZE_BYTES
+from arkana.mcp.server import _check_mcp_response_size
+from arkana.config import MAX_MCP_RESPONSE_SIZE_BYTES
 
 
 class MockContext:

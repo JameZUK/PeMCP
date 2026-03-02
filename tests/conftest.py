@@ -1,6 +1,6 @@
-"""Shared fixtures for PeMCP tests."""
+"""Shared fixtures for Arkana tests."""
 import pytest
-from pemcp.state import AnalyzerState, set_current_state
+from arkana.state import AnalyzerState, set_current_state
 
 
 class MockContext:

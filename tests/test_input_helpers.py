@@ -1,7 +1,7 @@
-"""Tests for pemcp.mcp._input_helpers — parsing, caching, and pagination."""
+"""Tests for arkana.mcp._input_helpers — parsing, caching, and pagination."""
 import pytest
 
-from pemcp.mcp._input_helpers import (
+from arkana.mcp._input_helpers import (
     _parse_int_param,
     _ToolResultCache,
     _make_cache_key,

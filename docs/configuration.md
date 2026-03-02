@@ -1,12 +1,12 @@
 # Configuration
 
-PeMCP's configuration covers API keys, the analysis cache, and command-line options. Settings persist in `~/.pemcp/config.json` across sessions.
+Arkana's configuration covers API keys, the analysis cache, and command-line options. Settings persist in `~/.arkana/config.json` across sessions.
 
 ---
 
 ## API Keys
 
-PeMCP stores API keys persistently in `~/.pemcp/config.json` with restricted file permissions (owner-only). Environment variables always take priority over stored values.
+Arkana stores API keys persistently in `~/.arkana/config.json` with restricted file permissions (owner-only). Environment variables always take priority over stored values.
 
 **Setting keys via MCP tools:**
 - Use the `set_api_key` tool: `set_api_key("vt_api_key", "your-key-here")`
@@ -19,10 +19,10 @@ PeMCP stores API keys persistently in `~/.pemcp/config.json` with restricted fil
 ```json
 {
   "mcpServers": {
-    "pemcp": {
+    "arkana": {
       "type": "stdio",
       "command": "python",
-      "args": ["PeMCP.py", "--mcp-server"],
+      "args": ["arkana.py", "--mcp-server"],
       "env": {
         "VT_API_KEY": "your-key-here"
       }
@@ -35,22 +35,22 @@ PeMCP stores API keys persistently in `~/.pemcp/config.json` with restricted fil
 
 ## Analysis Cache
 
-PeMCP caches analysis results to disk so that re-opening a previously analysed file is near-instant. Cache entries are stored as gzip-compressed JSON in `~/.pemcp/cache/`, keyed by the SHA256 hash of the file contents.
+Arkana caches analysis results to disk so that re-opening a previously analysed file is near-instant. Cache entries are stored as gzip-compressed JSON in `~/.arkana/cache/`, keyed by the SHA256 hash of the file contents.
 
 **How it works:**
 
-1. When `open_file` is called, PeMCP computes the SHA256 of the file.
+1. When `open_file` is called, Arkana computes the SHA256 of the file.
 2. If a cached result exists for that hash, it is loaded directly (typically under 10 ms).
 3. If no cache exists, the full analysis runs and the result is stored for future use.
-4. Cache entries are automatically invalidated when the PeMCP version changes (parser updates).
+4. Cache entries are automatically invalidated when the Arkana version changes (parser updates).
 5. LRU eviction removes the oldest entries when the cache exceeds its size limit.
 
-**Cache configuration** (via `~/.pemcp/config.json` or environment variables):
+**Cache configuration** (via `~/.arkana/config.json` or environment variables):
 
 | Setting | Environment Variable | Default | Description |
 |---|---|---|---|
-| `cache_enabled` | `PEMCP_CACHE_ENABLED` | `true` | Set to `"false"` to disable caching entirely |
-| `cache_max_size_mb` | `PEMCP_CACHE_MAX_SIZE_MB` | `500` | Maximum total cache size in MB |
+| `cache_enabled` | `ARKANA_CACHE_ENABLED` | `true` | Set to `"false"` to disable caching entirely |
+| `cache_max_size_mb` | `ARKANA_CACHE_MAX_SIZE_MB` | `500` | Maximum total cache size in MB |
 
 **Cache management MCP tools:**
 
@@ -68,7 +68,7 @@ open_file("/path/to/binary", use_cache=False)  # Force fresh analysis
 
 **Docker persistence:**
 
-In Docker, the cache lives at `/app/home/.pemcp/cache/` inside the container, which is bind-mounted to `~/.pemcp` on the host. The `run.sh` helper sets this up automatically (creating the directory if needed):
+In Docker, the cache lives at `/app/home/.arkana/cache/` inside the container, which is bind-mounted to `~/.arkana` on the host. The `run.sh` helper sets this up automatically (creating the directory if needed):
 
 ```bash
 # run.sh handles the bind mount automatically
@@ -81,9 +81,9 @@ In Docker, the cache lives at `/app/home/.pemcp/cache/` inside the container, wh
 docker run --rm -i \
   --user "$(id -u):$(id -g)" \
   -e HOME=/app/home \
-  -v "$HOME/.pemcp:/app/home/.pemcp:rw" \
+  -v "$HOME/.arkana:/app/home/.arkana:rw" \
   -v "$(pwd)/samples:/samples:ro" \
-  pemcp-toolkit --mcp-server --samples-path /samples
+  arkana-toolkit --mcp-server --samples-path /samples
 ```
 
 ---
@@ -99,7 +99,7 @@ docker run --rm -i \
 | `--mcp-host HOST` | Server host for HTTP transports (default: 127.0.0.1) |
 | `--mcp-port PORT` | Server port for HTTP transports (default: 8082) |
 | `--allowed-paths PATH [PATH ...]` | Restrict `open_file` to these directories (security sandbox for HTTP mode) |
-| `--samples-path PATH` | Path to the samples directory. Enables the `list_samples` tool for AI clients to discover available files. Falls back to the `PEMCP_SAMPLES` environment variable if not set. |
+| `--samples-path PATH` | Path to the samples directory. Enables the `list_samples` tool for AI clients to discover available files. Falls back to the `ARKANA_SAMPLES` environment variable if not set. |
 | `--skip-capa` | Skip capa capability analysis |
 | `--skip-floss` | Skip FLOSS string analysis |
 | `--skip-peid` | Skip PEiD signature scanning |

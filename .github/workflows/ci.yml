@@ -28,7 +28,7 @@ jobs:
       - name: Run unit tests with coverage
         run: |
           python -m pytest tests/ -v --tb=short \
-            --cov=pemcp --cov-report=xml --cov-report=term-missing \
+            --cov=arkana --cov-report=xml --cov-report=term-missing \
             --cov-config=.coveragerc \
             --cov-fail-under=65
 
@@ -60,7 +60,7 @@ jobs:
           python -c "
           import pathlib, py_compile, sys
           errors = []
-          for p in sorted(pathlib.Path('pemcp').rglob('*.py')):
+          for p in sorted(pathlib.Path('arkana').rglob('*.py')):
               try:
                   py_compile.compile(str(p), doraise=True)
               except py_compile.PyCompileError as e:
@@ -81,7 +81,7 @@ jobs:
 
       - name: Lint with ruff
         run: |
-          ruff check pemcp/ tests/ \
+          ruff check arkana/ tests/ \
             --select=E9,F63,F7,F82,F841,W291,W292,W293,B006,B007,B018,UP031,UP032,RUF005,RUF010,RUF019,G010 \
             --no-fix
 
@@ -101,10 +101,10 @@ jobs:
           pip install -r requirements-ci.txt
 
       - name: Verify CLI --help works
-        run: python -m pemcp --help
+        run: python -m arkana --help
 
       - name: Verify module imports
         run: |
-          python -c "from pemcp.constants import MAX_MCP_RESPONSE_SIZE_BYTES; print('constants OK')"
-          python -c "from pemcp.state import AnalyzerState; print('state OK')"
-          python -c "from pemcp.cache import AnalysisCache; print('cache OK')"
+          python -c "from arkana.constants import MAX_MCP_RESPONSE_SIZE_BYTES; print('constants OK')"
+          python -c "from arkana.state import AnalyzerState; print('state OK')"
+          python -c "from arkana.cache import AnalysisCache; print('cache OK')"

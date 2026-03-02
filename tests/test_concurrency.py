@@ -1,9 +1,9 @@
-"""Concurrency tests for pemcp/state.py — session isolation under concurrent load."""
+"""Concurrency tests for arkana/state.py — session isolation under concurrent load."""
 import threading
 import time
 import pytest
 
-from pemcp.state import (
+from arkana.state import (
     AnalyzerState,
     StateProxy,
     get_current_state,

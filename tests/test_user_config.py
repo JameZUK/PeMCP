@@ -1,9 +1,9 @@
-"""Unit tests for pemcp/user_config.py — persistent config management."""
+"""Unit tests for arkana/user_config.py — persistent config management."""
 import json
 import os
 import pytest
 
-from pemcp.user_config import (
+from arkana.user_config import (
     load_user_config,
     save_user_config,
     get_config_value,
@@ -18,11 +18,11 @@ from pemcp.user_config import (
 @pytest.fixture
 def config_dir(tmp_path, monkeypatch):
     """Redirect config to a temporary directory."""
-    cfg_dir = tmp_path / ".pemcp"
+    cfg_dir = tmp_path / ".arkana"
     cfg_dir.mkdir()
     cfg_file = cfg_dir / "config.json"
-    monkeypatch.setattr("pemcp.user_config.CONFIG_DIR", cfg_dir)
-    monkeypatch.setattr("pemcp.user_config.CONFIG_FILE", cfg_file)
+    monkeypatch.setattr("arkana.user_config.CONFIG_DIR", cfg_dir)
+    monkeypatch.setattr("arkana.user_config.CONFIG_FILE", cfg_file)
     return cfg_dir, cfg_file
 
 

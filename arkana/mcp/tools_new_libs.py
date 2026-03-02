@@ -1,0 +1,908 @@
+"""MCP tools powered by new library integrations — LIEF, Capstone, Keystone, Speakeasy, etc."""
+import asyncio
+import os
+import math
+import json
+import shutil
+import subprocess
+import re
+
+from typing import Dict, Any, Optional, List
+
+from arkana.config import (
+    state, logger, Context,
+    LIEF_AVAILABLE, CAPSTONE_AVAILABLE, KEYSTONE_AVAILABLE,
+    SPEAKEASY_AVAILABLE, _SPEAKEASY_VENV_PYTHON, _SPEAKEASY_RUNNER,
+    _check_speakeasy_available,
+    _UNIPACKER_VENV_PYTHON, _UNIPACKER_RUNNER,
+    _check_unipacker_available,
+    _check_qiling_available,
+    DOTNETFILE_AVAILABLE,
+    PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
+)
+from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_angr_ready, _check_mcp_response_size
+from arkana.mcp._progress_bridge import ProgressBridge
+
+# Conditionally import library objects for use in tool functions.
+# Availability flags are centralized in config.py.
+if LIEF_AVAILABLE:
+    import lief
+if CAPSTONE_AVAILABLE:
+    import capstone
+if KEYSTONE_AVAILABLE:
+    import keystone
+if DOTNETFILE_AVAILABLE:
+    import dotnetfile
+if PPDEEP_AVAILABLE:
+    import ppdeep
+if TLSH_AVAILABLE:
+    import tlsh
+if BINWALK_AVAILABLE and not BINWALK_CLI_ONLY:
+    import binwalk
+
+
+# ---------------------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------------------
+
+# Shared architecture mappings — single source of truth for arch constants.
+_CAPSTONE_ARCH_MAP = {}
+_KEYSTONE_ARCH_MAP = {}
+
+if CAPSTONE_AVAILABLE:
+    _CAPSTONE_ARCH_MAP = {
+        "x86": (capstone.CS_ARCH_X86, capstone.CS_MODE_32),
+        "x86_64": (capstone.CS_ARCH_X86, capstone.CS_MODE_64),
+        "arm": (capstone.CS_ARCH_ARM, capstone.CS_MODE_ARM),
+        "arm64": (capstone.CS_ARCH_ARM64, capstone.CS_MODE_ARM),
+        "mips": (capstone.CS_ARCH_MIPS, capstone.CS_MODE_MIPS32),
+    }
+
+if KEYSTONE_AVAILABLE:
+    _KEYSTONE_ARCH_MAP = {
+        "x86": (keystone.KS_ARCH_X86, keystone.KS_MODE_32),
+        "x86_64": (keystone.KS_ARCH_X86, keystone.KS_MODE_64),
+        "arm": (keystone.KS_ARCH_ARM, keystone.KS_MODE_ARM),
+        "arm64": (keystone.KS_ARCH_ARM64, keystone.KS_MODE_LITTLE_ENDIAN),
+        "mips": (keystone.KS_ARCH_MIPS, keystone.KS_MODE_MIPS32),
+    }
+
+
+def _get_capstone_arch(architecture: str):
+    """Look up Capstone arch/mode tuple, raising ValueError on unknown arch."""
+    if architecture not in _CAPSTONE_ARCH_MAP:
+        raise ValueError(f"Unsupported architecture. Supported: {', '.join(_CAPSTONE_ARCH_MAP.keys())}")
+    return _CAPSTONE_ARCH_MAP[architecture]
+
+
+def _get_keystone_arch(architecture: str):
+    """Look up Keystone arch/mode tuple, raising ValueError on unknown arch."""
+    if architecture not in _KEYSTONE_ARCH_MAP:
+        raise ValueError(f"Unsupported architecture. Supported: {', '.join(_KEYSTONE_ARCH_MAP.keys())}")
+    return _KEYSTONE_ARCH_MAP[architecture]
+
+
+def _check_lib(lib_name: str, available: bool, tool_name: str):
+    if not available:
+        raise RuntimeError(
+            f"[{tool_name}] The '{lib_name}' library is not installed. "
+            f"Install with: pip install {lib_name}"
+        )
+
+
+from arkana.utils import _safe_slice  # noqa: E402 — canonical implementation in utils.py
+
+
+async def _subprocess_progress_reporter(ctx, tool_name: str, timeout_seconds: int):
+    """Report estimated progress for opaque subprocess operations."""
+    start = asyncio.get_event_loop().time()
+    interval = max(3, timeout_seconds // 20)
+    while True:
+        await asyncio.sleep(interval)
+        elapsed = asyncio.get_event_loop().time() - start
+        pct = min(int((elapsed / timeout_seconds) * 95), 95)
+        try:
+            await ctx.report_progress(pct, 100)
+            await ctx.info(f"[{tool_name}] Processing... {int(elapsed)}s/{timeout_seconds}s elapsed")
+        except Exception:
+            break
+
+
+# ===================================================================
+#  LIEF — Binary modification and multi-format parsing
+# ===================================================================
+
+@tool_decorator
+async def parse_binary_with_lief(ctx: Context, file_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    [Phase: explore] Parses a PE/ELF/Mach-O binary using LIEF for cross-format analysis.
+    Returns headers, sections, imports, exports, and format-specific metadata.
+    Falls back to the currently loaded file if no path is given.
+
+    When to use: When you need cross-format binary parsing or an alternative view to pefile-based get_pe_data().
+    Next steps: Compare results with get_pe_data(), use decompile_function_with_angr() on interesting functions, add_note() for findings.
+
+    Args:
+        file_path: Optional path to any binary. If None, uses the loaded file.
+    """
+    await ctx.info("Parsing binary with LIEF")
+    _check_lib("lief", LIEF_AVAILABLE, "parse_binary_with_lief")
+
+    target = file_path or state.filepath
+    if not target or not os.path.isfile(target):
+        raise RuntimeError("No file specified and no file is loaded.")
+    if file_path:
+        state.check_path_allowed(os.path.abspath(target))
+
+    def _parse():
+        binary = lief.parse(target)
+        if binary is None:
+            return {"error": f"LIEF could not parse {target}"}
+
+        result = {
+            "format": str(binary.format).split(".")[-1],
+            "name": os.path.basename(target),
+            "entrypoint": hex(binary.entrypoint) if binary.entrypoint else None,
+        }
+
+        # Sections
+        sections = []
+        for sec in binary.sections:
+            sections.append({
+                "name": sec.name,
+                "size": sec.size,
+                "virtual_size": sec.virtual_size if hasattr(sec, 'virtual_size') else None,
+                "entropy": round(sec.entropy, 4),
+            })
+        result["sections"] = sections
+
+        # Imports
+        if hasattr(binary, 'imports') and binary.imports:
+            imports = []
+            for imp in list(binary.imports)[:200]:
+                imports.append(str(imp.name) if hasattr(imp, 'name') else str(imp))
+            result["imports_count"] = len(binary.imports)
+            result["imports_sample"] = imports[:100]
+
+        # PE-specific
+        if binary.format == lief.Binary.FORMATS.PE:
+            pe = binary
+            result["pe_info"] = {
+                "machine": str(pe.header.machine).split(".")[-1] if hasattr(pe.header, 'machine') else None,
+                "has_debug": pe.has_debug if hasattr(pe, 'has_debug') else None,
+                "has_tls": pe.has_tls if hasattr(pe, 'has_tls') else None,
+                "has_resources": pe.has_resources if hasattr(pe, 'has_resources') else None,
+                "has_signatures": pe.has_signatures if hasattr(pe, 'has_signatures') else None,
+                "is_pie": pe.is_pie if hasattr(pe, 'is_pie') else None,
+            }
+            # Debug info
+            if hasattr(pe, 'debug') and pe.debug:
+                debug_entries = []
+                for d in pe.debug:
+                    if hasattr(d, 'codeview') and d.codeview:
+                        cv = d.codeview
+                        debug_entries.append({
+                            "pdb_path": cv.filename if hasattr(cv, 'filename') else None,
+                            "guid": str(cv.guid) if hasattr(cv, 'guid') else None,
+                        })
+                result["debug_info"] = debug_entries
+
+        # ELF-specific
+        elif binary.format == lief.Binary.FORMATS.ELF:
+            elf = binary
+            result["elf_info"] = {
+                "type": str(elf.header.file_type).split(".")[-1] if hasattr(elf.header, 'file_type') else None,
+                "machine": str(elf.header.machine_type).split(".")[-1] if hasattr(elf.header, 'machine_type') else None,
+                "has_interpreter": bool(elf.interpreter) if hasattr(elf, 'interpreter') else None,
+                "interpreter": elf.interpreter if hasattr(elf, 'interpreter') else None,
+            }
+
+        return result
+
+    result = await asyncio.to_thread(_parse)
+    return await _check_mcp_response_size(ctx, result, "parse_binary_with_lief")
+
+
+@tool_decorator
+async def modify_pe_section(
+    ctx: Context,
+    section_name: str,
+    new_name: Optional[str] = None,
+    add_characteristics: Optional[int] = None,
+    remove_characteristics: Optional[int] = None,
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Modifies a PE section's properties (name, characteristics) using LIEF.
+
+    Args:
+        section_name: Name of the section to modify (e.g. '.text').
+        new_name: New name for the section.
+        add_characteristics: Characteristics flags to add (bitwise OR).
+        remove_characteristics: Characteristics flags to remove.
+        output_path: If provided, saves modified binary to this path.
+    """
+    await ctx.info(f"Modifying section {section_name}")
+    _check_lib("lief", LIEF_AVAILABLE, "modify_pe_section")
+    _check_pe_loaded("modify_pe_section")
+
+    # Validate output path against sandbox if provided
+    if output_path:
+        state.check_path_allowed(os.path.abspath(output_path))
+
+    def _modify():
+        binary = lief.parse(state.filepath)
+        if binary is None:
+            return {"error": "LIEF could not parse the loaded file."}
+
+        section = None
+        for sec in binary.sections:
+            if sec.name.strip('\x00') == section_name.strip('\x00'):
+                section = sec
+                break
+
+        if section is None:
+            return {"error": f"Section '{section_name}' not found."}
+
+        changes = []
+        if new_name:
+            section.name = new_name
+            changes.append(f"Renamed to '{new_name}'")
+        if add_characteristics:
+            section.characteristics = section.characteristics | add_characteristics
+            changes.append(f"Added characteristics {hex(add_characteristics)}")
+        if remove_characteristics:
+            section.characteristics = section.characteristics & ~remove_characteristics
+            changes.append(f"Removed characteristics {hex(remove_characteristics)}")
+
+        if output_path:
+            builder = lief.PE.Builder(binary)
+            builder.build()
+            builder.write(output_path)
+            changes.append(f"Saved to {output_path}")
+
+        return {"status": "success", "changes": changes}
+
+    result = await asyncio.to_thread(_modify)
+    return await _check_mcp_response_size(ctx, result, "modify_pe_section")
+
+
+# ===================================================================
+#  CAPSTONE — Standalone disassembly
+# ===================================================================
+
+@tool_decorator
+async def disassemble_raw_bytes(
+    ctx: Context,
+    hex_bytes: str,
+    architecture: str = "x86_64",
+    base_address: str = "0x0",
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    Disassembles raw bytes (shellcode, buffer contents) without needing a loaded binary.
+    Supports x86, x86_64, ARM, ARM64, MIPS.
+
+    Args:
+        hex_bytes: Hex-encoded bytes to disassemble (e.g. '554889e5...').
+        architecture: Target architecture ('x86', 'x86_64', 'arm', 'arm64', 'mips').
+        base_address: Base address for display (default '0x0').
+        limit: Max instructions to return.
+    """
+    await ctx.info(f"Disassembling raw bytes ({architecture})")
+    _check_lib("capstone", CAPSTONE_AVAILABLE, "disassemble_raw_bytes")
+
+    try:
+        code = bytes.fromhex(hex_bytes)
+    except ValueError:
+        raise ValueError("Invalid hex bytes.")
+
+    base_addr = int(base_address, 0)
+
+    arch, mode = _get_capstone_arch(architecture)
+
+    def _disasm():
+        md = capstone.Cs(arch, mode)
+        md.detail = True
+        instructions = []
+        for insn in md.disasm(code, base_addr):
+            entry = {
+                "address": hex(insn.address),
+                "bytes": insn.bytes.hex(),
+                "mnemonic": insn.mnemonic,
+                "op_str": insn.op_str,
+            }
+            # Add implicit register info
+            if insn.regs_read:
+                entry["regs_read"] = [insn.reg_name(r) for r in insn.regs_read]
+            if insn.regs_write:
+                entry["regs_write"] = [insn.reg_name(r) for r in insn.regs_write]
+            if insn.groups:
+                entry["groups"] = [insn.group_name(g) for g in insn.groups]
+
+            instructions.append(entry)
+            if len(instructions) >= limit:
+                break
+
+        return instructions
+
+    instructions = await asyncio.to_thread(_disasm)
+
+    return {
+        "architecture": architecture,
+        "base_address": hex(base_addr),
+        "total_bytes": len(code),
+        "instruction_count": len(instructions),
+        "instructions": instructions,
+    }
+
+
+# ===================================================================
+#  KEYSTONE — Assembler
+# ===================================================================
+
+@tool_decorator
+async def assemble_instruction(
+    ctx: Context,
+    assembly: str,
+    architecture: str = "x86_64",
+    base_address: str = "0x0",
+) -> Dict[str, Any]:
+    """
+    Converts assembly mnemonics to machine code bytes.
+    Useful for creating patches in human-readable form.
+
+    Args:
+        assembly: Assembly code string (e.g. 'nop; mov eax, 1; ret').
+        architecture: Target architecture ('x86', 'x86_64', 'arm', 'arm64', 'mips').
+        base_address: Base address for resolving relative references.
+    """
+    await ctx.info(f"Assembling: {assembly[:60]}")
+    _check_lib("keystone", KEYSTONE_AVAILABLE, "assemble_instruction")
+
+    base_addr = int(base_address, 0)
+
+    arch, mode = _get_keystone_arch(architecture)
+
+    def _assemble():
+        ks = keystone.Ks(arch, mode)
+        try:
+            encoding, count = ks.asm(assembly, base_addr)
+            if encoding is None:
+                return {"error": "Assembly failed: no output produced."}
+            machine_code = bytes(encoding)
+            return {
+                "machine_code_hex": machine_code.hex(),
+                "byte_count": len(machine_code),
+                "instruction_count": count,
+                "assembly_input": assembly,
+            }
+        except keystone.KsError as e:
+            return {"error": f"Assembly failed: {e}"}
+
+    result = await asyncio.to_thread(_assemble)
+    return await _check_mcp_response_size(ctx, result, "assemble_instruction")
+
+
+@tool_decorator
+async def patch_with_assembly(
+    ctx: Context,
+    address: str,
+    assembly: str,
+    architecture: str = "x86_64",
+) -> Dict[str, Any]:
+    """
+    Assembles instructions and patches them into the loaded binary at the given address.
+    Combines Keystone (assembly) with angr (memory patching).
+
+    Args:
+        address: Hex address to patch at.
+        assembly: Assembly mnemonics to assemble and write.
+        architecture: Target architecture.
+    """
+    await ctx.info(f"Assembling and patching at {address}")
+    _check_lib("keystone", KEYSTONE_AVAILABLE, "patch_with_assembly")
+    _check_angr_ready("patch_with_assembly")
+
+    from arkana.config import ANGR_AVAILABLE
+    if not ANGR_AVAILABLE:
+        raise RuntimeError(
+            "[patch_with_assembly] The angr library is not installed. "
+            "Install with: pip install 'angr[unicorn]'"
+        )
+    import angr
+
+    addr = int(address, 0)
+
+    arch, mode = _get_keystone_arch(architecture)
+
+    def _patch():
+        ks = keystone.Ks(arch, mode)
+        try:
+            encoding, count = ks.asm(assembly, addr)
+        except keystone.KsError as e:
+            return {"error": f"Assembly failed: {e}"}
+
+        if encoding is None:
+            return {"error": "Assembly produced no output."}
+
+        patch_data = bytes(encoding)
+
+        project, _ = state.get_angr_snapshot()
+        if project is None:
+            project = angr.Project(state.filepath, auto_load_libs=False)
+
+        project.loader.memory.store(addr, patch_data)
+        # Invalidate CFG and loop cache via atomic setter
+        state.set_angr_results(project, None, None, None)
+
+        return {
+            "status": "success",
+            "address": hex(addr),
+            "assembly": assembly,
+            "bytes_written": len(patch_data),
+            "machine_code_hex": patch_data.hex(),
+            "message": f"Patched {len(patch_data)} bytes. CFG cache cleared.",
+        }
+
+    result = await asyncio.to_thread(_patch)
+    return await _check_mcp_response_size(ctx, result, "patch_with_assembly")
+
+
+# ===================================================================
+#  SIMILARITY HASHING — ssdeep, TLSH
+# ===================================================================
+
+@tool_decorator
+async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Computes fuzzy/locality-sensitive hashes for sample similarity analysis:
+    ssdeep (context-triggered piecewise hash) and TLSH (Trend Micro Locality Sensitive Hash).
+
+    Args:
+        file_path: Optional path to a file. If None, uses the loaded file.
+    """
+    await ctx.info("Computing similarity hashes")
+    target = file_path or state.filepath
+    if not target or not os.path.isfile(target):
+        raise RuntimeError("No file specified and no file is loaded.")
+    if file_path:
+        state.check_path_allowed(os.path.abspath(target))
+
+    def _compute():
+        with open(target, 'rb') as f:
+            data = f.read()
+
+        result = {"file": target, "size": len(data)}
+
+        if PPDEEP_AVAILABLE:
+            try:
+                result["ssdeep"] = ppdeep.hash(data)
+            except Exception as e:
+                result["ssdeep_error"] = str(e)
+        else:
+            result["ssdeep"] = "ppdeep not installed (pip install ppdeep)"
+
+        if TLSH_AVAILABLE:
+            try:
+                h = tlsh.hash(data)
+                result["tlsh"] = h if h else "data too small for TLSH"
+            except Exception as e:
+                result["tlsh_error"] = str(e)
+        else:
+            result["tlsh"] = "tlsh not installed (pip install py-tlsh)"
+
+        # Standard imphash if PE is loaded
+        if state.pe_object:
+            try:
+                result["imphash"] = state.pe_object.get_imphash()
+            except Exception:
+                pass
+
+        return result
+
+    result = await asyncio.to_thread(_compute)
+    return await _check_mcp_response_size(ctx, result, "compute_similarity_hashes")
+
+
+@tool_decorator
+async def compare_file_similarity(
+    ctx: Context,
+    file_path_b: str,
+) -> Dict[str, Any]:
+    """
+    Compares the loaded file against another file using fuzzy hashes
+    to determine similarity (useful for malware family clustering).
+
+    Args:
+        file_path_b: Path to the second file to compare.
+    """
+    await ctx.info(f"Comparing similarity with {file_path_b}")
+    if not state.filepath or not os.path.isfile(state.filepath):
+        raise RuntimeError("No file is loaded.")
+    if not os.path.isfile(file_path_b):
+        raise RuntimeError(f"File not found: {file_path_b}")
+    state.check_path_allowed(os.path.abspath(file_path_b))
+
+    def _compare():
+        with open(state.filepath, 'rb') as f:
+            data_a = f.read()
+        with open(file_path_b, 'rb') as f:
+            data_b = f.read()
+
+        result = {"file_a": state.filepath, "file_b": file_path_b}
+
+        if PPDEEP_AVAILABLE:
+            try:
+                hash_a = ppdeep.hash(data_a)
+                hash_b = ppdeep.hash(data_b)
+                score = ppdeep.compare(hash_a, hash_b)
+                result["ssdeep_similarity"] = score
+                result["ssdeep_hash_a"] = hash_a
+                result["ssdeep_hash_b"] = hash_b
+            except Exception as e:
+                result["ssdeep_error"] = str(e)
+
+        if TLSH_AVAILABLE:
+            try:
+                h_a = tlsh.hash(data_a)
+                h_b = tlsh.hash(data_b)
+                if h_a and h_b:
+                    distance = tlsh.diff(h_a, h_b)
+                    result["tlsh_distance"] = distance
+                    result["tlsh_hash_a"] = h_a
+                    result["tlsh_hash_b"] = h_b
+                    result["tlsh_verdict"] = "very similar" if distance < 30 else "similar" if distance < 100 else "different"
+            except Exception as e:
+                result["tlsh_error"] = str(e)
+
+        return result
+
+    result = await asyncio.to_thread(_compare)
+    return await _check_mcp_response_size(ctx, result, "compare_file_similarity")
+
+
+# ===================================================================
+#  SPEAKEASY — Windows API emulation (via isolated venv subprocess)
+# ===================================================================
+
+async def _run_speakeasy(cmd: dict, timeout_seconds: int) -> dict:
+    """Invoke the speakeasy runner subprocess in the isolated venv."""
+    proc = await asyncio.create_subprocess_exec(
+        str(_SPEAKEASY_VENV_PYTHON), str(_SPEAKEASY_RUNNER),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    input_data = json.dumps(cmd).encode()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=input_data),
+            timeout=timeout_seconds + 30,  # buffer beyond emulation timeout
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass  # Best-effort cleanup; process may already be dead
+        return {"error": f"Speakeasy emulation timed out after {timeout_seconds}s"}
+
+    if proc.returncode != 0:
+        err_msg = stderr.decode(errors="replace")[:500]
+        return {"error": f"Speakeasy runner failed (exit {proc.returncode}): {err_msg}"}
+
+    try:
+        return json.loads(stdout.decode())
+    except json.JSONDecodeError:
+        return {"error": f"Invalid JSON from speakeasy runner: {stdout.decode(errors='replace')[:500]}"}
+
+
+@tool_decorator
+async def emulate_pe_with_windows_apis(
+    ctx: Context,
+    timeout_seconds: int = 60,
+    limit: int = 20,
+    track_allocations: bool = False,
+) -> Dict[str, Any]:
+    """
+    Emulates the loaded PE in Speakeasy's Windows environment with full API emulation.
+    Returns the API call log (DLL function calls, arguments, return values).
+
+    Args:
+        timeout_seconds: Max emulation time in seconds.
+        limit: Max API calls to return.
+        track_allocations: If True, tracks VirtualAlloc/VirtualProtect/HeapAlloc calls
+            during emulation and returns a memory allocation timeline. Flags suspicious
+            patterns like RWX allocations and allocation-write-execute sequences.
+    """
+    await ctx.info("Emulating PE with Speakeasy Windows API emulation")
+    _check_lib("speakeasy", _check_speakeasy_available(), "emulate_pe_with_windows_apis")
+    _check_pe_loaded("emulate_pe_with_windows_apis")
+
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "emulate_pe_with_windows_apis", timeout_seconds)
+    )
+    try:
+        result = await _run_speakeasy({
+            "action": "emulate_pe",
+            "filepath": state.filepath,
+            "timeout_seconds": timeout_seconds,
+            "limit": limit,
+            "track_allocations": track_allocations,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
+
+    # Warn when emulation captured nothing on a packed binary
+    if result.get("total_api_calls", -1) == 0:
+        likely_packed = (state.pe_data or {}).get("triage", {}).get(
+            "packing_assessment", {}
+        ).get("likely_packed", False)
+        if not likely_packed and state.pe_object:
+            try:
+                for sec in state.pe_object.sections:
+                    if sec.get_entropy() > 7.0 and sec.SizeOfRawData > 1024:
+                        likely_packed = True
+                        break
+            except Exception:
+                pass
+        if likely_packed:
+            result["warning"] = (
+                "Binary appears packed — emulation ran the packer stub, not the "
+                "real payload. Unpack first with auto_unpack_pe() or "
+                "try_all_unpackers(), then re-emulate the unpacked binary."
+            )
+
+    return await _check_mcp_response_size(ctx, result, "emulate_pe_with_windows_apis", "the 'limit' parameter")
+
+
+@tool_decorator
+async def emulate_shellcode_with_speakeasy(
+    ctx: Context,
+    shellcode_hex: Optional[str] = None,
+    architecture: str = "x86",
+    timeout_seconds: int = 30,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    Emulates shellcode with full Windows API emulation via Speakeasy.
+    If no shellcode_hex is provided, uses the loaded file as raw shellcode.
+
+    Args:
+        shellcode_hex: Hex-encoded shellcode bytes. If None, uses loaded file data.
+        architecture: 'x86' or 'x86_64'.
+        timeout_seconds: Max emulation time.
+        limit: Max API calls to return.
+    """
+    await ctx.info("Emulating shellcode with Speakeasy")
+    _check_lib("speakeasy", _check_speakeasy_available(), "emulate_shellcode_with_speakeasy")
+
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "emulate_shellcode_with_speakeasy", timeout_seconds)
+    )
+    try:
+        result = await _run_speakeasy({
+            "action": "emulate_shellcode",
+            "filepath": state.filepath,
+            "shellcode_hex": shellcode_hex,
+            "architecture": architecture,
+            "timeout_seconds": timeout_seconds,
+            "limit": limit,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
+    return await _check_mcp_response_size(ctx, result, "emulate_shellcode_with_speakeasy", "the 'limit' parameter")
+
+
+# ===================================================================
+#  UN{I}PACKER — Automatic PE unpacking (via isolated venv subprocess)
+# ===================================================================
+
+async def _run_unipacker(cmd: dict, timeout_seconds: int) -> dict:
+    """Invoke the unipacker runner subprocess in the isolated venv."""
+    proc = await asyncio.create_subprocess_exec(
+        str(_UNIPACKER_VENV_PYTHON), str(_UNIPACKER_RUNNER),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    input_data = json.dumps(cmd).encode()
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=input_data),
+            timeout=timeout_seconds + 30,  # buffer beyond unpacking timeout
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass  # Best-effort cleanup; process may already be dead
+        return {"error": f"Unipacker timed out after {timeout_seconds}s"}
+
+    if proc.returncode != 0:
+        err_msg = stderr.decode(errors="replace")[:500]
+        return {"error": f"Unipacker runner failed (exit {proc.returncode}): {err_msg}"}
+
+    try:
+        return json.loads(stdout.decode())
+    except json.JSONDecodeError:
+        return {"error": f"Invalid JSON from unipacker runner: {stdout.decode(errors='replace')[:500]}"}
+
+
+@tool_decorator
+async def auto_unpack_pe(
+    ctx: Context,
+    output_path: Optional[str] = None,
+    timeout_seconds: int = 120,
+) -> Dict[str, Any]:
+    """
+    Automatically unpacks a packed PE using Un{i}packer (Unicorn-based).
+    Supports UPX, ASPack, PEtite, FSG, and generic packing via section-hopping heuristics.
+    The packer type is auto-detected via YARA signatures.
+
+    Args:
+        output_path: Where to save the unpacked binary. Default: <original>_unpacked.exe.
+        timeout_seconds: Max time for unpacking in seconds. Default 120.
+    """
+    await ctx.info("Auto-unpacking PE")
+    _check_lib("unipacker", _check_unipacker_available(), "auto_unpack_pe")
+    _check_pe_loaded("auto_unpack_pe")
+
+    if not output_path:
+        base, ext = os.path.splitext(state.filepath)
+        output_path = f"{base}_unpacked{ext}"
+
+    # Validate output path against sandbox
+    state.check_path_allowed(os.path.abspath(output_path))
+
+    progress_task = asyncio.create_task(
+        _subprocess_progress_reporter(ctx, "auto_unpack_pe", timeout_seconds))
+    try:
+        result = await _run_unipacker({
+            "action": "unpack_pe",
+            "filepath": state.filepath,
+            "output_path": output_path,
+            "timeout_seconds": timeout_seconds,
+        }, timeout_seconds)
+    finally:
+        progress_task.cancel()
+        try:
+            await progress_task
+        except asyncio.CancelledError:
+            pass
+    await ctx.report_progress(100, 100)
+
+    # Add a hint for the user on success
+    if result.get("status") == "success":
+        result["hint"] = "Use open_file() to load the unpacked binary for further analysis."
+
+    return await _check_mcp_response_size(ctx, result, "auto_unpack_pe")
+
+
+# ===================================================================
+#  BINWALK — Embedded file detection
+# ===================================================================
+
+@tool_decorator
+async def scan_for_embedded_files(
+    ctx: Context,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    Scans the binary for embedded files, archives, and file system images
+    using Binwalk signature scanning.
+
+    Args:
+        limit: Max findings to return.
+    """
+    await ctx.info("Scanning for embedded files with Binwalk")
+    _check_lib("binwalk", BINWALK_AVAILABLE, "scan_for_embedded_files")
+    if not state.filepath or not os.path.isfile(state.filepath):
+        raise RuntimeError("[scan_for_embedded_files] No file is loaded. Use open_file first.")
+
+    def _scan_python_api():
+        """Use the binwalk Python API (v2.x)."""
+        results = []
+        for module in binwalk.scan(state.filepath, signature=True, quiet=True, extract=False):
+            for result in module.results:
+                results.append({
+                    "offset": hex(result.offset),
+                    "description": result.description,
+                })
+                if len(results) >= limit:
+                    break
+        return results
+
+    def _scan_cli():
+        """Fallback: parse output of the binwalk CLI tool."""
+        proc = subprocess.run(
+            ["binwalk", "--quiet", state.filepath],
+            capture_output=True, text=True, timeout=60,
+        )
+        _cli_warning = None
+        if proc.returncode != 0:
+            _cli_warning = f"binwalk CLI exited with code {proc.returncode}: {proc.stderr[:200]}"
+            logger.warning(_cli_warning)
+        results = []
+        # binwalk output: "DECIMAL       HEXADECIMAL     DESCRIPTION"
+        # then lines like "12345         0x3039          Zip archive data, ..."
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            m = re.match(r'^(\d+)\s+(0x[0-9A-Fa-f]+)\s+(.+)$', line)
+            if m:
+                results.append({
+                    "offset": m.group(2),
+                    "description": m.group(3),
+                })
+                if len(results) >= limit:
+                    break
+        return results, _cli_warning
+
+    def _scan():
+        try:
+            warning = None
+            if BINWALK_CLI_ONLY:
+                results, warning = _scan_cli()
+            else:
+                try:
+                    results = _scan_python_api()
+                except Exception as e_api:
+                    if shutil.which("binwalk"):
+                        logger.warning(
+                            "Binwalk Python API failed (%s), falling back to CLI",
+                            e_api,
+                        )
+                        results, warning = _scan_cli()
+                    else:
+                        raise
+            response = {
+                "total_found": len(results),
+                "embedded_files": results[:limit],
+            }
+            if warning:
+                response["warning"] = warning
+            return response
+        except Exception as e:
+            return {"error": f"Binwalk scan failed: {e}"}
+
+    result = await asyncio.to_thread(_scan)
+    return await _check_mcp_response_size(ctx, result, "scan_for_embedded_files", "the 'limit' parameter")
+
+
+# ===================================================================
+#  CAPABILITY REPORT — available new libraries
+# ===================================================================
+
+@tool_decorator
+async def get_extended_capabilities(ctx: Context) -> Dict[str, Any]:
+    """
+    Reports which extended libraries are available on this server instance.
+    Helps the AI understand what tools it can use.
+    """
+    await ctx.info("Checking extended library availability")
+    return {
+        "lief": {"available": LIEF_AVAILABLE, "purpose": "Binary modification, multi-format parsing (PE/ELF/Mach-O)"},
+        "capstone": {"available": CAPSTONE_AVAILABLE, "purpose": "Multi-architecture disassembly"},
+        "keystone": {"available": KEYSTONE_AVAILABLE, "purpose": "Multi-architecture assembly"},
+        "speakeasy": {"available": _check_speakeasy_available(), "purpose": "Windows API emulation for malware analysis"},
+        "unipacker": {"available": _check_unipacker_available(), "purpose": "Automatic PE unpacking"},
+        "qiling": {"available": _check_qiling_available(), "purpose": "Cross-platform binary emulation (PE/ELF/Mach-O), multi-arch shellcode, dynamic unpacking, API hooking"},
+        "dotnetfile": {"available": DOTNETFILE_AVAILABLE, "purpose": ".NET PE metadata parsing"},
+        "ppdeep": {"available": PPDEEP_AVAILABLE, "purpose": "ssdeep fuzzy hashing"},
+        "tlsh": {"available": TLSH_AVAILABLE, "purpose": "TLSH locality-sensitive hashing"},
+        "binwalk": {"available": BINWALK_AVAILABLE, "cli_only": BINWALK_CLI_ONLY, "purpose": "Embedded file/firmware detection"},
+    }

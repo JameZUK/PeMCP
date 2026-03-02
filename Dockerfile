@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # setuptools<81 is required: the unicorn package does `import pkg_resources`
 # at import time, and setuptools 81+ removed pkg_resources entirely.
 # The resulting deprecation *warning* is suppressed in application code
-# (pemcp/__init__.py).
+# (arkana/__init__.py).
 RUN pip install --no-cache-dir --upgrade pip "setuptools<81" wheel
 
 # --- Install Heavy Dependencies (Cached Layer) ---
@@ -157,8 +157,8 @@ PYEOF
 # user-mounted rootfs volumes work when the container runs as a non-root UID.
 # A dedicated group (gid 1500) is used so the container user can write without
 # full world-writable (777) permissions.  run.sh passes --group-add 1500.
-RUN groupadd -g 1500 pemcp && \
-    chown -R root:pemcp /app/qiling-rootfs && \
+RUN groupadd -g 1500 arkana && \
+    chown -R root:arkana /app/qiling-rootfs && \
     chmod -R 775 /app/qiling-rootfs
 
 # --- Install Binary Refinery optional sub-dependencies ---
@@ -257,28 +257,28 @@ print(f"  Yara-Rules Community rules installed: {community_count} files")
 PYEOF
 
 # --- Copy Application Files ---
-COPY PeMCP.py .
-COPY pemcp/ ./pemcp/
+COPY arkana.py .
+COPY arkana/ ./arkana/
 COPY scripts/ ./scripts/
 COPY userdb.txt .
 
 # --- Create writable home directory for runtime data ---
 # run.sh passes --user "$(id -u):$(id -g)" --group-add 1500 so the
-# container runs as the host user with membership in the pemcp group.
-# Group-writable (775) so any UID in the pemcp group can create
-# ~/.pemcp/cache and config.json inside it.
-RUN mkdir -p /app/home/.pemcp/cache /app/home/.cache && \
-    chown -R root:pemcp /app/home && \
+# container runs as the host user with membership in the arkana group.
+# Group-writable (775) so any UID in the arkana group can create
+# ~/.arkana/cache and config.json inside it.
+RUN mkdir -p /app/home/.arkana/cache /app/home/.cache && \
+    chown -R root:arkana /app/home && \
     chmod -R 775 /app/home
 
 # --- Create writable output directory ---
 # Default export/output directory for project archives, patched binaries, and reports.
 # run.sh mounts a host directory here; without a mount this provides a writable fallback.
-RUN mkdir -p /output && chown root:pemcp /output && chmod 775 /output
+RUN mkdir -p /output && chown root:arkana /output && chmod 775 /output
 
 # --- Declare volumes ---
 # Persistent cache and configuration
-VOLUME ["/app/home/.pemcp"]
+VOLUME ["/app/home/.arkana"]
 # Qiling rootfs — users can mount their own Windows DLLs, Linux libs, etc.
 # See docs/QILING_ROOTFS.md for setup instructions.
 VOLUME ["/app/qiling-rootfs"]
@@ -294,4 +294,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8082/mcp')"]
 
 # --- Set Entrypoint ---
-ENTRYPOINT ["python", "./PeMCP.py"]
+ENTRYPOINT ["python", "./arkana.py"]

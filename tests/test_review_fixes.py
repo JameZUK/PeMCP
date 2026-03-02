@@ -32,39 +32,39 @@ class TestSafeEnvInt:
     """Test _safe_env_int handles bad environment variable values."""
 
     def test_valid_int(self, monkeypatch):
-        monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "5")
-        from pemcp.utils import _safe_env_int
-        assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 5
+        monkeypatch.setenv("ARKANA_MAX_CONCURRENT_ANALYSES", "5")
+        from arkana.utils import _safe_env_int
+        assert _safe_env_int("ARKANA_MAX_CONCURRENT_ANALYSES", 3) == 5
 
     def test_missing_env_uses_default(self, monkeypatch):
-        monkeypatch.delenv("PEMCP_TEST_NONEXISTENT", raising=False)
-        from pemcp.utils import _safe_env_int
-        assert _safe_env_int("PEMCP_TEST_NONEXISTENT", 42) == 42
+        monkeypatch.delenv("ARKANA_TEST_NONEXISTENT", raising=False)
+        from arkana.utils import _safe_env_int
+        assert _safe_env_int("ARKANA_TEST_NONEXISTENT", 42) == 42
 
     def test_invalid_string_uses_default(self, monkeypatch):
-        monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "not_a_number")
-        from pemcp.utils import _safe_env_int
-        assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 3
+        monkeypatch.setenv("ARKANA_MAX_CONCURRENT_ANALYSES", "not_a_number")
+        from arkana.utils import _safe_env_int
+        assert _safe_env_int("ARKANA_MAX_CONCURRENT_ANALYSES", 3) == 3
 
     def test_empty_string_uses_default(self, monkeypatch):
-        monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "")
-        from pemcp.utils import _safe_env_int
-        assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 3
+        monkeypatch.setenv("ARKANA_MAX_CONCURRENT_ANALYSES", "")
+        from arkana.utils import _safe_env_int
+        assert _safe_env_int("ARKANA_MAX_CONCURRENT_ANALYSES", 3) == 3
 
     def test_float_string_uses_default(self, monkeypatch):
-        monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "3.5")
-        from pemcp.utils import _safe_env_int
-        assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 3
+        monkeypatch.setenv("ARKANA_MAX_CONCURRENT_ANALYSES", "3.5")
+        from arkana.utils import _safe_env_int
+        assert _safe_env_int("ARKANA_MAX_CONCURRENT_ANALYSES", 3) == 3
 
     def test_negative_value(self, monkeypatch):
-        monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "-1")
-        from pemcp.utils import _safe_env_int
-        assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == -1
+        monkeypatch.setenv("ARKANA_MAX_CONCURRENT_ANALYSES", "-1")
+        from arkana.utils import _safe_env_int
+        assert _safe_env_int("ARKANA_MAX_CONCURRENT_ANALYSES", 3) == -1
 
     def test_zero_value(self, monkeypatch):
-        monkeypatch.setenv("PEMCP_MAX_CONCURRENT_ANALYSES", "0")
-        from pemcp.utils import _safe_env_int
-        assert _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3) == 0
+        monkeypatch.setenv("ARKANA_MAX_CONCURRENT_ANALYSES", "0")
+        from arkana.utils import _safe_env_int
+        assert _safe_env_int("ARKANA_MAX_CONCURRENT_ANALYSES", 3) == 0
 
 
 # ===================================================================
@@ -97,7 +97,7 @@ class TestDeobfuscationRegexValidation:
     def test_source_has_upfront_validation(self):
         """Verify the deobfuscation tool validates regex before processing."""
         deobfuscation_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_deobfuscation.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_deobfuscation.py"
         )
         with open(deobfuscation_path) as f:
             source = f.read()
@@ -117,7 +117,7 @@ class TestHookStateCorruption:
     def test_hook_registration_after_success(self):
         """Verify source has hook registration after proj.hook / proj.hook_symbol."""
         hooks_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr_hooks.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_angr_hooks.py"
         )
         with open(hooks_path) as f:
             source = f.read()
@@ -131,7 +131,7 @@ class TestHookStateCorruption:
     def test_hex_address_hook_has_error_handling(self):
         """Verify proj.hook(addr) path has try/except."""
         hooks_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr_hooks.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_angr_hooks.py"
         )
         with open(hooks_path) as f:
             source = f.read()
@@ -149,7 +149,7 @@ class TestDataflowExceptionCounters:
     def test_reaching_definitions_has_warning_support(self):
         """Verify get_reaching_definitions can surface skip warnings."""
         dataflow_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr_dataflow.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_angr_dataflow.py"
         )
         with open(dataflow_path) as f:
             source = f.read()
@@ -159,7 +159,7 @@ class TestDataflowExceptionCounters:
     def test_data_dependencies_has_warning_support(self):
         """Verify get_data_dependencies can surface skip warnings."""
         dataflow_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr_dataflow.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_angr_dataflow.py"
         )
         with open(dataflow_path) as f:
             source = f.read()
@@ -177,7 +177,7 @@ class TestStringsToolSafety:
     def test_search_floss_uses_safe_access(self):
         """search_floss_strings should use .get() for string access."""
         strings_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_strings.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_strings.py"
         )
         with open(strings_path) as f:
             source = f.read()
@@ -187,7 +187,7 @@ class TestStringsToolSafety:
     def test_sifted_strings_uses_safe_access(self):
         """get_top_sifted_strings should use .get() for score and string."""
         strings_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_strings.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_strings.py"
         )
         with open(strings_path) as f:
             source = f.read()
@@ -197,7 +197,7 @@ class TestStringsToolSafety:
     def test_no_redundant_regex_compile(self):
         """get_top_sifted_strings should pre-compile regex for safe_regex_search."""
         strings_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_strings.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_strings.py"
         )
         with open(strings_path) as f:
             source = f.read()
@@ -234,7 +234,7 @@ class TestUnipackerTimeout:
     def test_tool_uses_subprocess_runner(self):
         """Verify auto_unpack_pe uses _run_unipacker subprocess pattern."""
         libs_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_new_libs.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_new_libs.py"
         )
         with open(libs_path) as f:
             source = f.read()
@@ -280,7 +280,7 @@ class TestBinwalkFailureSurfacing:
     def test_cli_warning_returned_in_response(self):
         """Verify binwalk CLI warnings are included in the response."""
         libs_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_new_libs.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_new_libs.py"
         )
         with open(libs_path) as f:
             source = f.read()
@@ -298,7 +298,7 @@ class TestSubprocessCleanup:
     def test_kill_wait_wrapped_in_try(self):
         """Verify proc.kill/wait is wrapped in try/except for both runners."""
         libs_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_new_libs.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_new_libs.py"
         )
         with open(libs_path) as f:
             source = f.read()
@@ -323,7 +323,7 @@ class TestCompactTriageDataAccess:
     def test_compact_reads_imports_as_list(self):
         """The compact triage code must treat suspicious_imports as a list, not a dict."""
         triage_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_triage.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_triage.py"
         )
         with open(triage_path) as f:
             source = f.read()
@@ -340,7 +340,7 @@ class TestCompactTriageDataAccess:
     def test_compact_reads_capabilities_as_list(self):
         """The compact triage code must treat suspicious_capabilities as a list."""
         triage_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_triage.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_triage.py"
         )
         with open(triage_path) as f:
             source = f.read()
@@ -353,7 +353,7 @@ class TestCompactTriageDataAccess:
     def test_compact_uses_correct_signature_key(self):
         """The compact triage must use 'present' key (not 'embedded_signature_present')."""
         triage_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_triage.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_triage.py"
         )
         with open(triage_path) as f:
             source = f.read()
@@ -373,7 +373,7 @@ class TestCloseFileThreadSafety:
     def test_close_file_uses_clear_notes(self):
         """close_file should call state.clear_notes() not state.notes = []."""
         pe_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_pe.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_pe.py"
         )
         with open(pe_path) as f:
             source = f.read()
@@ -388,7 +388,7 @@ class TestCloseFileThreadSafety:
     def test_close_file_uses_clear_tool_history(self):
         """close_file should call state.clear_tool_history() not state.tool_history = []."""
         pe_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_pe.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_pe.py"
         )
         with open(pe_path) as f:
             source = f.read()
@@ -401,7 +401,7 @@ class TestCloseFileThreadSafety:
 
     def test_clear_notes_exists_on_state(self):
         """AnalyzerState must have a clear_notes method."""
-        from pemcp.state import AnalyzerState
+        from arkana.state import AnalyzerState
         s = AnalyzerState()
         s.add_note("test note", category="general")
         assert len(s.get_notes()) == 1
@@ -418,12 +418,12 @@ class TestSafeRegexSearch:
 
     def test_safe_regex_search_exists(self):
         """utils.py must export safe_regex_search."""
-        from pemcp.utils import safe_regex_search
+        from arkana.utils import safe_regex_search
         assert callable(safe_regex_search)
 
     def test_safe_regex_search_returns_match(self):
         """safe_regex_search returns a match object for valid patterns."""
-        from pemcp.utils import safe_regex_search
+        from arkana.utils import safe_regex_search
         pat = re.compile(r'hello')
         result = safe_regex_search(pat, "say hello world")
         assert result is not None
@@ -431,7 +431,7 @@ class TestSafeRegexSearch:
 
     def test_safe_regex_search_returns_none_on_no_match(self):
         """safe_regex_search returns None when pattern doesn't match."""
-        from pemcp.utils import safe_regex_search
+        from arkana.utils import safe_regex_search
         pat = re.compile(r'xyz')
         result = safe_regex_search(pat, "hello world")
         assert result is None
@@ -439,7 +439,7 @@ class TestSafeRegexSearch:
     def test_strings_tool_uses_safe_regex(self):
         """tools_strings.py should import and use safe_regex_search."""
         strings_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_strings.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_strings.py"
         )
         with open(strings_path) as f:
             source = f.read()
@@ -449,7 +449,7 @@ class TestSafeRegexSearch:
     def test_deobfuscation_tool_uses_safe_regex(self):
         """tools_deobfuscation.py should import and use safe_regex_search."""
         deobfuscation_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_deobfuscation.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_deobfuscation.py"
         )
         with open(deobfuscation_path) as f:
             source = f.read()
@@ -466,7 +466,7 @@ class TestCacheMtimeValidation:
     def test_cache_put_stores_mtime_and_size(self):
         """cache.py put() must store file_mtime and file_size in metadata."""
         cache_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "cache.py"
+            os.path.dirname(__file__), "..", "arkana", "cache.py"
         )
         with open(cache_path) as f:
             source = f.read()
@@ -480,7 +480,7 @@ class TestCacheMtimeValidation:
     def test_cache_get_validates_mtime(self):
         """cache.py get() must check file_mtime on cache hit."""
         cache_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "cache.py"
+            os.path.dirname(__file__), "..", "arkana", "cache.py"
         )
         with open(cache_path) as f:
             source = f.read()
@@ -500,13 +500,13 @@ class TestIPFiltering:
     def _extract_ips(self, test_strings):
         """Helper to run the IP extraction logic from _triage_network_iocs."""
         from unittest.mock import patch, MagicMock
-        from pemcp.state import AnalyzerState
+        from arkana.state import AnalyzerState
 
         mock_state = AnalyzerState()
         mock_state.pe_data = {}
 
-        with patch("pemcp.mcp.tools_triage.state", mock_state):
-            from pemcp.mcp.tools_triage import _triage_network_iocs
+        with patch("arkana.mcp.tools_triage.state", mock_state):
+            from arkana.mcp.tools_triage import _triage_network_iocs
             result, _ = _triage_network_iocs(100, test_strings)
             return result.get("ip_addresses", [])
 
@@ -562,7 +562,7 @@ class TestBackgroundExceptionHandling:
     def test_no_redundant_except_blocks(self):
         """background.py should use a single except Exception block."""
         bg_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "background.py"
+            os.path.dirname(__file__), "..", "arkana", "background.py"
         )
         with open(bg_path) as f:
             source = f.read()
@@ -587,7 +587,7 @@ class TestGetProgressOverview:
     def test_tool_exists(self):
         """get_progress_overview should be defined in tools_session."""
         session_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_session.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_session.py"
         )
         with open(session_path) as f:
             source = f.read()
@@ -596,7 +596,7 @@ class TestGetProgressOverview:
     def test_excluded_from_history(self):
         """get_progress_overview should be in _SKIP_HISTORY_TOOLS."""
         server_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "server.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "server.py"
         )
         with open(server_path) as f:
             source = f.read()
@@ -605,7 +605,7 @@ class TestGetProgressOverview:
     def test_returns_analysis_phase_and_file_loaded(self):
         """get_progress_overview should return analysis_phase and file_loaded keys."""
         session_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_session.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_session.py"
         )
         with open(session_path) as f:
             source = f.read()
@@ -624,7 +624,7 @@ class TestSinceLastDigestFiltering:
     def test_digest_filters_notes_by_timestamp(self):
         """get_analysis_digest should filter notes when since_last_digest=True."""
         session_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_session.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_session.py"
         )
         with open(session_path) as f:
             source = f.read()
@@ -637,7 +637,7 @@ class TestSinceLastDigestFiltering:
 
     def test_since_last_digest_timestamp_updated(self):
         """Calling get_analysis_digest should update state.last_digest_timestamp."""
-        from pemcp.state import AnalyzerState
+        from arkana.state import AnalyzerState
         s = AnalyzerState()
         assert s.last_digest_timestamp == 0.0
 
@@ -647,7 +647,7 @@ class TestFlossConfigDataclass:
 
     def test_floss_config_exists(self):
         """_FlossConfig dataclass should be defined in tools_pe."""
-        from pemcp.mcp.tools_pe import _FlossConfig
+        from arkana.mcp.tools_pe import _FlossConfig
         cfg = _FlossConfig()
         assert cfg.min_length == 4
         assert cfg.verbose_level == 0
@@ -659,7 +659,7 @@ class TestFlossConfigDataclass:
 
     def test_build_floss_config_defaults(self):
         """_build_floss_config with all-None params should return defaults."""
-        from pemcp.mcp.tools_pe import _build_floss_config
+        from arkana.mcp.tools_pe import _build_floss_config
         cfg = _build_floss_config(
             floss_min_length=None,
             floss_verbose_level=None,
@@ -682,7 +682,7 @@ class TestFlossConfigDataclass:
 
     def test_build_floss_config_custom_values(self):
         """_build_floss_config with custom params should produce correct config."""
-        from pemcp.mcp.tools_pe import _build_floss_config
+        from arkana.mcp.tools_pe import _build_floss_config
         cfg = _build_floss_config(
             floss_min_length=10,
             floss_verbose_level=2,
@@ -714,7 +714,7 @@ class TestAutoNotingDecodedStrings:
     def test_auto_noting_code_exists(self):
         """tools_deobfuscation.py should auto-note high-confidence IOCs."""
         deob_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_deobfuscation.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_deobfuscation.py"
         )
         with open(deob_path) as f:
             source = f.read()
@@ -732,7 +732,7 @@ class TestNoteHintsInTools:
     def test_decompile_has_next_step(self):
         """decompile_function_with_angr should include next_step hint."""
         angr_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_angr.py"
         )
         with open(angr_path) as f:
             source = f.read()
@@ -743,7 +743,7 @@ class TestNoteHintsInTools:
     def test_annotated_disassembly_has_next_step(self):
         """get_annotated_disassembly should include next_step hint."""
         disasm_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr_disasm.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_angr_disasm.py"
         )
         with open(disasm_path) as f:
             source = f.read()
@@ -754,7 +754,7 @@ class TestNoteHintsInTools:
     def test_emulate_has_next_step(self):
         """emulate_function_execution should include next_step hint on success."""
         angr_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_angr.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_angr.py"
         )
         with open(angr_path) as f:
             source = f.read()
@@ -766,7 +766,7 @@ class TestNoteHintsInTools:
     def test_decode_strings_has_next_step(self):
         """find_and_decode_encoded_strings should include next_step hint."""
         deob_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "mcp", "tools_deobfuscation.py"
+            os.path.dirname(__file__), "..", "arkana", "mcp", "tools_deobfuscation.py"
         )
         with open(deob_path) as f:
             source = f.read()
@@ -783,7 +783,7 @@ class TestCacheLockConsolidation:
     def test_single_lock_acquisition_for_validation(self):
         """cache.get() should validate mtime/size and touch LRU in a single lock."""
         cache_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "cache.py"
+            os.path.dirname(__file__), "..", "arkana", "cache.py"
         )
         with open(cache_path) as f:
             source = f.read()
@@ -840,18 +840,18 @@ class TestDockerSecurity:
             source = f.read()
         assert "groupadd" in source, "Dockerfile should create a dedicated group"
         # Group ownership can be set via 'chgrp' or 'chown user:group'
-        assert "chgrp" in source or ":pemcp" in source, \
+        assert "chgrp" in source or ":arkana" in source, \
             "Dockerfile should set group ownership (chgrp or chown user:group)"
 
     def test_run_sh_uses_group_add(self):
-        """run.sh should pass --group-add to give access to pemcp group."""
+        """run.sh should pass --group-add to give access to arkana group."""
         run_path = os.path.join(
             os.path.dirname(__file__), "..", "run.sh"
         )
         with open(run_path) as f:
             source = f.read()
         assert "--group-add" in source, \
-            "run.sh should pass --group-add for the pemcp group"
+            "run.sh should pass --group-add for the arkana group"
 
 
 class TestSignifyImportHandling:
@@ -860,7 +860,7 @@ class TestSignifyImportHandling:
     def test_signify_import_has_general_exception_handler(self):
         """imports.py should catch generic Exception for signify import."""
         config_path = os.path.join(
-            os.path.dirname(__file__), "..", "pemcp", "imports.py"
+            os.path.dirname(__file__), "..", "arkana", "imports.py"
         )
         with open(config_path) as f:
             source = f.read()

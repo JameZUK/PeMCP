@@ -1,20 +1,20 @@
 # Architecture & Design
 
-Technical documentation for PeMCP's internal structure, design principles, and data handling.
+Technical documentation for Arkana's internal structure, design principles, and data handling.
 
 ---
 
 ## Package Structure
 
 ```
-PeMCP.py                        # Entry point (thin wrapper)
-pemcp/
+arkana.py                        # Entry point (thin wrapper)
+arkana/
 ├── __init__.py                 # Package metadata
-├── __main__.py                 # python -m pemcp support
+├── __main__.py                 # python -m arkana support
 ├── state.py                    # Thread-safe AnalyzerState
 ├── config.py                   # Imports, availability flags, constants
 ├── cache.py                    # Disk-based analysis cache (gzip/LRU)
-├── user_config.py              # Persistent API key storage (~/.pemcp/)
+├── user_config.py              # Persistent API key storage (~/.arkana/)
 ├── utils.py                    # Utility functions
 ├── hashing.py                  # ssdeep implementation
 ├── mock.py                     # MockPE for non-PE/shellcode mode
@@ -82,12 +82,12 @@ pemcp/
 
 ## Design Principles
 
-- **Modular Package** — Clean `pemcp/` package structure with 39 tool modules and separated concerns (parsers, MCP tools, CLI, configuration).
+- **Modular Package** — Clean `arkana/` package structure with 39 tool modules and separated concerns (parsers, MCP tools, CLI, configuration).
 - **Docker-First Design** — No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Single-File Analysis Context** — The server holds one file in memory via `AnalyzerState`. All tools operate on this shared context. Use `open_file` and `close_file` to switch between files.
 - **Thread-Safe State** — Centralised `AnalyzerState` class with locking for concurrent access.
 - **Background Tasks** — Long-running operations (symbolic execution, Angr CFG) run asynchronously with heartbeat monitoring.
-- **Disk-Based Caching** — Analysis results are cached in `~/.pemcp/cache/` as gzip-compressed JSON, keyed by SHA256. Re-opening a previously analysed file loads from cache in under 10 ms. LRU eviction keeps cache size bounded.
+- **Disk-Based Caching** — Analysis results are cached in `~/.arkana/cache/` as gzip-compressed JSON, keyed by SHA256. Re-opening a previously analysed file loads from cache in under 10 ms. LRU eviction keeps cache size bounded.
 - **Lazy Loading** — Heavy analysis (Angr CFG) runs in the background. The server is usable immediately.
 - **Pagination** — Tools that return lists support `limit` and `offset` parameters with LRU result caching, preventing response truncation and giving AI clients control over data volume per call (default limit 20 for most tools).
 - **Smart Truncation** — MCP responses exceeding 64KB are intelligently truncated (lists shortened, strings clipped) whilst preserving structure.
@@ -146,4 +146,4 @@ Paginated results are cached in an **LRU cache** (5 slots per tool) so that pagi
 | `MAX_TOOL_HISTORY` | 500 | Maximum tool invocation history entries retained per session |
 | `SESSION_TTL_SECONDS` | 3600 | Session lifetime before cleanup (1 hour) |
 | `MAX_MCP_RESPONSE_SIZE_KB` | 64 | MCP response size limit per the protocol specification |
-| `PEMCP_MAX_CONCURRENT_ANALYSES` | 3 | Concurrent heavy analysis semaphore (configurable via environment variable) |
+| `ARKANA_MAX_CONCURRENT_ANALYSES` | 3 | Concurrent heavy analysis semaphore (configurable via environment variable) |

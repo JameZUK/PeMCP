@@ -1,9 +1,9 @@
-"""Tests for pemcp.mcp._format_helpers — format detection and magic hints."""
+"""Tests for arkana.mcp._format_helpers — format detection and magic hints."""
 import os
 import tempfile
 import pytest
 
-from pemcp.mcp._format_helpers import detect_format_from_magic, get_magic_hint, _check_lib, _get_filepath
+from arkana.mcp._format_helpers import detect_format_from_magic, get_magic_hint, _check_lib, _get_filepath
 
 
 class TestDetectFormatFromMagic:
@@ -143,17 +143,17 @@ class TestGetFilepath:
 
     def test_no_file_raises(self):
         from unittest.mock import patch, MagicMock
-        from pemcp.state import AnalyzerState
+        from arkana.state import AnalyzerState
         mock_state = AnalyzerState()
-        with patch("pemcp.mcp._format_helpers.state", mock_state):
+        with patch("arkana.mcp._format_helpers.state", mock_state):
             with pytest.raises(RuntimeError, match="No file specified"):
                 _get_filepath(None)
 
     def test_nonexistent_explicit_file_raises(self):
         from unittest.mock import patch, MagicMock
-        from pemcp.state import AnalyzerState
+        from arkana.state import AnalyzerState
         mock_state = AnalyzerState()
         mock_state.allowed_paths = ["/tmp"]
-        with patch("pemcp.mcp._format_helpers.state", mock_state):
+        with patch("arkana.mcp._format_helpers.state", mock_state):
             with pytest.raises(RuntimeError, match="File not found"):
                 _get_filepath("/tmp/nonexistent_file_12345.bin")

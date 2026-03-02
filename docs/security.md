@@ -1,16 +1,16 @@
 # Security & Testing
 
-PeMCP's security model, sandboxing configuration, and testing infrastructure.
+Arkana's security model, sandboxing configuration, and testing infrastructure.
 
 ---
 
 ## Path Sandboxing
 
-When running PeMCP in HTTP mode (`--mcp-transport streamable-http`), any MCP client can call `open_file` to read files on the server. Use `--allowed-paths` to restrict access:
+When running Arkana in HTTP mode (`--mcp-transport streamable-http`), any MCP client can call `open_file` to read files on the server. Use `--allowed-paths` to restrict access:
 
 ```bash
 # Only allow access to /samples and /tmp
-python PeMCP.py --mcp-server --mcp-transport streamable-http \
+python arkana.py --mcp-server --mcp-transport streamable-http \
   --allowed-paths /samples /tmp
 
 # Docker with sandboxing (via run.sh — extra flags are passed through)
@@ -21,20 +21,20 @@ docker run --rm -it -p 8082:8082 \
   --user "$(id -u):$(id -g)" \
   -e HOME=/app/home \
   -v "$(pwd)/samples:/samples:ro" \
-  pemcp-toolkit \
+  arkana-toolkit \
   --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
   --allowed-paths /samples \
   --samples-path /samples
 ```
 
-If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
+If `--allowed-paths` is not set in HTTP mode, Arkana logs a warning at startup.
 
 ---
 
 ## Other Security Measures
 
 - **Non-root Docker**: The `run.sh` helper runs the container as your host UID/GID (`--user "$(id -u):$(id -g)"`), never as root.
-- **API key storage**: Keys are stored in `~/.pemcp/config.json` with 0o600 (owner-only) permissions.
+- **API key storage**: Keys are stored in `~/.arkana/config.json` with 0o600 (owner-only) permissions.
 - **Zip-slip protection**: Archive extraction validates member paths against directory traversal.
 - **No hardcoded secrets**: API keys are sourced from environment variables or the config file.
 
@@ -42,7 +42,7 @@ If `--allowed-paths` is not set in HTTP mode, PeMCP logs a warning at startup.
 
 ## Testing & CI/CD
 
-PeMCP has two layers of testing, with automated CI via **GitHub Actions**:
+Arkana has two layers of testing, with automated CI via **GitHub Actions**:
 
 - **Unit tests** (`tests/`) — 398 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrised edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
 - **Integration tests** (`mcp_test_client.py`) — End-to-end tests for all 190 MCP tools against a running server, organised into 19 test categories with pytest markers.
@@ -53,7 +53,7 @@ PeMCP has two layers of testing, with automated CI via **GitHub Actions**:
 pytest tests/ -v
 
 # Run unit tests with coverage
-pytest tests/ -v --cov=pemcp --cov-report=term-missing
+pytest tests/ -v --cov=arkana --cov-report=term-missing
 
 # Run integration tests (requires running server)
 pytest mcp_test_client.py -v

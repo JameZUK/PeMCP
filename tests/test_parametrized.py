@@ -4,14 +4,14 @@ import pytest
 
 pytest.importorskip("pefile", reason="pefile not installed")
 
-from pemcp.hashing import SSDeep, ssdeep_hasher
-from pemcp.parsers.strings import (
+from arkana.hashing import SSDeep, ssdeep_hasher
+from arkana.parsers.strings import (
     _get_string_category,
     _extract_strings_from_data,
     _format_hex_dump_lines,
 )
-from pemcp.utils import shannon_entropy, format_timestamp, get_symbol_storage_class_str
-from pemcp.state import AnalyzerState
+from arkana.utils import shannon_entropy, format_timestamp, get_symbol_storage_class_str
+from arkana.state import AnalyzerState
 
 
 # ---------------------------------------------------------------------------

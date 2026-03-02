@@ -1,10 +1,20 @@
 # Changelog
 
-All notable changes to PeMCP will be documented in this file.
+All notable changes to Arkana (formerly PeMCP) will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
+
+### Changed
+- **Project renamed from PeMCP to Arkana** — the tool has grown beyond PE-only analysis to support PE, ELF, Mach-O, .NET, Go, Rust, and shellcode across 190 tools. "Arkana" (Latin: hidden secrets/mysteries) better reflects the full scope.
+  - Package directory: `pemcp/` → `arkana/`
+  - Entry point: `PeMCP.py` → `arkana.py`
+  - MCP server name: `PEFileAnalyzerMCP` → `Arkana`
+  - Data directory: `~/.pemcp/` → `~/.arkana/` (auto-migrated on first run)
+  - Docker image: `pemcp-toolkit` → `arkana-toolkit`
+  - Environment variables: `PEMCP_*` → `ARKANA_*` (old vars still accepted as fallbacks)
+  - Project archives: `.pemcp_project.tar.gz` → `.arkana_project.tar.gz` (old format still importable)
 
 ### Added
 - **14 new tools** (178 → 190 total):

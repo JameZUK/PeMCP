@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 """
-Comprehensive MCP Integration Test Suite for PeMCP.
+Comprehensive MCP Integration Test Suite for Arkana.
 
 Tests all 104+ MCP tools across every category: file management, PE analysis,
 strings, deobfuscation, triage, Angr, multi-format, extended libraries, and more.
@@ -18,7 +18,7 @@ Supports both streamable-http (default) and SSE transports.
 
 Usage:
     # Start the server first
-    python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe
+    python arkana.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe
 
     # Run all tests
     pytest mcp_test_client.py -v
@@ -32,14 +32,14 @@ Usage:
     pytest mcp_test_client.py -v -m no_file
 
     # Run with a custom server URL or transport
-    PEMCP_TEST_URL=http://localhost:9000 pytest mcp_test_client.py -v
-    PEMCP_TEST_TRANSPORT=sse pytest mcp_test_client.py -v
+    ARKANA_TEST_URL=http://localhost:9000 pytest mcp_test_client.py -v
+    ARKANA_TEST_TRANSPORT=sse pytest mcp_test_client.py -v
 
 Environment variables:
-    PEMCP_TEST_URL         Server URL (default: http://127.0.0.1:8082)
-    PEMCP_TEST_TRANSPORT   Transport: "auto" (default), "streamable-http", or "sse"
+    ARKANA_TEST_URL         Server URL (default: http://127.0.0.1:8082)
+    ARKANA_TEST_TRANSPORT   Transport: "auto" (default), "streamable-http", or "sse"
                            "auto" tries streamable-http first, falls back to SSE
-    PEMCP_TEST_SAMPLE      Path to a sample file for open_file tests (optional)
+    ARKANA_TEST_SAMPLE      Path to a sample file for open_file tests (optional)
 """
 
 import asyncio
@@ -63,7 +63,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-8s [%(name)s] %(message)s",
 )
-logger = logging.getLogger("pemcp_tests")
+logger = logging.getLogger("arkana_tests")
 
 # ---------------------------------------------------------------------------
 # MCP SDK imports — try streamable-http first, fall back to SSE
@@ -104,9 +104,9 @@ if not _have_streamable_http and not _have_sse:
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-SERVER_URL = os.environ.get("PEMCP_TEST_URL", "http://127.0.0.1:8082")
-TRANSPORT = os.environ.get("PEMCP_TEST_TRANSPORT", "auto")
-SAMPLE_FILE = os.environ.get("PEMCP_TEST_SAMPLE", "")
+SERVER_URL = os.environ.get("ARKANA_TEST_URL", "http://127.0.0.1:8082")
+TRANSPORT = os.environ.get("ARKANA_TEST_TRANSPORT", "auto")
+SAMPLE_FILE = os.environ.get("ARKANA_TEST_SAMPLE", "")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -143,9 +143,9 @@ async def _connect_sse(url: str) -> AsyncGenerator[ClientSession, None]:
 
 @asynccontextmanager
 async def managed_mcp_session() -> AsyncGenerator[ClientSession, None]:
-    """Connect to the PeMCP server.
+    """Connect to the Arkana server.
 
-    Transport selection (PEMCP_TEST_TRANSPORT env var):
+    Transport selection (ARKANA_TEST_TRANSPORT env var):
       "auto"             — try streamable-http first, fall back to SSE (default)
       "streamable-http"  — only streamable-http
       "sse"              — only SSE
@@ -209,10 +209,10 @@ async def managed_mcp_session() -> AsyncGenerator[ClientSession, None]:
             f"(tried: {', '.join(l for l, _ in attempts)}): {root}\n"
             f"\n"
             f"Start the server first:\n"
-            f"  python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file <sample>\n"
+            f"  python arkana.py --mcp-server --mcp-transport streamable-http --input-file <sample>\n"
             f"\n"
             f"If using Docker/Podman, add --mcp-host 0.0.0.0 (or use ./run.sh):\n"
-            f"  podman run --rm -it -p 8082:8082 pemcp-toolkit \\\n"
+            f"  podman run --rm -it -p 8082:8082 arkana-toolkit \\\n"
             f"    --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 --input-file <sample>"
         )
 
@@ -592,10 +592,10 @@ class TestFileManagement:
 
     @pytest.mark.no_file
     def test_open_file_with_sample(self):
-        """open_file success path — requires PEMCP_TEST_SAMPLE env var."""
+        """open_file success path — requires ARKANA_TEST_SAMPLE env var."""
         async def _test():
             if not SAMPLE_FILE:
-                pytest.skip("Set PEMCP_TEST_SAMPLE to enable open_file success test")
+                pytest.skip("Set ARKANA_TEST_SAMPLE to enable open_file success test")
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "open_file",
                                     {"file_path": SAMPLE_FILE,
@@ -1717,10 +1717,10 @@ class TestAngrForensic:
     @pytest.mark.pe_file
     @pytest.mark.angr
     def test_diff_binaries(self):
-        """diff_binaries requires a second file — skip if PEMCP_TEST_SAMPLE not set."""
+        """diff_binaries requires a second file — skip if ARKANA_TEST_SAMPLE not set."""
         async def _test():
             if not SAMPLE_FILE:
-                pytest.skip("Set PEMCP_TEST_SAMPLE to enable diff_binaries test")
+                pytest.skip("Set ARKANA_TEST_SAMPLE to enable diff_binaries test")
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "diff_binaries",
                                     {"file_path_b": SAMPLE_FILE,
@@ -1969,7 +1969,7 @@ class TestExtendedLibraries:
         """compare_file_similarity requires a second file."""
         async def _test():
             if not SAMPLE_FILE:
-                pytest.skip("Set PEMCP_TEST_SAMPLE to enable compare_file_similarity test")
+                pytest.skip("Set ARKANA_TEST_SAMPLE to enable compare_file_similarity test")
             async with managed_mcp_session() as s:
                 r = await call_tool(s, "compare_file_similarity",
                                     {"file_path_b": SAMPLE_FILE},
@@ -2284,7 +2284,7 @@ class TestErrorHandling:
 # 19. Tool Discovery — verify all 104 tools are registered
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Complete list of all 104 tools in PeMCP
+# Complete list of all 104 tools in Arkana
 ALL_TOOL_NAMES = sorted([
     # File management (6)
     "open_file", "close_file", "reanalyze_loaded_pe_file",
@@ -2407,7 +2407,7 @@ class TestToolDiscovery:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    print("PeMCP Integration Test Suite")
+    print("Arkana Integration Test Suite")
     print("=" * 50)
     print()
     print("Usage:")
@@ -2419,11 +2419,11 @@ if __name__ == "__main__":
     print("  pytest mcp_test_client.py -v -k TestConfig    # Config & utility tests")
     print()
     print("Environment variables:")
-    print(f"  PEMCP_TEST_URL       = {SERVER_URL}")
-    print(f"  PEMCP_TEST_TRANSPORT = {TRANSPORT}  (auto|streamable-http|sse)")
-    print(f"  PEMCP_TEST_SAMPLE    = {SAMPLE_FILE or '(not set)'}")
+    print(f"  ARKANA_TEST_URL       = {SERVER_URL}")
+    print(f"  ARKANA_TEST_TRANSPORT = {TRANSPORT}  (auto|streamable-http|sse)")
+    print(f"  ARKANA_TEST_SAMPLE    = {SAMPLE_FILE or '(not set)'}")
     print()
     print("Start the server first:")
-    print("  python PeMCP.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe")
+    print("  python arkana.py --mcp-server --mcp-transport streamable-http --input-file samples/test.exe")
     print()
     sys.exit(pytest.main([__file__, "-v"]))

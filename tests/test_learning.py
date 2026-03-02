@@ -1,11 +1,11 @@
-"""Unit tests for pemcp/mcp/tools_learning.py — learner progress tracking."""
+"""Unit tests for arkana/mcp/tools_learning.py — learner progress tracking."""
 import asyncio
 import json
 import pytest
 
 from pathlib import Path
 
-import pemcp.mcp.tools_learning as tl
+import arkana.mcp.tools_learning as tl
 
 
 def _run(coro):
@@ -34,7 +34,7 @@ def mock_ctx():
 @pytest.fixture(autouse=True)
 def _isolate_profile(tmp_path, monkeypatch):
     """Redirect profile storage to a temp directory for every test."""
-    profile_dir = tmp_path / ".pemcp"
+    profile_dir = tmp_path / ".arkana"
     profile_path = profile_dir / "learner_profile.json"
     monkeypatch.setattr(tl, "_PROFILE_DIR", profile_dir)
     monkeypatch.setattr(tl, "_PROFILE_PATH", profile_path)
@@ -71,7 +71,7 @@ class TestLoadProfile:
 
     def test_handles_corrupt_json(self, tmp_path):
         """Corrupt JSON on disk should be silently replaced with a fresh profile."""
-        profile_path = tmp_path / ".pemcp" / "learner_profile.json"
+        profile_path = tmp_path / ".arkana" / "learner_profile.json"
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         profile_path.write_text("NOT VALID JSON {{{", encoding="utf-8")
         profile = tl._load_profile()
@@ -80,7 +80,7 @@ class TestLoadProfile:
 
     def test_handles_wrong_version(self, tmp_path):
         """A profile with unexpected version should be treated as corrupt."""
-        profile_path = tmp_path / ".pemcp" / "learner_profile.json"
+        profile_path = tmp_path / ".arkana" / "learner_profile.json"
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         profile_path.write_text(json.dumps({"version": 99}), encoding="utf-8")
         profile = tl._load_profile()
@@ -88,7 +88,7 @@ class TestLoadProfile:
 
     def test_handles_non_dict_json(self, tmp_path):
         """A profile that is valid JSON but not a dict should be treated as corrupt."""
-        profile_path = tmp_path / ".pemcp" / "learner_profile.json"
+        profile_path = tmp_path / ".arkana" / "learner_profile.json"
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         profile_path.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
         profile = tl._load_profile()

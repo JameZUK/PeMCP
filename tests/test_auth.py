@@ -1,7 +1,7 @@
-"""Unit tests for pemcp/auth.py — BearerAuthMiddleware."""
+"""Unit tests for arkana/auth.py — BearerAuthMiddleware."""
 import asyncio
 import pytest
-from pemcp.auth import BearerAuthMiddleware
+from arkana.auth import BearerAuthMiddleware
 
 
 # ---------------------------------------------------------------------------

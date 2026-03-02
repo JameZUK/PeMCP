@@ -1,6 +1,6 @@
 # Testing Guide
 
-PeMCP has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 190 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
+Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 190 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
 
 ---
 
@@ -33,7 +33,7 @@ PeMCP has two layers of testing: **unit tests** for fast, isolated verification 
 pytest tests/ -v
 
 # Run unit tests with coverage report
-pytest tests/ -v --cov=pemcp --cov-report=term-missing
+pytest tests/ -v --cov=arkana --cov-report=term-missing
 
 # Run integration tests (requires running server)
 pytest mcp_test_client.py -v
@@ -46,7 +46,7 @@ pytest -v
 
 ## CI/CD Pipeline
 
-PeMCP uses **GitHub Actions** to run unit tests automatically on every push and pull request to the `main`/`master` branches. The workflow is defined in `.github/workflows/ci.yml`.
+Arkana uses **GitHub Actions** to run unit tests automatically on every push and pull request to the `main`/`master` branches. The workflow is defined in `.github/workflows/ci.yml`.
 
 ### What CI runs
 
@@ -59,7 +59,7 @@ PeMCP uses **GitHub Actions** to run unit tests automatically on every push and 
 ```bash
 # Replicate the CI pipeline locally
 pip install -r requirements.txt -r requirements-test.txt
-pytest tests/ -v --cov=pemcp --cov-report=term-missing --cov-fail-under=60
+pytest tests/ -v --cov=arkana --cov-report=term-missing --cov-fail-under=60
 ```
 
 ---
@@ -116,28 +116,28 @@ pytest tests/
 
 ### Running with Coverage
 
-PeMCP uses `pytest-cov` for code coverage measurement. A **60% minimum** coverage floor is enforced in CI.
+Arkana uses `pytest-cov` for code coverage measurement. A **60% minimum** coverage floor is enforced in CI.
 
 ```bash
 # Terminal report with missing lines highlighted
-pytest tests/ -v --cov=pemcp --cov-report=term-missing
+pytest tests/ -v --cov=arkana --cov-report=term-missing
 
 # Generate HTML coverage report
-pytest tests/ -v --cov=pemcp --cov-report=html
+pytest tests/ -v --cov=arkana --cov-report=html
 # Open htmlcov/index.html in a browser
 
 # Generate XML report (for CI upload)
-pytest tests/ -v --cov=pemcp --cov-report=xml
+pytest tests/ -v --cov=arkana --cov-report=xml
 
 # Fail if coverage drops below threshold
-pytest tests/ --cov=pemcp --cov-fail-under=60
+pytest tests/ --cov=arkana --cov-fail-under=60
 ```
 
 Coverage configuration is in `pytest.ini`:
 
 ```ini
 [coverage:run]
-source = pemcp
+source = arkana
 
 [coverage:report]
 fail_under = 60
@@ -152,24 +152,24 @@ exclude_lines =
 
 | File | Module Under Test | Tests | What It Covers |
 |---|---|---|---|
-| `test_utils.py` | `pemcp/utils.py` | 13 | `shannon_entropy` (empty, uniform, max entropy, ASCII text), `format_timestamp` (zero, negative, valid, overflow, future dates), `get_symbol_type_str`, `get_symbol_storage_class_str` (COFF symbol constants) |
-| `test_hashing.py` | `pemcp/hashing.py` | 17 | `SSDeep.hash` (empty, bytes, string, deterministic, invalid types), `SSDeep.compare` (identical, different, invalid format), `_levenshtein` (edit distance), `_strip_sequences` (run-length reduction) |
-| `test_mock.py` | `pemcp/mock.py` | 13 | `MockPE` class (init, headers, sections, directories, `get_data` with offset/length, `close`, `generate_checksum`, `get_warnings`, empty data) |
-| `test_state.py` | `pemcp/state.py` | 21 | `AnalyzerState` (init, `touch`), background tasks (set/get/update, eviction of completed tasks, running tasks preserved), path sandboxing (`allowed_paths`, `check_path_allowed`), angr state (set/get/reset), session management (default/new/activate, `StateProxy` delegation) |
-| `test_cache.py` | `pemcp/cache.py` | 15 | `AnalysisCache` put/get, cache miss, case-insensitive SHA, filepath not persisted, format version invalidation, PeMCP version invalidation, LRU eviction, clear, stats, remove by hash, corrupt gzip handling, disabled cache |
-| `test_user_config.py` | `pemcp/user_config.py` | 14 | `load_user_config` (missing file, valid/invalid JSON, non-dict), `save_user_config` (save/reload, 0o600 permissions), `get_config_value` (from file, env override, missing key), `set_config_value`, `delete_config_value`, `get_masked_config` (sensitive key masking, env override notes) |
-| `test_parsers_strings.py` | `pemcp/parsers/strings.py` | 23 | `_extract_strings_from_data` (basic, min_length, offsets, empty, trailing, memoryview), `_search_specific_strings_in_data` (present/missing terms, offsets), `_format_hex_dump_lines` (format, address, ASCII, dots, multi-line), `_get_string_category` (IPv4, URL, domain, filepath, registry, email, none), `_decode_single_byte_xor` (known key, empty, random data) |
-| `test_mcp_helpers.py` | `pemcp/mcp/` helpers | 17 | `_parse_addr` (hex, decimal, invalid, empty, negative, zero), `_raise_on_error_dict` (passthrough, error dict, hint, non-dict, many-key dict), `_check_lib` (available, unavailable, custom pip name), `_check_pe_loaded` (no file, partial load, loaded), `_check_data_key_available` (present, missing, skipped analysis hint) |
+| `test_utils.py` | `arkana/utils.py` | 13 | `shannon_entropy` (empty, uniform, max entropy, ASCII text), `format_timestamp` (zero, negative, valid, overflow, future dates), `get_symbol_type_str`, `get_symbol_storage_class_str` (COFF symbol constants) |
+| `test_hashing.py` | `arkana/hashing.py` | 17 | `SSDeep.hash` (empty, bytes, string, deterministic, invalid types), `SSDeep.compare` (identical, different, invalid format), `_levenshtein` (edit distance), `_strip_sequences` (run-length reduction) |
+| `test_mock.py` | `arkana/mock.py` | 13 | `MockPE` class (init, headers, sections, directories, `get_data` with offset/length, `close`, `generate_checksum`, `get_warnings`, empty data) |
+| `test_state.py` | `arkana/state.py` | 21 | `AnalyzerState` (init, `touch`), background tasks (set/get/update, eviction of completed tasks, running tasks preserved), path sandboxing (`allowed_paths`, `check_path_allowed`), angr state (set/get/reset), session management (default/new/activate, `StateProxy` delegation) |
+| `test_cache.py` | `arkana/cache.py` | 15 | `AnalysisCache` put/get, cache miss, case-insensitive SHA, filepath not persisted, format version invalidation, Arkana version invalidation, LRU eviction, clear, stats, remove by hash, corrupt gzip handling, disabled cache |
+| `test_user_config.py` | `arkana/user_config.py` | 14 | `load_user_config` (missing file, valid/invalid JSON, non-dict), `save_user_config` (save/reload, 0o600 permissions), `get_config_value` (from file, env override, missing key), `set_config_value`, `delete_config_value`, `get_masked_config` (sensitive key masking, env override notes) |
+| `test_parsers_strings.py` | `arkana/parsers/strings.py` | 23 | `_extract_strings_from_data` (basic, min_length, offsets, empty, trailing, memoryview), `_search_specific_strings_in_data` (present/missing terms, offsets), `_format_hex_dump_lines` (format, address, ASCII, dots, multi-line), `_get_string_category` (IPv4, URL, domain, filepath, registry, email, none), `_decode_single_byte_xor` (known key, empty, random data) |
+| `test_mcp_helpers.py` | `arkana/mcp/` helpers | 17 | `_parse_addr` (hex, decimal, invalid, empty, negative, zero), `_raise_on_error_dict` (passthrough, error dict, hint, non-dict, many-key dict), `_check_lib` (available, unavailable, custom pip name), `_check_pe_loaded` (no file, partial load, loaded), `_check_data_key_available` (present, missing, skipped analysis hint) |
 | `test_parametrized.py` | Multiple modules | 95+ | Parametrized tests for broader coverage: `shannon_entropy` (6 known values, 5 bounds checks), `format_timestamp` (4 valid, 7 invalid), `get_symbol_storage_class_str` (11 known + 4 unknown), `_get_string_category` (20 categorisation + 3 invalid IPs), `SSDeep` (5 format, 3 determinism), Levenshtein (8 known distances), string extraction (6 min_length variations), hex dump (6 line counts), path sandboxing (7 allow/deny combinations) |
-| `test_concurrency.py` | `pemcp/state.py` | 5 | Thread isolation (4 threads, barrier sync), concurrent task updates (200 tasks across 4 threads), concurrent angr state set/get consistency, path sandboxing under concurrent load (20 threads), `StateProxy` per-thread delegation (8 threads) |
-| `test_format_detect.py` | `pemcp/mcp/_format_helpers.py`, `tools_format_detect.py` | 22 | Binary format detection (PE, ELF, Mach-O, ZIP, PDF, GZIP) and language-specific marker comprehensiveness for Go and Rust |
-| `test_rust_tools.py` | `pemcp/mcp/tools_rust.py` | 7 | Rust binary analysis via string scanning on stripped binaries, including panic handlers, allocators, and version detection |
-| `test_streamline.py` | `pemcp/mcp/` (multiple) | 25 | Streamlined analysis tools: category maps, container detection, focused imports, strings summary, auto-notes, analysis digest, session phase detection |
-| `test_go_tools.py` | `pemcp/mcp/tools_go.py` | 14 | Go binary analysis helper functions for safe type conversions (`_safe_str`, `_safe_int`) |
+| `test_concurrency.py` | `arkana/state.py` | 5 | Thread isolation (4 threads, barrier sync), concurrent task updates (200 tasks across 4 threads), concurrent angr state set/get consistency, path sandboxing under concurrent load (20 threads), `StateProxy` per-thread delegation (8 threads) |
+| `test_format_detect.py` | `arkana/mcp/_format_helpers.py`, `tools_format_detect.py` | 22 | Binary format detection (PE, ELF, Mach-O, ZIP, PDF, GZIP) and language-specific marker comprehensiveness for Go and Rust |
+| `test_rust_tools.py` | `arkana/mcp/tools_rust.py` | 7 | Rust binary analysis via string scanning on stripped binaries, including panic handlers, allocators, and version detection |
+| `test_streamline.py` | `arkana/mcp/` (multiple) | 25 | Streamlined analysis tools: category maps, container detection, focused imports, strings summary, auto-notes, analysis digest, session phase detection |
+| `test_go_tools.py` | `arkana/mcp/tools_go.py` | 14 | Go binary analysis helper functions for safe type conversions (`_safe_str`, `_safe_int`) |
 | `test_review_fixes.py` | Multiple modules | 65 | Comprehensive fixes: env var parsing, subprocess handling, regex validation, hook state, dataflow counters, safe dict access, regex timeouts, cache validation, IP filtering |
-| `test_triage_helpers.py` | `pemcp/mcp/tools_triage.py` | 14 | Triage helper functions for compiler/language detection (Go, Rust, .NET, MSVC, Delphi) and mode normalisation for PE parser output |
-| `test_truncation.py` | `pemcp/mcp/server.py` | 14 | MCP response size checking and smart truncation logic for large lists, strings, dicts, and deeply nested structures |
-| `test_auth.py` | `pemcp/auth.py` | 7 | Bearer token authentication middleware for ASGI with constant-time token comparison |
+| `test_triage_helpers.py` | `arkana/mcp/tools_triage.py` | 14 | Triage helper functions for compiler/language detection (Go, Rust, .NET, MSVC, Delphi) and mode normalisation for PE parser output |
+| `test_truncation.py` | `arkana/mcp/server.py` | 14 | MCP response size checking and smart truncation logic for large lists, strings, dicts, and deeply nested structures |
+| `test_auth.py` | `arkana/auth.py` | 7 | Bearer token authentication middleware for ASGI with constant-time token comparison |
 
 ### Writing New Unit Tests
 
@@ -208,18 +208,18 @@ When adding new unit tests, follow these conventions:
 
 5. **Test isolation**: Each test should be independent. Use `setup_method` or fixtures to reset state — never rely on test execution order.
 
-6. **Monkeypatch module globals** when testing code that depends on `pemcp.config` constants or paths:
+6. **Monkeypatch module globals** when testing code that depends on `arkana.config` constants or paths:
 
    ```python
    def test_something(monkeypatch):
-       monkeypatch.setattr("pemcp.cache.CACHE_DIR", tmp_path / "cache")
+       monkeypatch.setattr("arkana.cache.CACHE_DIR", tmp_path / "cache")
    ```
 
 ---
 
 ## Integration Tests
 
-The integration test suite (`mcp_test_client.py`) covers all **190 MCP tools** across 19 test categories. Tests connect to a running PeMCP server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
+The integration test suite (`mcp_test_client.py`) covers all **190 MCP tools** across 19 test categories. Tests connect to a running Arkana server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
 
 ### Prerequisites
 
@@ -229,13 +229,13 @@ pip install -r requirements-test.txt
 
 ### Starting the Server
 
-The integration tests require a running PeMCP server. Start it in a separate terminal:
+The integration tests require a running Arkana server. Start it in a separate terminal:
 
 #### Option A: Local Python
 
 ```bash
 # Start with a sample file loaded
-python PeMCP.py --mcp-server --mcp-transport streamable-http \
+python arkana.py --mcp-server --mcp-transport streamable-http \
   --samples-path ./samples --input-file samples/test.exe
 ```
 
@@ -248,7 +248,7 @@ python PeMCP.py --mcp-server --mcp-transport streamable-http \
 # Or manually
 podman run --rm -it -p 8082:8082 \
   --user "$(id -u):$(id -g)" -e HOME=/app/home \
-  -v ./samples:/samples:ro pemcp-toolkit \
+  -v ./samples:/samples:ro arkana-toolkit \
   --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
   --samples-path /samples --input-file /samples/test.exe
 ```
@@ -262,7 +262,7 @@ podman run --rm -it -p 8082:8082 \
 pytest mcp_test_client.py -v
 
 # Run against a different server
-PEMCP_TEST_URL=http://192.168.1.10:9000 pytest mcp_test_client.py -v
+ARKANA_TEST_URL=http://192.168.1.10:9000 pytest mcp_test_client.py -v
 ```
 
 ### Running Specific Test Categories
@@ -292,16 +292,16 @@ pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 190 tools e
 
 | Variable | Default | Description |
 |---|---|---|
-| `PEMCP_TEST_URL` | `http://127.0.0.1:8082` | Server URL to test against |
-| `PEMCP_TEST_TRANSPORT` | `auto` | Transport: `auto` (try streamable-http then SSE), `streamable-http`, or `sse` |
-| `PEMCP_TEST_SAMPLE` | *(not set)* | Path to a sample file for `open_file` tests |
+| `ARKANA_TEST_URL` | `http://127.0.0.1:8082` | Server URL to test against |
+| `ARKANA_TEST_TRANSPORT` | `auto` | Transport: `auto` (try streamable-http then SSE), `streamable-http`, or `sse` |
+| `ARKANA_TEST_SAMPLE` | *(not set)* | Path to a sample file for `open_file` tests |
 
 ```bash
 # Test against a remote server
-PEMCP_TEST_URL=http://192.168.1.10:9000 pytest mcp_test_client.py -v
+ARKANA_TEST_URL=http://192.168.1.10:9000 pytest mcp_test_client.py -v
 
 # Test using SSE transport (legacy)
-PEMCP_TEST_TRANSPORT=sse pytest mcp_test_client.py -v
+ARKANA_TEST_TRANSPORT=sse pytest mcp_test_client.py -v
 ```
 
 ### Test Categories
@@ -348,7 +348,7 @@ markers =
     unit: fast unit tests with no external dependencies
 
 [coverage:run]
-source = pemcp
+source = arkana
 
 [coverage:report]
 fail_under = 60
@@ -366,7 +366,7 @@ The `testpaths = tests` directive means `pytest` (with no arguments) runs unit t
 pytest -v
 
 # Unit tests with coverage
-pytest -v --cov=pemcp --cov-report=term-missing
+pytest -v --cov=arkana --cov-report=term-missing
 
 # Integration tests only
 pytest mcp_test_client.py -v
@@ -428,7 +428,7 @@ Ensure the MCP server is running and accessible:
 curl -s http://127.0.0.1:8082/mcp | head
 
 # Start the server if not running
-python PeMCP.py --mcp-server --mcp-transport streamable-http
+python arkana.py --mcp-server --mcp-transport streamable-http
 ```
 
 ### Integration tests skip most tests
@@ -437,4 +437,4 @@ If tests are skipping with messages about missing tools or libraries, the server
 
 ### Tests fail with `AnalysisCache` errors
 
-Unit tests for the cache use `tmp_path` and `monkeypatch` to redirect cache operations to a temporary directory. If you see unexpected cache errors, ensure no other process is modifying `~/.pemcp/cache/` concurrently.
+Unit tests for the cache use `tmp_path` and `monkeypatch` to redirect cache operations to a temporary directory. If you see unexpected cache errors, ensure no other process is modifying `~/.arkana/cache/` concurrently.

@@ -1,4 +1,4 @@
-# PeMCP Dependency Notes
+# Arkana Dependency Notes
 
 This document records known dependency conflicts, version constraints,
 and workarounds used in the Docker build.  If the container build breaks
@@ -89,7 +89,7 @@ is a git submodule that GitHub archive zips do not include).
 
 For Windows targets, Qiling's `RegistryManager` requires five registry
 hive files (`NTUSER.DAT`, `SAM`, `SECURITY`, `SOFTWARE`, `SYSTEM`)
-that cannot be legally distributed.  PeMCP generates minimal valid
+that cannot be legally distributed.  Arkana generates minimal valid
 stubs — structurally correct regf-format files with an empty root key
 node — at both Docker build time and at runtime (on first use).
 These stubs satisfy Qiling's format parser so emulation can proceed.
@@ -99,7 +99,7 @@ build time with Linux rootfs files.  Windows PE emulation additionally
 requires real DLL files (ntdll.dll, kernel32.dll, etc.) copied from a
 Windows installation — see `docs/QILING_ROOTFS.md` for instructions.
 
-### Runtime safety net (pemcp/config.py)
+### Runtime safety net (arkana/config.py)
 
 The angr import block catches both `ImportError` and `AttributeError`:
 
@@ -126,7 +126,7 @@ setuptools 81+ removed `pkg_resources` entirely, causing an
 **Fix:** Pin `setuptools<81` in the Dockerfile pip upgrade step.
 
 A deprecation warning is also suppressed in application code
-(`pemcp/__init__.py`).
+(`arkana/__init__.py`).
 
 ---
 
@@ -156,7 +156,7 @@ the others or the entire build.  They may have fragile or conflicting
 dependencies.
 
 If any of these break the build, the simplest fix is to comment them
-out — PeMCP will detect their absence at runtime and disable the
+out — Arkana will detect their absence at runtime and disable the
 corresponding tools.
 
 Note: unipacker was previously in this group but is now installed in
@@ -182,7 +182,7 @@ The bundled capa-rules must match the capa major version.  If you bump
 `flare-capa` to a new major version, update the rules download URL in
 **both** places:
 
-- `pemcp/config.py` → `CAPA_RULES_ZIP_URL`
+- `arkana/config.py` → `CAPA_RULES_ZIP_URL`
 - `Dockerfile` → the `urllib.request.urlretrieve(...)` URL
 
 Current alignment: **flare-capa >=9.3,<9.4** with **capa-rules v9.3.0**.
@@ -204,7 +204,7 @@ or the `run.sh` helper.
 
 ## 7. Bundled YARA rules store
 
-PeMCP bundles YARA rules from two legitimate open-source projects so
+Arkana bundles YARA rules from two legitimate open-source projects so
 that YARA scanning works out-of-the-box without the user needing to
 supply their own rules via `--yara-rules`.
 
@@ -227,7 +227,7 @@ yara_rules_store/
   during `docker build` (see the `PYEOF` block in the Dockerfile).  No
   network access is needed at runtime.
 - **Local / non-Docker (first run):** When `--yara-rules` is not
-  specified and no `yara_rules_store/` directory exists, PeMCP calls
+  specified and no `yara_rules_store/` directory exists, Arkana calls
   `ensure_yara_rules_exist()` which downloads both archives to
   `DATA_DIR/yara_rules_store/`.  Subsequent runs reuse the local copy.
 
@@ -237,7 +237,7 @@ YARA rules are compiled **per top-level subdirectory** (i.e. one batch
 for `reversinglabs/`, one for `community/`).  This preserves YARA
 `import` statements (`import "pe"`, `import "math"`, etc.) which many
 ReversingLabs rules require.  If batch compilation fails for a group
-(e.g. a rule references an unsupported module), PeMCP falls back to
+(e.g. a rule references an unsupported module), Arkana falls back to
 per-file compilation for that group, logging a warning for each file
 that fails.
 
@@ -251,7 +251,7 @@ response sizes.
 
 If you need to pin to a specific tag or update the sources:
 
-- `pemcp/config.py` → `YARA_REVERSINGLABS_ZIP_URL`,
+- `arkana/config.py` → `YARA_REVERSINGLABS_ZIP_URL`,
   `YARA_COMMUNITY_ZIP_URL`
 - `Dockerfile` → the corresponding `urllib.request.urlretrieve(...)` URLs
 
@@ -260,9 +260,9 @@ If you need to pin to a specific tag or update the sources:
 ## 8. Library API renames (runtime compatibility)
 
 Several libraries renamed classes or APIs in newer versions, breaking
-PeMCP's imports.  These are handled with compatibility shims:
+Arkana's imports.  These are handled with compatibility shims:
 
-| Library | Old API | New API (current) | Affected PeMCP files | Shim |
+| Library | Old API | New API (current) | Affected Arkana files | Shim |
 |---------|---------|-------------------|---------------------|------|
 | **dncil** >=1.0.2 | `dncil.cil.error.CilError` | `dncil.cil.error.MethodBodyFormatError` | `config.py`, `tools_dotnet.py` | `import MethodBodyFormatError as CilError` |
 | **angr** >=9.2.199 | `analyses.FlirtAnalysis()` | `analyses.Flirt()` | `tools_angr_disasm.py` | Direct rename + auto-load FLIRT sigs |
@@ -271,7 +271,7 @@ PeMCP's imports.  These are handled with compatibility shims:
 
 ### dncil: CilError → MethodBodyFormatError
 
-dncil v1.0.2 renamed the exception class.  PeMCP imports the new name
+dncil v1.0.2 renamed the exception class.  Arkana imports the new name
 with an alias (`as CilError`) so all downstream `except CilError`
 handlers continue to work.  Without this, `DNCIL_AVAILABLE` is set to
 `False` at startup, silently disabling all .NET CIL tools.
@@ -281,7 +281,7 @@ handlers continue to work.  Without this, `DNCIL_AVAILABLE` is set to
 angr v9.2.199 renamed the FLIRT analysis plugin.  Additionally, the new
 `Flirt()` API requires signatures to be pre-loaded via
 `angr.flirt.load_signatures(path)`, unlike the old `FlirtAnalysis()`
-which handled this internally.  PeMCP auto-discovers FLIRT signature
+which handled this internally.  Arkana auto-discovers FLIRT signature
 files from FLOSS's bundled sigs directory.
 
 ### unipacker: Sample object required
@@ -321,8 +321,8 @@ instructions (`SimIRSBError`), Claripy solver errors (`ClaripyError`),
 or generic simulation errors (`SimError`) — all of which fall through
 to the broken `ProcedureEngine()` calls.
 
-**Fix:** PeMCP monkey-patches `VFG._get_simsuccessors` at import time
-(in `pemcp/mcp/tools_angr_dataflow.py`).  The patched version is a
+**Fix:** Arkana monkey-patches `VFG._get_simsuccessors` at import time
+(in `arkana/mcp/tools_angr_dataflow.py`).  The patched version is a
 faithful copy of the original method with one change on each of the 3
 error paths: `ProcedureEngine()` → `ProcedureEngine(self.project)`.
 The `self.project` attribute is always available because `VFG` inherits
@@ -400,7 +400,7 @@ best-effort in the Dockerfile:
 | **pikepdf** (<=9.5) | `xtpdf` unit | PDF object/stream extraction |
 
 If any of these are missing at runtime, the corresponding refinery unit
-returns a `MissingModule` stub instead of functioning normally.  PeMCP's
+returns a `MissingModule` stub instead of functioning normally.  Arkana's
 tool wrappers detect this and return a clear error message.
 
 ---
@@ -414,7 +414,7 @@ tool wrappers detect this and return a clear error message.
    be 2.x.
 3. **Run an interactive shell** in a partial build to inspect:
    ```bash
-   podman run --rm -it --entrypoint bash pemcp-toolkit
+   podman run --rm -it --entrypoint bash arkana-toolkit
    python -c "import unicorn; print(unicorn.__version__, dir(unicorn))"
    pip list | grep -i unicorn
    ```

@@ -26,7 +26,7 @@ class TestCategoryMaps:
     """Test _category_maps module loads correctly."""
 
     def test_categorized_imports_db_has_entries(self):
-        from pemcp.mcp._category_maps import CATEGORIZED_IMPORTS_DB
+        from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB
         assert len(CATEGORIZED_IMPORTS_DB) > 50
         # Each entry should be (risk, category) tuple
         for _api, val in CATEGORIZED_IMPORTS_DB.items():
@@ -36,19 +36,19 @@ class TestCategoryMaps:
             assert isinstance(cat, str)
 
     def test_risk_order_complete(self):
-        from pemcp.mcp._category_maps import RISK_ORDER
+        from arkana.mcp._category_maps import RISK_ORDER
         assert "CRITICAL" in RISK_ORDER
         assert "HIGH" in RISK_ORDER
         assert "MEDIUM" in RISK_ORDER
 
     def test_string_patterns_compile(self):
-        from pemcp.mcp._category_maps import STRING_CATEGORY_PATTERNS
+        from arkana.mcp._category_maps import STRING_CATEGORY_PATTERNS
         import re
         for name, pattern in STRING_CATEGORY_PATTERNS.items():
             assert isinstance(pattern, re.Pattern), f"{name} is not a compiled regex"
 
     def test_category_descriptions_present(self):
-        from pemcp.mcp._category_maps import CATEGORY_DESCRIPTIONS, CATEGORIZED_IMPORTS_DB
+        from arkana.mcp._category_maps import CATEGORY_DESCRIPTIONS, CATEGORIZED_IMPORTS_DB
         # Every category in the DB should have a description
         categories_in_db = {cat for _, (_, cat) in CATEGORIZED_IMPORTS_DB.items()}
         for cat in categories_in_db:
@@ -63,14 +63,14 @@ class TestContainerDetection:
     """Test container detection logic."""
 
     def test_detect_container_returns_dict(self):
-        from pemcp.mcp.tools_config import _detect_container
+        from arkana.mcp.tools_config import _detect_container
         result = _detect_container()
         assert isinstance(result, dict)
         assert "containerized" in result
         assert "container_type" in result
 
     def test_get_environment_info_returns_dict(self):
-        from pemcp.mcp.tools_config import _get_environment_info
+        from arkana.mcp.tools_config import _get_environment_info
         result = _get_environment_info()
         assert isinstance(result, dict)
         assert "containerized" in result
@@ -82,7 +82,7 @@ class TestContainerDetection:
         assert len(result["recommended_export_path"]) > 0
 
     def test_environment_paths_structure(self):
-        from pemcp.mcp.tools_config import _get_environment_info
+        from arkana.mcp.tools_config import _get_environment_info
         result = _get_environment_info()
         for key in ("samples_dir", "cache_dir", "export_dir"):
             assert key in result["paths"], f"Missing path key: {key}"
@@ -100,12 +100,12 @@ class TestAnalysisPhase:
     """Test analysis phase detection logic."""
 
     def test_not_started_phase(self, clean_state):
-        from pemcp.mcp.tools_session import _detect_analysis_phase
+        from arkana.mcp.tools_session import _detect_analysis_phase
         assert _detect_analysis_phase() == "not_started"
 
     def test_file_loaded_phase(self, clean_state):
-        from pemcp.config import state
-        from pemcp.mcp.tools_session import _detect_analysis_phase
+        from arkana.config import state
+        from arkana.mcp.tools_session import _detect_analysis_phase
         state.filepath = "/fake/file.exe"
         state.pe_data = {"mode": "pe", "file_hashes": {}}
         assert _detect_analysis_phase() == "file_loaded"
@@ -120,7 +120,7 @@ class TestFocusedImports:
 
     @pytest.fixture(autouse=True)
     def setup_state(self, clean_state):
-        from pemcp.config import state
+        from arkana.config import state
         state.filepath = "/fake/test.exe"
         state.pe_data = {
             "mode": "pe",
@@ -155,7 +155,7 @@ class TestFocusedImports:
         }
 
     def test_returns_suspicious_only(self, mock_ctx):
-        from pemcp.mcp.tools_pe import get_focused_imports
+        from arkana.mcp.tools_pe import get_focused_imports
         result = _run(get_focused_imports.__wrapped__(mock_ctx))
         assert "filtered_imports" in result
         assert result["total_suspicious"] > 0
@@ -167,7 +167,7 @@ class TestFocusedImports:
         assert "CreateRemoteThread" in func_names
 
     def test_category_filter(self, mock_ctx):
-        from pemcp.mcp.tools_pe import get_focused_imports
+        from arkana.mcp.tools_pe import get_focused_imports
         result = _run(get_focused_imports.__wrapped__(mock_ctx, category="networking"))
         func_names = [i["function"] for i in result["filtered_imports"]]
         # Should include networking only
@@ -176,13 +176,13 @@ class TestFocusedImports:
         assert "CreateRemoteThread" not in func_names
 
     def test_benign_summary(self, mock_ctx):
-        from pemcp.mcp.tools_pe import get_focused_imports
+        from arkana.mcp.tools_pe import get_focused_imports
         result = _run(get_focused_imports.__wrapped__(mock_ctx, include_benign_summary=True))
         assert "benign_summary" in result
         assert "Filtered out" in result["benign_summary"]
 
     def test_by_category_counts(self, mock_ctx):
-        from pemcp.mcp.tools_pe import get_focused_imports
+        from arkana.mcp.tools_pe import get_focused_imports
         result = _run(get_focused_imports.__wrapped__(mock_ctx))
         assert "by_category" in result
         assert isinstance(result["by_category"], dict)
@@ -197,7 +197,7 @@ class TestStringsSummary:
 
     @pytest.fixture(autouse=True)
     def setup_state(self, clean_state):
-        from pemcp.config import state
+        from arkana.config import state
         state.filepath = "/fake/test.exe"
         state.pe_data = {
             "mode": "pe",
@@ -223,33 +223,33 @@ class TestStringsSummary:
         }
 
     def test_returns_categorized_strings(self, mock_ctx):
-        from pemcp.mcp.tools_strings import get_strings_summary
+        from arkana.mcp.tools_strings import get_strings_summary
         result = _run(get_strings_summary.__wrapped__(mock_ctx))
         assert "total_strings" in result
         assert "categorized" in result
         assert result["total_strings"] > 0
 
     def test_url_category(self, mock_ctx):
-        from pemcp.mcp.tools_strings import get_strings_summary
+        from arkana.mcp.tools_strings import get_strings_summary
         result = _run(get_strings_summary.__wrapped__(mock_ctx))
         cats = result["categorized"]
         assert "urls" in cats
         assert cats["urls"]["count"] >= 1
 
     def test_file_paths_category(self, mock_ctx):
-        from pemcp.mcp.tools_strings import get_strings_summary
+        from arkana.mcp.tools_strings import get_strings_summary
         result = _run(get_strings_summary.__wrapped__(mock_ctx))
         cats = result["categorized"]
         assert "file_paths" in cats
 
     def test_mutex_category(self, mock_ctx):
-        from pemcp.mcp.tools_strings import get_strings_summary
+        from arkana.mcp.tools_strings import get_strings_summary
         result = _run(get_strings_summary.__wrapped__(mock_ctx))
         cats = result["categorized"]
         assert "mutex_names" in cats
 
     def test_private_ips_filtered(self, mock_ctx):
-        from pemcp.mcp.tools_strings import get_strings_summary
+        from arkana.mcp.tools_strings import get_strings_summary
         result = _run(get_strings_summary.__wrapped__(mock_ctx))
         cats = result["categorized"]
         # 10.0.0.1 is private and should be filtered
@@ -258,7 +258,7 @@ class TestStringsSummary:
                 assert not ip.startswith("10.")
 
     def test_sifter_distribution(self, mock_ctx):
-        from pemcp.mcp.tools_strings import get_strings_summary
+        from arkana.mcp.tools_strings import get_strings_summary
         result = _run(get_strings_summary.__wrapped__(mock_ctx))
         assert "sifter_score_distribution" in result
         dist = result["sifter_score_distribution"]
@@ -274,7 +274,7 @@ class TestAutoNoteFunction:
 
     @pytest.fixture(autouse=True)
     def setup_state(self, clean_state):
-        from pemcp.config import state
+        from arkana.config import state
         state.filepath = "/fake/test.exe"
         state.pe_data = {
             "mode": "pe",
@@ -282,7 +282,7 @@ class TestAutoNoteFunction:
         }
 
     def test_custom_summary_creates_note(self, mock_ctx):
-        from pemcp.mcp.tools_notes import auto_note_function
+        from arkana.mcp.tools_notes import auto_note_function
         result = _run(auto_note_function.__wrapped__(
             mock_ctx,
             function_address="0x401000",
@@ -293,7 +293,7 @@ class TestAutoNoteFunction:
         assert result["address"] == "0x401000"
 
     def test_no_angr_fallback(self, mock_ctx):
-        from pemcp.mcp.tools_notes import auto_note_function
+        from arkana.mcp.tools_notes import auto_note_function
         result = _run(auto_note_function.__wrapped__(
             mock_ctx,
             function_address="0x401000",
@@ -302,7 +302,7 @@ class TestAutoNoteFunction:
         assert "note_id" in result
 
     def test_batch_mode_creates_multiple_notes(self, mock_ctx):
-        from pemcp.mcp.tools_notes import auto_note_function
+        from arkana.mcp.tools_notes import auto_note_function
         result = _run(auto_note_function.__wrapped__(
             mock_ctx,
             function_addresses=["0x401000", "0x402000", "0x403000"],
@@ -316,7 +316,7 @@ class TestAutoNoteFunction:
             assert "auto_summary" in entry
 
     def test_batch_mode_custom_summary_rejected(self, mock_ctx):
-        from pemcp.mcp.tools_notes import auto_note_function
+        from arkana.mcp.tools_notes import auto_note_function
         result = _run(auto_note_function.__wrapped__(
             mock_ctx,
             function_addresses=["0x401000"],
@@ -325,7 +325,7 @@ class TestAutoNoteFunction:
         assert "error" in result
 
     def test_single_mode_unchanged_with_address_alias(self, mock_ctx):
-        from pemcp.mcp.tools_notes import auto_note_function
+        from arkana.mcp.tools_notes import auto_note_function
         result = _run(auto_note_function.__wrapped__(
             mock_ctx,
             address="0x401000",
@@ -346,7 +346,7 @@ class TestAnalysisDigest:
 
     @pytest.fixture(autouse=True)
     def setup_state(self, clean_state):
-        from pemcp.config import state
+        from arkana.config import state
         state.filepath = "/fake/test.exe"
         state.pe_data = {
             "mode": "pe",
@@ -354,14 +354,14 @@ class TestAnalysisDigest:
         }
 
     def test_returns_digest_without_triage(self, mock_ctx):
-        from pemcp.mcp.tools_session import get_analysis_digest
+        from arkana.mcp.tools_session import get_analysis_digest
         result = _run(get_analysis_digest.__wrapped__(mock_ctx))
         assert "binary_profile" in result
         assert "Triage not yet run" in result["binary_profile"]
 
     def test_returns_digest_with_cached_triage(self, mock_ctx):
-        from pemcp.config import state
-        from pemcp.mcp.tools_session import get_analysis_digest
+        from arkana.config import state
+        from arkana.mcp.tools_session import get_analysis_digest
         state._cached_triage = {
             "risk_level": "HIGH",
             "risk_score": 15,
@@ -380,15 +380,15 @@ class TestAnalysisDigest:
         assert result["coverage"]["functions_explored"] == 0
 
     def test_since_last_digest_updates_timestamp(self, mock_ctx):
-        from pemcp.config import state
-        from pemcp.mcp.tools_session import get_analysis_digest
+        from arkana.config import state
+        from arkana.mcp.tools_session import get_analysis_digest
         assert state.last_digest_timestamp == 0.0
         _run(get_analysis_digest.__wrapped__(mock_ctx))
         assert state.last_digest_timestamp > 0.0
 
     def test_function_notes_in_digest(self, mock_ctx):
-        from pemcp.config import state
-        from pemcp.mcp.tools_session import get_analysis_digest
+        from arkana.config import state
+        from arkana.mcp.tools_session import get_analysis_digest
         state.add_note(content="Does process injection", category="function", address="0x401000")
         result = _run(get_analysis_digest.__wrapped__(mock_ctx))
         assert "functions_explored" in result
@@ -403,7 +403,7 @@ class TestAnalysisDigest:
 @pytest.fixture
 def clean_state():
     """Reset global state for each test."""
-    from pemcp.config import state
+    from arkana.config import state
     old_filepath = state.filepath
     old_pe_data = state.pe_data
     old_pe_object = state.pe_object

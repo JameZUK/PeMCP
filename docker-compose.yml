@@ -1,14 +1,14 @@
-# PeMCP Docker Compose Configuration
+# Arkana Docker Compose Configuration
 #
 # Usage:
 #   HTTP mode (network/web access):
-#     docker compose up pemcp-http
+#     docker compose up arkana-http
 #
 #   HTTP mode with a pre-loaded file:
-#     docker compose run --rm pemcp-http --input-file /samples/malware.exe
+#     docker compose run --rm arkana-http --input-file /samples/malware.exe
 #
 #   stdio mode (for Claude Code / MCP clients):
-#     docker compose run --rm -i pemcp-stdio
+#     docker compose run --rm -i arkana-stdio
 #
 #   Build only:
 #     docker compose build
@@ -23,20 +23,20 @@
 #   for 64-bit).  See docs/QILING_ROOTFS.md for detailed instructions.
 
 services:
-  pemcp-http:
+  arkana-http:
     build: .
-    image: pemcp-toolkit:latest
+    image: arkana-toolkit:latest
     ports:
-      - "127.0.0.1:${PEMCP_PORT:-8082}:8082"
+      - "127.0.0.1:${ARKANA_PORT:-${PEMCP_PORT:-8082}}:8082"
     volumes:
       - ./samples:/samples:ro
-      - ${PEMCP_OUTPUT:-./output}:/output:rw
-      - ${PEMCP_CACHE:-~/.pemcp}:/app/home/.pemcp:rw
-      - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
+      - ${ARKANA_OUTPUT:-${PEMCP_OUTPUT:-./output}}:/output:rw
+      - ${ARKANA_CACHE:-${PEMCP_CACHE:-~/.arkana}}:/app/home/.arkana:rw
+      - ${ARKANA_ROOTFS:-${PEMCP_ROOTFS:-./qiling-rootfs}}:/app/qiling-rootfs
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
-      - PEMCP_API_KEY=${PEMCP_API_KEY:-}
-      - PEMCP_PATH_MAP=/samples=${PEMCP_SAMPLES:-./samples};/output=${PEMCP_OUTPUT:-./output}
+      - ARKANA_API_KEY=${ARKANA_API_KEY:-${PEMCP_API_KEY:-}}
+      - ARKANA_PATH_MAP=/samples=${ARKANA_SAMPLES:-${PEMCP_SAMPLES:-./samples}};/output=${ARKANA_OUTPUT:-${PEMCP_OUTPUT:-./output}}
     command:
       - "--mcp-server"
       - "--mcp-transport"
@@ -61,18 +61,18 @@ services:
       start_period: 60s
       retries: 3
 
-  pemcp-stdio:
+  arkana-stdio:
     build: .
-    image: pemcp-toolkit:latest
+    image: arkana-toolkit:latest
     stdin_open: true
     volumes:
       - ./samples:/samples:ro
-      - ${PEMCP_OUTPUT:-./output}:/output:rw
-      - ${PEMCP_CACHE:-~/.pemcp}:/app/home/.pemcp:rw
-      - ${PEMCP_ROOTFS:-./qiling-rootfs}:/app/qiling-rootfs
+      - ${ARKANA_OUTPUT:-${PEMCP_OUTPUT:-./output}}:/output:rw
+      - ${ARKANA_CACHE:-${PEMCP_CACHE:-~/.arkana}}:/app/home/.arkana:rw
+      - ${ARKANA_ROOTFS:-${PEMCP_ROOTFS:-./qiling-rootfs}}:/app/qiling-rootfs
     environment:
       - VT_API_KEY=${VT_API_KEY:-}
-      - PEMCP_PATH_MAP=/samples=${PEMCP_SAMPLES:-./samples};/output=${PEMCP_OUTPUT:-./output}
+      - ARKANA_PATH_MAP=/samples=${ARKANA_SAMPLES:-${PEMCP_SAMPLES:-./samples}};/output=${ARKANA_OUTPUT:-${PEMCP_OUTPUT:-./output}}
     command: ["--mcp-server", "--samples-path", "/samples"]
     profiles:
       - stdio

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Standalone Qiling Framework runner -- invoked via subprocess from PeMCP.
+"""Standalone Qiling Framework runner -- invoked via subprocess from Arkana.
 
 Reads a JSON command from stdin, runs the requested Qiling emulation,
 and writes a JSON result to stdout.
@@ -627,7 +627,7 @@ def _init_qiling_for_binary(filepath, rootfs_path):
             }, None
 
     # Stage the binary inside the rootfs so Qiling can resolve paths
-    staging_dir = os.path.join(rootfs, "_pemcp_samples")
+    staging_dir = os.path.join(rootfs, "_arkana_samples")
     os.makedirs(staging_dir, exist_ok=True)
     staged_path = os.path.join(staging_dir, os.path.basename(filepath))
     try:

@@ -1,6 +1,6 @@
 # Real-World Scenarios & Comparisons
 
-These scenarios demonstrate PeMCP's combined power across its tool categories. Each represents a common analysis task that traditionally requires multiple disconnected tools.
+These scenarios demonstrate Arkana's combined power across its tool categories. Each represents a common analysis task that traditionally requires multiple disconnected tools.
 
 ---
 
@@ -10,11 +10,11 @@ These scenarios demonstrate PeMCP's combined power across its tool categories. E
 
 **Traditional workflow:** Open in a sandbox VM, use `olevba` to extract macros, manually read VBA code, use CyberChef to decode Base64 payloads, use `strings` to find URLs, check hashes on VirusTotal — switching between 5+ tools.
 
-**With PeMCP:**
+**With Arkana:**
 ```
 Analyst: "Open this Office document and tell me if it's malicious"
 ```
-PeMCP automatically:
+Arkana automatically:
 1. `open_file("attachment.doc")` — detects OLE format
 2. `get_triage_report(compact=True)` — instant risk assessment
 3. `refinery_extract(operation='office', sub_operation='vba')` — extracts VBA macros
@@ -33,11 +33,11 @@ The AI cross-references all findings: *"This document contains an obfuscated VBA
 
 **Traditional workflow:** Use `de4dot` to deobfuscate, load in `dnSpy` to find the config class, manually identify the decryption routine, write a Python script to replicate the decryption, extract the C2 address — a process that can take 1-2 hours.
 
-**With PeMCP:**
+**With Arkana:**
 ```
 Analyst: "Analyse this .NET binary and extract the C2 configuration"
 ```
-PeMCP orchestrates:
+Arkana orchestrates:
 1. `open_file("sample.exe")` — detects .NET assembly
 2. `dotnet_analyze()` — extracts CLR metadata, type/method definitions
 3. `refinery_dotnet(operation='strings')` — extracts all .NET metadata strings
@@ -55,11 +55,11 @@ The AI correlates field names with known AsyncRAT config patterns: *"This is Asy
 
 **The situation:** A threat intel analyst has a PE dropper that unpacks multiple stages. Stage 1 is a packed PE, Stage 2 is XOR-encrypted shellcode in the overlay, and Stage 3 is a DLL downloaded to memory.
 
-**With PeMCP:**
+**With Arkana:**
 ```
 Analyst: "This looks like a multi-stage dropper. Help me unpack each stage."
 ```
-PeMCP chains operations:
+Arkana chains operations:
 1. `open_file("dropper.exe")` — parses PE, background CFG starts
 2. `get_triage_report()` — identifies high entropy sections, overlay data, suspicious imports (`VirtualAlloc`, `WriteProcessMemory`)
 3. `detect_packing()` — confirms UPX packing on Stage 1
@@ -79,7 +79,7 @@ Each stage's findings are recorded with `auto_note_function()` and `add_note()`,
 
 **The situation:** An IR team recovers a suspicious ELF binary from a compromised Linux server. It's a stripped Go binary with no symbols.
 
-**With PeMCP:**
+**With Arkana:**
 ```
 Analyst: "Analyse this Linux binary — it might be a backdoor"
 ```
@@ -99,7 +99,7 @@ The AI recognises Go package names like `net/http`, `os/exec`, `crypto/tls` and 
 
 **The situation:** An incident responder has a PCAP capture from a compromised network segment and needs to extract all malicious indicators.
 
-**With PeMCP:**
+**With Arkana:**
 ```
 Analyst: "Extract all IOCs and embedded files from this PCAP"
 ```
@@ -117,11 +117,11 @@ Analyst: "Open this carved PE and analyse it"
 
 ---
 
-## PeMCP vs Traditional Tools
+## Arkana vs Traditional Tools
 
 ### Comparison Matrix
 
-| Capability | PeMCP | Ghidra | IDA Pro | pestudio | CyberChef | Binary Refinery CLI |
+| Capability | Arkana | Ghidra | IDA Pro | pestudio | CyberChef | Binary Refinery CLI |
 |---|---|---|---|---|---|---|
 | **PE/ELF/Mach-O parsing** | 190 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
 | **Decompilation** | Angr (auto, all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No | No | No |
@@ -135,15 +135,15 @@ Analyst: "Open this carved PE and analyse it"
 | **Learning curve** | Natural language | Months | Months | Low | Moderate | Moderate |
 | **Cost** | Free & open source | Free | $1,800+/year | Free | Free | Free |
 
-### How PeMCP Complements (Not Replaces) Existing Tools
+### How Arkana Complements (Not Replaces) Existing Tools
 
-PeMCP is not meant to fully replace Ghidra or IDA Pro — those tools remain essential for deep interactive reverse engineering sessions where you need to manually rename variables, annotate code, and navigate complex control flow graphs in a visual GUI. Instead, PeMCP excels in different parts of the analysis lifecycle:
+Arkana is not meant to fully replace Ghidra or IDA Pro — those tools remain essential for deep interactive reverse engineering sessions where you need to manually rename variables, annotate code, and navigate complex control flow graphs in a visual GUI. Instead, Arkana excels in different parts of the analysis lifecycle:
 
-**Where PeMCP excels over Ghidra/IDA:**
-- **Speed of initial triage** — PeMCP produces a comprehensive risk assessment in seconds. Ghidra takes 30+ seconds just to load and auto-analyse a binary, and IDA's auto-analysis can take minutes on large files.
-- **Automated IOC extraction** — PeMCP extracts URLs, IPs, domains, hashes, and file paths automatically. In Ghidra/IDA, this requires custom scripts or manual searching.
+**Where Arkana excels over Ghidra/IDA:**
+- **Speed of initial triage** — Arkana produces a comprehensive risk assessment in seconds. Ghidra takes 30+ seconds just to load and auto-analyse a binary, and IDA's auto-analysis can take minutes on large files.
+- **Automated IOC extraction** — Arkana extracts URLs, IPs, domains, hashes, and file paths automatically. In Ghidra/IDA, this requires custom scripts or manual searching.
 - **Data transformation chains** — Decoding nested Base64 → XOR → zlib payloads is a single `refinery_pipeline` call. In Ghidra, you'd write a Jython script. In IDA, an IDAPython script. In CyberChef, you'd manually build a recipe.
-- **Cross-tool correlation** — PeMCP's AI automatically connects findings: "The XOR key found in the .rdata section matches the key used to decrypt the config extracted from the .NET resources." No other tool does this automatically.
+- **Cross-tool correlation** — Arkana's AI automatically connects findings: "The XOR key found in the .rdata section matches the key used to decrypt the config extracted from the .NET resources." No other tool does this automatically.
 - **Multi-format support in one interface** — Analyse PE, ELF, Mach-O, .NET, Go, and Rust binaries without switching tools or learning different workflows.
 - **Accessibility** — A junior analyst can ask "What does this function do?" and get an explanation. In Ghidra, they'd need to understand the decompiler output themselves.
 
@@ -151,16 +151,16 @@ PeMCP is not meant to fully replace Ghidra or IDA Pro — those tools remain ess
 - **Interactive visual navigation** — Ghidra's graph view, cross-reference browser, and function call trees are unmatched for manual code exploration.
 - **Type reconstruction** — IDA's Hex-Rays decompiler produces higher-fidelity C pseudocode with better type propagation than Angr's decompiler.
 - **Plugin ecosystems** — Ghidra has GhidraScript/Pyhidra, IDA has IDAPython — mature scripting for custom analysis workflows.
-- **Debugging** — Both support live debugging. PeMCP is static/emulation-only.
+- **Debugging** — Both support live debugging. Arkana is static/emulation-only.
 
 **The ideal workflow combines both:**
-1. **PeMCP for triage and automated analysis** — Get the risk assessment, extract IOCs, identify interesting functions, decode obfuscated data.
-2. **Ghidra/IDA for targeted deep-dives** — When PeMCP identifies a critical function (e.g., "the decryption routine at 0x00401230"), open the binary in Ghidra to manually trace the algorithm and reconstruct data structures.
+1. **Arkana for triage and automated analysis** — Get the risk assessment, extract IOCs, identify interesting functions, decode obfuscated data.
+2. **Ghidra/IDA for targeted deep-dives** — When Arkana identifies a critical function (e.g., "the decryption routine at 0x00401230"), open the binary in Ghidra to manually trace the algorithm and reconstruct data structures.
 
-### PeMCP vs CyberChef / Binary Refinery CLI
+### Arkana vs CyberChef / Binary Refinery CLI
 
-CyberChef and Binary Refinery's command-line interface are powerful data transformation tools, but they require the analyst to know *which* transforms to apply and in *what order*. PeMCP wraps Binary Refinery's 200+ units behind an AI that can reason about the data:
+CyberChef and Binary Refinery's command-line interface are powerful data transformation tools, but they require the analyst to know *which* transforms to apply and in *what order*. Arkana wraps Binary Refinery's 200+ units behind an AI that can reason about the data:
 
 - **CyberChef** — Browser-based, visual recipe builder. Great for known transform chains but requires manual operation selection. No binary analysis, no PE parsing, no decompilation.
 - **Binary Refinery CLI** — Powerful pipe-based transforms (`data | b64 | xor[0x41] | zl`). Requires command-line expertise and knowledge of unit names. No AI reasoning.
-- **PeMCP** — Wraps Binary Refinery into 23 context-efficient MCP tools, adds AI reasoning, and combines with PE parsing, decompilation, emulation, and signature scanning. The AI can look at encrypted data, hypothesise the encryption scheme, try `refinery_xor(operation='guess_key')`, and if that fails, try `refinery_auto_decrypt()`, all without the analyst knowing which specific refinery units to use.
+- **Arkana** — Wraps Binary Refinery into 23 context-efficient MCP tools, adds AI reasoning, and combines with PE parsing, decompilation, emulation, and signature scanning. The AI can look at encrypted data, hypothesise the encryption scheme, try `refinery_xor(operation='guess_key')`, and if that fails, try `refinery_auto_decrypt()`, all without the analyst knowing which specific refinery units to use.

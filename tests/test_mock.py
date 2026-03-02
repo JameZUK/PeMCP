@@ -1,7 +1,7 @@
-"""Unit tests for pemcp/mock.py — MockPE class for shellcode mode."""
+"""Unit tests for arkana/mock.py — MockPE class for shellcode mode."""
 import pytest
 
-from pemcp.mock import MockPE
+from arkana.mock import MockPE
 
 
 class TestMockPE:

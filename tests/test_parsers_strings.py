@@ -1,9 +1,9 @@
-"""Unit tests for pemcp/parsers/strings.py — string extraction and analysis."""
+"""Unit tests for arkana/parsers/strings.py — string extraction and analysis."""
 import pytest
 
 pytest.importorskip("pefile", reason="pefile not installed")
 
-from pemcp.parsers.strings import (
+from arkana.parsers.strings import (
     _extract_strings_from_data,
     _search_specific_strings_in_data,
     _format_hex_dump_lines,

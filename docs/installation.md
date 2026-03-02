@@ -1,6 +1,6 @@
 # Installation & Setup
 
-This guide covers every way to install and run PeMCP, from the recommended Docker approach to minimal local installations.
+This guide covers every way to install and run Arkana, from the recommended Docker approach to minimal local installations.
 
 ---
 
@@ -35,8 +35,8 @@ The included `run.sh` helper auto-detects Docker or Podman and handles image bui
 Set environment variables as needed:
 
 ```bash
-VT_API_KEY=abc123 PEMCP_PORT=9000 ./run.sh
-PEMCP_SAMPLES=~/malware-zoo ./run.sh --stdio
+VT_API_KEY=abc123 ARKANA_PORT=9000 ./run.sh
+ARKANA_SAMPLES=~/malware-zoo ./run.sh --stdio
 ```
 
 Or copy `.env.example` to `.env` and fill in your values — `run.sh` loads it automatically.
@@ -47,20 +47,20 @@ For more control, use Docker Compose directly:
 
 ```bash
 # Start HTTP MCP server
-docker compose up pemcp-http
+docker compose up arkana-http
 
 # Start stdio MCP server
-docker compose run --rm -i pemcp-stdio
+docker compose run --rm -i arkana-stdio
 
 # Build only
 docker compose build
 ```
 
 The `docker-compose.yml` defines two services:
-- **`pemcp-http`** — Network-accessible MCP server with healthcheck and restart policy
-- **`pemcp-stdio`** — For Claude Code / MCP client integration (behind the `stdio` profile)
+- **`arkana-http`** — Network-accessible MCP server with healthcheck and restart policy
+- **`arkana-stdio`** — For Claude Code / MCP client integration (behind the `stdio` profile)
 
-Both services bind-mount `~/.pemcp` from the host for persistent cache and configuration (override with `PEMCP_CACHE`).
+Both services bind-mount `~/.arkana` from the host for persistent cache and configuration (override with `ARKANA_CACHE`).
 
 ### Manual Docker Commands
 
@@ -68,7 +68,7 @@ For most use cases, the `run.sh` helper is recommended. If you need to run Docke
 
 ```bash
 # Build the image
-docker build -t pemcp-toolkit .
+docker build -t arkana-toolkit .
 
 # Run as MCP server (streamable-http)
 docker run --rm -it \
@@ -76,9 +76,9 @@ docker run --rm -it \
   -e HOME=/app/home \
   -p 8082:8082 \
   -v "$(pwd)/samples:/samples:ro" \
-  -v "$HOME/.pemcp:/app/home/.pemcp:rw" \
+  -v "$HOME/.arkana:/app/home/.arkana:rw" \
   -e VT_API_KEY="your_key" \
-  pemcp-toolkit \
+  arkana-toolkit \
   --mcp-server \
   --mcp-transport streamable-http \
   --mcp-host 0.0.0.0 \
@@ -89,13 +89,13 @@ docker run --rm -i \
   --user "$(id -u):$(id -g)" \
   -e HOME=/app/home \
   -v "$(pwd)/samples:/samples:ro" \
-  -v "$HOME/.pemcp:/app/home/.pemcp:rw" \
-  pemcp-toolkit \
+  -v "$HOME/.arkana:/app/home/.arkana:rw" \
+  arkana-toolkit \
   --mcp-server \
   --samples-path /samples
 ```
 
-> **Note:** The `-v $HOME/.pemcp:/app/home/.pemcp:rw` mount persists the analysis cache, notes, and API key configuration in your home directory. Without it, cached results and stored keys are lost when the container is removed. The `run.sh` helper configures this bind mount automatically (creating `~/.pemcp` if needed).
+> **Note:** The `-v $HOME/.arkana:/app/home/.arkana:rw` mount persists the analysis cache, notes, and API key configuration in your home directory. Without it, cached results and stored keys are lost when the container is removed. The `run.sh` helper configures this bind mount automatically (creating `~/.arkana` if needed).
 
 ---
 
@@ -154,7 +154,7 @@ Optional packages can be added individually:
 Generates a comprehensive, human-readable report. Requires `--input-file`.
 
 ```bash
-python PeMCP.py --input-file malware.exe --verbose > report.txt
+python arkana.py --input-file malware.exe --verbose > report.txt
 ```
 
 ### MCP Server Mode (Interactive)
@@ -163,16 +163,16 @@ Starts the MCP server. The `--input-file` is optional — files can be loaded dy
 
 ```bash
 # Start without a file (recommended for Claude Code)
-python PeMCP.py --mcp-server
+python arkana.py --mcp-server
 
 # Start with a samples directory (enables the list_samples tool)
-python PeMCP.py --mcp-server --samples-path ./samples
+python arkana.py --mcp-server --samples-path ./samples
 
 # Start with a pre-loaded file
-python PeMCP.py --mcp-server --input-file malware.exe
+python arkana.py --mcp-server --input-file malware.exe
 
 # Start with streamable-http transport (for network access)
-python PeMCP.py --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 --mcp-port 8082 --samples-path ./samples
+python arkana.py --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 --mcp-port 8082 --samples-path ./samples
 ```
 
 ### Transport Options
@@ -189,7 +189,7 @@ python PeMCP.py --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 
 
 ### Auto-Detection (Recommended)
 
-PeMCP automatically detects the binary format from magic bytes:
+Arkana automatically detects the binary format from magic bytes:
 
 ```
 open_file("/path/to/binary")  # Auto-detects PE, ELF, or Mach-O
@@ -199,7 +199,7 @@ open_file("/path/to/binary")  # Auto-detects PE, ELF, or Mach-O
 
 ```bash
 # CLI mode
-python PeMCP.py --input-file binary.elf --mode elf
+python arkana.py --input-file binary.elf --mode elf
 
 # MCP mode — use elf_analyze, elf_dwarf_info, plus all angr tools
 open_file("/path/to/binary", mode="elf")
@@ -209,7 +209,7 @@ open_file("/path/to/binary", mode="elf")
 
 ```bash
 # CLI mode
-python PeMCP.py --input-file binary.macho --mode macho
+python arkana.py --input-file binary.macho --mode macho
 
 # MCP mode — use macho_analyze, plus all angr tools
 open_file("/path/to/binary", mode="macho")
@@ -227,14 +227,14 @@ rust_analyze("/path/to/rust-binary")        # Rust crate dependencies
 
 ### Shellcode Analysis
 
-PeMCP supports raw shellcode analysis:
+Arkana supports raw shellcode analysis:
 
 ```bash
 # CLI mode
-python PeMCP.py --input-file shellcode.bin --mode shellcode
+python arkana.py --input-file shellcode.bin --mode shellcode
 
 # MCP server mode with architecture hint
-python PeMCP.py --mcp-server --input-file shellcode.bin --mode shellcode --floss-format sc64
+python arkana.py --mcp-server --input-file shellcode.bin --mode shellcode --floss-format sc64
 ```
 
 In MCP mode, you can also open shellcode dynamically:

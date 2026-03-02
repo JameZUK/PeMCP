@@ -1,4 +1,4 @@
-# PeMCP Dependencies
+# Arkana Dependencies
 #
 # These are minimum version constraints (>=) for development flexibility.
 # For reproducible production/CI builds, generate a lockfile:

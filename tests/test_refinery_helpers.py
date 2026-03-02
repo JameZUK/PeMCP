@@ -1,11 +1,11 @@
-"""Unit tests for pemcp/mcp/_refinery_helpers.py — offset/artifact helpers."""
+"""Unit tests for arkana/mcp/_refinery_helpers.py — offset/artifact helpers."""
 import hashlib
 import os
 import threading
 
 import pytest
 
-from pemcp.state import AnalyzerState, set_current_state
+from arkana.state import AnalyzerState, set_current_state
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +41,7 @@ class TestGetDataFromHexOrFileWithOffset:
         set_current_state(None)
 
     def test_hex_takes_priority(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         result = _get_data_from_hex_or_file_with_offset(
             data_hex="AABBCC",
             file_offset="0x00",
@@ -50,7 +50,7 @@ class TestGetDataFromHexOrFileWithOffset:
         assert result == bytes.fromhex("AABBCC")
 
     def test_file_offset_and_length(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         result = _get_data_from_hex_or_file_with_offset(
             file_offset="0x10",
             length=4,
@@ -58,7 +58,7 @@ class TestGetDataFromHexOrFileWithOffset:
         assert result == bytes([0x10, 0x11, 0x12, 0x13])
 
     def test_file_offset_decimal(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         result = _get_data_from_hex_or_file_with_offset(
             file_offset="16",
             length=2,
@@ -66,7 +66,7 @@ class TestGetDataFromHexOrFileWithOffset:
         assert result == bytes([0x10, 0x11])
 
     def test_file_offset_without_length(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         result = _get_data_from_hex_or_file_with_offset(
             file_offset="0xFE",
         )
@@ -74,27 +74,27 @@ class TestGetDataFromHexOrFileWithOffset:
         assert result == bytes([0xFE, 0xFF])
 
     def test_full_file_when_no_params(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         result = _get_data_from_hex_or_file_with_offset()
         assert result == self.test_data
 
     def test_offset_out_of_bounds(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         with pytest.raises(ValueError, match="out of bounds"):
             _get_data_from_hex_or_file_with_offset(file_offset="0x200")
 
     def test_offset_plus_length_exceeds_file(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         with pytest.raises(ValueError, match="exceeds file size"):
             _get_data_from_hex_or_file_with_offset(file_offset="0xFE", length=10)
 
     def test_negative_offset(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         with pytest.raises(ValueError, match="out of bounds"):
             _get_data_from_hex_or_file_with_offset(file_offset="-1")
 
     def test_zero_length(self):
-        from pemcp.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
+        from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
         with pytest.raises(ValueError, match="length must be positive"):
             _get_data_from_hex_or_file_with_offset(file_offset="0x00", length=0)
 
@@ -105,27 +105,27 @@ class TestGetDataFromHexOrFileWithOffset:
 
 class TestDetectFileType:
     def test_pe(self):
-        from pemcp.mcp._refinery_helpers import _detect_file_type
+        from arkana.mcp._refinery_helpers import _detect_file_type
         assert _detect_file_type(b"MZ\x90\x00") == "pe"
 
     def test_elf(self):
-        from pemcp.mcp._refinery_helpers import _detect_file_type
+        from arkana.mcp._refinery_helpers import _detect_file_type
         assert _detect_file_type(b"\x7fELF\x02") == "elf"
 
     def test_macho_64(self):
-        from pemcp.mcp._refinery_helpers import _detect_file_type
+        from arkana.mcp._refinery_helpers import _detect_file_type
         assert _detect_file_type(b"\xcf\xfa\xed\xfe") == "macho"
 
     def test_zip(self):
-        from pemcp.mcp._refinery_helpers import _detect_file_type
+        from arkana.mcp._refinery_helpers import _detect_file_type
         assert _detect_file_type(b"PK\x03\x04") == "zip"
 
     def test_unknown(self):
-        from pemcp.mcp._refinery_helpers import _detect_file_type
+        from arkana.mcp._refinery_helpers import _detect_file_type
         assert _detect_file_type(b"\x00\x00\x00\x00") is None
 
     def test_empty(self):
-        from pemcp.mcp._refinery_helpers import _detect_file_type
+        from arkana.mcp._refinery_helpers import _detect_file_type
         assert _detect_file_type(b"") is None
 
 
@@ -143,7 +143,7 @@ class TestWriteOutputAndRegisterArtifact:
         set_current_state(None)
 
     def test_writes_file_and_registers(self, tmp_path):
-        from pemcp.mcp._refinery_helpers import _write_output_and_register_artifact
+        from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
         data = b"MZ\x90\x00" + b"\x00" * 100
         out = tmp_path / "output.bin"
 
@@ -169,7 +169,7 @@ class TestWriteOutputAndRegisterArtifact:
         assert arts[0]["source_tool"] == "test_tool"
 
     def test_creates_parent_dirs(self, tmp_path):
-        from pemcp.mcp._refinery_helpers import _write_output_and_register_artifact
+        from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
         out = tmp_path / "deep" / "nested" / "dir" / "output.bin"
         _write_output_and_register_artifact(
             str(out), b"test data", "tool", "desc",
@@ -177,7 +177,7 @@ class TestWriteOutputAndRegisterArtifact:
         assert out.exists()
 
     def test_path_restriction_enforced(self, tmp_path):
-        from pemcp.mcp._refinery_helpers import _write_output_and_register_artifact
+        from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
         self.state.allowed_paths = [str(tmp_path / "allowed")]
         with pytest.raises(RuntimeError, match="Access denied"):
             _write_output_and_register_artifact(
@@ -185,10 +185,10 @@ class TestWriteOutputAndRegisterArtifact:
             )
 
     def test_size_limit_enforced(self, tmp_path):
-        from pemcp.mcp._refinery_helpers import _write_output_and_register_artifact
-        from pemcp.constants import MAX_ARTIFACT_FILE_SIZE
+        from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
+        from arkana.constants import MAX_ARTIFACT_FILE_SIZE
         # We can't allocate 100MB in a test, so patch the constant
-        import pemcp.mcp._refinery_helpers as mod
+        import arkana.mcp._refinery_helpers as mod
         original = mod.MAX_ARTIFACT_FILE_SIZE
         try:
             mod.MAX_ARTIFACT_FILE_SIZE = 10  # 10 bytes

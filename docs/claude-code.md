@@ -1,53 +1,53 @@
-# Using PeMCP with Claude Code
+# Using Arkana with Claude Code
 
-PeMCP integrates seamlessly with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via stdio transport. This guide covers setup, configuration, the analysis skill, and typical workflows.
+Arkana integrates seamlessly with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) via stdio transport. This guide covers setup, configuration, the analysis skill, and typical workflows.
 
 ---
 
-## Adding PeMCP via the CLI
+## Adding Arkana via the CLI
 
-The fastest way to add PeMCP to Claude Code is with the `claude mcp add` command.
+The fastest way to add Arkana to Claude Code is with the `claude mcp add` command.
 
 **Add to the current project (recommended):**
 
 ```bash
-claude mcp add --scope project pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server --samples-path /path/to/samples
+claude mcp add --scope project arkana -- python /path/to/Arkana/arkana.py --mcp-server --samples-path /path/to/samples
 ```
 
 **Add with a VirusTotal API key:**
 
 ```bash
-claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server --samples-path /path/to/samples
+claude mcp add --scope project -e VT_API_KEY=your-key-here arkana -- python /path/to/Arkana/arkana.py --mcp-server --samples-path /path/to/samples
 ```
 
 **Add globally for all projects (user scope):**
 
 ```bash
-claude mcp add --scope user pemcp -- python /path/to/PeMCP/PeMCP.py --mcp-server
+claude mcp add --scope user arkana -- python /path/to/Arkana/arkana.py --mcp-server
 ```
 
 **Add using Docker (via `run.sh` helper):**
 
 ```bash
-claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --stdio
+claude mcp add --scope project arkana -- /path/to/Arkana/run.sh --stdio
 ```
 
 **Add using Docker with a custom samples directory:**
 
 ```bash
-claude mcp add --scope project pemcp -- /path/to/PeMCP/run.sh --samples /path/to/your/samples --stdio
+claude mcp add --scope project arkana -- /path/to/Arkana/run.sh --samples /path/to/your/samples --stdio
 ```
 
 The `run.sh` helper auto-detects Docker or Podman, builds the image if needed, and handles volume mounts and environment setup. The `--samples` flag mounts any local directory read-only into the container, mirroring the host folder name (e.g. `--samples ~/Downloads` mounts at `/Downloads`). To pass a VirusTotal API key, set it in your environment or `.env` file:
 
 ```bash
-claude mcp add --scope project -e VT_API_KEY=your-key-here pemcp -- /path/to/PeMCP/run.sh --samples ~/malware-zoo --stdio
+claude mcp add --scope project -e VT_API_KEY=your-key-here arkana -- /path/to/Arkana/run.sh --samples ~/malware-zoo --stdio
 ```
 
 **Add a remote HTTP server:**
 
 ```bash
-claude mcp add --transport http --scope project pemcp http://127.0.0.1:8082/mcp
+claude mcp add --transport http --scope project arkana http://127.0.0.1:8082/mcp
 ```
 
 **Verify the server was added:**
@@ -59,14 +59,14 @@ claude mcp list
 **Remove the server:**
 
 ```bash
-claude mcp remove pemcp
+claude mcp remove arkana
 ```
 
 ---
 
-## Adding PeMCP via JSON Configuration
+## Adding Arkana via JSON Configuration
 
-Alternatively, you can configure PeMCP by editing JSON files directly.
+Alternatively, you can configure Arkana by editing JSON files directly.
 
 ### Project-Level Configuration (Recommended)
 
@@ -75,10 +75,10 @@ Add a `.mcp.json` file to your project root (an example is included in this repo
 ```json
 {
   "mcpServers": {
-    "pemcp": {
+    "arkana": {
       "type": "stdio",
       "command": "python",
-      "args": ["PeMCP.py", "--mcp-server"],
+      "args": ["arkana.py", "--mcp-server"],
       "env": {
         "VT_API_KEY": ""
       }
@@ -87,15 +87,15 @@ Add a `.mcp.json` file to your project root (an example is included in this repo
 }
 ```
 
-Adjust the `command` path if PeMCP is installed elsewhere. Use `--samples-path` to point at your samples directory so the `list_samples` tool can discover files, or set the `PEMCP_SAMPLES` environment variable:
+Adjust the `command` path if Arkana is installed elsewhere. Use `--samples-path` to point at your samples directory so the `list_samples` tool can discover files, or set the `ARKANA_SAMPLES` environment variable:
 
 ```json
 {
   "mcpServers": {
-    "pemcp": {
+    "arkana": {
       "type": "stdio",
       "command": "python",
-      "args": ["/path/to/PeMCP/PeMCP.py", "--mcp-server", "--samples-path", "/path/to/samples"],
+      "args": ["/path/to/Arkana/arkana.py", "--mcp-server", "--samples-path", "/path/to/samples"],
       "env": {
         "VT_API_KEY": "your-api-key-here"
       }
@@ -106,15 +106,15 @@ Adjust the `command` path if PeMCP is installed elsewhere. Use `--samples-path` 
 
 ### User-Level Configuration
 
-For system-wide availability across all projects, add PeMCP to `~/.claude.json`:
+For system-wide availability across all projects, add Arkana to `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
-    "pemcp": {
+    "arkana": {
       "type": "stdio",
       "command": "python",
-      "args": ["/absolute/path/to/PeMCP/PeMCP.py", "--mcp-server"]
+      "args": ["/absolute/path/to/Arkana/arkana.py", "--mcp-server"]
     }
   }
 }
@@ -127,9 +127,9 @@ To use the Docker image with Claude Code, point the configuration at the `run.sh
 ```json
 {
   "mcpServers": {
-    "pemcp": {
+    "arkana": {
       "type": "stdio",
-      "command": "/path/to/PeMCP/run.sh",
+      "command": "/path/to/Arkana/run.sh",
       "args": ["--samples", "/path/to/your/samples", "--stdio"],
       "env": {
         "VT_API_KEY": "your-api-key-here"
@@ -145,15 +145,15 @@ Then in Claude Code, load files using the container path (which mirrors the host
 open_file("/samples/malware.exe")
 ```
 
-If `--samples` is omitted, the `./samples/` directory next to `run.sh` is mounted by default (at `/samples`). You can also set the `PEMCP_SAMPLES` environment variable instead of using the flag.
+If `--samples` is omitted, the `./samples/` directory next to `run.sh` is mounted by default (at `/samples`). You can also set the `ARKANA_SAMPLES` environment variable instead of using the flag.
 
-The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, runs as your host UID (not root), and persists the analysis cache and configuration in `~/.pemcp` on the host (bind-mounted into the container). Use `--cache <dir>` or `PEMCP_CACHE` to override the location.
+The `run.sh` helper automatically detects Docker or Podman, builds the image on first run, runs as your host UID (not root), and persists the analysis cache and configuration in `~/.arkana` on the host (bind-mounted into the container). Use `--cache <dir>` or `ARKANA_CACHE` to override the location.
 
 ---
 
 ## Typical Workflow
 
-Once configured, you can interact with PeMCP through Claude Code naturally:
+Once configured, you can interact with Arkana through Claude Code naturally:
 
 1. **"What samples are available?"** — Claude calls `list_samples` to discover files in the configured samples directory
 2. **"Open this sample for analysis"** — Claude calls `open_file` with the path (auto-detects PE/ELF/Mach-O). If `session_context` is returned, Claude knows to call `get_analysis_digest()` to review previous findings
@@ -173,7 +173,7 @@ API keys can be set interactively: *"Set my VirusTotal API key to abc123"* — C
 
 ## Example Natural Language Queries
 
-PeMCP understands analytical intent, not just tool commands. Here are examples of what you can ask:
+Arkana understands analytical intent, not just tool commands. Here are examples of what you can ask:
 
 **Triage & Classification:**
 - *"Is this file malicious? Give me a quick assessment."*
@@ -209,9 +209,9 @@ PeMCP understands analytical intent, not just tool commands. Here are examples o
 
 ## Analysis Skill for Claude Code
 
-PeMCP ships with an **analysis skill** — a structured workflow that teaches Claude Code how to use PeMCP's 190 tools methodically, rather than relying on the model to figure it out from tool descriptions alone.
+Arkana ships with an **analysis skill** — a structured workflow that teaches Claude Code how to use Arkana's 190 tools methodically, rather than relying on the model to figure it out from tool descriptions alone.
 
-Without the skill, Claude Code can still call PeMCP tools individually, but it won't follow a structured analysis methodology, may miss important steps, and won't know PeMCP-specific patterns like session persistence, note-taking discipline, or unpacking cascades.
+Without the skill, Claude Code can still call Arkana tools individually, but it won't follow a structured analysis methodology, may miss important steps, and won't know Arkana-specific patterns like session persistence, note-taking discipline, or unpacking cascades.
 
 ### What the Skill Does
 
@@ -226,12 +226,12 @@ The skill provides Claude Code with:
 
 ### Installing the Skill
 
-The skill files live in `.claude/skills/pemcp-analyze/` within the PeMCP repository. If you cloned the repo, they're already in place — no additional installation is needed.
+The skill files live in `.claude/skills/arkana-analyze/` within the Arkana repository. If you cloned the repo, they're already in place — no additional installation is needed.
 
 **Verify the skill is present:**
 
 ```bash
-ls .claude/skills/pemcp-analyze/
+ls .claude/skills/arkana-analyze/
 ```
 
 You should see:
@@ -244,27 +244,27 @@ unpacking-guide.md    # Packer identification and unpacking pipelines
 online-research.md    # Safe online research and decoder translation
 ```
 
-**If you're using PeMCP from a different working directory**, the skill won't auto-load since Claude Code skills are project-relative. You have two options:
+**If you're using Arkana from a different working directory**, the skill won't auto-load since Claude Code skills are project-relative. You have two options:
 
-1. **Run Claude Code from the PeMCP directory** (simplest):
+1. **Run Claude Code from the Arkana directory** (simplest):
    ```bash
-   cd /path/to/PeMCP
+   cd /path/to/Arkana
    claude
    ```
 
 2. **Copy the skill into your own project**:
    ```bash
-   cp -r /path/to/PeMCP/.claude/skills /path/to/your/project/.claude/skills
+   cp -r /path/to/Arkana/.claude/skills /path/to/your/project/.claude/skills
    ```
 
 ### Using the Skill
 
-**Automatic invocation** — The skill triggers automatically when Claude Code detects binary analysis context (PeMCP tools in the conversation, or keywords like "malware", "binary", "analyse", "PE", "ELF", "decompile", etc.). Just start talking about analysis and the skill activates.
+**Automatic invocation** — The skill triggers automatically when Claude Code detects binary analysis context (Arkana tools in the conversation, or keywords like "malware", "binary", "analyse", "PE", "ELF", "decompile", etc.). Just start talking about analysis and the skill activates.
 
-**Manual invocation** — Type `/pemcp-analyze` in Claude Code to explicitly activate the skill:
+**Manual invocation** — Type `/arkana-analyze` in Claude Code to explicitly activate the skill:
 
 ```
-/pemcp-analyze
+/arkana-analyze
 ```
 
 **Example sessions:**
@@ -297,17 +297,17 @@ The skill runs autonomously through Phases 0-3 (environment discovery, identific
 
 | File | Purpose |
 |------|---------|
-| [`SKILL.md`](../.claude/skills/pemcp-analyze/SKILL.md) | Core workflow orchestration — operating principles, 8 analysis phases, goal detection, reporting format, multi-file workflows, context management |
-| [`tooling-reference.md`](../.claude/skills/pemcp-analyze/tooling-reference.md) | Complete catalog of all 190 MCP tools organised by use case with brief descriptions and key parameters |
-| [`config-extraction.md`](../.claude/skills/pemcp-analyze/config-extraction.md) | Malware config storage patterns, family-specific extraction strategies (Agent Tesla, AsyncRAT, Cobalt Strike, Emotet, Remcos, AdaptixC2, etc.), generic unknown-family approach, validation checklist |
-| [`unpacking-guide.md`](../.claude/skills/pemcp-analyze/unpacking-guide.md) | Packer identification indicators, 5-method unpacking cascade (auto → orchestrated → emulation-based → emulation analysis → manual OEP), special cases for multi-layer packing, .NET obfuscators, shellcode loaders |
-| [`online-research.md`](../.claude/skills/pemcp-analyze/online-research.md) | When and how to research online, search query patterns, read-and-understand methodology, decoder operation → PeMCP tool translation table, safety rules |
+| [`SKILL.md`](../.claude/skills/arkana-analyze/SKILL.md) | Core workflow orchestration — operating principles, 8 analysis phases, goal detection, reporting format, multi-file workflows, context management |
+| [`tooling-reference.md`](../.claude/skills/arkana-analyze/tooling-reference.md) | Complete catalog of all 190 MCP tools organised by use case with brief descriptions and key parameters |
+| [`config-extraction.md`](../.claude/skills/arkana-analyze/config-extraction.md) | Malware config storage patterns, family-specific extraction strategies (Agent Tesla, AsyncRAT, Cobalt Strike, Emotet, Remcos, AdaptixC2, etc.), generic unknown-family approach, validation checklist |
+| [`unpacking-guide.md`](../.claude/skills/arkana-analyze/unpacking-guide.md) | Packer identification indicators, 5-method unpacking cascade (auto → orchestrated → emulation-based → emulation analysis → manual OEP), special cases for multi-layer packing, .NET obfuscators, shellcode loaders |
+| [`online-research.md`](../.claude/skills/arkana-analyze/online-research.md) | When and how to research online, search query patterns, read-and-understand methodology, decoder operation → Arkana tool translation table, safety rules |
 
 ---
 
 ## Learning Skill for Claude Code
 
-PeMCP ships with a **learning skill** — an interactive reverse engineering tutor that adapts to all levels, from complete beginners to experienced analysts looking to sharpen specific skills.
+Arkana ships with a **learning skill** — an interactive reverse engineering tutor that adapts to all levels, from complete beginners to experienced analysts looking to sharpen specific skills.
 
 Without the skill, you can still ask Claude Code to explain things, but it won't follow a structured pedagogical approach, track your progress across sessions, or draw from a curated curriculum of RE concepts.
 
@@ -323,12 +323,12 @@ The skill provides Claude Code with:
 
 ### Installing the Skill
 
-The skill files live in `.claude/skills/pemcp-learn/` within the PeMCP repository. If you cloned the repo, they're already in place — no additional installation is needed.
+The skill files live in `.claude/skills/arkana-learn/` within the Arkana repository. If you cloned the repo, they're already in place — no additional installation is needed.
 
 **Verify the skill is present:**
 
 ```bash
-ls .claude/skills/pemcp-learn/
+ls .claude/skills/arkana-learn/
 ```
 
 You should see:
@@ -339,27 +339,27 @@ curriculum.md         # 4-tier structured curriculum with modules, prerequisites
 concepts/             # 17 concept reference files covering RE topics from basics to specialist
 ```
 
-**If you're using PeMCP from a different working directory**, the skill won't auto-load since Claude Code skills are project-relative. You have two options:
+**If you're using Arkana from a different working directory**, the skill won't auto-load since Claude Code skills are project-relative. You have two options:
 
-1. **Run Claude Code from the PeMCP directory** (simplest):
+1. **Run Claude Code from the Arkana directory** (simplest):
    ```bash
-   cd /path/to/PeMCP
+   cd /path/to/Arkana
    claude
    ```
 
 2. **Copy the skill into your own project**:
    ```bash
-   cp -r /path/to/PeMCP/.claude/skills /path/to/your/project/.claude/skills
+   cp -r /path/to/Arkana/.claude/skills /path/to/your/project/.claude/skills
    ```
 
 ### Using the Skill
 
 **Automatic invocation** — The skill triggers automatically when Claude Code detects learning context (keywords like "teach", "learn", "tutorial", "explain", "what is", "how does", "walk me through", "help me understand", etc.). Just start asking questions and the skill activates.
 
-**Manual invocation** — Type `/pemcp-learn` (or `/pemcp-tutor`) in Claude Code to explicitly activate the skill:
+**Manual invocation** — Type `/arkana-learn` (or `/arkana-tutor`) in Claude Code to explicitly activate the skill:
 
 ```
-/pemcp-learn
+/arkana-learn
 ```
 
 **Example sessions:**
@@ -392,9 +392,9 @@ The skill uses the Socratic method throughout — expect questions, not just dem
 
 | File | Purpose |
 |------|---------|
-| [`SKILL.md`](../.claude/skills/pemcp-learn/SKILL.md) | Core tutor behaviour — teaching principles (explain-then-do, Socratic method, evidence-based), level adaptation rules, dual-mode operation (guided analysis + structured lessons), progress tracking integration |
-| [`curriculum.md`](../.claude/skills/pemcp-learn/curriculum.md) | 4-tier structured curriculum: Foundation (binary basics, PE structure, strings, imports), Core Skills (control flow, decompilation, packing), Applied Analysis (crypto, anti-analysis, C2 extraction, emulation), Specialist (data flow, YARA authoring, advanced unpacking, campaign analysis) |
-| [`concepts/`](../.claude/skills/pemcp-learn/concepts/) | 17 concept reference files — detailed teaching material for each RE topic, including analogies, key points, common misconceptions, and PeMCP tool mappings |
+| [`SKILL.md`](../.claude/skills/arkana-learn/SKILL.md) | Core tutor behaviour — teaching principles (explain-then-do, Socratic method, evidence-based), level adaptation rules, dual-mode operation (guided analysis + structured lessons), progress tracking integration |
+| [`curriculum.md`](../.claude/skills/arkana-learn/curriculum.md) | 4-tier structured curriculum: Foundation (binary basics, PE structure, strings, imports), Core Skills (control flow, decompilation, packing), Applied Analysis (crypto, anti-analysis, C2 extraction, emulation), Specialist (data flow, YARA authoring, advanced unpacking, campaign analysis) |
+| [`concepts/`](../.claude/skills/arkana-learn/concepts/) | 17 concept reference files — detailed teaching material for each RE topic, including analogies, key points, common misconceptions, and Arkana tool mappings |
 
 ### Progress Tracking Tools
 

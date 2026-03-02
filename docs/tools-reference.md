@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-PeMCP exposes **190 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters — see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **190 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters — see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 ---
 
@@ -8,7 +8,7 @@ PeMCP exposes **190 tools** organised into the following categories. All list-re
 
 ### Multi-Format Binary Support
 
-PeMCP automatically detects and analyses binaries across all major platforms:
+Arkana automatically detects and analyses binaries across all major platforms:
 
 - **PE (Windows)** — Full parsing of DOS/NT Headers, Imports/Exports, Resources, TLS, Debug, Load Config, Rich Header, Overlay, and more.
 - **ELF (Linux)** — Headers, sections, segments, symbols, dynamic dependencies, DWARF debug info.
@@ -65,7 +65,7 @@ PeMCP automatically detects and analyses binaries across all major platforms:
 
 ### Session Continuity & AI Progress Tracking
 
-PeMCP is designed for **large binary corpus analysis** where AI clients need to maintain analytical context across long investigations and limited context windows:
+Arkana is designed for **large binary corpus analysis** where AI clients need to maintain analytical context across long investigations and limited context windows:
 
 - **Persistent Notes** — Record findings with `add_note()`, auto-summarise functions with `auto_note_function()`, and aggregate everything with `get_analysis_digest()`. Notes survive server restarts and are restored automatically when the same file is reopened.
 - **Tool History** — Every tool invocation is recorded with parameters, result summaries, and timing. Use `get_tool_history()` to review what was done, or `get_session_summary()` for full session state.
@@ -73,14 +73,14 @@ PeMCP is designed for **large binary corpus analysis** where AI clients need to 
 - **Analysis Digest** — `get_analysis_digest()` compiles all accumulated notes, triage findings, IOCs, coverage stats, and unexplored targets into a single context-efficient summary — what was *learned*, not just what tools ran.
 - **Discoverability** — `list_tools_by_phase()` organises tools by workflow stage, `suggest_next_action()` recommends specific next steps based on session state, and `get_analysis_timeline()` merges tool history with notes into a chronological narrative.
 - **Workflow Automation** — `generate_analysis_report()` produces a comprehensive Markdown report from accumulated findings, and `auto_name_sample()` suggests descriptive filenames based on detected capabilities and C2 indicators.
-- **Project Export/Import** — Bundle analysis + notes + history + binary into a `.pemcp_project.tar.gz` for sharing or archiving with `export_project`.
+- **Project Export/Import** — Bundle analysis + notes + history + binary into a `.arkana_project.tar.gz` for sharing or archiving with `export_project`.
 
 ### Dynamic File Loading & Caching
 
 - **Auto-Detection** — `open_file` automatically detects PE/ELF/Mach-O from magic bytes. No need to specify the format.
 - **No Pre-loading Required** — The MCP server starts without needing a file path. Use the `open_file` tool to load files dynamically.
-- **Analysis Caching** — Results are cached to disk in `~/.pemcp/cache/`, keyed by SHA256 hash and compressed with gzip (~12x compression). Re-opening a previously analysed file loads instantly from cache.
-- **Persistent Configuration** — API keys are stored securely in `~/.pemcp/config.json` and recalled automatically across sessions.
+- **Analysis Caching** — Results are cached to disk in `~/.arkana/cache/`, keyed by SHA256 hash and compressed with gzip (~12x compression). Re-opening a previously analysed file loads instantly from cache.
+- **Persistent Configuration** — API keys are stored securely in `~/.arkana/config.json` and recalled automatically across sessions.
 - **Progress Reporting** — Over 50 long-running tools report fine-grained progress to the MCP client in real time (percentage, stage descriptions). Tools running in background threads use a thread-safe `ProgressBridge` to push updates back to the async MCP context.
 
 ---
@@ -93,13 +93,13 @@ PeMCP is designed for **large binary corpus analysis** where AI clients need to 
 | `close_file` | Close the loaded file and clear analysis data from memory. |
 | `reanalyze_loaded_pe_file` | Re-run PE analysis with different options (skip/enable specific analyses). |
 | `detect_binary_format` | Auto-detect binary format and suggest appropriate analysis tools. |
-| `list_samples` | List files in the configured samples directory. Supports flat (top-level only) and recursive listing, glob pattern filtering (e.g. `*.exe`), and returns file metadata including size and magic-byte format hints (PE/ELF/Mach-O/ZIP/etc.). Paginated with `limit` and `offset`. Configured via `--samples-path` or `PEMCP_SAMPLES`. |
+| `list_samples` | List files in the configured samples directory. Supports flat (top-level only) and recursive listing, glob pattern filtering (e.g. `*.exe`), and returns file metadata including size and magic-byte format hints (PE/ELF/Mach-O/ZIP/etc.). Paginated with `limit` and `offset`. Configured via `--samples-path` or `ARKANA_SAMPLES`. |
 
 ## Configuration & Utilities
 
 | Tool | Description |
 |---|---|
-| `set_api_key` | Store an API key persistently in `~/.pemcp/config.json`. |
+| `set_api_key` | Store an API key persistently in `~/.arkana/config.json`. |
 | `get_config` | View current configuration, available libraries, and loaded file status. |
 | `get_current_datetime` | Retrieve current UTC and local date/time. |
 | `check_task_status` | Monitor progress of background tasks (e.g., Angr CFG generation). |
@@ -307,7 +307,7 @@ All multi-format analysis tools support pagination via `limit` (default 20) and 
 
 ## Binary Refinery — Data Transforms (23 tools)
 
-PeMCP integrates the full power of [Binary Refinery](https://github.com/binref/refinery) — a library of **200+ composable binary transformation units** — through 23 context-efficient MCP tools. Binary Refinery is used extensively by professional malware analysts for tasks like decrypting multi-layer obfuscation, extracting payloads from documents, unpacking installers, and parsing forensic artefacts. PeMCP makes these capabilities accessible through natural language, with the AI selecting the right units automatically.
+Arkana integrates the full power of [Binary Refinery](https://github.com/binref/refinery) — a library of **200+ composable binary transformation units** — through 23 context-efficient MCP tools. Binary Refinery is used extensively by professional malware analysts for tasks like decrypting multi-layer obfuscation, extracting payloads from documents, unpacking installers, and parsing forensic artefacts. Arkana makes these capabilities accessible through natural language, with the AI selecting the right units automatically.
 
 All tools accept data as hex input or operate on the currently loaded file. All Refinery tools support pagination via `limit` (default 20) and `offset` (default 0) parameters. **Only registered when binary-refinery is installed** (lazy registration saves context tokens when absent).
 
@@ -372,7 +372,7 @@ The `refinery_extract` tool handles every container format commonly encountered 
 
 ### Binary Refinery Power Combinations
 
-The real power of PeMCP's Binary Refinery integration emerges when tools are chained together. Here are patterns the AI uses automatically:
+The real power of Arkana's Binary Refinery integration emerges when tools are chained together. Here are patterns the AI uses automatically:
 
 **Decode multi-layer obfuscation:**
 `refinery_carve(pattern='b64')` → `refinery_xor(operation='guess_key')` → `refinery_decompress(algorithm='auto')` → `refinery_extract_iocs()`
@@ -480,7 +480,7 @@ Notes and tool history are the primary mechanism for preserving analysis context
 - **Manual findings**: `add_note(content, category='tool_result')` records specific observations (decoded C2 URLs, crypto keys, evasion techniques)
 - **Aggregation**: `get_analysis_digest()` compiles all notes into an actionable summary with coverage stats and unexplored targets
 - **Persistence**: Notes survive server restarts. When the same file is reopened, all previous notes and history are restored automatically
-- **Export**: `export_project` bundles analysis + notes + history + optionally the binary into a `.pemcp_project.tar.gz` for sharing
+- **Export**: `export_project` bundles analysis + notes + history + optionally the binary into a `.arkana_project.tar.gz` for sharing
 
 | Tool | Description |
 |---|---|
@@ -496,7 +496,7 @@ Notes and tool history are the primary mechanism for preserving analysis context
 | `list_tools_by_phase` | Browse available tools organised by analysis phase (triage, explore, deep-dive, context, utility). Helps discover the right tool for your current workflow stage. |
 | `suggest_next_action` | Analyse current session state and recommend 3-5 specific next steps based on what has already been done and what remains unexplored. |
 | `get_analysis_timeline` | Merge tool history with notes into a single chronological timeline. Paginated (default limit 20). |
-| `export_project` | Export session (analysis + notes + history + optionally the binary) as `.pemcp_project.tar.gz`. |
+| `export_project` | Export session (analysis + notes + history + optionally the binary) as `.arkana_project.tar.gz`. |
 | `import_project` | Import a previously exported project archive. |
 
 ## Learner Progress Tracking (4 tools)

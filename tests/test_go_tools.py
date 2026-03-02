@@ -3,7 +3,7 @@ import pytest
 
 pytest.importorskip("pefile", reason="pefile not installed")
 
-from pemcp.mcp.tools_go import _safe_str, _safe_int
+from arkana.mcp.tools_go import _safe_str, _safe_int
 
 
 class TestSafeStr:

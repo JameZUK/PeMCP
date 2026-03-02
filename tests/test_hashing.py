@@ -1,7 +1,7 @@
-"""Unit tests for pemcp/hashing.py — SSDeep fuzzy hashing."""
+"""Unit tests for arkana/hashing.py — SSDeep fuzzy hashing."""
 import pytest
 
-from pemcp.hashing import SSDeep, ssdeep_hasher
+from arkana.hashing import SSDeep, ssdeep_hasher
 
 
 class TestSSDeepHash:

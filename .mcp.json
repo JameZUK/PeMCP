@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "pemcp": {
+    "arkana": {
       "type": "stdio",
       "command": "./run.sh",
       "args": ["--stdio"],

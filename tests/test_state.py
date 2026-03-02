@@ -1,10 +1,10 @@
-"""Unit tests for pemcp/state.py — AnalyzerState and session management."""
+"""Unit tests for arkana/state.py — AnalyzerState and session management."""
 import os
 import time
 import threading
 import pytest
 
-from pemcp.state import (
+from arkana.state import (
     AnalyzerState,
     StateProxy,
     get_current_state,

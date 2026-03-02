@@ -1,19 +1,19 @@
-# PeMCP Development Guide
+# Arkana Development Guide
 
-## What is PeMCP?
+## What is Arkana?
 
-PeMCP is a Model Context Protocol (MCP) server exposing 190 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
+Arkana is a Model Context Protocol (MCP) server exposing 190 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
 
 ## Project Structure
 
 ```
-pemcp/                  # Main package
+arkana/                  # Main package
 ├── main.py             # Entry point, arg parsing, server startup
 ├── state.py            # Thread-safe AnalyzerState + StateProxy (per-session isolation)
 ├── config.py           # Central re-export hub (constants, imports, state, cache)
 ├── constants.py        # Pure constants (response limits, timeouts, URLs)
 ├── imports.py          # Optional library imports with *_AVAILABLE flags
-├── cache.py            # Gzip-compressed LRU disk cache (~/.pemcp/cache/)
+├── cache.py            # Gzip-compressed LRU disk cache (~/.arkana/cache/)
 ├── auth.py             # Bearer token ASGI middleware
 ├── utils.py            # ReDoS-safe regex, safe_slice, safe_env_int
 ├── parsers/            # PE/FLOSS/capa/YARA/strings parsers
@@ -33,7 +33,7 @@ tests/integration/      # Integration tests (requires running server)
 python -m pytest tests/ -v
 
 # Unit tests with coverage
-python -m pytest tests/ -v --cov=pemcp --cov-config=.coveragerc
+python -m pytest tests/ -v --cov=arkana --cov-config=.coveragerc
 
 # Integration tests (requires running server)
 ./run.sh  # Start server in one terminal
@@ -45,7 +45,7 @@ Coverage configuration lives in `.coveragerc` (single source of truth). MCP tool
 ## Lint
 
 ```bash
-ruff check pemcp/ tests/ \
+ruff check arkana/ tests/ \
   --select=E9,F63,F7,F82,F841,W291,W292,W293,B006,B007,B018,UP031,UP032,RUF005,RUF010,RUF019,G010
 ```
 

@@ -1,4 +1,4 @@
-"""Unit tests for pemcp/utils.py — utility functions."""
+"""Unit tests for arkana/utils.py — utility functions."""
 import datetime
 import math
 import re
@@ -6,7 +6,7 @@ import pytest
 
 pefile = pytest.importorskip("pefile", reason="pefile not installed")
 
-from pemcp.utils import (
+from arkana.utils import (
     shannon_entropy,
     format_timestamp,
     get_file_characteristics,

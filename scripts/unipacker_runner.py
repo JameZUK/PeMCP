@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Standalone unipacker runner -- invoked via subprocess from PeMCP.
+"""Standalone unipacker runner -- invoked via subprocess from Arkana.
 
 Reads a JSON command from stdin, runs the requested unpacking operation,
 and writes a JSON result to stdout.

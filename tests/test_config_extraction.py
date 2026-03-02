@@ -16,7 +16,7 @@ import pytest
 class TestRC4Decrypt:
     def test_roundtrip(self):
         """RC4 encryption and decryption are the same operation."""
-        from pemcp.mcp.tools_payload import _rc4_decrypt
+        from arkana.mcp.tools_payload import _rc4_decrypt
         key = b"secretkey1234567"
         plaintext = b"Hello, this is a test of RC4 encryption."
         ciphertext = _rc4_decrypt(plaintext, key)
@@ -26,7 +26,7 @@ class TestRC4Decrypt:
 
     def test_known_vector(self):
         """Verify against a known RC4 test vector (key='Key', plaintext='Plaintext')."""
-        from pemcp.mcp.tools_payload import _rc4_decrypt
+        from arkana.mcp.tools_payload import _rc4_decrypt
         # RFC 6229 / well-known test vector
         key = b"Key"
         plaintext = b"Plaintext"
@@ -35,11 +35,11 @@ class TestRC4Decrypt:
         assert ciphertext == expected
 
     def test_empty_data(self):
-        from pemcp.mcp.tools_payload import _rc4_decrypt
+        from arkana.mcp.tools_payload import _rc4_decrypt
         assert _rc4_decrypt(b"", b"key") == b""
 
     def test_single_byte(self):
-        from pemcp.mcp.tools_payload import _rc4_decrypt
+        from arkana.mcp.tools_payload import _rc4_decrypt
         key = b"K"
         ct = _rc4_decrypt(b"\x00", key)
         pt = _rc4_decrypt(ct, key)
@@ -52,34 +52,34 @@ class TestRC4Decrypt:
 
 class TestParseCstrings:
     def test_basic(self):
-        from pemcp.mcp.tools_payload import _parse_cstrings
+        from arkana.mcp.tools_payload import _parse_cstrings
         data = b"hello\x00world\x00"
         assert _parse_cstrings(data) == ["hello", "world"]
 
     def test_no_null_terminator(self):
-        from pemcp.mcp.tools_payload import _parse_cstrings
+        from arkana.mcp.tools_payload import _parse_cstrings
         data = b"unterminated"
         assert _parse_cstrings(data) == ["unterminated"]
 
     def test_empty_strings(self):
-        from pemcp.mcp.tools_payload import _parse_cstrings
+        from arkana.mcp.tools_payload import _parse_cstrings
         data = b"\x00\x00\x00"
         result = _parse_cstrings(data)
         assert result == ["", "", ""]
 
     def test_max_count(self):
-        from pemcp.mcp.tools_payload import _parse_cstrings
+        from arkana.mcp.tools_payload import _parse_cstrings
         data = b"a\x00" * 100
         result = _parse_cstrings(data, max_count=5)
         assert len(result) == 5
 
     def test_empty_data(self):
-        from pemcp.mcp.tools_payload import _parse_cstrings
+        from arkana.mcp.tools_payload import _parse_cstrings
         assert _parse_cstrings(b"") == []
 
     def test_binary_safe(self):
         """Non-ASCII bytes should be replaced, not crash."""
-        from pemcp.mcp.tools_payload import _parse_cstrings
+        from arkana.mcp.tools_payload import _parse_cstrings
         data = b"\xff\xfe\x80\x00"
         result = _parse_cstrings(data)
         assert len(result) == 1
@@ -107,7 +107,7 @@ def _build_adaptixc2_blob(
 
     Uses the real format: length-prefixed strings, per-server addr+port.
     """
-    from pemcp.mcp.tools_payload import _rc4_decrypt
+    from arkana.mcp.tools_payload import _rc4_decrypt
 
     if servers is None:
         servers = [("10.0.0.1", 443)]
@@ -135,7 +135,7 @@ def _build_adaptixc2_blob(
 
 class TestExtractAdaptixC2Beacon:
     def test_basic_extraction(self):
-        from pemcp.mcp.tools_payload import _extract_adaptixc2_beacon
+        from arkana.mcp.tools_payload import _extract_adaptixc2_beacon
         blob, key, _ = _build_adaptixc2_blob()
         section_data = blob + b"\x00" * 64
         family_meta = {"config": {"key_length": 16}}
@@ -155,7 +155,7 @@ class TestExtractAdaptixC2Beacon:
         assert result["fields"]["jitter"] == 20
 
     def test_iocs_extracted(self):
-        from pemcp.mcp.tools_payload import _extract_adaptixc2_beacon
+        from arkana.mcp.tools_payload import _extract_adaptixc2_beacon
         blob, _, _ = _build_adaptixc2_blob(
             servers=[("192.168.1.1", 8443), ("10.0.0.5", 443)],
             uri_path="/beacon",
@@ -176,7 +176,7 @@ class TestExtractAdaptixC2Beacon:
 
     def test_offset_in_section(self):
         """Blob is not at the start of the section."""
-        from pemcp.mcp.tools_payload import _extract_adaptixc2_beacon
+        from arkana.mcp.tools_payload import _extract_adaptixc2_beacon
         blob, _, _ = _build_adaptixc2_blob()
         # Put 64 bytes of junk before the blob (within the 256-byte scan window)
         section_data = b"\xFF" * 64 + blob + b"\x00" * 64
@@ -188,8 +188,8 @@ class TestExtractAdaptixC2Beacon:
 
     def test_bad_key_entropy_skipped(self):
         """Keys with low entropy (all same byte) should be rejected."""
-        from pemcp.mcp.tools_payload import _rc4_decrypt
-        from pemcp.mcp.tools_payload import _extract_adaptixc2_beacon
+        from arkana.mcp.tools_payload import _rc4_decrypt
+        from arkana.mcp.tools_payload import _extract_adaptixc2_beacon
 
         # Build something that looks like a blob but with a low-entropy key
         plaintext = b"\x49\x01\x4c\xbe" + b"\x00" + struct.pack("<I", 1) + b"x\x00" * 20
@@ -203,14 +203,14 @@ class TestExtractAdaptixC2Beacon:
         assert result is None
 
     def test_no_valid_blob_returns_none(self):
-        from pemcp.mcp.tools_payload import _extract_adaptixc2_beacon
+        from arkana.mcp.tools_payload import _extract_adaptixc2_beacon
         section_data = b"\x00" * 512
         family_meta = {"config": {"key_length": 16}}
         result = _extract_adaptixc2_beacon(b"", section_data, 0, family_meta)
         assert result is None
 
     def test_section_too_small(self):
-        from pemcp.mcp.tools_payload import _extract_adaptixc2_beacon
+        from arkana.mcp.tools_payload import _extract_adaptixc2_beacon
         section_data = b"\x00" * 20  # Too small to contain a valid blob
         family_meta = {"config": {"key_length": 16}}
         result = _extract_adaptixc2_beacon(b"", section_data, 0, family_meta)
@@ -223,7 +223,7 @@ class TestExtractAdaptixC2Beacon:
 
 class TestExtractGenericRC4:
     def test_basic_extraction(self):
-        from pemcp.mcp.tools_payload import _rc4_decrypt, _extract_generic_rc4_size_prefixed
+        from arkana.mcp.tools_payload import _rc4_decrypt, _extract_generic_rc4_size_prefixed
         key = bytes(range(0x30, 0x40))  # 16 bytes, good entropy
         plaintext = b"http://evil.com\x00user-agent\x00config-data\x00"
         ciphertext = _rc4_decrypt(plaintext, key)
@@ -240,7 +240,7 @@ class TestExtractGenericRC4:
 
     def test_low_printable_ratio_skipped(self):
         """Blobs where decrypted data is mostly non-printable should be rejected."""
-        from pemcp.mcp.tools_payload import _rc4_decrypt, _extract_generic_rc4_size_prefixed
+        from arkana.mcp.tools_payload import _rc4_decrypt, _extract_generic_rc4_size_prefixed
         key = bytes(range(0x30, 0x40))
         # Use a different key for "encryption" so decryption produces garbage
         wrong_key = bytes(range(0x50, 0x60))
@@ -264,7 +264,7 @@ class TestExtractXorSingleByte:
         """XOR extractor finds configs by locating runs of the XOR key byte
         (which correspond to null-padded regions in plaintext). The config
         must have 16+ consecutive null bytes for the needle to match."""
-        from pemcp.mcp.tools_payload import _extract_xor_single_byte
+        from arkana.mcp.tools_payload import _extract_xor_single_byte
         xor_key = 0x5A
         config_size = 80
         # Build plaintext: null padding first (creates the XOR key needle),
@@ -296,7 +296,7 @@ class TestExtractXorSingleByte:
         assert "http://c2.evil.com" in result["extracted_strings"]
 
     def test_no_xor_keys_returns_none(self):
-        from pemcp.mcp.tools_payload import _extract_xor_single_byte
+        from arkana.mcp.tools_payload import _extract_xor_single_byte
         family_meta = {
             "family": "NoKeys",
             "constants": {"config_size": 64},
@@ -305,7 +305,7 @@ class TestExtractXorSingleByte:
         assert result is None
 
     def test_no_config_size_returns_none(self):
-        from pemcp.mcp.tools_payload import _extract_xor_single_byte
+        from arkana.mcp.tools_payload import _extract_xor_single_byte
         family_meta = {
             "family": "NoSize",
             "constants": {"xor_key_1": 0x5A},
@@ -314,14 +314,14 @@ class TestExtractXorSingleByte:
         assert result is None
 
     def test_no_constants_returns_none(self):
-        from pemcp.mcp.tools_payload import _extract_xor_single_byte
+        from arkana.mcp.tools_payload import _extract_xor_single_byte
         family_meta = {"family": "NoConst"}
         result = _extract_xor_single_byte(b"", b"\x00" * 512, 0, family_meta)
         assert result is None
 
     def test_invalid_xor_key_skipped(self):
         """XOR key of 0 should be skipped (0 < v < 256)."""
-        from pemcp.mcp.tools_payload import _extract_xor_single_byte
+        from arkana.mcp.tools_payload import _extract_xor_single_byte
         family_meta = {
             "family": "ZeroKey",
             "constants": {"xor_key_1": 0, "config_size": 64},

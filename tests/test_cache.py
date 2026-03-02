@@ -1,11 +1,11 @@
-"""Unit tests for pemcp/cache.py — AnalysisCache disk-based caching."""
+"""Unit tests for arkana/cache.py — AnalysisCache disk-based caching."""
 import json
 import gzip
 import time
 import pytest
 from unittest import mock
 
-from pemcp.cache import AnalysisCache, CACHE_FORMAT_VERSION
+from arkana.cache import AnalysisCache, CACHE_FORMAT_VERSION
 
 
 @pytest.fixture
@@ -14,8 +14,8 @@ def cache_dir(tmp_path, monkeypatch):
     cache_path = tmp_path / "cache"
     cache_path.mkdir()
     meta_file = cache_path / "meta.json"
-    monkeypatch.setattr("pemcp.cache.CACHE_DIR", cache_path)
-    monkeypatch.setattr("pemcp.cache.META_FILE", meta_file)
+    monkeypatch.setattr("arkana.cache.CACHE_DIR", cache_path)
+    monkeypatch.setattr("arkana.cache.META_FILE", meta_file)
     return cache_path
 
 
@@ -102,12 +102,12 @@ class TestCacheVersionInvalidation:
 
         assert cache.get(sha, "/test.exe") is None
 
-    def test_pemcp_version_mismatch(self, cache, cache_dir, sample_pe_data, monkeypatch):
+    def test_arkana_version_mismatch(self, cache, cache_dir, sample_pe_data, monkeypatch):
         sha = "e" * 64
         cache.put(sha, sample_pe_data, "/test.exe")
 
-        # Change the version that _get_pemcp_version returns
-        monkeypatch.setattr("pemcp.cache._get_pemcp_version", lambda: "99.99.99")
+        # Change the version that _get_arkana_version returns
+        monkeypatch.setattr("arkana.cache._get_arkana_version", lambda: "99.99.99")
 
         result = cache.get(sha, "/test.exe")
         assert result is None
@@ -225,12 +225,12 @@ class TestCacheMetaHandling:
 
     def test_meta_save_error(self, cache, cache_dir, monkeypatch):
         """Cache survives when meta file cannot be written."""
-        import pemcp.cache as cache_mod
+        import arkana.cache as cache_mod
         orig_meta = cache_mod.META_FILE
-        monkeypatch.setattr("pemcp.cache.META_FILE",
+        monkeypatch.setattr("arkana.cache.META_FILE",
                             cache_dir / "nonexistent_subdir" / "meta.json")
         # put should still succeed (data written, meta save fails gracefully)
         data = {"mode": "pe", "test": True}
         # This exercises the OSError path in _save_meta
         cache.put("ee" * 32, data, "/test.exe")
-        monkeypatch.setattr("pemcp.cache.META_FILE", orig_meta)
+        monkeypatch.setattr("arkana.cache.META_FILE", orig_meta)

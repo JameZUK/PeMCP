@@ -3,10 +3,10 @@ import pytest
 
 pytest.importorskip("pefile", reason="pefile not installed")
 
-from pemcp.mcp._angr_helpers import _parse_addr, _raise_on_error_dict
-from pemcp.mcp._format_helpers import _check_lib
-from pemcp.mcp.server import _check_pe_loaded, _check_data_key_available
-from pemcp.state import AnalyzerState, set_current_state
+from arkana.mcp._angr_helpers import _parse_addr, _raise_on_error_dict
+from arkana.mcp._format_helpers import _check_lib
+from arkana.mcp.server import _check_pe_loaded, _check_data_key_available
+from arkana.state import AnalyzerState, set_current_state
 
 
 @pytest.fixture(autouse=True)

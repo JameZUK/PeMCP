@@ -5,7 +5,7 @@ pytest.importorskip("pefile", reason="pefile not installed")
 
 from unittest.mock import patch, MagicMock
 
-from pemcp.state import AnalyzerState
+from arkana.state import AnalyzerState
 
 
 # ---------------------------------------------------------------------------
@@ -23,8 +23,8 @@ class TestTriageCompilerLanguage:
         mock_state = AnalyzerState()
         mock_state.pe_data = pe_data
 
-        with patch("pemcp.mcp.tools_triage.state", mock_state):
-            from pemcp.mcp.tools_triage import _triage_compiler_language
+        with patch("arkana.mcp.tools_triage.state", mock_state):
+            from arkana.mcp.tools_triage import _triage_compiler_language
             return _triage_compiler_language(all_string_values)
 
     def test_go_detected_from_section_names(self):
@@ -121,7 +121,7 @@ class TestTriageModeNormalization:
     def test_pe_parser_mode_is_pe(self):
         """The PE parser must set mode='pe' for normal PE files."""
         # This test verifies the fix for the critical pe_executable vs pe bug
-        from pemcp.parsers.pe import _parse_pe_to_dict
+        from arkana.parsers.pe import _parse_pe_to_dict
         # We can't call the full parser without pefile, but we can check the
         # source code for the correct mode string
         import inspect
@@ -133,7 +133,7 @@ class TestTriageModeNormalization:
     def test_shellcode_mode_is_shellcode(self):
         """The PE parser must set mode='shellcode' for raw/shellcode files."""
         import inspect
-        from pemcp.parsers.pe import _parse_pe_to_dict
+        from arkana.parsers.pe import _parse_pe_to_dict
         source = inspect.getsource(_parse_pe_to_dict)
         assert '"shellcode_raw"' not in source, \
             "Parser still uses 'shellcode_raw' instead of 'shellcode'"
@@ -150,7 +150,7 @@ class TestRichHeaderKeys:
     def test_triage_reads_decoded_values_key(self):
         """_triage_rich_header must use 'decoded_values' (not 'decoded_entries')."""
         import inspect
-        from pemcp.mcp.tools_triage import _triage_rich_header
+        from arkana.mcp.tools_triage import _triage_rich_header
         source = inspect.getsource(_triage_rich_header)
         assert "decoded_values" in source, \
             "Triage must use 'decoded_values' key to match parser output"
@@ -158,7 +158,7 @@ class TestRichHeaderKeys:
     def test_triage_reads_product_id_dec(self):
         """_triage_rich_header must use 'product_id_dec' or 'raw_comp_id'."""
         import inspect
-        from pemcp.mcp.tools_triage import _triage_rich_header
+        from arkana.mcp.tools_triage import _triage_rich_header
         source = inspect.getsource(_triage_rich_header)
         assert "product_id_dec" in source or "raw_comp_id" in source, \
             "Triage must use actual parser field names (product_id_dec, raw_comp_id)"

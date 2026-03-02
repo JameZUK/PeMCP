@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# PeMCP Helper Script
+# Arkana Helper Script
 #
-# Detects Docker or Podman and runs PeMCP with sensible defaults.
+# Detects Docker or Podman and runs Arkana with sensible defaults.
 # Handles volume mounts, environment variables, and common modes.
 #
 # Usage:
@@ -16,13 +16,13 @@
 
 set -euo pipefail
 
-IMAGE_NAME="pemcp-toolkit"
-CONTAINER_PORT="${PEMCP_PORT:-8082}"
-SAMPLES_DIR="${PEMCP_SAMPLES:-$(cd "$(dirname "$0")" && pwd)/samples}"
+IMAGE_NAME="arkana-toolkit"
+CONTAINER_PORT="${ARKANA_PORT:-${PEMCP_PORT:-8082}}"
+SAMPLES_DIR="${ARKANA_SAMPLES:-${PEMCP_SAMPLES:-$(cd "$(dirname "$0")" && pwd)/samples}}"
 CONTAINER_SAMPLES="/$(basename "$SAMPLES_DIR")"
-ROOTFS_DIR="${PEMCP_ROOTFS:-$(cd "$(dirname "$0")" && pwd)/qiling-rootfs}"
-OUTPUT_DIR="${PEMCP_OUTPUT:-$(cd "$(dirname "$0")" && pwd)/output}"
-CACHE_DIR="${PEMCP_CACHE:-$HOME/.pemcp}"
+ROOTFS_DIR="${ARKANA_ROOTFS:-${PEMCP_ROOTFS:-$(cd "$(dirname "$0")" && pwd)/qiling-rootfs}}"
+OUTPUT_DIR="${ARKANA_OUTPUT:-${PEMCP_OUTPUT:-$(cd "$(dirname "$0")" && pwd)/output}}"
+CACHE_DIR="${ARKANA_CACHE:-${PEMCP_CACHE:-$HOME/.arkana}}"
 
 # --- Detect container runtime ---
 detect_runtime() {
@@ -81,7 +81,7 @@ common_args() {
     local args=(
         --rm
         -e "HOME=/app/home"
-        -e "USER=${USER:-pemcp}"
+        -e "USER=${USER:-arkana}"
     )
 
     # Podman rootless needs --userns=keep-id to map host UID into the container
@@ -94,9 +94,9 @@ common_args() {
     fi
 
     args+=(
-        -e "PEMCP_HOST_SAMPLES=$SAMPLES_DIR"
+        -e "ARKANA_HOST_SAMPLES=$SAMPLES_DIR"
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro${SELINUX_SUFFIX}"
-        -v "$CACHE_DIR:/app/home/.pemcp:rw${SELINUX_SUFFIX}"
+        -v "$CACHE_DIR:/app/home/.arkana:rw${SELINUX_SUFFIX}"
     )
 
     # Mount output directory if it exists (create it on first use)
@@ -104,8 +104,8 @@ common_args() {
         mkdir -p "$OUTPUT_DIR" 2>/dev/null || true
         if [[ -d "$OUTPUT_DIR" ]]; then
             args+=(-v "$OUTPUT_DIR:/output:rw${SELINUX_SUFFIX}")
-            args+=(-e "PEMCP_HOST_EXPORT=$OUTPUT_DIR")
-            args+=(-e "PEMCP_EXPORT_DIR=/output")
+            args+=(-e "ARKANA_HOST_EXPORT=$OUTPUT_DIR")
+            args+=(-e "ARKANA_EXPORT_DIR=/output")
         fi
     fi
 
@@ -127,13 +127,13 @@ common_args() {
         args+=(--env-file "$env_file")
     fi
 
-    # Build PEMCP_PATH_MAP: semicolon-separated internal=external path pairs
+    # Build ARKANA_PATH_MAP: semicolon-separated internal=external path pairs
     # so MCP clients can translate container paths to host paths.
     local path_map="$CONTAINER_SAMPLES=$SAMPLES_DIR"
     if [[ -n "${OUTPUT_DIR:-}" && -d "$OUTPUT_DIR" ]]; then
         path_map="$path_map;/output=$OUTPUT_DIR"
     fi
-    args+=(-e "PEMCP_PATH_MAP=$path_map")
+    args+=(-e "ARKANA_PATH_MAP=$path_map")
 
     echo "${args[@]}"
 }
@@ -141,9 +141,9 @@ common_args() {
 # --- Commands ---
 cmd_http() {
     ensure_image
-    echo "[*] Starting PeMCP HTTP server on port $CONTAINER_PORT..."
+    echo "[*] Starting Arkana HTTP server on port $CONTAINER_PORT..."
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)"
-    echo "[*] Config/cache (.pemcp): $CACHE_DIR"
+    echo "[*] Config/cache (.arkana): $CACHE_DIR"
     echo "[*] MCP endpoint: http://127.0.0.1:$CONTAINER_PORT/mcp"
     echo "[*] Press Ctrl+C to stop."
     echo ""
@@ -160,9 +160,9 @@ cmd_http() {
 
 cmd_stdio() {
     ensure_image
-    echo "[*] Starting PeMCP in stdio MCP mode..." >&2
+    echo "[*] Starting Arkana in stdio MCP mode..." >&2
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)" >&2
-    echo "[*] Config/cache (.pemcp): $CACHE_DIR" >&2
+    echo "[*] Config/cache (.arkana): $CACHE_DIR" >&2
     # shellcheck disable=SC2046
     $RUNTIME run -i \
         $(common_args) \
@@ -194,7 +194,7 @@ cmd_analyze() {
     $RUNTIME run -it \
         $(common_args) \
         -v "$dir:/app/input:ro${SELINUX_SUFFIX}" \
-        -e "PEMCP_PATH_MAP=$CONTAINER_SAMPLES=$SAMPLES_DIR;/app/input=$dir" \
+        -e "ARKANA_PATH_MAP=$CONTAINER_SAMPLES=$SAMPLES_DIR;/app/input=$dir" \
         "$IMAGE_NAME" \
         --input-file "/app/input/$base" --verbose \
         "$@"
@@ -202,7 +202,7 @@ cmd_analyze() {
 
 cmd_shell() {
     ensure_image
-    echo "[*] Opening shell in PeMCP container..."
+    echo "[*] Opening shell in Arkana container..."
     # shellcheck disable=SC2046
     $RUNTIME run -it \
         $(common_args) \
@@ -212,7 +212,7 @@ cmd_shell() {
 
 show_help() {
     cat <<'EOF'
-PeMCP Container Helper
+Arkana Container Helper
 
 Usage:
   ./run.sh [--samples <dir>] <command>
@@ -233,9 +233,9 @@ Options:
   --output <dir>    Mount a writable output directory into the container at /output.
                     Used for project exports, patched binaries, and reports.
                     Default: ./output/ next to this script.
-  --cache <dir>     Mount a cache/config directory into the container at /app/home/.pemcp.
+  --cache <dir>     Mount a cache/config directory into the container at /app/home/.arkana.
                     Persists analysis cache, notes, and tool history across sessions.
-                    Default: ~/.pemcp (auto-created if missing).
+                    Default: ~/.arkana (auto-created if missing).
   --rootfs <dir>    Mount a Qiling rootfs directory into the container.
                     Place Windows DLLs, Linux libs, etc. here for emulation.
                     Default: ./qiling-rootfs/ next to this script.
@@ -243,11 +243,11 @@ Options:
 
 Environment variables:
   VT_API_KEY        VirusTotal API key (passed into container)
-  PEMCP_PORT        Host port for HTTP mode (default: 8082)
-  PEMCP_SAMPLES     Default samples directory (overridden by --samples)
-  PEMCP_OUTPUT      Default output directory (overridden by --output)
-  PEMCP_CACHE       Default cache/config directory (overridden by --cache)
-  PEMCP_ROOTFS      Default Qiling rootfs directory (overridden by --rootfs)
+  ARKANA_PORT       Host port for HTTP mode (default: 8082)
+  ARKANA_SAMPLES    Default samples directory (overridden by --samples)
+  ARKANA_OUTPUT     Default output directory (overridden by --output)
+  ARKANA_CACHE      Default cache/config directory (overridden by --cache)
+  ARKANA_ROOTFS     Default Qiling rootfs directory (overridden by --rootfs)
 
 Examples:
   ./run.sh                                         # HTTP server, default samples/
@@ -255,8 +255,8 @@ Examples:
   ./run.sh --samples ~/malware-zoo --stdio         # Mounted at /malware-zoo
   ./run.sh --analyze samples/suspicious.exe        # Analyze a single file
   ./run.sh --rootfs ~/qiling-rootfs                # Custom rootfs for Qiling
-  VT_API_KEY=abc123 PEMCP_PORT=9000 ./run.sh       # Custom port + API key
-  PEMCP_SAMPLES=~/samples ./run.sh --stdio         # Via environment variable
+  VT_API_KEY=abc123 ARKANA_PORT=9000 ./run.sh      # Custom port + API key
+  ARKANA_SAMPLES=~/samples ./run.sh --stdio        # Via environment variable
 
 Notes:
   - Sample files are mounted read-only; the output directory is writable
@@ -264,7 +264,7 @@ Notes:
     (e.g. --samples ~/Downloads → /Downloads/yourfile.exe inside the container)
   - Default samples: ./samples/ → /samples/yourfile.exe
   - Default output: ./output/ → /output/ (writable, for exports and patched binaries)
-  - Analysis cache persists in ~/.pemcp (bind-mounted into the container)
+  - Analysis cache persists in ~/.arkana (bind-mounted into the container)
   - Auto-detects Docker or Podman
 EOF
 }
