@@ -1301,15 +1301,16 @@ async def find_anti_debug_comprehensive(
     compact: bool = False,
 ) -> Dict[str, Any]:
     """
-    [Phase: explore] Comprehensive anti-analysis and anti-debug technique detection.
-    Goes beyond the triage report by checking for specific API patterns, timing checks,
-    TLS callbacks, PEB access, and known evasion techniques.
+    [Phase: explore] Comprehensive anti-analysis technique detection — covers
+    anti-debugging, anti-VM, and sandbox evasion. Checks for specific API
+    patterns, timing checks, TLS callbacks, PEB access, VM indicator strings,
+    and known evasion techniques.
 
-    When to use: After triage when anti-debug imports are flagged and you need a
-    detailed inventory of evasion techniques. Also useful for packed samples where
-    anti-debug prevents dynamic analysis.
+    When to use: After triage when anti-debug/anti-VM imports are flagged and
+    you need a detailed inventory of evasion techniques. Also useful for packed
+    samples where anti-analysis prevents dynamic analysis.
 
-    Next steps: decompile_function_with_angr() on functions containing anti-debug
+    Next steps: decompile_function_with_angr() on functions containing anti-analysis
     to understand the specific implementation and potential bypasses.
 
     Args:
@@ -1379,6 +1380,59 @@ async def find_anti_debug_comprehensive(
                               "description": "Process enumeration helper"},
             "GetModuleHandleA": {"category": "module_check", "severity": "low",
                                   "description": "Can check for loaded analysis DLLs"},
+            # --- Anti-VM / Sandbox detection ---
+            "GetSystemFirmwareTable": {"category": "vm_detection", "severity": "high",
+                                       "description": "Reads SMBIOS/ACPI tables — detects VMware, VBox, Hyper-V"},
+            "EnumSystemFirmwareTables": {"category": "vm_detection", "severity": "high",
+                                          "description": "Enumerates firmware tables for VM artifacts"},
+            "EnumServicesStatusExA": {"category": "vm_detection", "severity": "medium",
+                                      "description": "Enumerates services — detects VM guest tools"},
+            "EnumServicesStatusExW": {"category": "vm_detection", "severity": "medium",
+                                      "description": "Enumerates services (wide) — detects VM guest tools"},
+            "GetAdaptersAddresses": {"category": "vm_detection", "severity": "medium",
+                                     "description": "Checks MAC address OUI for VM vendors"},
+            "GetAdaptersInfo": {"category": "vm_detection", "severity": "medium",
+                                "description": "Checks network adapters for VM artifacts"},
+            "SetupDiGetDeviceRegistryPropertyA": {"category": "vm_detection", "severity": "medium",
+                                                   "description": "Queries device properties for VM hardware strings"},
+            "SetupDiGetDeviceRegistryPropertyW": {"category": "vm_detection", "severity": "medium",
+                                                   "description": "Queries device properties (wide) for VM hardware strings"},
+            "WMIQuery": {"category": "vm_detection", "severity": "medium",
+                         "description": "WMI queries can detect VM vendor strings"},
+            "SleepEx": {"category": "sandbox_evasion", "severity": "medium",
+                        "description": "Extended sleep — evades sandbox time limits"},
+            "WaitForSingleObject": {"category": "sandbox_evasion", "severity": "low",
+                                    "description": "Can be used for timing-based sandbox evasion"},
+            "GetCursorPos": {"category": "sandbox_evasion", "severity": "medium",
+                             "description": "Checks for mouse movement — detects automated sandboxes"},
+            "GetLastInputInfo": {"category": "sandbox_evasion", "severity": "medium",
+                                 "description": "Checks time since last user input — sandbox detection"},
+            "GetSystemMetrics": {"category": "sandbox_evasion", "severity": "low",
+                                 "description": "Checks screen resolution — small screens indicate sandbox"},
+            "GlobalMemoryStatusEx": {"category": "vm_detection", "severity": "medium",
+                                     "description": "Checks total RAM — low RAM indicates VM"},
+            "GetDiskFreeSpaceExA": {"category": "vm_detection", "severity": "medium",
+                                    "description": "Checks disk space — small disks indicate VM/sandbox"},
+            "GetDiskFreeSpaceExW": {"category": "vm_detection", "severity": "medium",
+                                    "description": "Checks disk space (wide) — small disks indicate VM/sandbox"},
+            "RegOpenKeyExA": {"category": "vm_detection", "severity": "medium",
+                              "description": "Registry key check — can probe VM-specific registry paths"},
+            "RegOpenKeyExW": {"category": "vm_detection", "severity": "medium",
+                              "description": "Registry key check (wide) — VM registry path probing"},
+            "DeviceIoControl": {"category": "vm_detection", "severity": "medium",
+                                "description": "Device IOCTL — can probe virtual hardware controllers"},
+            "NtDelayExecution": {"category": "sandbox_evasion", "severity": "medium",
+                                 "description": "NT native sleep — evades sandbox time limits"},
+            "Sleep": {"category": "sandbox_evasion", "severity": "low",
+                      "description": "Sleep call — can delay past sandbox execution timeout"},
+            "GetProcessHeap": {"category": "debugger_check", "severity": "medium",
+                               "description": "Heap flags check — ForceFlags/Flags differ under debugger"},
+            "NtQueryObject": {"category": "debugger_check", "severity": "high",
+                              "description": "Can query DebugObject type count to detect debuggers"},
+            "GetVolumeInformationA": {"category": "vm_detection", "severity": "medium",
+                                      "description": "Volume serial number check — detects cloned VMs"},
+            "GetVolumeInformationW": {"category": "vm_detection", "severity": "medium",
+                                      "description": "Volume serial number check (wide) — VM detection"},
         }
 
         callgraph = state.angr_cfg.functions.callgraph
@@ -1444,6 +1498,191 @@ async def find_anti_debug_comprehensive(
                         "function_name": "TLS callback(s)",
                     })
 
+        # Check for anti-VM strings in binary data
+        _ad_bridge.report_progress(85, 100)
+        _ad_bridge.info("Scanning for anti-VM indicator strings...")
+        vm_strings_found = []
+        if state.pe_object and hasattr(state.pe_object, '__data__'):
+            file_data = state.pe_object.__data__
+            # Known VM/sandbox indicator strings (case-insensitive search)
+            _VM_INDICATORS = [
+                # --- VMware ---
+                (b"VMwareVMware", "VMware", "CPUID brand string"),
+                (b"vmware", "VMware", "Driver/service name"),
+                (b"VMware Virtual", "VMware", "Hardware string"),
+                (b"vmci.sys", "VMware", "VMCI driver"),
+                (b"vmhgfs.sys", "VMware", "HGFS shared folders driver"),
+                (b"vmmouse.sys", "VMware", "VM mouse driver"),
+                (b"vmrawdsk.sys", "VMware", "Raw disk driver"),
+                (b"vmusbmouse.sys", "VMware", "USB mouse driver"),
+                (b"vmx86.sys", "VMware", "VMX driver"),
+                (b"vmnet.sys", "VMware", "Network driver"),
+                (b"VMTools", "VMware", "Guest tools service"),
+                (b"vmtoolsd", "VMware", "Tools daemon"),
+                (b"vmwaretray", "VMware", "System tray tool"),
+                # --- VirtualBox ---
+                (b"VBoxGuest", "VirtualBox", "Guest additions driver"),
+                (b"VBoxMiniRdr", "VirtualBox", "Shared folders driver"),
+                (b"VBoxSF", "VirtualBox", "Shared folders service"),
+                (b"vboxservice", "VirtualBox", "Guest service"),
+                (b"VBOX HARDDISK", "VirtualBox", "Disk identifier"),
+                (b"VBoxMouse", "VirtualBox", "Mouse integration"),
+                (b"VBoxVideo", "VirtualBox", "Video driver"),
+                (b"VBoxTray", "VirtualBox", "Tray application"),
+                (b"innotek GmbH", "VirtualBox", "BIOS vendor"),
+                (b"VirtualBox", "VirtualBox", "Product name"),
+                (b"vboxdrv", "VirtualBox", "Kernel driver"),
+                # --- Hyper-V ---
+                (b"Virtual HD", "Hyper-V", "Disk identifier"),
+                (b"Microsoft Hv", "Hyper-V", "CPUID brand string"),
+                (b"vmicheartbeat", "Hyper-V", "Heartbeat IC"),
+                (b"vmicshutdown", "Hyper-V", "Shutdown IC"),
+                (b"vmickvpexchange", "Hyper-V", "KVP exchange IC"),
+                (b"vmbus", "Hyper-V", "VMBus driver"),
+                (b"Hyper-V", "Hyper-V", "Product name"),
+                (b"storvsc", "Hyper-V", "Storage VSC driver"),
+                (b"netvsc", "Hyper-V", "Network VSC driver"),
+                # --- QEMU/KVM ---
+                (b"QEMU HARDDISK", "QEMU", "Disk identifier"),
+                (b"QEMU DVD-ROM", "QEMU", "DVD identifier"),
+                (b"KVMKVMKVM", "KVM", "CPUID brand string"),
+                (b"BOCHS", "QEMU/Bochs", "BIOS vendor string"),
+                (b"SeaBIOS", "QEMU", "BIOS firmware"),
+                (b"virtio", "QEMU/KVM", "VirtIO driver string"),
+                (b"qemu-ga", "QEMU", "Guest agent"),
+                # --- Xen ---
+                (b"Xen ", "Xen", "Hypervisor string"),
+                (b"XenVMMXenVMM", "Xen", "CPUID brand string"),
+                (b"xenbus", "Xen", "Xen bus driver"),
+                # --- Parallels ---
+                (b"prl_fs", "Parallels", "Shared folders driver"),
+                (b"prl_tg", "Parallels", "Tools gate driver"),
+                (b"Parallels", "Parallels", "Product name"),
+                # --- Sandbox indicators ---
+                (b"SbieDll", "Sandboxie", "Sandbox DLL"),
+                (b"sbiedll", "Sandboxie", "Sandbox DLL"),
+                (b"cuckoomon", "Cuckoo", "Cuckoo sandbox monitor"),
+                (b"CWSandbox", "CWSandbox", "Sandbox indicator"),
+                (b"JoeBox", "JoeSandbox", "Sandbox indicator"),
+                # --- Analysis tool indicators ---
+                (b"dbghelp", "Debugger", "Debug helper library"),
+                (b"wireshark", "Wireshark", "Network analysis tool"),
+                (b"procmon", "Procmon", "Process monitor"),
+                (b"procexp", "Procexp", "Process explorer"),
+                (b"ollydbg", "OllyDbg", "Debugger"),
+                (b"x64dbg", "x64dbg", "Debugger"),
+                (b"ImmunityDebugger", "Immunity", "Debugger"),
+                (b"ida.exe", "IDA Pro", "Disassembler"),
+                (b"Fiddler", "Fiddler", "HTTP proxy"),
+                # --- Registry paths (VM-specific) ---
+                (b"SOFTWARE\\VMware, Inc.\\VMware Tools", "VMware", "Registry: VMware Tools path"),
+                (b"SOFTWARE\\Oracle\\VirtualBox Guest Additions", "VirtualBox", "Registry: VBox GA path"),
+                (b"SYSTEM\\CurrentControlSet\\Services\\VBoxGuest", "VirtualBox", "Registry: VBox service"),
+                (b"SYSTEM\\CurrentControlSet\\Services\\VMTools", "VMware", "Registry: VMware service"),
+                (b"HARDWARE\\ACPI\\DSDT\\VBOX__", "VirtualBox", "Registry: VBox ACPI table"),
+                (b"HARDWARE\\ACPI\\FADT\\VBOX__", "VirtualBox", "Registry: VBox ACPI table"),
+                (b"HARDWARE\\Description\\System\\SystemBiosVersion", "Generic", "Registry: BIOS version query"),
+                # --- WMI query strings ---
+                (b"Win32_ComputerSystem", "Generic", "WMI: computer system query"),
+                (b"Win32_BIOS", "Generic", "WMI: BIOS info query"),
+                (b"Win32_BaseBoard", "Generic", "WMI: baseboard info query"),
+                (b"Win32_DiskDrive", "Generic", "WMI: disk drive query"),
+                (b"Win32_NetworkAdapter", "Generic", "WMI: network adapter query"),
+                (b"Win32_PhysicalMemory", "Generic", "WMI: physical memory query"),
+                (b"MSAcpi_ThermalZoneTemperature", "Generic", "WMI: thermal zone (absent in VMs)"),
+                # --- MAC OUI strings ---
+                (b"00:0C:29", "VMware", "MAC OUI: VMware"),
+                (b"00:50:56", "VMware", "MAC OUI: VMware"),
+                (b"00-0C-29", "VMware", "MAC OUI: VMware (dash)"),
+                (b"00-50-56", "VMware", "MAC OUI: VMware (dash)"),
+                (b"08:00:27", "VirtualBox", "MAC OUI: VirtualBox"),
+                (b"08-00-27", "VirtualBox", "MAC OUI: VirtualBox (dash)"),
+                (b"00:15:5D", "Hyper-V", "MAC OUI: Hyper-V"),
+                (b"00-15-5D", "Hyper-V", "MAC OUI: Hyper-V (dash)"),
+                (b"52:54:00", "QEMU", "MAC OUI: QEMU"),
+                (b"52-54-00", "QEMU", "MAC OUI: QEMU (dash)"),
+            ]
+            file_lower = file_data.lower()
+            for indicator, target, detail in _VM_INDICATORS:
+                if indicator.lower() in file_lower:
+                    vm_strings_found.append({
+                        "indicator": indicator.decode('ascii', 'replace'),
+                        "target": target,
+                        "detail": detail,
+                    })
+                    techniques.append({
+                        "technique": f"VM_String_{target}",
+                        "category": "vm_detection",
+                        "severity": "medium",
+                        "function": "string_scan",
+                        "function_name": f"Contains '{indicator.decode('ascii', 'replace')}' ({detail})",
+                    })
+
+        # Scan executable sections for anti-analysis instructions
+        _ad_bridge.report_progress(90, 100)
+        _ad_bridge.info("Scanning for anti-analysis instructions...")
+        instruction_findings = []
+        if state.pe_object:
+            image_base = getattr(state.pe_object.OPTIONAL_HEADER, 'ImageBase', 0)
+            _INSN_PATTERNS = [
+                (b'\x0f\x31', "RDTSC", "timing_check", "medium",
+                 "Read timestamp counter — timing-based anti-debug/VM detection"),
+                (b'\x0f\xa2', "CPUID", "vm_detection", "high",
+                 "CPUID — leaf 1 bit 31 = hypervisor, leaf 0x40000000 = vendor ID"),
+                (b'\xcd\x2d', "INT 2Dh", "debugger_check", "high",
+                 "Debug service interrupt — execution differs under debugger"),
+                (b'\x0f\x01\x0d', "SIDT", "vm_detection", "low",
+                 "Store IDT register — Red Pill VM detection (unreliable on modern CPUs)"),
+            ]
+            for section in state.pe_object.sections:
+                try:
+                    chars = getattr(section, 'Characteristics', 0) or 0
+                    if not (chars & 0x20000000):  # IMAGE_SCN_MEM_EXECUTE
+                        continue
+                    data = section.get_data()
+                    sec_rva = section.VirtualAddress
+                    sec_name = section.Name.rstrip(b'\x00').decode('ascii', 'replace')
+
+                    for pattern, name, category, severity, desc in _INSN_PATTERNS:
+                        addrs = []
+                        pos = 0
+                        while pos <= len(data) - len(pattern):
+                            pos = data.find(pattern, pos)
+                            if pos == -1:
+                                break
+                            addrs.append(hex(image_base + sec_rva + pos))
+                            pos += len(pattern)
+                        if addrs:
+                            instruction_findings.append({
+                                "instruction": name,
+                                "count": len(addrs),
+                                "addresses": addrs[:10],
+                                "section": sec_name,
+                                "category": category,
+                                "severity": severity,
+                                "description": desc,
+                            })
+                except Exception as e:
+                    logger.debug("Error scanning section for instructions: %s", e)
+                    continue
+
+        # Add instruction findings to techniques list
+        for finding in instruction_findings:
+            techniques.append({
+                "technique": finding["instruction"],
+                "category": finding["category"],
+                "severity": finding["severity"],
+                "function": finding["addresses"][0] if finding["addresses"] else "unknown",
+                "function_name": f"{finding['instruction']} x{finding['count']} in {finding['section']}",
+            })
+
+        # Build hypervisor breakdown from VM findings
+        hypervisor_breakdown = {}
+        for vs in vm_strings_found:
+            target = vs["target"]
+            hypervisor_breakdown.setdefault(target, []).append(vs["indicator"])
+        hypervisor_breakdown = {k: sorted(set(v)) for k, v in hypervisor_breakdown.items()}
+
         # Categorize findings
         categories = {}
         for t in techniques:
@@ -1472,6 +1711,9 @@ async def find_anti_debug_comprehensive(
                 "categories": categories,
                 "top_functions": top_funcs_compact,
                 "has_tls_callbacks": bool(tls_callbacks),
+                "has_vm_strings": bool(vm_strings_found),
+                "hypervisor_breakdown": hypervisor_breakdown,
+                "instruction_findings_count": len(instruction_findings),
                 "note": "Use find_anti_debug_comprehensive(compact=False) for per-occurrence technique details.",
             }
 
@@ -1479,9 +1721,12 @@ async def find_anti_debug_comprehensive(
             "total_techniques_found": len(techniques),
             "severity_summary": severity_counts,
             "categories": categories,
+            "hypervisor_breakdown": hypervisor_breakdown,
             "functions_with_anti_debug": functions_with_antidbg[:30],
             "tls_callbacks": tls_callbacks,
-            "techniques": techniques[:50],
+            "vm_indicator_strings": vm_strings_found[:30],
+            "instruction_findings": instruction_findings[:20],
+            "techniques": techniques[:60],
         }
 
     try:

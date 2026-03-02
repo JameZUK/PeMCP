@@ -66,6 +66,11 @@ import pemcp.mcp.tools_diff
 import pemcp.mcp.tools_workflow
 import pemcp.mcp.tools_learning
 import pemcp.mcp.tools_malware_identify
+import pemcp.mcp.tools_malware_detect
+import pemcp.mcp.tools_pe_structure
+import pemcp.mcp.tools_pe_forensic
+import pemcp.mcp.tools_threat_intel
+import pemcp.mcp.tools_batch
 import pemcp.mcp.tools_struct
 # Only register refinery tools when binary-refinery is installed.
 # When absent this saves ~20 tool definitions from the MCP catalog,

@@ -610,8 +610,8 @@ async def deobfuscate_xor_multi_byte(
     [Phase: deep-dive] Decrypts data using a multi-byte XOR key (repeating key cipher).
 
     When to use: After identifying XOR-encrypted data via detect_crypto_constants(),
-    string analysis, or decompilation. Use bruteforce_xor_key() first if the key
-    is unknown.
+    string analysis, or decompilation. Use brute_force_simple_crypto() first if
+    the key is unknown.
 
     Next steps: If decrypted data looks like a PE → open_file() to analyze it.
     If it contains strings/URLs → add_note() to record IOCs.
@@ -646,110 +646,6 @@ async def deobfuscate_xor_multi_byte(
         "printable_ratio": round(printable_ratio, 3),
         "key_length": len(key),
         "data_length": len(data),
-    }
-
-
-@tool_decorator
-async def bruteforce_xor_key(
-    ctx: Context,
-    data_hex: str,
-    max_key_length: int = 4,
-    known_plaintext: Optional[str] = None,
-    limit: int = 10,
-) -> Dict[str, Any]:
-    """
-    [Phase: deep-dive] Brute-forces XOR key for encrypted data. Optionally uses
-    known plaintext to derive the key directly.
-
-    When to use: When you've found XOR-encrypted data (via detect_crypto_constants,
-    decompilation, or hex dump) but don't know the key. Provide known_plaintext
-    (e.g. 'MZ', 'http') for faster key recovery.
-
-    Next steps: Once key found → deobfuscate_xor_multi_byte() to decrypt full data.
-    If decrypted data is a PE → open_file(). Record findings with add_note().
-
-    Args:
-        data_hex: Hex-encoded encrypted data.
-        max_key_length: Max key length to try (1-8 bytes). Default 4.
-        known_plaintext: If you know what part of the plaintext looks like, provide it to derive the key.
-        limit: Max results to return (sorted by printable ratio).
-    """
-    await ctx.info(f"XOR brute-force: max_key_len={max_key_length}")
-    try:
-        data = bytes.fromhex(data_hex)
-    except ValueError:
-        raise ValueError("Invalid hex string.")
-
-    max_key_length = min(max_key_length, 8)
-
-    def _bruteforce():
-        results = []
-
-        # If known plaintext provided, derive key directly
-        if known_plaintext:
-            pt = known_plaintext.encode('ascii', 'ignore')
-            if len(pt) > 0:
-                derived_key = bytes([data[i] ^ pt[i % len(pt)] for i in range(min(len(data), len(pt)))])
-                # Try the derived key
-                decrypted = bytes([data[i] ^ derived_key[i % len(derived_key)] for i in range(len(data))])
-                dec_text = decrypted.decode('utf-8', 'ignore')
-                printable = sum(1 for c in dec_text if ' ' <= c <= '~' or c in '\n\r\t') / max(len(dec_text), 1)
-                results.append({
-                    "key_hex": derived_key.hex(),
-                    "key_length": len(derived_key),
-                    "printable_ratio": round(printable, 3),
-                    "preview": dec_text[:200],
-                    "method": "known_plaintext",
-                })
-                return results
-
-        # Single-byte brute force
-        for key_byte in range(256):
-            decrypted = bytes([b ^ key_byte for b in data])
-            dec_text = decrypted.decode('latin-1', 'ignore')
-            printable = sum(1 for c in dec_text if ' ' <= c <= '~' or c in '\n\r\t') / max(len(dec_text), 1)
-            if printable > 0.7:
-                results.append({
-                    "key_hex": f"{key_byte:02x}",
-                    "key_length": 1,
-                    "printable_ratio": round(printable, 3),
-                    "preview": dec_text[:200],
-                    "method": "bruteforce",
-                })
-
-        # Multi-byte: use index-of-coincidence heuristic for key length detection
-        if max_key_length > 1 and len(data) >= 16:
-            for kl in range(2, max_key_length + 1):
-                # For each key byte position, find the most common XOR result
-                key = bytearray(kl)
-                for pos in range(kl):
-                    freq = [0] * 256
-                    for i in range(pos, len(data), kl):
-                        freq[data[i]] += 1
-                    # Assume most common byte XORs to space (0x20) or null (0x00)
-                    most_common = freq.index(max(freq))
-                    key[pos] = most_common ^ 0x00  # Try null assumption
-
-                decrypted = bytes([data[i] ^ key[i % kl] for i in range(len(data))])
-                dec_text = decrypted.decode('latin-1', 'ignore')
-                printable = sum(1 for c in dec_text if ' ' <= c <= '~' or c in '\n\r\t') / max(len(dec_text), 1)
-                if printable > 0.6:
-                    results.append({
-                        "key_hex": bytes(key).hex(),
-                        "key_length": kl,
-                        "printable_ratio": round(printable, 3),
-                        "preview": dec_text[:200],
-                        "method": "frequency_analysis",
-                    })
-
-        results.sort(key=lambda r: r["printable_ratio"], reverse=True)
-        return results
-
-    results = await asyncio.to_thread(_bruteforce)
-
-    return {
-        "total_candidates": len(results),
-        "results": results[:limit],
     }
 
 

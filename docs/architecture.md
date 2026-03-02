@@ -130,7 +130,7 @@ The default `limit` varies by tool to balance context efficiency with completene
 | **50** | `get_call_graph` (call graph edges), `analyze_entropy_by_offset`, `qiling_trace_execution` |
 | **80** | `get_value_set_analysis`, `propagate_constants`, `get_function_variables` |
 | **300** | `get_annotated_disassembly` (rich disassembly blocks) |
-| **10** | `brute_force_simple_crypto`, `extract_steganography`, `bruteforce_xor_key`, `find_oep_heuristic` |
+| **10** | `brute_force_simple_crypto`, `extract_steganography`, `find_oep_heuristic` |
 
 The hard upper bound on `limit` is **100,000** (enforced in `get_pe_data` and string tools) to prevent excessive memory allocation.
 

@@ -157,7 +157,7 @@ Single-byte XOR key, config is a TLV (type-length-value) structure.
 
 ```
 1. get_hex_dump(offset=<.data section start>, length=0x2000) → search for 0x1000-byte high-entropy region
-2. bruteforce_xor_key(data="<0x1000 bytes hex>") or deobfuscate_xor_single_byte(data="<0x1000 bytes hex>", key=0x69) — try common keys (0x69, 0x2e)
+2. brute_force_simple_crypto(data_hex="<0x1000 bytes hex>", known_plaintext="MZ") or deobfuscate_xor_single_byte(data_hex="<0x1000 bytes hex>", key=0x69) — try common keys (0x69, 0x2e)
 3. Or: extract_config_automated() — has built-in Cobalt Strike parser
 4. Parse TLV: type (2 bytes) + length (2 bytes) + value
 5. Key fields: BeaconType (0x0001), Port (0x0002), SleepTime (0x0003),

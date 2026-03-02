@@ -603,6 +603,7 @@ async def emulate_pe_with_windows_apis(
     ctx: Context,
     timeout_seconds: int = 60,
     limit: int = 20,
+    track_allocations: bool = False,
 ) -> Dict[str, Any]:
     """
     Emulates the loaded PE in Speakeasy's Windows environment with full API emulation.
@@ -611,6 +612,9 @@ async def emulate_pe_with_windows_apis(
     Args:
         timeout_seconds: Max emulation time in seconds.
         limit: Max API calls to return.
+        track_allocations: If True, tracks VirtualAlloc/VirtualProtect/HeapAlloc calls
+            during emulation and returns a memory allocation timeline. Flags suspicious
+            patterns like RWX allocations and allocation-write-execute sequences.
     """
     await ctx.info("Emulating PE with Speakeasy Windows API emulation")
     _check_lib("speakeasy", _check_speakeasy_available(), "emulate_pe_with_windows_apis")
@@ -625,6 +629,7 @@ async def emulate_pe_with_windows_apis(
             "filepath": state.filepath,
             "timeout_seconds": timeout_seconds,
             "limit": limit,
+            "track_allocations": track_allocations,
         }, timeout_seconds)
     finally:
         progress_task.cancel()
@@ -784,97 +789,6 @@ async def auto_unpack_pe(
         result["hint"] = "Use open_file() to load the unpacked binary for further analysis."
 
     return await _check_mcp_response_size(ctx, result, "auto_unpack_pe")
-
-
-# ===================================================================
-#  DOTNETFILE — .NET metadata parsing
-# ===================================================================
-
-@tool_decorator
-async def parse_dotnet_metadata(ctx: Context, limit: int = 20) -> Dict[str, Any]:
-    """
-    Parses .NET metadata from the loaded PE: CLR header, streams, type definitions,
-    method definitions, assembly references, and user strings.
-
-    Args:
-        limit: Max entries per category.
-    """
-    await ctx.info("Parsing .NET metadata")
-    _check_lib("dotnetfile", DOTNETFILE_AVAILABLE, "parse_dotnet_metadata")
-    _check_pe_loaded("parse_dotnet_metadata")
-
-    def _parse():
-        try:
-            dn = dotnetfile.DotNetPE(state.filepath)
-        except Exception as e:
-            return {"error": f"Not a valid .NET binary or parsing failed: {e}"}
-
-        result = {}
-
-        # CLR header
-        try:
-            result["clr_version"] = str(dn.clr_header.RuntimeVersion) if hasattr(dn, 'clr_header') else None
-        except Exception as e:
-            logger.debug("Could not read CLR version: %s", e)
-
-        # Type definitions
-        types = []
-        try:
-            for td in dn.metadata_table_lookup("TypeDef"):
-                types.append({
-                    "name": str(td.TypeName),
-                    "namespace": str(td.TypeNamespace),
-                })
-                if len(types) >= limit:
-                    break
-        except Exception as e:
-            logger.debug("Error reading .NET TypeDef table: %s", e)
-        result["type_definitions"] = types
-
-        # Method definitions
-        methods = []
-        try:
-            for md in dn.metadata_table_lookup("MethodDef"):
-                methods.append({
-                    "name": str(md.Name),
-                    "rva": hex(md.RVA) if md.RVA else None,
-                })
-                if len(methods) >= limit:
-                    break
-        except Exception as e:
-            logger.debug("Error reading .NET MethodDef table: %s", e)
-        result["method_definitions"] = methods
-
-        # Assembly references
-        refs = []
-        try:
-            for ref in dn.metadata_table_lookup("AssemblyRef"):
-                refs.append({
-                    "name": str(ref.Name),
-                    "version": f"{ref.MajorVersion}.{ref.MinorVersion}" if hasattr(ref, 'MajorVersion') else None,
-                })
-                if len(refs) >= limit:
-                    break
-        except Exception as e:
-            logger.debug("Error reading .NET AssemblyRef table: %s", e)
-        result["assembly_references"] = refs
-
-        # User strings
-        user_strings = []
-        try:
-            for s in dn.get_user_strings():
-                if s and len(s) > 2:
-                    user_strings.append(str(s))
-                if len(user_strings) >= limit:
-                    break
-        except Exception as e:
-            logger.debug("Error reading .NET user strings: %s", e)
-        result["user_strings"] = user_strings
-
-        return result
-
-    result = await asyncio.to_thread(_parse)
-    return await _check_mcp_response_size(ctx, result, "parse_dotnet_metadata", "the 'limit' parameter")
 
 
 # ===================================================================

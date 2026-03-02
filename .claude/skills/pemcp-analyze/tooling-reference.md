@@ -76,9 +76,8 @@ Source files: `pemcp/mcp/tools_*.py`
 | `elf_analyze` | Analyzing ELF binaries | — |
 | `elf_dwarf_info` | Extracting DWARF debug symbols from ELF | — |
 | `macho_analyze` | Analyzing Mach-O binaries | — |
-| `dotnet_analyze` | .NET assembly analysis | — |
+| `dotnet_analyze` | .NET assembly analysis (dnfile + dotnetfile fallback) | — |
 | `dotnet_disassemble_method` | Disassemble specific .NET CIL method | `method_name` |
-| `parse_dotnet_metadata` | .NET metadata tables and streams | — |
 | `go_analyze` | Go binary analysis (packages, version) | — |
 | `rust_analyze` | Rust binary metadata | — |
 | `rust_demangle_symbols` | Demangle Rust symbol names | — |
@@ -173,7 +172,7 @@ Source files: `pemcp/mcp/tools_*.py`
 | `deobfuscate_base64` | Decode hex-encoded Base64 data | `data` |
 | `deobfuscate_xor_single_byte` | Single-byte XOR decryption | `data`, `key` |
 | `deobfuscate_xor_multi_byte` | Multi-byte XOR decryption | `data`, `key` |
-| `bruteforce_xor_key` | Brute-force XOR key recovery | `data` |
+| `brute_force_simple_crypto` | Brute-force XOR/RC4/ADD/SUB/ROL/ROR with known-plaintext support | `data_hex`, `known_plaintext` |
 | `is_mostly_printable_ascii` | Check if data is mostly printable | `data` |
 | `get_hex_dump` | Hex dump of a binary region | `offset`, `length` |
 

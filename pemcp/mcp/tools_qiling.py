@@ -157,6 +157,9 @@ async def emulate_binary_with_qiling(
     timeout_seconds: int = 60,
     max_instructions: int = 0,
     limit: int = 20,
+    trace_syscalls: bool = False,
+    syscall_filter: Optional[List[str]] = None,
+    track_memory: bool = False,
 ) -> Dict[str, Any]:
     """
     Emulates the loaded binary (PE, ELF, or Mach-O) using the Qiling Framework
@@ -184,6 +187,18 @@ async def emulate_binary_with_qiling(
         timeout_seconds: Max emulation time in seconds (default 60).
         max_instructions: Max CPU instructions to emulate (0 = unlimited, use timeout only).
         limit: Max entries per activity category to return.
+        trace_syscalls: If True, enables detailed syscall-level tracing using
+            ENTER+EXIT hooks. Returns a structured syscall timeline with arguments
+            and return values, plus a frequency summary. Supports both Windows
+            API calls (ntdll stubs) and Linux syscalls (int 0x80 / syscall).
+        syscall_filter: When trace_syscalls is True, optionally filter the timeline
+            to only include calls matching these substrings (case-insensitive).
+            E.g. ['CreateFile', 'VirtualAlloc', 'connect'] to trace only those APIs.
+            If empty/None, all calls are traced.
+        track_memory: If True, analyzes captured API calls for memory allocation
+            patterns. Returns memory_activity with operations timeline, anomalies
+            (RWX allocations, protection changes to executable, guard pages, large
+            allocations), and alloc-then-execute sequence detection.
     """
     await ctx.info("Emulating binary with Qiling Framework")
     _check_qiling("emulate_binary_with_qiling")
@@ -199,6 +214,9 @@ async def emulate_binary_with_qiling(
             "timeout_seconds": timeout_seconds,
             "max_instructions": max_instructions,
             "limit": limit,
+            "trace_syscalls": trace_syscalls,
+            "syscall_filter": syscall_filter or [],
+            "track_memory": track_memory,
         }, timeout_seconds)
     finally:
         progress_task.cancel()

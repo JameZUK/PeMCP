@@ -133,7 +133,6 @@ Many PE extended analysis tools support pagination via `limit` and `offset` para
 | `detect_format_strings` | Detect printf/scanf format strings (format string vuln hunting). Paginated (default limit 20). |
 | `detect_compression_headers` | Detect embedded compressed data (zlib, gzip, LZMA, etc.). Paginated (default limit 30). |
 | `deobfuscate_xor_multi_byte` | Multi-byte XOR deobfuscation with known key. |
-| `bruteforce_xor_key` | Brute-force single and multi-byte XOR keys against known plaintext. Paginated (default limit 10). |
 | `detect_crypto_constants` | Detect crypto constants (AES S-box, DES, SHA, RC4, etc.). Paginated (default limit 20). |
 | `analyze_entropy_by_offset` | Sliding-window entropy analysis to detect packed/encrypted regions. Paginated (default limit 50). |
 | `scan_for_api_hashes` | Detect API hashing patterns (ROR13, CRC32, DJB2, FNV). Paginated (default limit 20). |
@@ -250,7 +249,6 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `emulate_pe_with_windows_apis` | Full Windows API emulation with Speakeasy. Paginated (default limit 20). |
 | `emulate_shellcode_with_speakeasy` | Emulate shellcode with Windows API hooks. Paginated (default limit 20). |
 | `auto_unpack_pe` | Automatically unpack packed PEs (UPX, ASPack, FSG, etc.). |
-| `parse_dotnet_metadata` | Parse .NET metadata with dotnetfile. Paginated (default limit 20). |
 | `scan_for_embedded_files` | Detect embedded files/firmware with Binwalk. Paginated (default limit 20). |
 | `get_extended_capabilities` | List all available tools and library versions. |
 

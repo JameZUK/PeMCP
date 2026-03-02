@@ -23,7 +23,7 @@ async def get_hex_dump(ctx: Context, start_offset: Union[int, str] = 0, length: 
     When to use: When you need to inspect raw bytes at a specific offset — after
     finding interesting strings, embedded data, crypto constants, or archive headers.
 
-    Next steps: If data looks encrypted → bruteforce_xor_key() or deobfuscate_xor_single_byte().
+    Next steps: If data looks encrypted → brute_force_simple_crypto() or deobfuscate_xor_single_byte().
     If data looks like an embedded file → scan_for_embedded_files().
 
     Prerequisites:
@@ -141,8 +141,8 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
     """
     [Phase: deep-dive] Decrypts hex-encoded data using a single-byte XOR key (0-255).
 
-    When to use: When you know the XOR key (from decompilation, bruteforce_xor_key(),
-    or pattern analysis). For unknown keys, use bruteforce_xor_key() first.
+    When to use: When you know the XOR key (from decompilation, brute_force_simple_crypto(),
+    or pattern analysis). For unknown keys, use brute_force_simple_crypto() first.
 
     Next steps: Check is_mostly_printable_ascii() on the result. If printable →
     add_note(). If result looks like PE header → open_file() to analyze extracted payload.

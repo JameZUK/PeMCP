@@ -39,7 +39,7 @@ Harder to spot because the key is loaded from memory rather than as an immediate
 arrays in a loop. Single-byte XOR uses a constant; multi-byte uses indexed key bytes.
 
 **Weaknesses**: XOR is trivially breakable. Known-plaintext attacks work instantly.
-Single-byte XOR has only 256 possible keys — `bruteforce_xor_key()` automates this.
+Single-byte XOR has only 256 possible keys — `brute_force_simple_crypto()` automates this.
 
 ### RC4
 
@@ -123,7 +123,7 @@ to confirm the algorithm and understand how it is called.
 
 **When an XOR loop is found in decompiled code**: Walk through the XOR pattern.
 Ask whether it is single-byte or multi-byte. If single-byte, demonstrate using
-`bruteforce_xor_key()` to recover the key. If multi-byte, trace the key source
+`brute_force_simple_crypto()` to recover the key. If multi-byte, trace the key source
 using `get_reaching_definitions()`.
 
 **When encrypted data is found but the algorithm is unknown**: This is a natural

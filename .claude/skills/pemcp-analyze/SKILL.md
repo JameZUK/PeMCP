@@ -177,7 +177,7 @@ Establish what we're looking at. One or two calls maximum.
 4. **Format-specific** (if not PE):
    - ELF: `elf_analyze()`, optionally `elf_dwarf_info()`
    - Mach-O: `macho_analyze()`
-   - .NET: `dotnet_analyze()`, `parse_dotnet_metadata()`
+   - .NET: `dotnet_analyze()`
    - Go: `go_analyze()`
    - Rust: `rust_analyze()`
    - Unknown: `detect_binary_format()`

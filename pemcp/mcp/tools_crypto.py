@@ -451,17 +451,21 @@ async def brute_force_simple_crypto(
     algorithms: Optional[List[str]] = None,
     max_key_length: int = 16,
     key_hex: Optional[str] = None,
+    known_plaintext: Optional[str] = None,
     limit: int = 10,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Brute-forces simple cryptographic transforms on the provided
-    data. Tries XOR (single/multi-byte), RC4, ADD/SUB/ROL/ROR and validates
-    results by checking for PE headers, readable strings, and known patterns.
+    data. Tries XOR (single/multi-byte with frequency analysis), RC4, ADD/SUB/ROL/ROR
+    and validates results by checking for PE headers, readable strings, and known
+    patterns. Supports known-plaintext attacks for direct XOR key derivation.
 
     When to use: When you have encrypted data (from get_hex_dump or payload
     extraction) and want to try common decryption methods automatically.
+    For known-plaintext XOR recovery, pass the known_plaintext parameter.
 
     Next steps: If decryption succeeds → open_file() for PE payloads,
+    deobfuscate_xor_multi_byte() to decrypt full data with recovered key,
     add_note() for text/config data.
 
     Args:
@@ -470,6 +474,8 @@ async def brute_force_simple_crypto(
         algorithms: List of algorithms to try. Default: ['xor_single', 'xor_multi', 'rc4', 'add', 'sub', 'rol', 'ror'].
         max_key_length: Max key length for multi-byte operations. Default 16.
         key_hex: Optional specific key to try (hex-encoded). Skips brute-force.
+        known_plaintext: Optional known plaintext string for direct XOR key
+            derivation (e.g. 'MZ' for PE headers, 'This program').
         limit: Max successful results to return. Default 10.
     """
     if algorithms is None:
@@ -538,6 +544,21 @@ async def brute_force_simple_crypto(
                     "full_size": len(decrypted),
                 })
 
+        # --- Known-plaintext XOR key derivation (fast path) ---
+        if known_plaintext and ("xor_single" in algorithms or "xor_multi" in algorithms):
+            bridge.info("Trying known-plaintext XOR key derivation...")
+            pt = known_plaintext.encode('ascii', 'ignore')
+            if len(pt) > 0 and len(data) >= len(pt):
+                derived_key = bytes(data[i] ^ pt[i % len(pt)] for i in range(len(pt)))
+                # Try as full-length key
+                klen = len(derived_key)
+                dec = bytes(data[i] ^ derived_key[i % klen] for i in range(len(data)))
+                score = _score_result(dec)
+                _add_result("xor_known_plaintext", derived_key.hex(), dec, max(score, 2.0))
+                # If derived key is all same byte, also note the single-byte key
+                if len(set(derived_key)) == 1:
+                    _add_result("xor_single_kp", f"0x{derived_key[0]:02x}", dec, max(score, 2.0))
+
         bridge.report_progress(5, 100)
         bridge.info("Trying XOR single-byte...")
 
@@ -562,15 +583,28 @@ async def brute_force_simple_crypto(
             if specific_key and len(specific_key) > 1:
                 keys_to_try = [specific_key]
             else:
-                # Detect repeating XOR key using known-plaintext (null bytes)
                 keys_to_try = []
+                # Strategy 1: null-byte assumption (data starts XOR'd against nulls)
                 for klen in range(2, min(max_key_length + 1, 33)):
                     key = data[:klen]
-                    # If the data starts with what looks like an XOR'd null sequence
                     if len(set(key)) >= 2:
                         keys_to_try.append(key)
                     if len(keys_to_try) >= 50:
                         break
+
+                # Strategy 2: frequency analysis (from bruteforce_xor_key)
+                # For each key length, find most common byte per position
+                # and assume it XORs to null (0x00)
+                if len(data) >= 16:
+                    for klen in range(2, min(max_key_length + 1, 9)):
+                        key = bytearray(klen)
+                        for pos in range(klen):
+                            freq = [0] * 256
+                            for i in range(pos, len(data), klen):
+                                freq[data[i]] += 1
+                            key[pos] = freq.index(max(freq))  # XOR to 0x00
+                        if bytes(key) not in keys_to_try:
+                            keys_to_try.append(bytes(key))
 
             for key in keys_to_try:
                 klen = len(key)

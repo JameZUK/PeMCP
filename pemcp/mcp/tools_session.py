@@ -497,7 +497,6 @@ _SPECIALIZED_TOOL_GROUPS: Dict[str, List[tuple]] = {
         ("go_analyze", "Analyze Go binary metadata and symbols."),
         ("rust_analyze", "Analyze Rust binary metadata."),
         ("rust_demangle_symbols", "Demangle Rust symbol names."),
-        ("parse_dotnet_metadata", "Parse raw .NET metadata tables."),
     ],
     "emulation": [
         ("emulate_binary_with_qiling", "Full OS emulation with Qiling Framework."),

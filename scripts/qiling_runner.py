@@ -151,6 +151,295 @@ def _setup_api_hooks(ql, os_type, api_calls_list, limit):
             pass  # Fallback: no syscall capture if hooking fails
 
 
+def _setup_syscall_trace(ql, os_type, api_calls, timeline, syscall_filter, limit):
+    """Set up ENTER+EXIT hooks for full syscall/API timeline with return values.
+
+    Captures both arguments (on entry) and return values (on exit) for a
+    structured timeline. Also populates api_calls for backward-compatible
+    activity classification. Falls back to standard CALL hooks if
+    ENTER/EXIT intercepts aren't available in this Qiling version.
+    """
+    filter_lower = [f.lower() for f in syscall_filter] if syscall_filter else []
+    seq = [0]
+    max_timeline = limit * 3
+
+    def _read_retval(ql):
+        """Read the return value register (RAX for 64-bit, EAX for 32-bit)."""
+        try:
+            if hasattr(ql.arch.regs, 'rax'):
+                return ql.arch.regs.rax
+            elif hasattr(ql.arch.regs, 'eax'):
+                return ql.arch.regs.eax
+        except Exception:
+            pass
+        return None
+
+    if os_type == "windows":
+        def _win_enter(ql, address, params):
+            api_name = "unknown"
+            args = {}
+            if isinstance(params, dict):
+                api_name = params.get("__name__", "unknown")
+                for k, v in list(params.items())[:8]:
+                    if not k.startswith("__"):
+                        args[k] = str(v)[:200] if v is not None else None
+
+            # Always populate api_calls for activity classification
+            if len(api_calls) < limit * 2:
+                api_calls.append({
+                    "api": api_name,
+                    "address": _hex(address),
+                    "params": args,
+                    "retval": None,
+                })
+
+            # Apply filter for timeline
+            if filter_lower and not any(f in api_name.lower() for f in filter_lower):
+                return
+
+            if len(timeline) < max_timeline:
+                timeline.append({
+                    "seq": seq[0],
+                    "api": api_name,
+                    "type": "win_api",
+                    "address": _hex(address),
+                    "args": args,
+                    "return_value": None,
+                })
+                seq[0] += 1
+
+        def _win_exit(ql, *_args):
+            retval_hex = _hex(_read_retval(ql))
+            for entry in reversed(timeline):
+                if entry.get("return_value") is None:
+                    entry["return_value"] = retval_hex
+                    break
+            if api_calls and api_calls[-1].get("retval") is None:
+                api_calls[-1]["retval"] = retval_hex
+
+        try:
+            ql.os.set_api("*", _win_enter, QL_INTERCEPT.ENTER)
+            ql.os.set_api("*", _win_exit, QL_INTERCEPT.EXIT)
+        except Exception:
+            # ENTER/EXIT not available — fall back to CALL hooks
+            _setup_api_hooks(ql, os_type, api_calls, limit)
+
+    else:
+        # POSIX syscall hooks
+        def _posix_enter(ql, *args):
+            syscall_name = str(args[0]) if args else "unknown"
+            if filter_lower and not any(f in syscall_name.lower() for f in filter_lower):
+                return
+
+            sc_args = {}
+            for i, a in enumerate(args[1:6]):
+                sc_args[f"arg{i}"] = str(a)[:200] if a is not None else None
+
+            pc = None
+            try:
+                pc = _hex(ql.arch.regs.arch_pc)
+            except Exception:
+                pass
+
+            if len(api_calls) < limit * 2:
+                api_calls.append({
+                    "api": syscall_name,
+                    "address": pc,
+                    "params": sc_args,
+                    "retval": None,
+                })
+
+            if len(timeline) < max_timeline:
+                timeline.append({
+                    "seq": seq[0],
+                    "syscall": syscall_name,
+                    "type": "posix_syscall",
+                    "address": pc,
+                    "args": sc_args,
+                    "return_value": None,
+                })
+                seq[0] += 1
+
+        def _posix_exit(ql, *args):
+            # Try args first (some Qiling versions pass retval), else read register
+            retval = None
+            if args and isinstance(args[0], int):
+                retval = args[0]
+            else:
+                retval = _read_retval(ql)
+            retval_hex = _hex(retval)
+
+            for entry in reversed(timeline):
+                if entry.get("return_value") is None:
+                    entry["return_value"] = retval_hex
+                    break
+            if api_calls and api_calls[-1].get("retval") is None:
+                api_calls[-1]["retval"] = retval_hex
+
+        try:
+            ql.os.set_syscall("*", _posix_enter, QL_INTERCEPT.ENTER)
+            ql.os.set_syscall("*", _posix_exit, QL_INTERCEPT.EXIT)
+        except Exception:
+            _setup_api_hooks(ql, os_type, api_calls, limit)
+
+
+# Windows memory protection flags
+_WIN_PROTECT_FLAGS = {
+    0x01: "PAGE_NOACCESS", 0x02: "PAGE_READONLY", 0x04: "PAGE_READWRITE",
+    0x08: "PAGE_WRITECOPY", 0x10: "PAGE_EXECUTE", 0x20: "PAGE_EXECUTE_READ",
+    0x40: "PAGE_EXECUTE_READWRITE", 0x80: "PAGE_EXECUTE_WRITECOPY",
+}
+
+
+def _safe_int(val, default=0):
+    """Parse a string or int value to int, returning default on failure."""
+    if val is None:
+        return default
+    if isinstance(val, int):
+        return val
+    try:
+        return int(val, 0) if isinstance(val, str) and val.startswith("0x") else int(val)
+    except (ValueError, TypeError):
+        return default
+
+
+def _analyze_memory_activity(api_calls, limit):
+    """Post-hoc analysis of captured API calls for memory allocation patterns.
+
+    Returns structured memory operation timeline and flags suspicious patterns
+    like RWX allocations, protection changes to executable, guard pages, and
+    large allocations that may indicate injection or unpacking.
+    """
+    memory_ops = []
+    anomalies = []
+
+    for call in api_calls:
+        api = (call.get("api") or "").lower()
+        params = call.get("params", {})
+
+        if "virtualalloc" in api and "free" not in api:
+            size = _safe_int(params.get("dwSize") or params.get("RegionSize", "0"))
+            protect = _safe_int(params.get("flProtect") or params.get("Protect", "0"))
+            addr = params.get("lpAddress") or params.get("BaseAddress", "0")
+
+            protect_name = _WIN_PROTECT_FLAGS.get(protect & 0xFF, hex(protect))
+            entry = {
+                "api": call.get("api", "VirtualAlloc"),
+                "address": str(addr),
+                "size": size,
+                "protection": protect_name,
+            }
+            memory_ops.append(entry)
+
+            if protect & 0x40:  # PAGE_EXECUTE_READWRITE
+                anomalies.append({
+                    "type": "RWX_ALLOCATION",
+                    "severity": "high",
+                    "api": call.get("api"),
+                    "size": size,
+                    "detail": f"Allocated {size} bytes with RWX — common in shellcode injection and unpacking",
+                })
+            if size > 1048576:  # > 1 MB
+                anomalies.append({
+                    "type": "LARGE_ALLOCATION",
+                    "severity": "medium",
+                    "api": call.get("api"),
+                    "size": size,
+                    "detail": f"Large allocation ({size} bytes) — may indicate process hollowing or payload staging",
+                })
+
+        elif "virtualprotect" in api:
+            new_protect = _safe_int(params.get("flNewProtect") or params.get("NewProtect", "0"))
+            addr = params.get("lpAddress") or params.get("BaseAddress", "0")
+            size = _safe_int(params.get("dwSize") or params.get("RegionSize", "0"))
+
+            protect_name = _WIN_PROTECT_FLAGS.get(new_protect & 0xFF, hex(new_protect))
+            entry = {
+                "api": call.get("api", "VirtualProtect"),
+                "address": str(addr),
+                "size": size,
+                "new_protection": protect_name,
+            }
+            memory_ops.append(entry)
+
+            if new_protect & 0x40:
+                anomalies.append({
+                    "type": "RWX_PROTECTION_CHANGE",
+                    "severity": "high",
+                    "api": call.get("api"),
+                    "detail": "Protection changed to RWX — often precedes shellcode execution",
+                })
+            elif new_protect & 0xF0:  # any executable flag
+                anomalies.append({
+                    "type": "EXECUTE_PROTECTION_CHANGE",
+                    "severity": "medium",
+                    "api": call.get("api"),
+                    "detail": f"Protection changed to executable ({protect_name}) — may indicate unpacking",
+                })
+            if new_protect & 0x100:  # PAGE_GUARD
+                anomalies.append({
+                    "type": "GUARD_PAGE",
+                    "severity": "medium",
+                    "api": call.get("api"),
+                    "detail": "Guard page set — can be used for anti-debug single-step tracking",
+                })
+
+        elif "heapalloc" in api or "heapcreate" in api:
+            size = _safe_int(params.get("dwBytes") or params.get("dwInitialSize", "0"))
+            memory_ops.append({
+                "api": call.get("api", api),
+                "size": size,
+            })
+
+        elif "virtualfree" in api:
+            addr = params.get("lpAddress", "0")
+            memory_ops.append({
+                "api": call.get("api", "VirtualFree"),
+                "address": str(addr),
+            })
+
+        elif api in ("mmap", "mmap2"):
+            # POSIX memory mapping
+            memory_ops.append({
+                "api": api,
+                "params_raw": {k: str(v)[:100] for k, v in list(params.items())[:6]},
+            })
+
+        elif api == "mprotect":
+            memory_ops.append({
+                "api": "mprotect",
+                "params_raw": {k: str(v)[:100] for k, v in list(params.items())[:6]},
+            })
+
+        if len(memory_ops) >= limit * 2:
+            break
+
+    # Detect allocation→execute sequences
+    alloc_apis = [op for op in memory_ops if "alloc" in op.get("api", "").lower()]
+    protect_apis = [op for op in memory_ops if "protect" in op.get("api", "").lower()]
+    if alloc_apis and protect_apis:
+        exec_changes = [p for p in protect_apis
+                        if _safe_int(p.get("new_protection", "0x0"), 0) & 0xF0]
+        if exec_changes:
+            anomalies.append({
+                "type": "ALLOC_THEN_EXECUTE_SEQUENCE",
+                "severity": "high",
+                "detail": (f"Detected {len(alloc_apis)} allocation(s) followed by "
+                           f"{len(exec_changes)} protection change(s) to executable — "
+                           "classic injection/unpacking pattern"),
+            })
+
+    return {
+        "memory_operations": memory_ops[:limit],
+        "anomalies": anomalies[:limit],
+        "summary": {
+            "total_memory_operations": len(memory_ops),
+            "total_anomalies": len(anomalies),
+            "anomaly_types": sorted(set(a["type"] for a in anomalies)),
+        },
+    }
+
+
 def _detect_binary_format(filepath):
     """Detect binary format from magic bytes. Returns (os_type, arch, format_desc)."""
     with open(filepath, "rb") as f:
@@ -382,6 +671,9 @@ def emulate_binary(cmd):
     timeout_seconds = cmd.get("timeout_seconds", 60)
     max_instructions = cmd.get("max_instructions", 0)
     limit = cmd.get("limit", 200)
+    trace_syscalls = cmd.get("trace_syscalls", False)
+    syscall_filter = cmd.get("syscall_filter", [])
+    track_memory = cmd.get("track_memory", False)
 
     ql, os_type, arch, fmt_desc, init_result, staged_path = _init_qiling_for_binary(filepath, rootfs_path)
     if ql is None:
@@ -393,9 +685,14 @@ def emulate_binary(cmd):
         file_activity = []
         registry_activity = []
         network_activity = []
+        syscall_timeline = []
 
-        # Set up OS-appropriate API/syscall interception
-        _setup_api_hooks(ql, os_type, api_calls, limit)
+        # Set up hooks — enhanced ENTER+EXIT for tracing, or standard CALL
+        if trace_syscalls:
+            _setup_syscall_trace(ql, os_type, api_calls, syscall_timeline,
+                                syscall_filter, limit)
+        else:
+            _setup_api_hooks(ql, os_type, api_calls, limit)
 
         try:
             if max_instructions > 0:
@@ -433,6 +730,24 @@ def emulate_binary(cmd):
             "registry_activity": _safe_slice(registry_activity, limit),
             "network_activity": _safe_slice(network_activity, limit),
         }
+
+        # Add syscall timeline when tracing is enabled
+        if trace_syscalls and syscall_timeline:
+            result["syscall_timeline"] = _safe_slice(syscall_timeline, limit)
+            result["total_syscalls_traced"] = len(syscall_timeline)
+            # Summarize by API/syscall name
+            counts = {}
+            for entry in syscall_timeline:
+                name = entry.get("api") or entry.get("syscall", "unknown")
+                counts[name] = counts.get(name, 0) + 1
+            result["syscall_summary"] = dict(sorted(counts.items(), key=lambda x: -x[1])[:20])
+            if syscall_filter:
+                result["syscall_filter_applied"] = syscall_filter
+
+        # Add memory allocation analysis when tracking is enabled
+        if track_memory:
+            result["memory_activity"] = _analyze_memory_activity(api_calls, limit)
+
         if dll_warning:
             result["warning"] = dll_warning
         return result

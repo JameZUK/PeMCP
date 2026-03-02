@@ -1,7 +1,7 @@
-"""MCP tools for .NET binary analysis using dnfile and dncil."""
+"""MCP tools for .NET binary analysis using dnfile, dncil, and dotnetfile."""
 import asyncio
-from typing import Dict, Any, Optional
-from pemcp.config import state, logger, Context, DNFILE_AVAILABLE, DNCIL_AVAILABLE
+from typing import Dict, Any, Optional, List
+from pemcp.config import state, logger, Context, DNFILE_AVAILABLE, DNCIL_AVAILABLE, DOTNETFILE_AVAILABLE
 from pemcp.mcp.server import tool_decorator, _check_mcp_response_size
 from pemcp.mcp._format_helpers import _check_lib, _get_filepath
 
@@ -11,6 +11,8 @@ if DNCIL_AVAILABLE:
     from dncil.cil.body import CilMethodBody
     from dncil.cil.error import MethodBodyFormatError as CilError
     from dncil.clr.token import Token
+if DOTNETFILE_AVAILABLE:
+    import dotnetfile
 
 
 @tool_decorator
@@ -21,23 +23,35 @@ async def dotnet_analyze(
 ) -> Dict[str, Any]:
     """
     [Phase: triage] Comprehensive .NET assembly analysis: CLR header, metadata
-    streams, type definitions, method definitions, assembly references, and
-    user strings.
+    streams, type definitions, method definitions, member references, assembly
+    references, and user strings. Uses dnfile backend when available, falls back
+    to dotnetfile automatically.
 
     When to use: When detect_binary_format() or classify_binary_purpose()
-    identifies a .NET assembly. This is the primary .NET analysis tool.
+    identifies a .NET assembly. For resource extraction and CIL disassembly,
+    use refinery_dotnet().
 
     Next steps: dotnet_disassemble_method() to inspect specific methods,
     get_triage_report() for risk assessment, extract_wide_strings() for
     .NET wide string data.
+
+    See also: refinery_dotnet() (Binary Refinery).
 
     Args:
         file_path: Optional path to a .NET binary. If None, uses the loaded file.
         limit: Max entries per category.
     """
     await ctx.info("Analysing .NET metadata")
-    _check_lib("dnfile", DNFILE_AVAILABLE, "dotnet_analyze")
+    if not DNFILE_AVAILABLE and not DOTNETFILE_AVAILABLE:
+        return {"error": "Neither dnfile nor dotnetfile is installed. Install one: pip install dnfile  OR  pip install dotnetfile"}
     target = _get_filepath(file_path)
+
+    # Use dotnetfile fallback if dnfile is not available
+    if not DNFILE_AVAILABLE:
+        await ctx.info("dnfile not available, using dotnetfile backend")
+        result = await asyncio.to_thread(_parse_with_dotnetfile, target, limit)
+        result["backend"] = "dotnetfile"
+        return await _check_mcp_response_size(ctx, result, "dotnet_analyze", "the 'limit' parameter")
 
     def _parse():
         try:
@@ -187,7 +201,91 @@ async def dotnet_analyze(
             dn.close()
 
     result = await asyncio.to_thread(_parse)
+    if "error" not in result:
+        result["backend"] = "dnfile"
     return await _check_mcp_response_size(ctx, result, "dotnet_analyze", "the 'limit' parameter")
+
+
+def _parse_with_dotnetfile(target: str, limit: int) -> Dict[str, Any]:
+    """Parse .NET metadata using the dotnetfile backend (fallback)."""
+    try:
+        dn = dotnetfile.DotNetPE(target)
+    except Exception as e:
+        return {"error": f"Not a valid .NET binary or parsing failed: {e}"}
+
+    result: Dict[str, Any] = {"file": target, "is_dotnet": True}
+
+    # CLR header
+    try:
+        result["clr_header"] = {
+            "runtime_version": str(dn.clr_header.RuntimeVersion) if hasattr(dn, 'clr_header') else None,
+        }
+    except Exception as e:
+        logger.debug("Could not read CLR version: %s", e)
+
+    # Type definitions
+    types: List[Dict[str, Any]] = []
+    try:
+        for td in dn.metadata_table_lookup("TypeDef"):
+            types.append({
+                "name": str(td.TypeName),
+                "namespace": str(td.TypeNamespace),
+            })
+            if len(types) >= limit:
+                break
+    except Exception as e:
+        logger.debug("Error reading .NET TypeDef table: %s", e)
+    result["type_definitions"] = types
+
+    # Method definitions
+    methods: List[Dict[str, Any]] = []
+    try:
+        for md in dn.metadata_table_lookup("MethodDef"):
+            methods.append({
+                "name": str(md.Name),
+                "rva": hex(md.RVA) if md.RVA else None,
+            })
+            if len(methods) >= limit:
+                break
+    except Exception as e:
+        logger.debug("Error reading .NET MethodDef table: %s", e)
+    result["method_definitions"] = methods
+
+    # Assembly references
+    refs: List[Dict[str, Any]] = []
+    try:
+        for ref in dn.metadata_table_lookup("AssemblyRef"):
+            refs.append({
+                "name": str(ref.Name),
+                "version": f"{ref.MajorVersion}.{ref.MinorVersion}" if hasattr(ref, 'MajorVersion') else None,
+            })
+            if len(refs) >= limit:
+                break
+    except Exception as e:
+        logger.debug("Error reading .NET AssemblyRef table: %s", e)
+    result["assembly_references"] = refs
+
+    # User strings
+    user_strings: List[str] = []
+    try:
+        for s in dn.get_user_strings():
+            if s and len(s) > 2:
+                user_strings.append(str(s))
+            if len(user_strings) >= limit:
+                break
+    except Exception as e:
+        logger.debug("Error reading .NET user strings: %s", e)
+    result["user_strings"] = user_strings
+
+    # Summary
+    result["summary"] = {
+        "types": len(types),
+        "methods": len(methods),
+        "assembly_refs": len(refs),
+        "user_strings": len(user_strings),
+    }
+
+    return result
 
 
 @tool_decorator
