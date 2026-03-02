@@ -472,6 +472,9 @@ async def qiling_resolve_api_hashes(
     ctx: Context,
     hash_values: List[str] = None,
     hash_algorithm: str = "ror13",
+    seed: Optional[int] = None,
+    case_handling: Optional[str] = None,
+    family_hint: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Resolves API hash values by computing hashes of known DLL export function
@@ -484,41 +487,128 @@ async def qiling_resolve_api_hashes(
     - djb2: DJB2 hash (Daniel J. Bernstein)
     - fnv1a: FNV-1a 32-bit hash
 
-    Rootfs requirements: This tool scans DLL export tables to build a hash lookup
-    database.  It REQUIRES real Windows DLL files in the rootfs to work — without
-    DLLs there are no exports to hash against and no hashes can be resolved.
-    Copy DLLs from C:\\Windows\\System32\\ (64-bit) or C:\\Windows\\SysWOW64\\
-    (32-bit) into qiling-rootfs/<arch>_windows/Windows/System32/ on the host.
-    The more DLLs you provide, the more hashes can be resolved.
+    Uses Qiling rootfs DLLs when available for comprehensive resolution. Falls
+    back to the bundled API name database (~800 curated + ~10K extended names)
+    when rootfs DLLs are absent.
 
     Args:
         hash_values: List of hash values to resolve (hex strings, e.g. ['0x6A4ABC5B']).
         hash_algorithm: Hash algorithm to use ('ror13', 'crc32', 'djb2', 'fnv1a').
+        seed: Custom seed/initial value for the hash algorithm. None uses standard
+            default (e.g. 5381 for djb2). Use for malware variants with modified seeds.
+        case_handling: Transform API names before hashing: 'lower', 'upper', or None.
+        family_hint: Malware family name. Reads algorithm, seed, and case from the
+            malware_signatures.yaml knowledge base automatically.
     """
     if hash_values is None:
         hash_values = []
-    await ctx.info(f"Resolving {len(hash_values)} API hashes ({hash_algorithm})")
+
+    # Apply family_hint overrides from KB
+    if family_hint:
+        try:
+            from pemcp.mcp.tools_malware_identify import _get_families
+            for fam in _get_families():
+                if fam.get("family", "").lower() == family_hint.lower():
+                    api_hash_meta = fam.get("api_hash") or {}
+                    if isinstance(api_hash_meta, dict):
+                        kb_algo = api_hash_meta.get("algorithm", "").replace("_modified", "")
+                        if kb_algo and hash_algorithm == "ror13":
+                            hash_algorithm = kb_algo
+                        if seed is None and "seed" in api_hash_meta:
+                            seed = api_hash_meta["seed"]
+                        if case_handling is None:
+                            cs = api_hash_meta.get("case_sensitive", True)
+                            if not cs:
+                                case_handling = "lower"
+                    break
+        except Exception:
+            logger.debug("qiling_resolve_api_hashes: KB lookup failed for '%s'",
+                         family_hint, exc_info=True)
+
+    await ctx.info(f"Resolving {len(hash_values)} API hashes ({hash_algorithm}"
+                   f"{f', seed={seed}' if seed is not None else ''})")
     _check_qiling("qiling_resolve_api_hashes")
 
     if not hash_values:
         return {"error": "No hash values provided. Pass a list of hex hash values to resolve."}
 
+    # Build the IPC command with optional seed/case
+    ipc_cmd = {
+        "action": "resolve_api_hashes",
+        "filepath": state.filepath or "",
+        "rootfs_path": _rootfs_path(),
+        "hash_values": hash_values,
+        "hash_algorithm": hash_algorithm,
+    }
+    if seed is not None:
+        ipc_cmd["hash_seed"] = seed
+    if case_handling:
+        ipc_cmd["case_handling"] = case_handling
+
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "qiling_resolve_api_hashes", 60))
     try:
-        result = await _run_qiling({
-            "action": "resolve_api_hashes",
-            "filepath": state.filepath or "",
-            "rootfs_path": _rootfs_path(),
-            "hash_values": hash_values,
-            "hash_algorithm": hash_algorithm,
-        }, 60)
+        result = await _run_qiling(ipc_cmd, 60)
     finally:
         progress_task.cancel()
         try:
             await progress_task
         except asyncio.CancelledError:
             pass
+
+    # Fallback: if Qiling resolved nothing (missing rootfs), use bundled DB
+    qiling_resolved = result.get("total_resolved", 0) if isinstance(result, dict) else 0
+    used_fallback = False
+    if qiling_resolved == 0 and isinstance(result, dict):
+        try:
+            from pemcp.mcp._helpers_api_hashes import (
+                get_all_api_names, build_hash_lookup,
+            )
+            await ctx.info("No rootfs DLLs — falling back to bundled API database")
+            api_names = get_all_api_names(include_extended=True)
+            lookup = build_hash_lookup(api_names, hash_algorithm,
+                                       seed=seed, case_handling=case_handling)
+
+            target_hashes = set()
+            for hv in hash_values:
+                target_hashes.add(int(hv, 0) if isinstance(hv, str) else int(hv))
+
+            fallback_resolved = []
+            for h in target_hashes:
+                if h in lookup:
+                    fallback_resolved.append({
+                        "hash_value": hex(h),
+                        "dll": "unknown",
+                        "function": lookup[h],
+                        "name_form": lookup[h],
+                        "source": "bundled_db",
+                    })
+
+            unresolved = [hex(h) for h in target_hashes
+                          if h not in {int(r["hash_value"], 16) for r in fallback_resolved}]
+            result = {
+                "status": "completed",
+                "hash_algorithm": hash_algorithm,
+                "seed": seed,
+                "source": "bundled_api_db (rootfs DLLs not found)",
+                "total_input": len(target_hashes),
+                "total_resolved": len(fallback_resolved),
+                "total_unresolved": len(unresolved),
+                "resolved": fallback_resolved,
+                "unresolved": unresolved,
+            }
+            used_fallback = True
+        except Exception:
+            logger.debug("qiling_resolve_api_hashes: bundled DB fallback failed", exc_info=True)
+
+    if isinstance(result, dict) and not used_fallback:
+        if seed is not None:
+            result["seed"] = seed
+        if case_handling:
+            result["case_handling"] = case_handling
+    if family_hint and isinstance(result, dict):
+        result["family_hint"] = family_hint
+
     await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "qiling_resolve_api_hashes")
 

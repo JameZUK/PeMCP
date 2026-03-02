@@ -756,30 +756,33 @@ def resolve_api_hashes(cmd):
                 ),
             }
 
-    # Compute hashes for known DLL exports
-    def _ror13(name):
-        """ROR13 hash (commonly used by shellcode)."""
-        h = 0
+    # Read optional seed and case_handling from IPC command
+    custom_seed = cmd.get("hash_seed")  # None means use default
+    case_handling = cmd.get("case_handling")  # 'lower', 'upper', or None
+
+    # Default seeds per algorithm
+    _DEFAULT_SEEDS = {"ror13": 0, "crc32": 0, "djb2": 5381, "fnv1a": 0x811C9DC5}
+
+    # Compute hashes for known DLL exports — with configurable seeds
+    def _ror13(name, seed=None):
+        h = (seed if seed is not None else _DEFAULT_SEEDS["ror13"]) & 0xFFFFFFFF
         for c in name:
             h = ((h >> 13) | (h << (32 - 13))) & 0xFFFFFFFF
             h = (h + ord(c)) & 0xFFFFFFFF
         return h
 
-    def _crc32(name):
-        """CRC32 hash."""
+    def _crc32(name, seed=None):
         import binascii
         return binascii.crc32(name.encode()) & 0xFFFFFFFF
 
-    def _djb2(name):
-        """DJB2 hash."""
-        h = 5381
+    def _djb2(name, seed=None):
+        h = (seed if seed is not None else _DEFAULT_SEEDS["djb2"]) & 0xFFFFFFFF
         for c in name:
             h = ((h << 5) + h + ord(c)) & 0xFFFFFFFF
         return h
 
-    def _fnv1a(name):
-        """FNV-1a hash (32-bit)."""
-        h = 0x811C9DC5
+    def _fnv1a(name, seed=None):
+        h = (seed if seed is not None else _DEFAULT_SEEDS["fnv1a"]) & 0xFFFFFFFF
         for c in name:
             h = (h ^ ord(c)) & 0xFFFFFFFF
             h = (h * 0x01000193) & 0xFFFFFFFF
@@ -792,9 +795,17 @@ def resolve_api_hashes(cmd):
         "fnv1a": _fnv1a,
     }
 
-    hash_func = hash_funcs.get(hash_algorithm)
-    if not hash_func:
+    hash_func_raw = hash_funcs.get(hash_algorithm)
+    if not hash_func_raw:
         return {"error": f"Unknown hash algorithm: {hash_algorithm}. Supported: {list(hash_funcs.keys())}"}
+
+    # Wrap with seed and case handling
+    def hash_func(name):
+        if case_handling == "lower":
+            name = name.lower()
+        elif case_handling == "upper":
+            name = name.upper()
+        return hash_func_raw(name, seed=custom_seed)
 
     # Convert input hash values to integers
     target_hashes = set()

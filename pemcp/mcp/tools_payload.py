@@ -8,7 +8,7 @@ import math
 import re
 import struct
 
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from pemcp.config import state, logger, Context
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
@@ -838,3 +838,450 @@ async def extract_config_automated(
         )
 
     return await _check_mcp_response_size(ctx, result, "extract_config_automated")
+
+
+# ===================================================================
+#  Tool 4: extract_config_for_family — KB-driven config extraction
+# ===================================================================
+
+def _rc4_decrypt(data: bytes, key: bytes) -> bytes:
+    """RC4 decryption (KSA + PRGA)."""
+    S = list(range(256))
+    j = 0
+    for i in range(256):
+        j = (j + S[i] + key[i % len(key)]) % 256
+        S[i], S[j] = S[j], S[i]
+    i = j = 0
+    result = bytearray(len(data))
+    for n in range(len(data)):
+        i = (i + 1) % 256
+        j = (j + S[i]) % 256
+        S[i], S[j] = S[j], S[i]
+        result[n] = data[n] ^ S[(S[i] + S[j]) % 256]
+    return bytes(result)
+
+
+def _parse_cstrings(data: bytes, max_count: int = 50) -> list:
+    """Extract null-terminated strings sequentially from data."""
+    strings = []
+    offset = 0
+    while offset < len(data) and len(strings) < max_count:
+        null_pos = data.find(b"\x00", offset)
+        if null_pos == -1:
+            s = data[offset:].decode("ascii", errors="replace")
+            if s:
+                strings.append(s)
+            break
+        s = data[offset:null_pos].decode("ascii", errors="replace")
+        strings.append(s)
+        offset = null_pos + 1
+    return strings
+
+
+# --- Family-specific extractor dispatch table ---
+
+def _read_lpstring(data: bytes, pos: int) -> Tuple[str, int]:
+    """Read a length-prefixed null-terminated string: uint32_le length | chars | null."""
+    if pos + 4 > len(data):
+        return ("", pos)
+    strlen = struct.unpack_from("<I", data, pos)[0]
+    pos += 4
+    if strlen < 1 or pos + strlen > len(data):
+        return ("", pos)
+    raw = data[pos:pos + strlen]
+    # Strip trailing null if present (the null is included in strlen)
+    if raw and raw[-1:] == b"\x00":
+        raw = raw[:-1]
+    pos += strlen
+    return (raw.decode("ascii", errors="replace"), pos)
+
+
+def _extract_adaptixc2_beacon(file_data: bytes, section_data: bytes,
+                               section_offset: int, family_meta: dict) -> Optional[Dict[str, Any]]:
+    """Extract AdaptixC2 Beacon config: size(4B LE) | ciphertext | rc4_key(16B).
+
+    Decrypted config format (length-prefixed strings):
+      [4B header][1B ssl][4B server_count]
+      per server: [4B strlen][string+null][4B port]
+      [lpstring method][lpstring uri][lpstring parameter]
+      [lpstring user_agent][lpstring http_headers]
+      [4B sleep][4B jitter][4B download_chunk][4B pad][4B retry][4B pad]
+    """
+    config_meta = family_meta.get("config", {})
+    key_length = config_meta.get("key_length", 16)
+
+    # Scan the section for size-prefixed blobs that look like encrypted configs
+    for offset in range(0, min(len(section_data) - 24, 256)):
+        size_val = struct.unpack_from("<I", section_data, offset)[0]
+        if size_val < 10 or size_val > 4096:
+            continue
+        total_blob = 4 + size_val + key_length
+        if offset + total_blob > len(section_data):
+            continue
+
+        ciphertext = section_data[offset + 4:offset + 4 + size_val]
+        key = section_data[offset + 4 + size_val:offset + total_blob]
+
+        # Validate: key should have reasonable entropy (not all zeros/same byte)
+        if len(set(key)) < 3:
+            continue
+
+        plaintext = _rc4_decrypt(ciphertext, key)
+        if len(plaintext) < 20:
+            continue
+
+        # Validate: byte 4 should be ssl flag (0 or 1), bytes 5-8 a small server count
+        ssl_byte = plaintext[4]
+        if ssl_byte > 1:
+            continue
+        server_count = struct.unpack_from("<I", plaintext, 5)[0]
+        if server_count < 1 or server_count > 50:
+            continue
+
+        # Parse fields
+        fields = {}
+        pos = 0
+        try:
+            fields["config_header"] = plaintext[:4].hex()
+            pos = 4
+            fields["ssl"] = plaintext[pos]
+            pos += 1
+            fields["server_count"] = struct.unpack_from("<I", plaintext, pos)[0]
+            pos += 4
+
+            # Parse servers: each is lpstring(addr) + uint32(port)
+            servers = []
+            for _ in range(fields["server_count"]):
+                addr, pos = _read_lpstring(plaintext, pos)
+                if pos + 4 > len(plaintext):
+                    break
+                port = struct.unpack_from("<I", plaintext, pos)[0]
+                pos += 4
+                servers.append(f"{addr}:{port}")
+            fields["servers"] = ";".join(servers)
+
+            # Parse remaining length-prefixed strings
+            for field_name in ["http_method", "uri_path", "parameter",
+                               "user_agent", "http_headers"]:
+                val, pos = _read_lpstring(plaintext, pos)
+                fields[field_name] = val
+
+            # Parse trailing integers
+            for field_name in ["sleep", "jitter", "download_chunk_size",
+                               "_pad1", "retry_count", "_pad2"]:
+                if pos + 4 > len(plaintext):
+                    break
+                fields[field_name] = struct.unpack_from("<I", plaintext, pos)[0]
+                pos += 4
+
+            # Remove padding fields from output
+            fields.pop("_pad1", None)
+            fields.pop("_pad2", None)
+        except Exception:
+            pass  # Return whatever we managed to parse
+
+        # Extract IOCs
+        iocs = []
+        if fields.get("servers"):
+            for server in fields["servers"].split(";"):
+                server = server.strip()
+                if server:
+                    iocs.append({"type": "server", "value": server})
+        if fields.get("uri_path"):
+            iocs.append({"type": "uri_path", "value": fields["uri_path"]})
+        if fields.get("user_agent"):
+            iocs.append({"type": "user_agent", "value": fields["user_agent"]})
+
+        abs_offset = section_offset + offset
+        return {
+            "family": "AdaptixC2 Beacon",
+            "config_offset": hex(abs_offset),
+            "config_size": total_blob,
+            "encryption": "rc4",
+            "key_hex": key.hex(),
+            "key_offset": hex(abs_offset + 4 + size_val),
+            "decrypted_size": len(plaintext),
+            "decrypted_hex": plaintext.hex(),
+            "fields": fields,
+            "iocs": iocs,
+            "bytes_parsed": pos,
+        }
+
+    return None
+
+
+def _extract_generic_rc4_size_prefixed(file_data: bytes, section_data: bytes,
+                                        section_offset: int, family_meta: dict) -> Optional[Dict[str, Any]]:
+    """Generic extractor for: size(4B LE) | ciphertext | key(NB) in a section."""
+    config_meta = family_meta.get("config", {})
+    key_length = config_meta.get("key_length", 16)
+    family_name = family_meta.get("family", "unknown")
+
+    for offset in range(0, min(len(section_data) - 24, 512)):
+        size_val = struct.unpack_from("<I", section_data, offset)[0]
+        if size_val < 8 or size_val > 8192:
+            continue
+        total_blob = 4 + size_val + key_length
+        if offset + total_blob > len(section_data):
+            continue
+
+        ciphertext = section_data[offset + 4:offset + 4 + size_val]
+        key = section_data[offset + 4 + size_val:offset + total_blob]
+
+        if len(set(key)) < 3:
+            continue
+
+        plaintext = _rc4_decrypt(ciphertext, key)
+
+        # Basic validation: should contain some printable content
+        printable_count = sum(1 for b in plaintext if 32 <= b < 127)
+        if printable_count < len(plaintext) * 0.15:
+            continue
+
+        abs_offset = section_offset + offset
+        # Extract any null-terminated strings as potential config values
+        strings = _parse_cstrings(plaintext, max_count=20)
+        strings = [s for s in strings if len(s) >= 2]
+
+        return {
+            "family": family_name,
+            "config_offset": hex(abs_offset),
+            "config_size": total_blob,
+            "encryption": "rc4",
+            "key_hex": key.hex(),
+            "key_offset": hex(abs_offset + 4 + size_val),
+            "decrypted_size": len(plaintext),
+            "decrypted_hex": plaintext.hex(),
+            "decrypted_text": plaintext.decode("ascii", errors="replace")[:500],
+            "extracted_strings": strings[:20],
+        }
+
+    return None
+
+
+def _extract_xor_single_byte(file_data: bytes, section_data: bytes,
+                               section_offset: int, family_meta: dict) -> Optional[Dict[str, Any]]:
+    """Generic extractor for single-byte XOR encrypted configs."""
+    constants = family_meta.get("constants") or {}
+    family_name = family_meta.get("family", "unknown")
+
+    config_size = constants.get("config_size")
+    if not isinstance(config_size, int) or config_size < 8:
+        return None
+
+    candidate_keys = []
+    for k, v in constants.items():
+        if k.startswith("xor_key_") and isinstance(v, int) and 0 < v < 256:
+            candidate_keys.append(v)
+    if not candidate_keys:
+        return None
+
+    for key in candidate_keys:
+        needle = bytes([key]) * 16
+        pos = section_data.find(needle)
+        while pos != -1:
+            # Align to block start
+            block_start = pos
+            while block_start > 0 and section_data[block_start - 1] == key:
+                block_start -= 1
+            if block_start + config_size > len(section_data):
+                pos = section_data.find(needle, pos + 16)
+                continue
+
+            candidate = section_data[block_start:block_start + config_size]
+            decrypted = bytes(b ^ key for b in candidate)
+
+            # Validate
+            first32 = decrypted[:32]
+            non_null = sum(1 for b in first32 if b != 0)
+            if 4 <= non_null <= 28:
+                abs_offset = section_offset + block_start
+                strings = _parse_cstrings(decrypted, max_count=20)
+                strings = [s for s in strings if len(s) >= 2]
+
+                return {
+                    "family": family_name,
+                    "config_offset": hex(abs_offset),
+                    "config_size": config_size,
+                    "encryption": "xor_single_byte",
+                    "xor_key": key,
+                    "xor_key_hex": f"0x{key:02x}",
+                    "decrypted_size": len(decrypted),
+                    "decrypted_hex": decrypted.hex(),
+                    "decrypted_text": decrypted.decode("ascii", errors="replace")[:500],
+                    "extracted_strings": strings[:20],
+                }
+
+            pos = section_data.find(needle, pos + 16)
+
+    return None
+
+
+# Dispatch table: family name (lowercase) → extractor function
+_FAMILY_EXTRACTORS = {
+    "adaptixc2 beacon": _extract_adaptixc2_beacon,
+}
+
+
+@tool_decorator
+async def extract_config_for_family(
+    ctx: Context,
+    family: str,
+    section_hint: Optional[str] = None,
+    offset_hint: Optional[str] = None,
+    auto_note: bool = True,
+) -> Dict[str, Any]:
+    """
+    [Phase: deep-dive] Extracts malware configuration using family-specific
+    recipes from the knowledge base. Locates the encrypted config blob, extracts
+    the key, decrypts, and parses the fields automatically.
+
+    When to use: After identify_malware_family() returns a confirmed family, use
+    this to extract the full C2 config in a single call. Falls back to generic
+    extraction if no family-specific extractor exists.
+
+    Next steps: Review extracted IOCs with get_iocs_structured(). Use add_note()
+    to record key findings. Cross-reference servers with get_virustotal_report().
+
+    Args:
+        family: Malware family name (e.g. 'AdaptixC2 Beacon'). Must match a
+            family in malware_signatures.yaml.
+        section_hint: Override the section to scan (e.g. '.rdata', '.data').
+            If None, uses the section from the KB entry.
+        offset_hint: Start scanning at this file offset (e.g. '0x1000').
+        auto_note: If True, automatically save extracted IOCs as notes.
+    """
+    await ctx.info(f"Extracting config for family: {family}")
+    _check_pe_loaded("extract_config_for_family")
+
+    # Load KB entry
+    from pemcp.mcp.tools_malware_identify import _get_families
+    family_meta = None
+    for fam in _get_families():
+        if fam.get("family", "").lower() == family.lower():
+            family_meta = fam
+            break
+
+    if not family_meta:
+        return {
+            "error": f"Unknown family '{family}'. Use list_malware_signatures() to see available families.",
+        }
+
+    config_meta = family_meta.get("config") or {}
+    if not isinstance(config_meta, dict):
+        return {
+            "error": f"No config extraction info for '{family}' in the knowledge base.",
+            "family": family,
+        }
+
+    pe = state.pe_object
+    file_data = pe.__data__
+
+    # Determine which section to scan
+    target_section = section_hint
+    if not target_section:
+        loc = config_meta.get("location") or {}
+        if isinstance(loc, dict):
+            target_section = loc.get("section")
+
+    # Get section data
+    section_data = file_data
+    section_offset = 0
+    if target_section and pe.sections:
+        for sec in pe.sections:
+            sec_name = sec.Name.decode("utf-8", "ignore").rstrip("\x00")
+            if sec_name == target_section:
+                section_offset = sec.PointerToRawData
+                section_size = sec.SizeOfRawData
+                section_data = file_data[section_offset:section_offset + section_size]
+                break
+
+    if offset_hint:
+        from pemcp.mcp._input_helpers import _parse_int_param
+        hint_offset = _parse_int_param(offset_hint, "offset_hint")
+        if hint_offset >= section_offset:
+            rel_offset = hint_offset - section_offset
+            section_data = section_data[rel_offset:]
+            section_offset = hint_offset
+
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
+    def _extract():
+        bridge.info(f"Scanning {target_section or 'full binary'} ({len(section_data)} bytes)...")
+        bridge.report_progress(10, 100)
+
+        # Try family-specific extractor first
+        family_key = family.lower()
+        if family_key in _FAMILY_EXTRACTORS:
+            bridge.info(f"Using {family} specific extractor...")
+            bridge.report_progress(30, 100)
+            result = _FAMILY_EXTRACTORS[family_key](file_data, section_data,
+                                                     section_offset, family_meta)
+            if result:
+                bridge.report_progress(90, 100)
+                return result
+
+        # Fall back to generic extraction based on encryption type
+        encryption = config_meta.get("encryption", "")
+        bridge.info(f"Trying generic {encryption} extraction...")
+        bridge.report_progress(50, 100)
+
+        if encryption == "rc4":
+            result = _extract_generic_rc4_size_prefixed(
+                file_data, section_data, section_offset, family_meta)
+            if result:
+                bridge.report_progress(90, 100)
+                return result
+
+        if encryption == "xor_single_byte":
+            result = _extract_xor_single_byte(
+                file_data, section_data, section_offset, family_meta)
+            if result:
+                bridge.report_progress(90, 100)
+                return result
+
+        bridge.report_progress(90, 100)
+        return None
+
+    result = await asyncio.to_thread(_extract)
+
+    if result is None:
+        return {
+            "status": "not_found",
+            "family": family,
+            "section_scanned": target_section or "full binary",
+            "encryption_type": config_meta.get("encryption", "unknown"),
+            "hint": (
+                "Config blob not found in the expected location. Try: "
+                "1) Different section_hint (e.g. '.data', '.rdata', '.rsrc'). "
+                "2) get_hex_dump() to manually inspect candidate regions. "
+                "3) analyze_entropy_by_offset() to find encrypted regions."
+            ),
+        }
+
+    result["status"] = "extracted"
+    result["section_scanned"] = target_section or "full binary"
+
+    # Auto-note IOCs
+    if auto_note and result.get("iocs"):
+        for ioc in result["iocs"][:10]:
+            try:
+                state.add_note(
+                    content=f"[{family}] {ioc['type']}: {ioc['value']}",
+                    category="ioc",
+                )
+            except Exception:
+                pass
+    if auto_note and result.get("fields"):
+        try:
+            fields_summary = ", ".join(
+                f"{k}={v}" for k, v in list(result["fields"].items())[:8]
+            )
+            state.add_note(
+                content=f"[{family}] Config extracted: {fields_summary}",
+                category="tool_result",
+            )
+        except Exception:
+            pass
+
+    return await _check_mcp_response_size(ctx, result, "extract_config_for_family")

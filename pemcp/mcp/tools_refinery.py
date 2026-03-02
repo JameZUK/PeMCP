@@ -993,14 +993,22 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
         parts = step_str.split(":")
         unit_name = parts[0].lower()
 
+        _CIPHER_NAMES = ("rc4", "aes", "des", "blowfish", "chacha", "salsa")
+
         if unit_name == "xor":
             from refinery.units.blockwise.xor import xor
             key = bytes.fromhex(parts[1]) if len(parts) > 1 else b"\x00"
             current = current | xor(key) | bytes
-        elif unit_name in ("rc4", "aes", "des", "blowfish", "chacha", "salsa"):
-            mod_path = f"refinery.units.crypto.cipher.{unit_name}"
+
+        # ── Ciphers (decrypt by default, enc_ prefix to encrypt) ──
+        elif unit_name in _CIPHER_NAMES or (
+            unit_name.startswith("enc_") and unit_name[4:] in _CIPHER_NAMES
+        ):
+            encrypt_mode = unit_name.startswith("enc_")
+            cipher_name = unit_name[4:] if encrypt_mode else unit_name
+            mod_path = f"refinery.units.crypto.cipher.{cipher_name}"
             mod = importlib.import_module(mod_path)
-            unit_cls = getattr(mod, unit_name)
+            unit_cls = getattr(mod, cipher_name)
             kwargs = {}
             if len(parts) > 1:
                 kwargs["key"] = bytes.fromhex(parts[1])
@@ -1008,7 +1016,132 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
                 kwargs["mode"] = parts[2].upper()
             if len(parts) > 3:
                 kwargs["iv"] = bytes.fromhex(parts[3])
+            if encrypt_mode:
+                # Stream ciphers (rc4) are symmetric — reverse isn't needed/accepted.
+                # Block ciphers (aes, des, blowfish) use reverse to switch direction.
+                _STREAM_CIPHERS = {"rc4", "chacha", "salsa"}
+                if cipher_name not in _STREAM_CIPHERS:
+                    kwargs["reverse"] = True
             current = current | unit_cls(**kwargs) | bytes
+
+        # ── Byte slicing ──
+        elif unit_name == "snip":
+            slice_args = parts[1:]
+            if len(slice_args) == 0:
+                pass  # no-op
+            elif len(slice_args) == 1:
+                current = current[int(slice_args[0]):]
+            elif len(slice_args) == 2:
+                start = int(slice_args[0]) if slice_args[0] else None
+                stop = int(slice_args[1]) if slice_args[1] else None
+                current = current[slice(start, stop)]
+            else:
+                start = int(slice_args[0]) if slice_args[0] else None
+                stop = int(slice_args[1]) if slice_args[1] else None
+                step = int(slice_args[2]) if slice_args[2] else None
+                current = current[slice(start, stop, step)]
+
+        # ── Chunking ──
+        elif unit_name == "chop":
+            if len(parts) < 2:
+                raise ValueError("chop requires chunk size: 'chop:16' or 'chop:16:0'")
+            chunk_size = int(parts[1])
+            if chunk_size <= 0:
+                raise ValueError("chop chunk size must be positive")
+            chunks = [current[i:i + chunk_size] for i in range(0, len(current), chunk_size)]
+            if len(parts) >= 3:
+                idx = int(parts[2])
+                if idx < 0 or idx >= len(chunks):
+                    raise ValueError(f"chop index {idx} out of range ({len(chunks)} chunks)")
+                current = chunks[idx]
+            else:
+                current = chunks[0] if chunks else b""
+
+        elif unit_name == "pick":
+            if len(parts) < 2:
+                raise ValueError("pick requires byte count: 'pick:16'")
+            current = current[:int(parts[1])]
+
+        # ── Padding / termination ──
+        elif unit_name == "pad":
+            from refinery.units.meta.pad import pad as _pad
+            if len(parts) < 2:
+                raise ValueError("pad requires block size: 'pad:16'")
+            block_size = int(parts[1])
+            if block_size <= 0:
+                raise ValueError("pad block size must be positive")
+            current = current | _pad(block_size) | bytes
+
+        elif unit_name == "terminate":
+            if len(parts) >= 2 and parts[1] == "add":
+                # Add null if missing (no refinery equivalent)
+                if not current.endswith(b"\x00"):
+                    current = current + b"\x00"
+            else:
+                from refinery.units.blockwise.terminate import terminate as _term
+                current = current | _term() | bytes
+
+        elif unit_name == "nop":
+            pass
+
+        # ── Bitwise operations (delegate to refinery blockwise units) ──
+        elif unit_name == "ror":
+            from refinery.units.blockwise.rotr import rotr
+            if len(parts) < 2:
+                raise ValueError("ror requires shift amount: 'ror:13' or 'ror:13:dword'")
+            shift = int(parts[1])
+            bs = 4 if (len(parts) > 2 and parts[2] == "dword") else 1
+            current = current | rotr(shift, blocksize=bs) | bytes
+
+        elif unit_name == "rol":
+            from refinery.units.blockwise.rotl import rotl
+            if len(parts) < 2:
+                raise ValueError("rol requires shift amount: 'rol:3' or 'rol:3:dword'")
+            shift = int(parts[1])
+            bs = 4 if (len(parts) > 2 and parts[2] == "dword") else 1
+            current = current | rotl(shift, blocksize=bs) | bytes
+
+        elif unit_name == "shl":
+            from refinery.units.blockwise.shl import shl as _shl
+            if len(parts) < 2:
+                raise ValueError("shl requires shift amount: 'shl:2'")
+            current = current | _shl(int(parts[1])) | bytes
+
+        elif unit_name == "shr":
+            from refinery.units.blockwise.shr import shr as _shr
+            if len(parts) < 2:
+                raise ValueError("shr requires shift amount: 'shr:2'")
+            current = current | _shr(int(parts[1])) | bytes
+
+        elif unit_name in ("and", "bitand"):
+            from refinery.units.blockwise.alu import alu
+            if len(parts) < 2:
+                raise ValueError("and requires hex mask: 'and:0F'")
+            current = current | alu("B&A", int(parts[1], 16)) | bytes
+
+        elif unit_name in ("or", "bitor"):
+            from refinery.units.blockwise.alu import alu
+            if len(parts) < 2:
+                raise ValueError("or requires hex mask: 'or:80'")
+            current = current | alu("B|A", int(parts[1], 16)) | bytes
+
+        elif unit_name in ("not", "bitnot"):
+            from refinery.units.blockwise.neg import neg
+            current = current | neg() | bytes
+
+        elif unit_name == "add":
+            from refinery.units.blockwise.add import add as _add
+            if len(parts) < 2:
+                raise ValueError("add requires value: 'add:5'")
+            current = current | _add(int(parts[1])) | bytes
+
+        elif unit_name == "sub":
+            from refinery.units.blockwise.sub import sub as _sub
+            if len(parts) < 2:
+                raise ValueError("sub requires value: 'sub:5'")
+            current = current | _sub(int(parts[1])) | bytes
+
+        # ── Refinery built-in units ──
         elif unit_name in _PIPELINE_UNIT_MAP:
             mod_path, cls_name, kwargs = _PIPELINE_UNIT_MAP[unit_name]
             mod = importlib.import_module(mod_path)
@@ -1034,8 +1167,17 @@ async def refinery_pipeline(
 ) -> Dict[str, Any]:
     """Execute a multi-step Binary Refinery transformation pipeline.
 
-    Each step is 'unit_name:arg1:arg2'. Examples: 'b64', 'xor:41',
-    'aes:key_hex:mode', 'rc4:key_hex', 'zl', 'decompress'.
+    Each step is 'unit_name:arg1:arg2'.
+
+    Available pipeline steps:
+    - Encoding: b64, hex, b32, b85, url, esc, u16
+    - Compression: zl, bz2, lzma, lz4, decompress
+    - Crypto: xor:KEY, rc4:KEY, aes:KEY:MODE:IV, des, blowfish, chacha, salsa
+      Prefix with enc_ to encrypt: enc_rc4:KEY, enc_aes:KEY:CBC:IV
+    - Slicing: snip:start:stop (Python slice, negative indices OK), chop:size[:index], pick:N
+    - Padding: pad:blocksize, terminate (strip nulls), terminate:add (add null)
+    - Bitwise: ror:N[:dword], rol:N[:dword], shl:N, shr:N, and:HH, or:HH, not, add:N, sub:N
+    - Utility: rot, nop (passthrough)
 
     Args:
         ctx: MCP Context.

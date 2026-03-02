@@ -908,11 +908,15 @@ async def analyze_entropy_by_offset(
 async def scan_for_api_hashes(
     ctx: Context,
     hash_algorithm: str = "ror13",
+    seed: Optional[int] = None,
+    case_handling: Optional[str] = None,
+    family_hint: Optional[str] = None,
+    include_extended_db: bool = False,
     limit: int = 20,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Scans for known API name hashes used by shellcode and malware
-    to hide imports via dynamic resolution (e.g. ror13, djb2, crc32).
+    to hide imports via dynamic resolution (e.g. ror13, djb2, crc32, fnv1a).
 
     When to use: When triage shows very few imports (suggesting dynamic resolution),
     or when analyzing shellcode. Common in malware that avoids static import tables.
@@ -922,62 +926,72 @@ async def scan_for_api_hashes(
     shellcode. Record findings with add_note().
 
     Args:
-        hash_algorithm: Algorithm to check ('ror13', 'djb2', 'crc32'). Default 'ror13'.
+        hash_algorithm: Algorithm ('ror13', 'djb2', 'crc32', 'fnv1a'). Default 'ror13'.
+        seed: Custom seed/initial value for the hash algorithm. None uses the standard
+            default (e.g. 5381 for djb2, 0 for ror13). Use for malware variants that
+            modify the seed (e.g. AdaptixC2 uses djb2 with seed=1572).
+        case_handling: Transform API names before hashing: 'lower', 'upper', or None.
+        family_hint: Malware family name (e.g. 'AdaptixC2 Beacon'). Reads algorithm,
+            seed, and case handling from malware_signatures.yaml knowledge base.
+            Also adds any known_hashes from the KB to the lookup table.
+        include_extended_db: If True, use the full ~10K API export list (slower but
+            more comprehensive). Default False uses the curated ~800 name list.
         limit: Max resolved hashes to return.
     """
-    await ctx.info(f"Scanning for API hashes ({hash_algorithm})")
+    from pemcp.mcp._helpers_api_hashes import (
+        get_all_api_names, compute_hash, build_hash_lookup,
+        HASH_ALGORITHMS,
+    )
+
+    # If family_hint is provided, read algorithm/seed/case from the KB
+    kb_known_hashes = {}
+    family_match_info = None
+    if family_hint:
+        try:
+            from pemcp.mcp.tools_malware_identify import _get_families
+            for fam in _get_families():
+                if fam.get("family", "").lower() == family_hint.lower():
+                    api_hash_meta = fam.get("api_hash") or {}
+                    if isinstance(api_hash_meta, dict):
+                        kb_algo = api_hash_meta.get("algorithm", "").replace("_modified", "")
+                        if kb_algo and hash_algorithm == "ror13":
+                            hash_algorithm = kb_algo
+                        if seed is None and "seed" in api_hash_meta:
+                            seed = api_hash_meta["seed"]
+                        if case_handling is None:
+                            case_sensitive = api_hash_meta.get("case_sensitive", True)
+                            if not case_sensitive:
+                                case_handling = "lower"
+                        # Grab known_hashes for direct lookup
+                        known = api_hash_meta.get("known_hashes") or {}
+                        if isinstance(known, dict):
+                            kb_known_hashes = {v: k for k, v in known.items()}
+                    family_match_info = fam.get("family")
+                    break
+        except Exception:
+            logger.debug("scan_for_api_hashes: KB lookup failed for '%s'", family_hint, exc_info=True)
+
+    if hash_algorithm not in HASH_ALGORITHMS:
+        raise ValueError(
+            f"Unknown hash algorithm '{hash_algorithm}'. "
+            f"Supported: {', '.join(sorted(HASH_ALGORITHMS))}"
+        )
+
+    await ctx.info(f"Scanning for API hashes ({hash_algorithm}"
+                   f"{f', seed={seed}' if seed is not None else ''}"
+                   f"{f', case={case_handling}' if case_handling else ''})")
     _check_pe_loaded("scan_for_api_hashes")
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
-    # Common Windows API names
-    COMMON_APIS = [
-        "LoadLibraryA", "LoadLibraryW", "GetProcAddress", "VirtualAlloc",
-        "VirtualProtect", "CreateThread", "CreateRemoteThread", "WriteProcessMemory",
-        "ReadProcessMemory", "OpenProcess", "VirtualAllocEx", "NtAllocateVirtualMemory",
-        "WinExec", "CreateProcessA", "CreateProcessW", "ShellExecuteA",
-        "URLDownloadToFileA", "InternetOpenA", "InternetConnectA", "HttpOpenRequestA",
-        "WSAStartup", "connect", "send", "recv", "socket",
-        "RegOpenKeyExA", "RegSetValueExA", "CreateFileA", "WriteFile", "ReadFile",
-        "GetModuleHandleA", "GetModuleHandleW", "ExitProcess", "TerminateProcess",
-        "IsDebuggerPresent", "CheckRemoteDebuggerPresent", "GetTickCount",
-        "Sleep", "GetSystemTime", "GetComputerNameA", "GetUserNameA",
-        "CryptAcquireContextA", "CryptEncrypt", "CryptDecrypt",
-    ]
-
-    def _ror13_hash(name):
-        h = 0
-        for c in name:
-            h = ((h >> 13) | (h << 19)) & 0xFFFFFFFF
-            h = (h + ord(c)) & 0xFFFFFFFF
-        return h
-
-    def _djb2_hash(name):
-        h = 5381
-        for c in name:
-            h = ((h << 5) + h + ord(c)) & 0xFFFFFFFF
-        return h
-
-    def _crc32_hash(name):
-        return binascii.crc32(name.encode('ascii')) & 0xFFFFFFFF
-
-    hash_funcs = {
-        "ror13": _ror13_hash,
-        "djb2": _djb2_hash,
-        "crc32": _crc32_hash,
-    }
-
-    if hash_algorithm not in hash_funcs:
-        raise ValueError(f"Unknown hash algorithm. Supported: {', '.join(hash_funcs.keys())}")
-
-    hash_func = hash_funcs[hash_algorithm]
-
     def _scan():
-        # Build lookup table
-        hash_to_api = {}
-        for api in COMMON_APIS:
-            h = hash_func(api)
-            hash_to_api[h] = api
+        # Build lookup table from bundled API DB
+        api_names = get_all_api_names(include_extended=include_extended_db)
+        hash_to_api = build_hash_lookup(api_names, hash_algorithm,
+                                        seed=seed, case_handling=case_handling)
+
+        # Merge KB known_hashes (these are pre-computed, no need to hash)
+        hash_to_api.update(kb_known_hashes)
 
         pe = state.pe_object
         file_data = pe.__data__
@@ -985,7 +999,7 @@ async def scan_for_api_hashes(
         total_dwords = max(1, (len(file_data) - 3) // 4)
 
         bridge.report_progress(5, 100)
-        bridge.info("Scanning for API hash values...")
+        bridge.info(f"Scanning {total_dwords} dwords against {len(hash_to_api)} API hashes...")
 
         # Scan for 4-byte aligned values matching known hashes
         for i in range(0, len(file_data) - 3, 4):
@@ -1001,25 +1015,64 @@ async def scan_for_api_hashes(
                         section_name = sec.Name.decode('utf-8', 'ignore').strip('\x00')
                 except Exception:
                     logger.debug("scan_for_api_hashes: failed to resolve section at offset %s", hex(i), exc_info=True)
-                matches.append({
+
+                entry = {
                     "offset": hex(i),
                     "hash_value": hex(val),
                     "resolved_api": hash_to_api[val],
                     "algorithm": hash_algorithm,
                     "section": section_name,
-                })
+                }
+
+                # Check if this hash appears in any KB family's known_hashes
+                if val in kb_known_hashes:
+                    entry["kb_match"] = True
+                    if family_match_info:
+                        entry["family_match"] = family_match_info
+
+                matches.append(entry)
                 if len(matches) >= limit:
                     break
+
+        # KB cross-reference: check if found hashes match any family
+        if matches and not family_hint:
+            bridge.info("Cross-referencing with malware KB...")
+            try:
+                from pemcp.mcp.tools_malware_identify import _get_families
+                found_hashes = {int(m["hash_value"], 16) for m in matches}
+                for fam in _get_families():
+                    api_hash_meta = fam.get("api_hash") or {}
+                    if not isinstance(api_hash_meta, dict):
+                        continue
+                    known = api_hash_meta.get("known_hashes") or {}
+                    if not isinstance(known, dict):
+                        continue
+                    kb_vals = set(known.values())
+                    overlap = found_hashes & kb_vals
+                    if overlap:
+                        for m in matches:
+                            if int(m["hash_value"], 16) in overlap:
+                                m["family_match"] = fam.get("family", "unknown")
+            except Exception:
+                logger.debug("scan_for_api_hashes: KB cross-reference failed", exc_info=True)
 
         return matches
 
     matches = await asyncio.to_thread(_scan)
 
-    return {
+    result = {
         "algorithm": hash_algorithm,
+        "seed": seed,
+        "case_handling": case_handling,
+        "api_db_size": "extended (~10K)" if include_extended_db else "curated (~800)",
         "total_resolved": len(matches),
         "matches": matches[:limit],
     }
+    if family_hint:
+        result["family_hint"] = family_hint
+        result["family_resolved"] = family_match_info
+
+    return result
 
 
 @tool_decorator
