@@ -144,18 +144,18 @@ Suppose VT identifies the sample as "AsyncRAT" and `extract_config_automated()` 
 
 ## Safety Rules
 
+**These rules are NON-NEGOTIABLE. Do NOT use the Bash tool or write scripts.**
+
 1. **NEVER execute downloaded scripts** — read and understand the logic, then
    translate to Arkana tool calls. Downloaded code may be malicious, backdoored,
-   or destructive.
+   or destructive. Do NOT use the Bash tool to run them.
 
-2. **NEVER write Python scripts when internal tools exist** — the entire point of
-   research is to understand the algorithm, then execute it with Arkana's built-in
-   tools. If a decoder does `base64 → AES-CBC → XOR`, translate that to
-   `refinery_pipeline(pipeline="b64 | aes -m cbc -k KEY | xor KEY2")` — not a
-   Python script that reimplements the same logic. Internal tool calls are logged
-   in tool history, reproducible, and auditable. Scripts are opaque and
-   unreviewable. Only write a script when no combination of internal tools can
-   accomplish the task, and document why in an `add_note()` call.
+2. **NEVER write or run Python/shell scripts** — do NOT use the Bash tool. The
+   entire point of research is to understand the algorithm, then execute it with
+   Arkana's built-in MCP tools. If a decoder does `base64 → AES-CBC → XOR`,
+   translate that to `refinery_pipeline(pipeline="b64 | aes -m cbc -k KEY |
+   xor KEY2")` — do NOT write a Python script that reimplements the same logic.
+   Internal tool calls are logged, reproducible, and auditable.
 
 3. **Verify output** — after decryption/decoding, validate that results look like
    legitimate config data (valid IPs, URLs, port numbers). Garbage output means
