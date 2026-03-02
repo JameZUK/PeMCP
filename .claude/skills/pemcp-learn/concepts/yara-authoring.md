@@ -124,10 +124,47 @@ Generate imphash and other similarity hashes. These can serve as additional
 YARA conditions for high-confidence matching.
 ```
 
+## Generating YARA Rules with PeMCP
+
+PeMCP can auto-generate a starting-point YARA rule from the loaded binary's
+analysis findings:
+
+```
+Tool: generate_yara_rule(rule_name="family_variant", scan_after_generate=True)
+
+Generates a rule from: unique strings, suspicious imports, PDB path, Rich
+header hash, file size range. The scan_after_generate parameter immediately
+compiles the rule and scans the loaded binary, returning match results inline.
+
+Key parameters:
+  include_strings=True       Include distinctive strings
+  include_imports=True       Include import-based conditions
+  include_rich_header=False  Include Rich header hash
+  include_pdb=True           Include PDB path
+  max_strings=15             Max string indicators
+  scan_after_generate=True   Compile & scan immediately
+```
+
+The generated rule is a starting point — always review and refine before
+production use. Common refinements: add hex byte patterns from unique code
+sequences, replace generic conditions with more specific ones, add `wide`
+modifiers for UTF-16 strings.
+
 ## Testing YARA Rules
 
 ### Testing Against the Sample
 
+Two approaches:
+
+**1. Generate and test in one call:**
+```
+Tool: generate_yara_rule(scan_after_generate=True)
+
+Generates the rule AND scans the loaded binary. The response includes both
+the rule text and match results (matched strings with offsets).
+```
+
+**2. Test a hand-written or refined rule:**
 ```
 Tool: search_yara_custom(rule="rule Test { strings: $s1 = ... condition: ... }")
 

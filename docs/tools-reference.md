@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-PeMCP exposes **178 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters — see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+PeMCP exposes **190 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters — see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 ---
 
@@ -233,7 +233,29 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `save_patched_binary` | Save a patched binary to disk. |
 | `identify_cpp_classes` | Recover C++ vtables and class hierarchies. Paginated (default limit 20). |
 | `get_function_map` | Smart function ranking — scores every function by interestingness (complexity, suspicious API calls, string refs, xref count) and groups by purpose. Paginated (default limit 30). |
-| `find_anti_debug_comprehensive` | Comprehensive anti-analysis and anti-debug technique detection — checks specific API patterns (IsDebuggerPresent, NtQueryInformationProcess, timing checks, PEB access), TLS callbacks, and known evasion techniques. Returns a detailed inventory with severity ratings. |
+| `find_anti_debug_comprehensive` | Comprehensive anti-analysis and anti-debug technique detection — checks specific API patterns (IsDebuggerPresent, NtQueryInformationProcess, timing checks, PEB access), TLS callbacks, known evasion techniques, anti-VM indicators (93 hypervisor strings across VMware/VirtualBox/Hyper-V/QEMU/Xen/Parallels/sandbox/analysis tools), and instruction-level scanning (RDTSC, CPUID, INT 2Dh, SIDT). Returns a detailed inventory with severity ratings, hypervisor breakdown, and instruction findings. |
+
+## PE Forensics & Detection Engineering (7 tools)
+
+| Tool | Description |
+|---|---|
+| `generate_yara_rule` | Auto-generate a YARA detection rule from the loaded binary's analysis findings: unique strings, import combinations, section names, Rich header hash, PDB path, file size range, and byte patterns. Outputs valid YARA syntax. Use `scan_after_generate=True` to immediately compile and scan the loaded binary with the generated rule, returning match results inline. |
+| `generate_sigma_rule` | Generate draft Sigma detection rules from analysis findings: process creation patterns, file paths, registry keys, and network indicators. Supports `rule_type`: `process_creation`, `file_event`, `registry`, or `all`. Includes confidence annotations. |
+| `parse_authenticode` | Parse PE authenticode signatures: certificate details (subject, issuer, serial, thumbprint, validity), countersignature timestamps, PE hash validation, and anomaly detection (expired, self-signed, mismatched hashes). |
+| `unify_artifact_timeline` | Correlate all temporal artifacts: PE compile timestamp, debug directory timestamps, Rich header build info, resource timestamps, export table timestamp, digital signature timestamps, and .NET metadata. Flags timestomping, future dates, and component mismatches. |
+| `analyze_debug_directory` | Deep parsing of the debug directory: PDB paths and GUIDs (CodeView NB10/RSDS), POGO sections, Rich header build tool info, debug info anomalies (mismatched timestamps, suspicious PDB paths, timestamp tampering). |
+| `analyze_relocations` | Parse BASE_RELOC directory: relocation blocks, types, and anomalies. Detects ASLR bypass indicators, out-of-section relocations, unusual type distributions, and empty/malformed blocks. |
+| `analyze_seh_handlers` | Analyze Structured Exception Handling: x64 RUNTIME_FUNCTION entries, SafeSEH table (x86), SEH-based anti-debug patterns, and suspicious handler addresses (outside image, in writable sections). |
+
+## Threat Intelligence & Attribution (5 tools)
+
+| Tool | Description |
+|---|---|
+| `detect_dga_indicators` | Scan for Domain Generation Algorithm indicators via API co-occurrence analysis, suspicious string patterns, and import combination scoring. Configurable `confidence_threshold`. |
+| `match_c2_indicators` | Match binary content against known C2 framework indicator profiles: Cobalt Strike, Metasploit, Sliver, Havoc, Brute Ratel, Covenant, Mythic, PoshC2. Checks User-Agent strings, URI patterns, named pipes, framework-specific strings, and magic bytes. |
+| `analyze_kernel_driver` | Analyze kernel driver characteristics: DriverEntry detection, kernel API categorization, IRP dispatch patterns, IOCTL handler identification, filter driver registration, and DKOM/rootkit indicators. Use when PE subsystem is Native (1). |
+| `map_mitre_attack` | Aggregate all MITRE ATT&CK-relevant findings from analysis: capa results, import classification, behavioral indicators, and string matches. Maps to specific techniques with confidence scores. Optionally outputs an ATT&CK Navigator JSON layer. |
+| `analyze_batch` | Batch-analyze multiple binary files: compute hashes, PE metadata, import overlaps, timestamp comparison, and optional similarity clustering (ssdeep/TLSH pairwise). Does NOT modify the currently loaded file. Accepts `directory` or `file_paths`. |
 
 ## Extended Library Tools (13 tools)
 
@@ -256,7 +278,7 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 
 | Tool | Description |
 |---|---|
-| `emulate_binary_with_qiling` | Full OS emulation of PE/ELF/Mach-O binaries with behavioural report (API calls, file/registry/network activity). Cross-platform — unlike Speakeasy (Windows-only), Qiling handles Linux ELF and macOS Mach-O as well. Paginated (default limit 20). |
+| `emulate_binary_with_qiling` | Full OS emulation of PE/ELF/Mach-O binaries with behavioural report (API calls, file/registry/network activity). Cross-platform — unlike Speakeasy (Windows-only), Qiling handles Linux ELF and macOS Mach-O as well. Use `trace_syscalls=True` for syscall-level tracing with optional `syscall_filter`, and `track_memory=True` for memory allocation tracking (detects RWX allocations, large allocations, and protection changes). Paginated (default limit 20). |
 | `emulate_shellcode_with_qiling` | Multi-architecture shellcode emulation (x86, x64, ARM, ARM64, MIPS) with API/syscall capture. Paginated (default limit 20). |
 | `qiling_trace_execution` | Instruction-level execution tracing with addresses, sizes, and raw bytes for each executed instruction. Paginated (default limit 50). |
 | `qiling_hook_api_calls` | Hook specific APIs/syscalls to capture arguments and return values during emulation. Paginated (default limit 20). |

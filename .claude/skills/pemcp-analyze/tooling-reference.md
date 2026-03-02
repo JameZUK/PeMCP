@@ -1,6 +1,6 @@
 # PeMCP Tool Reference
 
-Complete catalog of all 178 MCP tools organized by use case.
+Complete catalog of all 190 MCP tools organized by use case.
 Source files: `pemcp/mcp/tools_*.py`
 
 ---
@@ -141,7 +141,7 @@ Source files: `pemcp/mcp/tools_*.py`
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
 | `emulate_function_execution` | Execute a single function with concrete args | `address`, `args` |
-| `emulate_binary_with_qiling` | Full binary emulation with API tracking | `timeout`, `rootfs` |
+| `emulate_binary_with_qiling` | Full binary emulation with API tracking | `timeout`, `rootfs`, `trace_syscalls`, `syscall_filter`, `track_memory` |
 | `emulate_shellcode_with_qiling` | Shellcode emulation (x86/x64/ARM/MIPS) | `shellcode`, `arch` |
 | `qiling_trace_execution` | Detailed API call tracing during emulation | — |
 | `qiling_hook_api_calls` | Hook specific APIs in Qiling emulation | `api_names` |
@@ -288,9 +288,31 @@ Source files: `pemcp/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `find_anti_debug_comprehensive` | Comprehensive anti-debug technique detection | — |
+| `find_anti_debug_comprehensive` | Comprehensive anti-debug + anti-VM + instruction scan | `compact` |
 | `detect_self_modifying_code` | Detect self-modifying code patterns | — |
 | `find_code_caves` | Find executable gaps in code sections | — |
+
+## PE Forensics & Detection Engineering
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `generate_yara_rule` | Generate YARA detection rule from analysis | `rule_name`, `scan_after_generate` |
+| `generate_sigma_rule` | Generate Sigma detection rules | `rule_type` (`process_creation`, `file_event`, `registry`, `all`) |
+| `parse_authenticode` | Analyze PE code signing certificates | — |
+| `unify_artifact_timeline` | Correlate all temporal artifacts, detect timestomping | — |
+| `analyze_debug_directory` | Deep PDB/POGO/Rich header analysis | — |
+| `analyze_relocations` | Parse relocations, detect ASLR bypass | `limit` |
+| `analyze_seh_handlers` | Analyze SEH/x64 exception handlers | `limit` |
+
+## Threat Intelligence & Attribution
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `detect_dga_indicators` | Scan for DGA capability indicators | `confidence_threshold` |
+| `match_c2_indicators` | Match against C2 framework profiles | `frameworks`, `scan_depth` |
+| `analyze_kernel_driver` | Analyze kernel driver (.sys) characteristics | — |
+| `map_mitre_attack` | Map findings to MITRE ATT&CK techniques | `include_navigator_layer` |
+| `analyze_batch` | Multi-file comparison and clustering | `directory` or `file_paths`, `include_similarity` |
 
 ## Hooking (Emulation Control)
 

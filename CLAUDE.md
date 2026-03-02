@@ -2,7 +2,7 @@
 
 ## What is PeMCP?
 
-PeMCP is a Model Context Protocol (MCP) server exposing 178 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
+PeMCP is a Model Context Protocol (MCP) server exposing 190 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
 
 ## Project Structure
 
@@ -17,7 +17,7 @@ pemcp/                  # Main package
 ├── auth.py             # Bearer token ASGI middleware
 ├── utils.py            # ReDoS-safe regex, safe_slice, safe_env_int
 ├── parsers/            # PE/FLOSS/capa/YARA/strings parsers
-└── mcp/                # MCP tool modules (178 tools across 41 files)
+└── mcp/                # MCP tool modules (190 tools across 47 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery)
     └── tools_*.py      # Tool modules grouped by domain

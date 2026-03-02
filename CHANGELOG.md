@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **14 new tools** (178 → 190 total):
+  - `generate_yara_rule()` — auto-generate YARA detection rules from analysis findings with optional `scan_after_generate` to compile and validate in one call.
+  - `generate_sigma_rule()` — generate draft Sigma detection rules (process creation, file events, registry, network).
+  - `parse_authenticode()` — PE authenticode signature parsing with certificate details, countersignature timestamps, and anomaly detection.
+  - `unify_artifact_timeline()` — correlate all temporal artifacts and detect timestomping/timestamp anomalies.
+  - `analyze_debug_directory()` — deep PDB/POGO/Rich header parsing with anomaly detection.
+  - `analyze_relocations()` — BASE_RELOC directory parsing with ASLR bypass indicators.
+  - `analyze_seh_handlers()` — SEH/x64 exception handler analysis with anti-debug detection.
+  - `detect_dga_indicators()` — DGA capability detection via API co-occurrence analysis.
+  - `match_c2_indicators()` — C2 framework indicator matching (Cobalt Strike, Metasploit, Sliver, Havoc, Brute Ratel, Covenant, Mythic, PoshC2).
+  - `analyze_kernel_driver()` — kernel driver analysis (DriverEntry, IRP dispatch, IOCTL handlers, DKOM/rootkit indicators).
+  - `map_mitre_attack()` — MITRE ATT&CK mapping with optional Navigator layer output.
+  - `analyze_batch()` — multi-file batch analysis with hashing, import overlap, timestamp comparison, and ssdeep/TLSH similarity clustering.
 - Three malware family identification tools: `identify_malware_family()`, `list_malware_signatures()`, `verify_malware_attribution()` — match binary indicators against a 123-family signature knowledge base (`pemcp/data/malware_signatures.yaml`) for automated malware attribution with confidence scoring.
 - `pemcp/constants.py` — pure constants module (no side effects, safe to import anywhere).
 - `pemcp/imports.py` — centralised optional library imports and availability flags.
@@ -15,6 +28,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - New test suites: `test_format_helpers.py` (format detection) and `test_input_helpers.py` (parsing, caching, pagination).
 - CI smoke-test job that verifies CLI `--help` and core module imports.
 - `CHANGELOG.md` and `docs/CONTRIBUTING.md`.
+
+### Enhanced
+- `find_anti_debug_comprehensive()` — expanded with anti-VM detection (93 hypervisor indicators across VMware/VirtualBox/Hyper-V/QEMU/Xen/Parallels/sandbox/analysis tools) and instruction-level scanning (RDTSC, CPUID, INT 2Dh, SIDT) in executable sections.
+- `emulate_binary_with_qiling()` — added `trace_syscalls` parameter for syscall-level tracing with optional `syscall_filter`, and `track_memory` for memory allocation tracking (RWX detection, large allocations, protection changes).
+- `brute_force_simple_crypto()` — expanded with RC4, ADD, SUB, ROL, ROR transforms and known-plaintext XOR key detection.
+- `dotnet_analyze()` — enhanced with user string extraction, improved type/method listing.
+- Consolidated duplicate tools: merged `find_anti_debug` into `find_anti_debug_comprehensive`, merged `detect_anti_vm` into `find_anti_debug_comprehensive`.
 
 ### Changed
 - Split `pemcp/config.py` into three focused modules (`constants.py`, `imports.py`, `config.py`). All existing `from pemcp.config import ...` statements continue to work via re-exports.

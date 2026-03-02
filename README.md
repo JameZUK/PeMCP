@@ -2,7 +2,7 @@
 
 ![PeMCP Logo](docs/logo.svg)
 
-Point an AI at a binary and ask questions. PeMCP gives Claude Code (or any MCP client) **178 analysis tools** — decompilation, emulation, string decoding, YARA scanning, and more — so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by just describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
+Point an AI at a binary and ask questions. PeMCP gives Claude Code (or any MCP client) **190 analysis tools** — decompilation, emulation, string decoding, YARA scanning, and more — so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by just describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
 
 ---
 
@@ -16,11 +16,11 @@ This creates three critical bottlenecks:
 2. **Context fragmentation** — Findings from one tool don't automatically inform analysis in another. The analyst becomes the integration layer, manually cross-referencing decompilation output with string analysis, import tables, and network IOCs.
 3. **Repetitive drudgery** — The initial triage of every sample follows a predictable pattern (check hashes, scan signatures, extract strings, review imports, check entropy), yet analysts must manually execute these same steps every time.
 
-PeMCP eliminates these bottlenecks by putting **178 specialised analysis tools behind a single AI-driven interface** — the equivalent of an entire malware lab in one MCP server. Instead of learning 10 different tools, you describe what you want to know in natural language and the AI orchestrates the right tools automatically.
+PeMCP eliminates these bottlenecks by putting **190 specialised analysis tools behind a single AI-driven interface** — the equivalent of an entire malware lab in one MCP server. Instead of learning 10 different tools, you describe what you want to know in natural language and the AI orchestrates the right tools automatically.
 
 **What makes PeMCP unique:**
 
-1. **Breadth** — 178 tools spanning PE/ELF/Mach-O parsing, Angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/Capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration.
+1. **Breadth** — 190 tools spanning PE/ELF/Mach-O parsing, Angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/Capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration.
 
 2. **AI reasoning over results** — Unlike tools that just produce output, PeMCP feeds results back to an AI that can reason about them. When the AI decompiles a function and sees `VirtualAlloc` followed by `memcpy` and an indirect call, it recognises the shellcode injection pattern, notes it as a finding, and suggests investigating the source buffer.
 
@@ -82,7 +82,7 @@ For other installation methods (local Python, minimal install) and detailed conf
 | **[Installation Guide](docs/installation.md)** | Docker, local, and minimal installation; modes of operation; multi-format binary support |
 | **[Claude Code Integration](docs/claude-code.md)** | Setup via CLI and JSON config; analysis and learning skills; typical workflows and example queries |
 | **[Configuration](docs/configuration.md)** | API keys, analysis cache, and command-line options |
-| **[Tools Reference](docs/tools-reference.md)** | Complete catalog of all 178 MCP tools organised by category |
+| **[Tools Reference](docs/tools-reference.md)** | Complete catalog of all 190 MCP tools organised by category |
 | **[Scenarios & Comparisons](docs/scenarios.md)** | Five real-world analysis walkthroughs; PeMCP vs Ghidra, IDA Pro, CyberChef |
 | **[Architecture](docs/architecture.md)** | Package structure, design principles, pagination and result limits |
 | **[Security & Testing](docs/security.md)** | Path sandboxing, security measures, testing and CI/CD |

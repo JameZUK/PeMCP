@@ -14,7 +14,7 @@ description: >
 # PeMCP Binary Analysis Skill
 
 You are a binary analysis specialist using PeMCP, a comprehensive binary analysis
-MCP server with 178 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 190 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -287,6 +287,27 @@ Use as needed based on goal:
 - **Embedded content**: `scan_for_embedded_files()` — detect nested PE, ZIP, PDF,
   scripts, certificates embedded within the binary.
 
+- **Anti-analysis**: `find_anti_debug_comprehensive()` — comprehensive anti-debug,
+  anti-VM (93 hypervisor indicators), and instruction-level scanning (RDTSC, CPUID,
+  INT 2Dh, SIDT). Use after triage flags anti-analysis imports.
+
+- **C2 detection**: `match_c2_indicators()` — match against 8 C2 framework profiles
+  (Cobalt Strike, Metasploit, Sliver, Havoc, etc.). `detect_dga_indicators()` — scan
+  for DGA capability from API co-occurrence patterns.
+
+- **PE forensics**: `analyze_debug_directory()` — PDB paths, Rich header, timestamp
+  anomalies. `analyze_relocations()` — relocation integrity, ASLR bypass indicators.
+  `analyze_seh_handlers()` — SEH anti-debug patterns, suspicious handlers.
+  `parse_authenticode()` — certificate details, signature validation.
+  `unify_artifact_timeline()` — correlate all timestamps, detect timestomping.
+
+- **Kernel drivers**: `analyze_kernel_driver()` — DriverEntry detection, kernel API
+  categorization, IOCTL handlers, DKOM/rootkit indicators. Use when subsystem is
+  Native (1).
+
+- **Batch comparison**: `analyze_batch(directory)` — multi-file hashing, import overlap,
+  timestamp analysis, ssdeep/TLSH clustering. Does not modify loaded file.
+
 - **Synthesize**: `get_analysis_digest()` — aggregate findings so far before deep dive.
 
 ## Phase 4: Deep Dive
@@ -334,7 +355,9 @@ Progressive depth — use the minimum tier needed to answer your question.
 
 ### Tier 3: Dynamic / Emulation (when static + data-flow aren't enough)
 - `emulate_function_execution(address, args)` — concrete function execution
-- `emulate_binary_with_qiling()` — full binary emulation with API tracking
+- `emulate_binary_with_qiling()` — full binary emulation with API tracking;
+  use `trace_syscalls=True` for syscall-level tracing with `syscall_filter`,
+  `track_memory=True` for memory allocation tracking (RWX, large allocs)
 - `emulate_shellcode_with_qiling()` — shellcode emulation (x86/x64/ARM/MIPS)
 - `emulate_pe_with_windows_apis()` — PE emulation with Windows API simulation (Speakeasy)
 - `emulate_shellcode_with_speakeasy()` — shellcode with Speakeasy
@@ -560,7 +583,13 @@ After the summary, offer the user two follow-up options:
    If yes → `get_analysis_digest()` then `generate_analysis_report()`, optionally
    `auto_name_sample()` for a descriptive filename.
 
-2. **Session export**: "Would you like to export this session as a portable archive?"
+2. **Detection signatures**: "Would you like YARA/Sigma detection rules?"
+   If yes → `generate_yara_rule(scan_after_generate=True)` for a YARA rule
+   (generates and validates in one call), `generate_sigma_rule(rule_type='all')`
+   for Sigma rules. `map_mitre_attack(include_navigator_layer=True)` for an
+   ATT&CK mapping with Navigator layer.
+
+3. **Session export**: "Would you like to export this session as a portable archive?"
    If yes → `export_project()` — saves all notes, history, findings, extracted
    artifacts, and cached analysis as a self-contained archive that can be imported
    later with `import_project()`. Artifacts (extracted payloads, decoded configs)
@@ -720,7 +749,7 @@ data accumulate. If the session becomes sluggish or context is getting large, us
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 178-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [tooling-reference.md](tooling-reference.md) — Complete 190-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to PeMCP tool calls
