@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300" width="300" height="300">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   style="stop-color:#000d00;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#000400;stop-opacity:1"/>
+    </linearGradient>
+    <radialGradient id="eyeAura" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   style="stop-color:#00ff41;stop-opacity:0.6"/>
+      <stop offset="60%"  style="stop-color:#00cc33;stop-opacity:0.2"/>
+      <stop offset="100%" style="stop-color:#000800;stop-opacity:0"/>
+    </radialGradient>
+    <radialGradient id="irisGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   style="stop-color:#001000;stop-opacity:1"/>
+      <stop offset="60%"  style="stop-color:#002800;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#004400;stop-opacity:1"/>
+    </radialGradient>
+    <radialGradient id="pupilGrad" cx="50%" cy="40%" r="50%">
+      <stop offset="0%"   style="stop-color:#ccffcc;stop-opacity:1"/>
+      <stop offset="35%"  style="stop-color:#00ff41;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#001400;stop-opacity:1"/>
+    </radialGradient>
+    <pattern id="scanlines" x="0" y="0" width="300" height="3" patternUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="300" height="1.4" fill="black" opacity="0.35"/>
+    </pattern>
+    <pattern id="grid" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse">
+      <path d="M 30 0 L 0 0 0 30" fill="none" stroke="#00ff41" stroke-width="0.25" opacity="0.1"/>
+    </pattern>
+    <radialGradient id="vignette" cx="50%" cy="50%" r="65%">
+      <stop offset="0%"   style="stop-color:#000800;stop-opacity:0"/>
+      <stop offset="75%"  style="stop-color:#000400;stop-opacity:0.35"/>
+      <stop offset="100%" style="stop-color:#000000;stop-opacity:0.9"/>
+    </radialGradient>
+    <filter id="glowHeavy" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="3"  result="b1"/>
+      <feGaussianBlur stdDeviation="8"  result="b2"/>
+      <feGaussianBlur stdDeviation="18" result="b3"/>
+      <feMerge>
+        <feMergeNode in="b3"/>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowMed" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="4"  result="b1"/>
+      <feGaussianBlur stdDeviation="10" result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowSoft" x="-25%" y="-40%" width="150%" height="180%">
+      <feGaussianBlur stdDeviation="2.5" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <clipPath id="irisClip">
+      <ellipse cx="150" cy="134" rx="58" ry="58"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <rect width="300" height="300" fill="url(#bgGrad)" rx="18"/>
+  <rect width="300" height="300" fill="url(#grid)" rx="18"/>
+
+  <!-- Eye aura -->
+  <ellipse cx="150" cy="134" rx="145" ry="90" fill="url(#eyeAura)" filter="url(#glowHeavy)" opacity="0.65"/>
+
+  <!-- Sclera -->
+  <path d="M18,134 Q68,48 150,48 Q232,48 282,134 Q232,220 150,220 Q68,220 18,134 Z"
+        fill="#000c00"/>
+
+  <!-- Eye outline -->
+  <path d="M18,134 Q68,48 150,48 Q232,48 282,134 Q232,220 150,220 Q68,220 18,134 Z"
+        fill="none" stroke="#00ff41" stroke-width="3" filter="url(#glowMed)" opacity="0.9"/>
+
+  <!-- Iris -->
+  <ellipse cx="150" cy="134" rx="60" ry="60" fill="url(#irisGrad)"/>
+  <ellipse cx="150" cy="134" rx="60" ry="60" fill="none" stroke="#00ff41" stroke-width="2.2" filter="url(#glowMed)" opacity="0.9"/>
+  <ellipse cx="150" cy="134" rx="50" ry="50" fill="none" stroke="#00cc33" stroke-width="0.7" opacity="0.35"/>
+  <ellipse cx="150" cy="134" rx="40" ry="40" fill="none" stroke="#009922" stroke-width="0.5" opacity="0.3"/>
+
+  <!-- Hex data overlay in iris -->
+  <g clip-path="url(#irisClip)" opacity="0.6" filter="url(#glowSoft)">
+    <text x="108" y="103" font-family="monospace" font-size="7.5" fill="#00ff41" letter-spacing="1">4D5A9000</text>
+    <text x="108" y="113" font-family="monospace" font-size="7.5" fill="#00cc33" letter-spacing="1">03000000</text>
+    <text x="108" y="123" font-family="monospace" font-size="7.5" fill="#00ff41" letter-spacing="1">50450000</text>
+    <text x="108" y="133" font-family="monospace" font-size="7.5" fill="#00cc33" letter-spacing="1">64860900</text>
+    <text x="108" y="143" font-family="monospace" font-size="7.5" fill="#00ff41" letter-spacing="1">EB371666</text>
+    <text x="108" y="153" font-family="monospace" font-size="7.5" fill="#00cc33" letter-spacing="1">B8004000</text>
+    <text x="108" y="163" font-family="monospace" font-size="7.5" fill="#00ff41" letter-spacing="1">00000000</text>
+  </g>
+
+  <!-- Targeting marks -->
+  <g stroke="#00ff41" stroke-width="2.5" opacity="0.8" filter="url(#glowSoft)">
+    <line x1="150" y1="70"  x2="150" y2="83"/>
+    <line x1="150" y1="185" x2="150" y2="198"/>
+    <line x1="86"  y1="134" x2="99"  y2="134"/>
+    <line x1="201" y1="134" x2="214" y2="134"/>
+  </g>
+  <g stroke="#00ff41" stroke-width="1.5" opacity="0.5" filter="url(#glowSoft)">
+    <line x1="108" y1="92"  x2="115" y2="99"/>
+    <line x1="185" y1="169" x2="192" y2="176"/>
+    <line x1="192" y1="92"  x2="185" y2="99"/>
+    <line x1="115" y1="169" x2="108" y2="176"/>
+  </g>
+
+  <!-- Scan line -->
+  <line x1="18"  y1="134" x2="282" y2="134" stroke="#00ff41" stroke-width="0.8" opacity="0.2"/>
+  <line x1="150" y1="48"  x2="150" y2="220" stroke="#00ff41" stroke-width="0.5" opacity="0.12"/>
+
+  <!-- Pupil -->
+  <ellipse cx="150" cy="134" rx="24" ry="24" fill="url(#pupilGrad)" filter="url(#glowHeavy)"/>
+  <ellipse cx="150" cy="134" rx="24" ry="24" fill="none" stroke="#00ff41" stroke-width="2" opacity="0.9"/>
+  <ellipse cx="150" cy="134" rx="9"  ry="9"  fill="#99ffaa" opacity="0.98" filter="url(#glowHeavy)"/>
+  <ellipse cx="146" cy="130" rx="3.5" ry="3" fill="white" opacity="0.8"/>
+
+  <!-- Eyelash accents -->
+  <g stroke="#00ff41" stroke-width="2" opacity="0.65" filter="url(#glowSoft)">
+    <line x1="150" y1="48"  x2="150" y2="33"/>
+    <line x1="120" y1="56"  x2="113" y2="43"/>
+    <line x1="180" y1="56"  x2="187" y2="43"/>
+    <line x1="96"  y1="80"  x2="87"  y2="70"/>
+    <line x1="204" y1="80"  x2="213" y2="70"/>
+  </g>
+
+  <!-- Corner brackets — chunky -->
+  <polyline points="10,44 10,10 44,10" fill="none" stroke="#00ff41" stroke-width="4" opacity="0.75" filter="url(#glowSoft)"/>
+  <polyline points="290,44 290,10 256,10" fill="none" stroke="#00ff41" stroke-width="4" opacity="0.75" filter="url(#glowSoft)"/>
+  <polyline points="10,256 10,290 44,290" fill="none" stroke="#00ff41" stroke-width="4" opacity="0.75" filter="url(#glowSoft)"/>
+  <polyline points="290,256 290,290 256,290" fill="none" stroke="#00ff41" stroke-width="4" opacity="0.75" filter="url(#glowSoft)"/>
+
+  <!-- Wordmark -->
+  <!-- Shadow -->
+  <text x="150" y="265"
+        font-family="'Courier New', Courier, monospace"
+        font-size="32"
+        font-weight="900"
+        letter-spacing="8"
+        text-anchor="middle"
+        fill="#003300">ARKANA</text>
+  <!-- Main -->
+  <text x="150" y="263"
+        font-family="'Courier New', Courier, monospace"
+        font-size="32"
+        font-weight="900"
+        letter-spacing="8"
+        text-anchor="middle"
+        fill="#00ff41"
+        filter="url(#glowMed)">ARKANA</text>
+
+  <!-- 0x4D5A annotation -->
+  <text x="150" y="284"
+        font-family="monospace"
+        font-size="8"
+        letter-spacing="2"
+        text-anchor="middle"
+        fill="#006611"
+        opacity="0.7">0x4D5A // MZ</text>
+
+  <!-- CRT scanlines -->
+  <rect width="300" height="300" fill="url(#scanlines)" rx="18"/>
+
+  <!-- Vignette -->
+  <rect width="300" height="300" fill="url(#vignette)" rx="18"/>
+
+</svg>
