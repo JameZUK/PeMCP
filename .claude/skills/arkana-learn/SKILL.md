@@ -209,9 +209,9 @@ step-by-step, teaching concepts as they arise from the actual sample.
 **Intermediate learner** — add decompilation and deeper analysis:
 | Step | Tool | What to teach |
 |------|------|---------------|
-| Functions | `get_function_map(limit=20)` | Function ranking, targeting analysis |
+| Functions | `get_function_map(limit=15)` | Function ranking, targeting analysis |
 | CFG | `get_function_cfg(address)` | Control flow, basic blocks |
-| Decompile | `decompile_function_with_angr(address)` | Reading pseudocode |
+| Decompile | `decompile_function_with_angr(address)` | Reading pseudocode (paginated — use `line_offset` for more) |
 | Capabilities | `get_capa_analysis_info()` | ATT&CK mapping, validation |
 | Packing | `detect_packing()` | Packing detection, unpacking cascade |
 | Crypto | `identify_crypto_algorithm()` | Crypto pattern recognition |

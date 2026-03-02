@@ -363,7 +363,7 @@ When the malware family is unknown, use this systematic approach:
 1. extract_config_automated()          → try automated extraction first
 2. get_strings_summary()               → look for URL/IP/domain patterns
 3. analyze_entropy_by_offset()         → find encrypted blobs
-4. get_function_map(limit=30)          → find init/config functions
+4. get_function_map(limit=15)          → find init/config functions
 5. scan_for_embedded_files()           → check for embedded configs
 ```
 

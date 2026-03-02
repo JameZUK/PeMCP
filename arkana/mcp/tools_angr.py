@@ -11,6 +11,12 @@ from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_resp
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
+from arkana.mcp._input_helpers import _ToolResultCache
+
+# Cache for paginated decompilation results — avoids re-decompiling when
+# the client requests subsequent pages of the same function.
+_decompile_cache = _ToolResultCache()
+_decompile_meta: dict = {}  # cache_key -> {function_name, address}
 
 if ANGR_AVAILABLE:
     import angr
@@ -152,10 +158,19 @@ async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, A
 
 
 @tool_decorator
-async def decompile_function_with_angr(ctx: Context, function_address: str) -> Dict[str, Any]:
+async def decompile_function_with_angr(
+    ctx: Context,
+    function_address: str,
+    line_offset: int = 0,
+    line_limit: int = 80,
+) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Decompiles a function into C-like pseudocode using Angr.
     Automatically attempts to handle RVA (offsets) if the exact VA is not found.
+
+    Output is paginated by line. The first call decompiles and caches the full
+    result; subsequent calls with different ``line_offset`` values serve from
+    cache without re-decompiling.
 
     When to use: After identifying a function of interest via get_function_map() or get_function_complexity_list().
     Next steps: auto_note_function(address) to save a behavioral summary, get_function_cfg() for control flow,
@@ -165,11 +180,43 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
     save a one-line behavioral summary, or add_note(content, category='tool_result')
     to record specific findings. This builds the analysis digest without keeping
     full pseudocode in context.
+
+    Args:
+        function_address: Hex address of the function to decompile (e.g. '0x140001000').
+        line_offset: Start returning lines from this index (0-based). Default 0.
+        line_limit: Maximum number of lines to return per page. Default 80.
     """
 
     await ctx.info(f"Requesting Angr decompilation for: {function_address}")
     _check_angr_ready("decompile_function_with_angr")
     target_addr = _parse_addr(function_address)
+
+    # Check cache first — serves subsequent pages without re-decompiling
+    cache_key = (target_addr,)
+    cached_lines = _decompile_cache.get("decompile_function_with_angr", cache_key)
+
+    if cached_lines is not None:
+        meta = _decompile_meta.get(cache_key, {})
+        page = cached_lines[line_offset:line_offset + line_limit]
+        has_more = (line_offset + line_limit) < len(cached_lines)
+        return {
+            "function_name": meta.get("function_name", "unknown"),
+            "address": meta.get("address", hex(target_addr)),
+            "lines": page,
+            "count": len(page),
+            "_pagination": {
+                "total": len(cached_lines),
+                "offset": line_offset,
+                "limit": line_limit,
+                "has_more": has_more,
+            },
+            "next_step": (
+                f"Call decompile_function_with_angr('{function_address}', line_offset={line_offset + line_limit}) to see more lines."
+                if has_more else
+                "Call auto_note_function(address) to save a behavioral summary of this function."
+            ),
+        }
+
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _decompile():
@@ -192,24 +239,61 @@ async def decompile_function_with_angr(ctx: Context, function_address: str) -> D
             dec = state.angr_project.analyses.Decompiler(func, cfg=state.angr_cfg.model)
             bridge.report_progress(90, 100)
             bridge.info("Formatting output...")
-            if not dec.codegen: return {"error": "Decompilation produced no code."}
+            if not dec.codegen:
+                return {"error": "Decompilation produced no code."}
             return {
                 "function_name": func.name,
                 "address": hex(addr_to_use),
                 "c_pseudocode": dec.codegen.text,
-                "next_step": "Call auto_note_function(address) to save a behavioral summary of this function.",
             }
-        except Exception as e: return {"error": f"Decompilation failed: {e}"}
+        except Exception as e:
+            return {"error": f"Decompilation failed: {e}"}
 
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_decompile), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
         raise RuntimeError(f"Decompilation timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
-    return await _check_mcp_response_size(ctx, result, "decompile_function_with_angr")
+
+    # Cache full result and return paginated
+    all_lines = result["c_pseudocode"].splitlines()
+    _decompile_cache.set("decompile_function_with_angr", cache_key, all_lines)
+    _decompile_meta[cache_key] = {
+        "function_name": result["function_name"],
+        "address": result["address"],
+    }
+
+    page = all_lines[line_offset:line_offset + line_limit]
+    has_more = (line_offset + line_limit) < len(all_lines)
+    paginated_result = {
+        "function_name": result["function_name"],
+        "address": result["address"],
+        "lines": page,
+        "count": len(page),
+        "_pagination": {
+            "total": len(all_lines),
+            "offset": line_offset,
+            "limit": line_limit,
+            "has_more": has_more,
+        },
+        "next_step": (
+            f"Call decompile_function_with_angr('{function_address}', line_offset={line_offset + line_limit}) to see more lines."
+            if has_more else
+            "Call auto_note_function(address) to save a behavioral summary of this function."
+        ),
+    }
+    return await _check_mcp_response_size(
+        ctx, paginated_result, "decompile_function_with_angr",
+        "line_offset and line_limit parameters",
+    )
 
 @tool_decorator
-async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any]:
+async def get_function_cfg(
+    ctx: Context,
+    function_address: str,
+    node_limit: int = 50,
+    edge_limit: int = 100,
+) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Retrieves the Control Flow Graph (CFG) for a function (Nodes/Blocks and Edges/Jumps).
     Automatically attempts to handle RVA (offsets) if the exact VA is not found.
@@ -217,6 +301,11 @@ async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any
     When to use: After decompilation shows complex control flow (many branches, loops, or obfuscation).
     Next steps: get_annotated_disassembly() for instruction-level detail, get_dominators() for dominator tree,
     or analyze_binary_loops() to identify loop structures.
+
+    Args:
+        function_address: Hex address of the function (e.g. '0x140001000').
+        node_limit: Max basic blocks to return (default 50).
+        edge_limit: Max edges to return (default 100).
     """
 
     await ctx.info(f"Requesting CFG for: {function_address}")
@@ -237,18 +326,32 @@ async def get_function_cfg(ctx: Context, function_address: str) -> Dict[str, Any
 
         bridge.report_progress(30, 100)
         bridge.info("Extracting graph nodes and edges...")
-        nodes_data = [{"addr": hex(b.addr), "size": b.size} for b in func.blocks]
-        edges_data = [{"src": hex(s.addr), "dst": hex(d.addr)} for s, d in func.graph.edges]
+        all_nodes = [{"addr": hex(b.addr), "size": b.size} for b in func.blocks]
+        all_edges = [{"src": hex(s.addr), "dst": hex(d.addr)} for s, d in func.graph.edges]
         bridge.report_progress(90, 100)
         bridge.info("Formatting...")
-        return {"function_name": func.name, "address": hex(addr_to_use), "nodes": nodes_data, "edges": edges_data}
+        result = {
+            "function_name": func.name,
+            "address": hex(addr_to_use),
+            "total_nodes": len(all_nodes),
+            "total_edges": len(all_edges),
+            "nodes": all_nodes[:node_limit],
+            "edges": all_edges[:edge_limit],
+        }
+        if len(all_nodes) > node_limit or len(all_edges) > edge_limit:
+            result["_truncation_warning"] = (
+                f"CFG truncated: showing {min(len(all_nodes), node_limit)}/{len(all_nodes)} nodes, "
+                f"{min(len(all_edges), edge_limit)}/{len(all_edges)} edges. "
+                f"Increase node_limit/edge_limit for more."
+            )
+        return result
 
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_extract_graph), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
         raise RuntimeError(f"CFG extraction timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
-    return await _check_mcp_response_size(ctx, result, "get_function_cfg")
+    return await _check_mcp_response_size(ctx, result, "get_function_cfg", "node_limit and edge_limit parameters")
 
 @tool_decorator
 async def find_path_to_address(

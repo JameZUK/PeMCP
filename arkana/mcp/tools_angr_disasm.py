@@ -395,7 +395,7 @@ async def identify_library_functions(
 async def get_annotated_disassembly(
     ctx: Context,
     function_address: str,
-    limit: int = 300,
+    limit: int = 50,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Returns disassembly annotated with variable names,
@@ -536,7 +536,7 @@ async def get_annotated_disassembly(
 @tool_decorator
 async def get_function_map(
     ctx: Context,
-    limit: int = 30,
+    limit: int = 15,
     group_by: str = "category",
     include_details: bool = False,
     compact: bool = False,
@@ -559,7 +559,7 @@ async def get_function_map(
 
     Args:
         ctx: The MCP Context object.
-        limit: (int) Max number of top functions to return. Default 30.
+        limit: (int) Max number of top functions to return. Default 15.
         group_by: (str) 'category' for semantic grouping, 'score' for flat ranked list.
         include_details: (bool) If True, include callee names and string refs per function.
 

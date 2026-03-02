@@ -116,12 +116,14 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
 - **Trust Arkana's built-in guidance**: When tools error, Arkana returns enriched
   error messages with actionable next steps and alternative tool suggestions.
   Follow those hints rather than guessing at workarounds.
-- **Handle tool limits gracefully**: MCP responses are capped at 64KB and will be
-  auto-truncated. Use pagination parameters (`offset`, `limit`) for large results.
-  Angr analyses timeout at 300s — if a decompilation times out, try a simpler
-  function first or use `get_annotated_disassembly()` as a lighter alternative.
-  When `get_function_map()` returns too many results, increase selectivity with
-  the `limit` parameter.
+- **Handle tool limits gracefully**: MCP responses are soft-capped at 8K chars
+  (configurable via `ARKANA_MCP_RESPONSE_LIMIT_CHARS`) to prevent Claude Code CLI
+  from truncating responses. Responses that exceed the limit are auto-truncated
+  with pagination hints. `decompile_function_with_angr()` uses line-based
+  pagination (`line_offset`/`line_limit`) — request additional pages with
+  `line_offset=80` to continue reading. Angr analyses timeout at 300s — if a
+  decompilation times out, try a simpler function first or use
+  `get_annotated_disassembly()` as a lighter alternative.
 
 ## Role & Adaptive Goal Detection
 
@@ -284,8 +286,9 @@ Use as needed based on goal:
   - For deeper string analysis: `get_top_sifted_strings()` (ML-ranked relevance)
   - For FLOSS decoded strings: `get_floss_analysis_info()`
 
-- **Functions**: `get_function_map(limit=30)` — functions ranked by interestingness,
-  grouped by purpose. This is your decompilation priority list.
+- **Functions**: `get_function_map(limit=15)` — functions ranked by interestingness,
+  grouped by purpose. This is your decompilation priority list. Increase `limit`
+  if needed.
 
 - **Capabilities**: `get_capa_analysis_info()` — ATT&CK technique mappings.
   Use `get_capa_rule_match_details(rule_name)` for specific rule deep-dives.
@@ -347,7 +350,7 @@ Progressive depth — use the minimum tier needed to answer your question.
 - **Large binaries (>10MB)**: Avoid `get_full_analysis_results()`. Use targeted
   `get_pe_data(key=...)`. Angr CFG recovery may be slow — start with specific
   functions, not whole-binary analysis.
-- **Many functions (>1000)**: Use `get_function_map(limit=20)` to focus on the most
+- **Many functions (>1000)**: Use `get_function_map(limit=15)` to focus on the most
   interesting. Don't attempt to decompile exhaustively.
 - **Angr timeout**: If decompilation times out, try: (1) a smaller function first to
   verify angr works, (2) `get_annotated_disassembly()` as a disassembly-only fallback,
@@ -356,9 +359,11 @@ Progressive depth — use the minimum tier needed to answer your question.
   set a `timeout` parameter. Check results even on partial execution.
 
 ### Tier 1: Static Analysis (start here)
-- `decompile_function_with_angr(address)` — C-like pseudocode
+- `decompile_function_with_angr(address)` — C-like pseudocode (paginated, default
+  80 lines; use `line_offset` for subsequent pages)
 - **ALWAYS** call `auto_note_function(address)` after each decompilation
-- `get_function_cfg(address)` — control flow graph
+- `get_function_cfg(address)` — control flow graph (default `node_limit=50`,
+  `edge_limit=100`)
 - `get_function_xrefs(address)` — callers and callees
 - `get_annotated_disassembly(address)` — disassembly with variable names and xrefs
 - `get_function_variables(address)` — stack and register variables

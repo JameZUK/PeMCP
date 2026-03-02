@@ -110,7 +110,7 @@ entry point, trace forward through callees to see the execution flow.
 
 | Tool | Purpose |
 |------|---------|
-| `decompile_function_with_angr(address)` | Produce C-like pseudocode for a function |
+| `decompile_function_with_angr(address)` | Produce C-like pseudocode for a function (paginated — 80 lines/page, use `line_offset` for more) |
 | `auto_note_function(address)` | Record a behavioral summary after decompiling — always call this |
 | `get_function_xrefs(address)` | Find callers and callees of a function |
 | `get_function_variables(address)` | List stack and register variables with types and offsets |

@@ -9,10 +9,10 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Instead of... | Prefer... | Why |
 |---|---|---|
-| `get_full_analysis_results()` | `get_pe_data(key='...')` | Full dump can exceed 64KB limit; targeted queries are faster |
+| `get_full_analysis_results()` | `get_pe_data(key='...')` | Full dump exceeds 8K char soft limit; targeted queries are faster |
 | `extract_strings_from_binary()` | `get_strings_summary()` | Raw dumps are noisy; summary categorizes by type (URLs, IPs, paths) |
 | `get_pe_data(key='imports')` for security | `get_focused_imports()` | Focused imports categorizes by threat behavior |
-| `get_function_map(limit=100)` | `get_function_map(limit=20-30)` | Too many functions overwhelms context; start small, expand if needed |
+| `get_function_map(limit=100)` | `get_function_map(limit=15)` | Too many functions overwhelms context; start small, expand if needed |
 | Calling `get_analysis_digest()` repeatedly | Call at phase transitions | Digest has overhead; use it strategically |
 | `get_notes()` to check findings | `get_analysis_digest()` | Digest aggregates notes with triage data and coverage |
 | `get_hex_dump()` + `refinery_xor(data_hex=...)` | `refinery_xor(file_offset=..., length=...)` | Single step; avoids hex-encoding large blobs |
@@ -104,13 +104,13 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `decompile_function_with_angr` | Get C-like pseudocode for a function | `address` |
-| `get_annotated_disassembly` | Disassembly with variable names and xrefs | `address` |
+| `decompile_function_with_angr` | Get C-like pseudocode for a function (paginated) | `address`, `line_offset` (default 0), `line_limit` (default 80) |
+| `get_annotated_disassembly` | Disassembly with variable names and xrefs | `address`, `limit` (default 50) |
 | `disassemble_at_address` | Raw disassembly at arbitrary address | `address`, `count` |
 | `disassemble_raw_bytes` | Disassemble arbitrary byte sequences | `bytes`, `arch` |
-| `get_function_map` | List functions ranked by interestingness | `limit` (default 20) |
+| `get_function_map` | List functions ranked by interestingness | `limit` (default 15) |
 | `get_function_complexity_list` | Functions sorted by cyclomatic complexity | — |
-| `get_function_cfg` | Control flow graph for a function | `address` |
+| `get_function_cfg` | Control flow graph for a function | `address`, `node_limit` (default 50), `edge_limit` (default 100) |
 | `get_function_xrefs` | Cross-references (callers + callees) | `address` |
 | `get_cross_reference_map` | Batch cross-reference lookup | `function_addresses` |
 | `get_function_variables` | Stack and register variables | `address` |
@@ -120,7 +120,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `get_global_data_refs` | Global data references across binary | — |
 | `scan_for_indirect_jumps` | Find jump tables, vtables, indirect calls | — |
 | `identify_cpp_classes` | C++ class structure identification | — |
-| `get_call_graph` | Inter-procedural call graph from a function | `address` |
+| `get_call_graph` | Inter-procedural call graph from a function | `address`, `limit` (default 20) |
 
 ## Data Flow Analysis
 

@@ -11,8 +11,16 @@ from typing import Dict, Any, Optional
 from arkana.config import (
     state, logger, FastMCP, Context,
     ANGR_AVAILABLE, MAX_MCP_RESPONSE_SIZE_BYTES, MAX_MCP_RESPONSE_SIZE_KB,
+    MCP_SOFT_RESPONSE_LIMIT_CHARS,
 )
 from arkana.state import get_session_key_from_context, activate_session_state, get_current_state, TASK_RUNNING
+from arkana.utils import _safe_env_int
+
+# Soft character limit — primary truncation threshold.
+# Claude Code CLI truncates MCP responses at character thresholds far below 64KB,
+# so we default to 8K chars.  Non-Claude-Code clients can set the env var to
+# a higher value (e.g. 65536) to restore the old 64KB-only behaviour.
+_SOFT_LIMIT = _safe_env_int("ARKANA_MCP_RESPONSE_LIMIT_CHARS", MCP_SOFT_RESPONSE_LIMIT_CHARS)
 
 # --- MCP Server Setup ---
 mcp_server = FastMCP("Arkana")
@@ -207,6 +215,17 @@ def tool_decorator(func):
                 except asyncio.CancelledError:
                     pass
 
+        # Safety net: enforce soft char limit for tools that don't call
+        # _check_mcp_response_size explicitly.  Fast no-op when the response
+        # is already under the limit (single json.dumps + len check).
+        if ctx is not None and isinstance(result, (dict, list, str)):
+            try:
+                _result_len = len(json.dumps(result, ensure_ascii=False))
+                if _result_len > _SOFT_LIMIT:
+                    result = await _check_mcp_response_size(ctx, result, tool_name)
+            except (TypeError, ValueError):
+                pass
+
         duration_ms = int((time.time() - start_time) * 1000)
 
         # Record tool invocation in history (skip meta-tools)
@@ -381,40 +400,57 @@ async def _check_mcp_response_size(
     limit_param_info: Optional[str] = None
 ) -> Any:
     """
-    Smart Size Guard: Checks if response exceeds the 64KB limit.
-    If it does, it INTELLIGENTLY TRUNCATES the largest list or string in the response
-    to fit within the limit, rather than raising an error.
+    Smart Size Guard with dual-limit system.
+
+    Primary: Soft character limit (_SOFT_LIMIT, default 8K chars) — prevents
+    Claude Code CLI from truncating or persisting responses to disk files.
+
+    Secondary: Hard byte limit (MAX_MCP_RESPONSE_SIZE_BYTES, 64KB) — backstop
+    for correctness.
+
+    Set ARKANA_MCP_RESPONSE_LIMIT_CHARS=65536 to restore old 64KB-only behavior.
     """
     data_size_bytes = 0  # Safe default for error fallback
     try:
-        # 1. Check initial size — encode once and measure byte length
+        # 1. Check initial size — measure both char count and byte length
         serialized_data = json.dumps(data_to_return, ensure_ascii=False)
+        data_size_chars = len(serialized_data)
         data_size_bytes = len(serialized_data.encode('utf-8'))
 
-        # If it fits, return immediately
-        if data_size_bytes <= MAX_MCP_RESPONSE_SIZE_BYTES:
+        # Fast path: under both limits
+        if data_size_chars <= _SOFT_LIMIT and data_size_bytes <= MAX_MCP_RESPONSE_SIZE_BYTES:
             return data_to_return
 
         # 2. It's too big. Enter Truncation Mode.
-        # We aim for 60KB to leave a safety buffer for the warning message
-        TARGET_SIZE = MAX_MCP_RESPONSE_SIZE_BYTES - 4096
+        # Target 90% of the soft char limit to leave room for warning metadata.
+        TARGET_CHARS = int(_SOFT_LIMIT * 0.9)
+        TARGET_BYTES = MAX_MCP_RESPONSE_SIZE_BYTES - 4096
 
-        await ctx.warning(f"Response for '{tool_name}' was {data_size_bytes/1024:.1f}KB. Auto-truncating to fit limits.")
+        exceeded = []
+        if data_size_chars > _SOFT_LIMIT:
+            exceeded.append(f"{data_size_chars} chars (limit: {_SOFT_LIMIT})")
+        if data_size_bytes > MAX_MCP_RESPONSE_SIZE_BYTES:
+            exceeded.append(f"{data_size_bytes / 1024:.1f}KB (limit: {MAX_MCP_RESPONSE_SIZE_KB}KB)")
+
+        await ctx.warning(
+            f"Response for '{tool_name}' exceeded limits: {', '.join(exceeded)}. "
+            f"Auto-truncating."
+        )
 
         # Deep copy to avoid mutating shared state (e.g. state.pe_data dicts)
         modified_data = copy.deepcopy(data_to_return)
 
-        # Track current size from the initial measurement to avoid
+        # Track current char count from the initial measurement to avoid
         # re-serialising on every loop iteration (expensive for large dicts).
-        current_size = data_size_bytes
+        current_chars = data_size_chars
 
         # 3. Heuristic: Find the largest element and chop it
         # We iterate up to 5 times to try and make it fit.
         for _attempt in range(5):
-            if current_size <= TARGET_SIZE:
-                break # It fits now!
+            if current_chars <= TARGET_CHARS:
+                break  # It fits now!
 
-            reduction_ratio = TARGET_SIZE / current_size
+            reduction_ratio = TARGET_CHARS / current_chars
             # Be aggressive: cut slightly more than the ratio suggests
             reduction_ratio *= 0.9
 
@@ -436,14 +472,15 @@ async def _check_mcp_response_size(
                     if isinstance(val, list):
                         orig_len = len(val)
                         new_len = int(orig_len * reduction_ratio)
-                        new_len = max(1, new_len) # Keep at least 1
+                        new_len = max(1, new_len)  # Keep at least 1
                         modified_data[largest_key] = val[:new_len]
                         modified_data["_truncation_warning"] = (
                             f"Data in '{largest_key}' truncated from {orig_len} to {new_len} items "
-                            f"(MCP response exceeded 64KB byte-size limit). "
+                            f"(response exceeded {_SOFT_LIMIT}-char limit). "
                             f"Use {limit_param_info} to paginate, or request specific items."
                             if limit_param_info else
-                            f"Data in '{largest_key}' truncated from {orig_len} to {new_len} items to fit 64KB response limit."
+                            f"Data in '{largest_key}' truncated from {orig_len} to {new_len} items "
+                            f"to fit {_SOFT_LIMIT}-char response limit."
                         )
                     elif isinstance(val, str):
                         new_len = int(len(val) * reduction_ratio)
@@ -474,16 +511,14 @@ async def _check_mcp_response_size(
                 new_len = int(len(modified_data) * reduction_ratio)
                 modified_data = modified_data[:new_len] + "...[TRUNCATED]"
 
-            # Re-measure after this iteration's modification.
-            # Use len(str) as a fast proxy — for ASCII-heavy JSON data the
-            # byte length is nearly identical and avoids an extra .encode().
-            current_size = len(json.dumps(modified_data, ensure_ascii=False))
+            # Re-measure after this iteration's modification (char count).
+            current_chars = len(json.dumps(modified_data, ensure_ascii=False))
 
-        # Final safety check: if still oversized, convert to string and truncate
+        # Byte-limit backstop: if char truncation still leaves us over 64KB bytes
         final_json = json.dumps(modified_data, ensure_ascii=False)
         final_size = len(final_json.encode('utf-8'))
         if final_size > MAX_MCP_RESPONSE_SIZE_BYTES:
-            truncated_str = final_json[:TARGET_SIZE - 200]
+            truncated_str = final_json[:TARGET_BYTES - 200]
             modified_data = {
                 "data_preview": truncated_str,
                 "_truncation_warning": f"Response could not be structurally reduced. Converted to truncated string preview ({final_size} bytes -> {len(truncated_str)} bytes)."

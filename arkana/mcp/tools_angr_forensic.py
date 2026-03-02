@@ -1173,7 +1173,7 @@ async def get_call_graph(
     ctx: Context,
     root_address: Optional[str] = None,
     max_depth: int = 0,
-    limit: int = 50,
+    limit: int = 20,
     compact: bool = False,
 ) -> Dict[str, Any]:
     """

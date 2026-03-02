@@ -54,7 +54,8 @@ ruff check arkana/ tests/ \
 - **Optional deps**: Every library is guarded by `*_AVAILABLE` flags in `imports.py`. Tools return actionable error messages when a dep is missing — never crash.
 - **Thread safety**: All shared state uses locks. `StateProxy` + `contextvars` isolates HTTP sessions. Use `ProgressBridge` to report progress from worker threads.
 - **`asyncio.to_thread()`**: CPU-intensive tool work runs in threads to avoid blocking the event loop. See `tools_angr.py` and `tools_triage.py` for examples.
-- **Response truncation**: `_check_mcp_response_size()` auto-truncates responses over 64KB. Always call it before returning large results.
+- **Response truncation**: `_check_mcp_response_size()` enforces a dual-limit system — soft character limit (8K chars by default, for Claude Code CLI compatibility) plus hard byte limit (64KB backstop). The `tool_decorator` includes a safety net that auto-enforces the soft limit even for tools that don't call `_check_mcp_response_size` explicitly. Set `ARKANA_MCP_RESPONSE_LIMIT_CHARS=65536` to restore 64KB-only behavior for non-Claude-Code clients.
+- **Pagination**: Large-output tools like `decompile_function_with_angr` use line-based pagination (`line_offset`/`line_limit`). Results are cached via `_ToolResultCache` so subsequent page requests don't re-execute analysis.
 - **`tool_decorator`**: Wraps every MCP tool — handles session activation, heartbeat, history recording, and error enrichment.
 - **Notes system**: `add_note()` categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `manual`.
 - **Artifacts system**: `state.register_artifact()` tracks extracted files (path, hashes, source tool, type detection). Artifacts persist via cache alongside notes/tool_history, and are included in `export_project` / `import_project` archives. Constants: `MAX_ARTIFACT_FILE_SIZE` (100 MB), `MAX_TOTAL_ARTIFACT_EXPORT_SIZE` (50 MB).

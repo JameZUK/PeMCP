@@ -9,6 +9,14 @@ from pathlib import Path
 MAX_MCP_RESPONSE_SIZE_KB = 64
 MAX_MCP_RESPONSE_SIZE_BYTES = MAX_MCP_RESPONSE_SIZE_KB * 1024
 
+# Soft character limit for Claude Code CLI compatibility.
+# Claude Code truncates MCP tool responses at character thresholds:
+#   <10K chars: no truncation, 10-30K: truncated to 8K, 30-50K: truncated to 4K.
+# Default 8000 gives safe margin under the 10K threshold.
+# Override with ARKANA_MCP_RESPONSE_LIMIT_CHARS env var (e.g. 65536 to restore
+# old 64KB-only behaviour for non-Claude-Code clients).
+MCP_SOFT_RESPONSE_LIMIT_CHARS = 8000
+
 # --- Timeout Constants (seconds) ---
 ANGR_ANALYSIS_TIMEOUT = 300    # angr symbolic execution / analysis operations
 ANGR_SHORT_TIMEOUT = 120       # shorter angr operations (e.g. anti-debug scan)
