@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 300" width="800" height="300">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"   style="stop-color:#000d00;stop-opacity:1"/>
+      <stop offset="50%"  style="stop-color:#000800;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#000500;stop-opacity:1"/>
+    </linearGradient>
+    <radialGradient id="eyeAura" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   style="stop-color:#00ff41;stop-opacity:0.55"/>
+      <stop offset="50%"  style="stop-color:#00cc33;stop-opacity:0.2"/>
+      <stop offset="100%" style="stop-color:#000800;stop-opacity:0"/>
+    </radialGradient>
+    <radialGradient id="irisGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"   style="stop-color:#001000;stop-opacity:1"/>
+      <stop offset="60%"  style="stop-color:#002800;stop-opacity:1"/>
+      <stop offset="100%" style="stop-color:#004400;stop-opacity:1"/>
+    </radialGradient>
+    <radialGradient id="pupilGrad" cx="50%" cy="40%" r="50%">
+      <stop offset="0%"   style="stop-color:#ccffcc;stop-opacity:1"/>
+      <stop offset="30%"  style="stop-color:#00ff41;stop-opacity:0.9"/>
+      <stop offset="100%" style="stop-color:#001400;stop-opacity:1"/>
+    </radialGradient>
+    <pattern id="scanlines" x="0" y="0" width="800" height="3" patternUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="800" height="1.5" fill="black" opacity="0.35"/>
+      <rect x="0" y="1.5" width="800" height="1.5" fill="transparent"/>
+    </pattern>
+    <pattern id="noise" x="0" y="0" width="6" height="6" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="0.5" fill="#00ff41" opacity="0.04"/>
+      <circle cx="4" cy="4" r="0.4" fill="#00ff41" opacity="0.03"/>
+    </pattern>
+    <pattern id="grid" x="0" y="0" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#00ff41" stroke-width="0.25" opacity="0.12"/>
+    </pattern>
+    <filter id="glowHeavy" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="2"  result="b1"/>
+      <feGaussianBlur stdDeviation="6"  result="b2"/>
+      <feGaussianBlur stdDeviation="14" result="b3"/>
+      <feGaussianBlur stdDeviation="25" result="b4"/>
+      <feMerge>
+        <feMergeNode in="b4"/>
+        <feMergeNode in="b3"/>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowMed" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="3"  result="b1"/>
+      <feGaussianBlur stdDeviation="8"  result="b2"/>
+      <feMerge>
+        <feMergeNode in="b2"/>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="glowSoft" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="2.5" result="b1"/>
+      <feMerge>
+        <feMergeNode in="b1"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+      <stop offset="0%"   style="stop-color:#000800;stop-opacity:0"/>
+      <stop offset="80%"  style="stop-color:#000400;stop-opacity:0.4"/>
+      <stop offset="100%" style="stop-color:#000000;stop-opacity:0.85"/>
+    </radialGradient>
+    <clipPath id="irisClip">
+      <ellipse cx="147" cy="150" rx="50" ry="50"/>
+    </clipPath>
+  </defs>
+
+  <!-- BASE -->
+  <rect width="800" height="300" fill="url(#bgGrad)"/>
+  <rect width="800" height="300" fill="url(#grid)"/>
+  <rect width="800" height="300" fill="url(#noise)"/>
+
+  <!-- EYE AURA -->
+  <ellipse cx="147" cy="150" rx="130" ry="78" fill="url(#eyeAura)" filter="url(#glowHeavy)" opacity="0.7"/>
+
+  <!-- SCLERA -->
+  <path d="M57,150 Q91,82 147,82 Q203,82 237,150 Q203,218 147,218 Q91,218 57,150 Z" fill="#000d00"/>
+  <path d="M57,150 Q91,82 147,82 Q203,82 237,150 Q203,218 147,218 Q91,218 57,150 Z"
+        fill="none" stroke="#00ff41" stroke-width="2.5" filter="url(#glowMed)" opacity="0.9"/>
+
+  <!-- IRIS -->
+  <ellipse cx="147" cy="150" rx="52" ry="52" fill="url(#irisGrad)"/>
+  <ellipse cx="147" cy="150" rx="52" ry="52" fill="none" stroke="#00ff41" stroke-width="1.8" opacity="0.85" filter="url(#glowSoft)"/>
+  <ellipse cx="147" cy="150" rx="44" ry="44" fill="none" stroke="#00cc33" stroke-width="0.6" opacity="0.4"/>
+  <ellipse cx="147" cy="150" rx="36" ry="36" fill="none" stroke="#00ff41" stroke-width="0.4" opacity="0.3"/>
+
+  <!-- HEX DATA IN IRIS -->
+  <g clip-path="url(#irisClip)" opacity="0.65" filter="url(#glowSoft)">
+    <text x="109" y="123" font-family="monospace" font-size="6" fill="#00ff41" letter-spacing="1.2">4D5A9000</text>
+    <text x="109" y="131" font-family="monospace" font-size="6" fill="#00cc33" letter-spacing="1.2">03000000</text>
+    <text x="109" y="139" font-family="monospace" font-size="6" fill="#00ff41" letter-spacing="1.2">50450000</text>
+    <text x="109" y="147" font-family="monospace" font-size="6" fill="#00cc33" letter-spacing="1.2">64860900</text>
+    <text x="109" y="155" font-family="monospace" font-size="6" fill="#00ff41" letter-spacing="1.2">EB371666</text>
+    <text x="109" y="163" font-family="monospace" font-size="6" fill="#00cc33" letter-spacing="1.2">00000000</text>
+    <text x="109" y="171" font-family="monospace" font-size="6" fill="#00ff41" letter-spacing="1.2">E8000000</text>
+    <text x="109" y="179" font-family="monospace" font-size="6" fill="#00cc33" letter-spacing="1.2">B8004000</text>
+  </g>
+
+  <!-- RETICLE TICKS -->
+  <g stroke="#00ff41" stroke-width="2" opacity="0.75" filter="url(#glowSoft)">
+    <line x1="147" y1="94"  x2="147" y2="104"/>
+    <line x1="147" y1="196" x2="147" y2="206"/>
+    <line x1="91"  y1="150" x2="101" y2="150"/>
+    <line x1="193" y1="150" x2="203" y2="150"/>
+  </g>
+  <g stroke="#00ff41" stroke-width="1.2" opacity="0.5" filter="url(#glowSoft)">
+    <line x1="111" y1="114" x2="117" y2="120"/>
+    <line x1="177" y1="180" x2="183" y2="186"/>
+    <line x1="183" y1="114" x2="177" y2="120"/>
+    <line x1="117" y1="180" x2="111" y2="186"/>
+  </g>
+  <line x1="57"  y1="150" x2="237" y2="150" stroke="#00ff41" stroke-width="0.8" opacity="0.25"/>
+  <line x1="147" y1="82"  x2="147" y2="218" stroke="#00ff41" stroke-width="0.5" opacity="0.15"/>
+
+  <!-- PUPIL -->
+  <ellipse cx="147" cy="150" rx="20" ry="20" fill="url(#pupilGrad)" filter="url(#glowHeavy)"/>
+  <ellipse cx="147" cy="150" rx="20" ry="20" fill="none" stroke="#00ff41" stroke-width="1.5" opacity="0.9"/>
+  <ellipse cx="147" cy="150" rx="8"  ry="8"  fill="#66ffaa" opacity="0.95" filter="url(#glowHeavy)"/>
+  <ellipse cx="144" cy="147" rx="3"  ry="2.5" fill="white"  opacity="0.8"/>
+
+  <!-- LASHES -->
+  <g stroke="#00ff41" stroke-width="1.5" opacity="0.6" filter="url(#glowSoft)">
+    <line x1="147" y1="82"  x2="147" y2="70"/>
+    <line x1="122" y1="88"  x2="117" y2="78"/>
+    <line x1="172" y1="88"  x2="177" y2="78"/>
+    <line x1="100" y1="106" x2="93"  y2="97"/>
+    <line x1="194" y1="106" x2="201" y2="97"/>
+  </g>
+
+  <!-- ── WORDMARK ── -->
+  <text x="286" y="148"
+        font-family="'Courier New', Courier, monospace"
+        font-size="90" font-weight="900" letter-spacing="8"
+        fill="#003300" opacity="1">ARKANA</text>
+  <text x="284" y="146"
+        font-family="'Courier New', Courier, monospace"
+        font-size="90" font-weight="900" letter-spacing="8"
+        fill="#00ff41" filter="url(#glowHeavy)" opacity="1">ARKANA</text>
+  <text x="284" y="146"
+        font-family="'Courier New', Courier, monospace"
+        font-size="90" font-weight="900" letter-spacing="8"
+        fill="none" stroke="#ccffcc" stroke-width="0.5" opacity="0.5">ARKANA</text>
+
+  <!-- ── SEPARATOR ── -->
+  <line x1="283" y1="162" x2="782" y2="162" stroke="#00ff41" stroke-width="1.2" opacity="0.5" filter="url(#glowSoft)"/>
+  <line x1="283" y1="166" x2="782" y2="166" stroke="#00ff41" stroke-width="0.4" opacity="0.25"/>
+  <rect x="283" y="160" width="4" height="8" fill="#00ff41" opacity="0.7" filter="url(#glowSoft)"/>
+  <rect x="779" y="160" width="4" height="8" fill="#00ff41" opacity="0.7" filter="url(#glowSoft)"/>
+
+  <!-- ── SUBTITLE ── -->
+  <text x="285" y="185"
+        font-family="'Courier New', Courier, monospace"
+        font-size="15" font-weight="700" letter-spacing="6"
+        fill="#00ff41" filter="url(#glowSoft)" opacity="0.9">BINARY INTELLIGENCE PLATFORM</text>
+
+  <!-- ── FORMAT / TOOL COUNT LINE ── -->
+  <text x="285" y="205"
+        font-family="'Courier New', Courier, monospace"
+        font-size="9.5" letter-spacing="3"
+        fill="#00aa22" opacity="0.75">190 TOOLS  ·  PE · ELF · MACH-O · .NET · GO · RUST · SHELLCODE</text>
+
+  <!-- ── TERMINAL STATUS (top right) ── -->
+  <text x="782" y="26" font-family="monospace" font-size="8.5" letter-spacing="1.5" fill="#00ff41" opacity="0.55" text-anchor="end">SYS:ONLINE</text>
+  <text x="782" y="38" font-family="monospace" font-size="8.5" letter-spacing="1.5" fill="#00cc33" opacity="0.45" text-anchor="end">ANALYZING...</text>
+  <text x="782" y="50" font-family="monospace" font-size="8.5" letter-spacing="1.5" fill="#009922" opacity="0.35" text-anchor="end">v2.0.0_ARKANA</text>
+
+  <!-- ── CORNER BRACKETS ── -->
+  <polyline points="8,35 8,8 35,8"      fill="none" stroke="#00ff41" stroke-width="3" opacity="0.7" filter="url(#glowSoft)"/>
+  <polyline points="792,35 792,8 765,8" fill="none" stroke="#00ff41" stroke-width="3" opacity="0.7" filter="url(#glowSoft)"/>
+  <polyline points="8,265 8,292 35,292" fill="none" stroke="#00ff41" stroke-width="3" opacity="0.7" filter="url(#glowSoft)"/>
+  <polyline points="792,265 792,292 765,292" fill="none" stroke="#00ff41" stroke-width="3" opacity="0.7" filter="url(#glowSoft)"/>
+
+  <!-- ── BOTTOM STATUS BAR ── -->
+  <line x1="8" y1="275" x2="792" y2="275" stroke="#00ff41" stroke-width="0.6" opacity="0.3"/>
+  <text x="16"  y="288" font-family="monospace" font-size="8" letter-spacing="2" fill="#00ff41" opacity="0.5">0x4D5A // MZ MAGIC</text>
+  <text x="400" y="288" font-family="monospace" font-size="8" letter-spacing="2" fill="#006611" opacity="0.45" text-anchor="middle">[ ADVANCED MULTI-FORMAT BINARY ANALYSIS &amp; MCP SERVER ]</text>
+  <text x="784" y="288" font-family="monospace" font-size="8" letter-spacing="2" fill="#00ff41" opacity="0.5" text-anchor="end">SHALL WE PLAY A GAME?</text>
+
+  <!-- CRT SCANLINES -->
+  <rect width="800" height="300" fill="url(#scanlines)"/>
+  <!-- VIGNETTE -->
+  <rect width="800" height="300" fill="url(#vignette)"/>
+</svg>
