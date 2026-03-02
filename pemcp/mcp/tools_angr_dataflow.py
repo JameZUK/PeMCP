@@ -19,7 +19,7 @@ if ANGR_AVAILABLE:
     # The VFG._get_simsuccessors() method calls ProcedureEngine() without
     # the required 'project' argument in 3 error-handling fallback paths.
     # This is an upstream bug. We patch it here so get_value_set_analysis
-    # works correctly.  See DEPENDENCIES.md section 7 for details.
+    # works correctly.  See docs/dependencies.md section 7 for details.
     try:
         from angr.analyses.vfg import VFG as _VFG
         from angr.engines.procedure import ProcedureEngine as _ProcedureEngine

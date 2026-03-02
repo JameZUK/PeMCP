@@ -59,4 +59,4 @@ pytest tests/ -v --cov=pemcp --cov-report=term-missing
 pytest mcp_test_client.py -v
 ```
 
-For detailed instructions on running tests, writing new tests, coverage, CI/CD, environment variables, test categories, markers, and troubleshooting, see **[TESTING.md](../TESTING.md)**.
+For detailed instructions on running tests, writing new tests, coverage, CI/CD, environment variables, test categories, markers, and troubleshooting, see **[Testing](testing.md)**.
