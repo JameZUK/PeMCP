@@ -1,6 +1,6 @@
 # Arkana - AI-Powered Binary Analysis
 
-![Arkana Logo](docs/logo.svg)
+![Arkana Logo](docs/logo_banner.svg)
 
 Point an AI at a binary and ask questions. Arkana gives Claude Code (or any MCP client) **190 analysis tools** — decompilation, emulation, string decoding, YARA scanning, and more — so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by just describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
 
