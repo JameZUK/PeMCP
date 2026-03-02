@@ -111,6 +111,10 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                     if f_name.lower().endswith(('.yar', '.yara')):
                         full = os.path.join(dirname, f_name)
                         rel = os.path.relpath(full, yara_rules_path).replace(os.sep, '/')
+                        # Skip deprecated rules (e.g. community/deprecated/Android/)
+                        # which use YARA module features not available at compile time
+                        if '/deprecated/' in rel or rel.startswith('deprecated/'):
+                            continue
                         filepaths[rel] = full
             if not filepaths: logger.warning("   No .yar or .yara files in dir: %s", yara_rules_path); return scan_results
 

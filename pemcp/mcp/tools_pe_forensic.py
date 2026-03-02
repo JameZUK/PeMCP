@@ -10,7 +10,7 @@ from typing import Dict, Any, List, Optional
 
 from pemcp.config import (
     state, logger, Context, pefile,
-    CRYPTOGRAPHY_AVAILABLE, SIGNIFY_AVAILABLE,
+    CRYPTOGRAPHY_AVAILABLE, SIGNIFY_AVAILABLE, YARA_AVAILABLE,
 )
 from pemcp.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
@@ -37,6 +37,7 @@ async def generate_yara_rule(
     include_pdb: bool = True,
     max_strings: int = 15,
     min_string_length: int = 6,
+    scan_after_generate: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: utility] Auto-generates a YARA rule from the loaded binary's analysis
@@ -59,6 +60,8 @@ async def generate_yara_rule(
         include_pdb: Include PDB path if found. Default True.
         max_strings: Max string indicators to include. Default 15.
         min_string_length: Min length for string candidates. Default 6.
+        scan_after_generate: If True, immediately scan the loaded binary with
+            the generated rule and include match results. Requires yara-python.
     """
     await ctx.info("Generating YARA rule")
     _check_pe_loaded("generate_yara_rule")
@@ -197,6 +200,44 @@ async def generate_yara_rule(
         }
 
     result = await asyncio.to_thread(_generate)
+
+    # Optionally scan the loaded binary with the generated rule
+    if scan_after_generate:
+        if not YARA_AVAILABLE:
+            result["scan_error"] = "yara-python not installed — cannot scan"
+        else:
+            import yara
+            rule_text = result.get("rule", "")
+            try:
+                compiled = yara.compile(source=rule_text)
+                matches = compiled.match(state.filepath)
+                scan_results = []
+                for match in matches:
+                    match_info: Dict[str, Any] = {
+                        "rule": match.rule,
+                        "tags": list(match.tags) if match.tags else [],
+                        "meta": dict(match.meta) if match.meta else {},
+                    }
+                    string_matches = []
+                    for s in match.strings:
+                        for instance in s.instances[:20]:
+                            string_matches.append({
+                                "identifier": s.identifier,
+                                "offset": instance.offset,
+                                "matched_data": instance.matched_data.hex()[:64],
+                            })
+                    match_info["strings"] = string_matches[:20]
+                    scan_results.append(match_info)
+                result["scan_result"] = {
+                    "matched": len(scan_results) > 0,
+                    "match_count": len(scan_results),
+                    "matches": scan_results,
+                }
+            except yara.SyntaxError as e:
+                result["scan_error"] = f"YARA compilation error: {e}"
+            except Exception as e:
+                result["scan_error"] = f"YARA scan error: {e}"
+
     return await _check_mcp_response_size(ctx, result, "generate_yara_rule")
 
 

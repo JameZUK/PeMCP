@@ -83,9 +83,12 @@ async def try_all_unpackers(
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            base, ext = os.path.splitext(state.filepath)
+            output_path = f"{base}_unpacked{ext or '.exe'}"
             cmd = _json.dumps({
                 "action": "unpack_pe",
                 "filepath": state.filepath,
+                "output_path": output_path,
                 "timeout_seconds": timeout_seconds,
             }).encode()
             stdout, stderr = await asyncio.wait_for(

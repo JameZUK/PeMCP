@@ -60,7 +60,7 @@ def unpack_pe(cmd):
                 return {
                     "status": "timeout",
                     "input_file": filepath,
-                    "output_file": output_path,
+                    "output_path": output_path,
                     "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
                     "warning": f"Unpacking timed out after {timeout_seconds}s. Output may be incomplete.",
                 }
@@ -81,7 +81,7 @@ def unpack_pe(cmd):
         return {
             "status": "success",
             "input_file": filepath,
-            "output_file": output_path,
+            "output_path": output_path,
             "output_size": os.path.getsize(output_path) if os.path.exists(output_path) else 0,
         }
     except Exception as e:
