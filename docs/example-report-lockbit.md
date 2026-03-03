@@ -3,14 +3,14 @@
 **Analyst:** Arkana Automated Analysis
 **Date:** 2026-03-03
 **Classification:** Ransomware (Packed)
-**Risk Level:** CRITICAL (36/100 static — understated due to packing)
+**Risk Level:** CRITICAL (36/100 static  - understated due to packing)
 **VT Detection:** 63/72
 
 ---
 
 ## 1. Executive Summary
 
-This report documents the triage-level analysis of a **LockBit 3.0 / BlackMatter ransomware** sample. The binary is **heavily packed** with near-maximum entropy (7.998) across all executable sections, a self-modifying `.text` section (RWX), and an unconventional entry point in `.itext`. Packing effectively conceals the ransomware payload from static analysis — no ransom note strings, no encryption routine identifiers, and no meaningful IOCs are visible without unpacking.
+This report documents the triage-level analysis of a **LockBit 3.0 / BlackMatter ransomware** sample. The binary is **heavily packed** with near-maximum entropy (7.998) across all executable sections, a self-modifying `.text` section (RWX), and an unconventional entry point in `.itext`. Packing effectively conceals the ransomware payload from static analysis  - no ransom note strings, no encryption routine identifiers, and no meaningful IOCs are visible without unpacking.
 
 Despite the packing, Arkana identified **RC4 KSA** and **XOR encoding** routines in the unpacking stub, dynamic API resolution via `GetProcAddress`/`GetModuleHandleA`, and a **screenshot capture capability** (`BitBlt`). The domain `z.pw` was recovered from static strings.
 
@@ -61,12 +61,12 @@ The binary is heavily packed/encrypted. Multiple independent indicators confirm 
 | Section | VA | Virtual Size | Raw Size | Permissions | Entropy |
 |---------|-----|-------------|----------|-------------|---------|
 | .text | 0x1000 | 97,606 | 97,792 | **RWX** | 7.998 |
-| .itext | 0x19000 | 1,385 | 1,536 | R-X | — |
-| .rdata | 0x1a000 | 1,202 | 1,536 | R-- | — |
+| .itext | 0x19000 | 1,385 | 1,536 | R-X |  - |
+| .rdata | 0x1a000 | 1,202 | 1,536 | R-- |  - |
 | .data | 0x1b000 | 44,488 | 40,960 | RW- | 7.995 |
 | .pdata | 0x26000 | 5,304 | 5,632 | RW- | 7.968 |
 
-The `.text` section being both writable and executable is a strong packing indicator — the unpacking stub decrypts the payload into this section at runtime.
+The `.text` section being both writable and executable is a strong packing indicator  - the unpacking stub decrypts the payload into this section at runtime.
 
 ### 3.3 Implications
 
@@ -88,7 +88,7 @@ Despite heavy packing, the following capabilities were identified in the unpacki
 |------------|-----------|---------|--------|
 | Encode data using XOR | data-manipulation/encoding/xor | 2 addresses | T1027 |
 | Encrypt data using RC4 KSA | data-manipulation/encryption/rc4 | 1 address | T1027 |
-| Contain loop | (library rule) | 10 functions | — |
+| Contain loop | (library rule) | 10 functions |  - |
 
 ### 4.2 Dynamic API Resolution
 
@@ -126,7 +126,7 @@ The minimal import table (25 functions) combined with `GetProcAddress` is a clas
 | Control Flow Guard | **Disabled** |
 | Force Integrity | Not set |
 
-The lack of ASLR and CFG is typical for malware — these protections benefit defenders and are intentionally omitted.
+The lack of ASLR and CFG is typical for malware  - these protections benefit defenders and are intentionally omitted.
 
 ---
 
@@ -176,19 +176,19 @@ Static analysis of the packed stub provides limited ATT&CK coverage. The followi
 
 This analysis is **triage-level only** due to the heavy packing:
 
-1. **No ransomware payload analysis** — the encryption routines, ransom note, and file targeting logic are hidden within the packed .text section
-2. **No C2 infrastructure** — beyond the `z.pw` domain, all network IOCs are encrypted
-3. **No YARA rule generated** — byte patterns from the packed stub would produce high false-positive rates
-4. **Capa coverage minimal** — only 3 rules matched against the unpacking stub vs the full payload
+1. **No ransomware payload analysis**  - the encryption routines, ransom note, and file targeting logic are hidden within the packed .text section
+2. **No C2 infrastructure**  - beyond the `z.pw` domain, all network IOCs are encrypted
+3. **No YARA rule generated**  - byte patterns from the packed stub would produce high false-positive rates
+4. **Capa coverage minimal**  - only 3 rules matched against the unpacking stub vs the full payload
 
 ### Recommended Next Steps
 
 | Action | Tool |
 |--------|------|
-| Automated unpacking | `auto_unpack_pe()` — attempt UPX/ASPack/PEtite/FSG unpacking |
-| Manual unpacking | `emulate_pe_with_windows_apis()` — run in Speakeasy emulator |
-| Shellcode emulation | `emulate_shellcode_with_speakeasy()` — if unpacking stub is shellcode-like |
-| Similarity clustering | `compute_similarity_hashes()` — ssdeep/TLSH against known LockBit variants |
+| Automated unpacking | `auto_unpack_pe()`  - attempt UPX/ASPack/PEtite/FSG unpacking |
+| Manual unpacking | `emulate_pe_with_windows_apis()`  - run in Speakeasy emulator |
+| Shellcode emulation | `emulate_shellcode_with_speakeasy()`  - if unpacking stub is shellcode-like |
+| Similarity clustering | `compute_similarity_hashes()`  - ssdeep/TLSH against known LockBit variants |
 | Dynamic analysis | Execute in sandbox (ANY.RUN, CAPE, Joe Sandbox) for full behavioral trace |
 
 ---
@@ -197,7 +197,7 @@ This analysis is **triage-level only** due to the heavy packing:
 
 This is a **LockBit 3.0** ransomware sample (also labelled BlackMatter by some vendors) with professional-grade packing that defeats static analysis. The packed stub uses RC4 and XOR to decrypt the payload at runtime, dynamically resolves APIs via `GetProcAddress`, and includes a screenshot capture capability (`BitBlt`).
 
-The binary's characteristics — stripped Rich header, disabled ASLR/CFG, RWX .text section with near-maximum entropy, and entry point in a separate `.itext` section — are consistent with the LockBit 3.0 builder output. The filename `LB3_pass.exe` on VirusTotal suggests this is a password-protected variant that requires a command-line password to execute.
+The binary's characteristics  - stripped Rich header, disabled ASLR/CFG, RWX .text section with near-maximum entropy, and entry point in a separate `.itext` section  - are consistent with the LockBit 3.0 builder output. The filename `LB3_pass.exe` on VirusTotal suggests this is a password-protected variant that requires a command-line password to execute.
 
 Static analysis alone provides limited visibility into packed samples. This report demonstrates that Arkana can still extract valuable intelligence from the unpacking stub (crypto primitives, API resolution, imported capabilities) and integrate external threat intelligence (VirusTotal) to contextualise the sample, even when the primary payload is inaccessible.
 

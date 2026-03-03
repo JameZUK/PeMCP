@@ -50,9 +50,9 @@ Arkana uses **GitHub Actions** to run unit tests automatically on every push and
 
 ### What CI runs
 
-1. **Unit tests** — Runs `pytest tests/` with coverage on Python 3.10, 3.11, and 3.12.
-2. **Coverage enforcement** — Fails the build if code coverage drops below **60%**.
-3. **Syntax checking** — Verifies core modules compile without errors.
+1. **Unit tests**  - Runs `pytest tests/` with coverage on Python 3.10, 3.11, and 3.12.
+2. **Coverage enforcement**  - Fails the build if code coverage drops below **60%**.
+3. **Syntax checking**  - Verifies core modules compile without errors.
 
 ### Running locally (same as CI)
 
@@ -175,7 +175,7 @@ exclude_lines =
 
 When adding new unit tests, follow these conventions:
 
-1. **File naming**: `tests/test_<module_name>.py` — mirrors the source module path.
+1. **File naming**: `tests/test_<module_name>.py`  - mirrors the source module path.
 
 2. **Class organisation**: Group related tests into classes named `Test<FeatureName>`:
 
@@ -206,7 +206,7 @@ When adding new unit tests, follow these conventions:
        ...
    ```
 
-5. **Test isolation**: Each test should be independent. Use `setup_method` or fixtures to reset state — never rely on test execution order.
+5. **Test isolation**: Each test should be independent. Use `setup_method` or fixtures to reset state  - never rely on test execution order.
 
 6. **Monkeypatch module globals** when testing code that depends on `arkana.config` constants or paths:
 
@@ -433,7 +433,7 @@ python arkana.py --mcp-server --mcp-transport streamable-http
 
 ### Integration tests skip most tests
 
-If tests are skipping with messages about missing tools or libraries, the server may be running without all optional dependencies. This is expected behaviour — install additional libraries on the server to enable more tests.
+If tests are skipping with messages about missing tools or libraries, the server may be running without all optional dependencies. This is expected behaviour  - install additional libraries on the server to enable more tests.
 
 ### Tests fail with `AnalysisCache` errors
 

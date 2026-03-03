@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-This report documents the analysis of an **AsyncRAT** client built from the open-source AsyncRAT C# framework. The binary is a **.NET assembly** (CLR v4.0.30319) with obfuscated metadata — type and method definitions are stripped, but string tables and member references remain readable, providing extensive visibility into its capabilities.
+This report documents the analysis of an **AsyncRAT** client built from the open-source AsyncRAT C# framework. The binary is a **.NET assembly** (CLR v4.0.30319) with obfuscated metadata  - type and method definitions are stripped, but string tables and member references remain readable, providing extensive visibility into its capabilities.
 
 The sample connects to C2 server **cveutb.sa.com**, uses **AES-256 + HMACSHA256** for encrypted communications via the **MessagePack** serialisation protocol, and implements comprehensive anti-analysis (VMware, VirtualBox, Sandboxie, debugger detection). It persists via the Windows **Run registry key** and drops itself to `C:\Windows\ett1h.exe`.
 
@@ -34,7 +34,7 @@ Debug strings left in the binary (`[DEBUG] Sandbox detected`, `[DEBUG] Extreme p
 | **Runtime** | CLR v4.0.30319 (.NET Framework 4.x) |
 | **Signed** | No |
 | **Sections** | 3 |
-| **Imports** | 1 function from 1 DLL (mscoree.dll — .NET loader stub) |
+| **Imports** | 1 function from 1 DLL (mscoree.dll  - .NET loader stub) |
 | **VT Label** | trojan.msil/asyncrat |
 | **VT First Seen** | 2026-03-01 |
 | **VT Tags** | long-sleeps, assembly, detect-debug-environment |
@@ -63,8 +63,8 @@ The .NET metadata has been stripped/obfuscated:
 | Type definitions | **0** | All types stripped |
 | Method definitions | **0** | All methods stripped |
 | User strings | **0** | User string heap cleared |
-| Assembly references | **10** | Intact — reveals dependencies |
-| Member references | **30** | Intact — reveals API usage |
+| Assembly references | **10** | Intact  - reveals dependencies |
+| Member references | **30** | Intact  - reveals API usage |
 
 Despite metadata stripping, the string tables (FLOSS-extracted) and member references provide full visibility.
 
@@ -110,7 +110,7 @@ Despite metadata stripping, the string tables (FLOSS-extracted) and member refer
 
 ### 4.2 Cryptographic Keys
 
-Two 64-character hex strings (SHA-256 hashes) are embedded — likely the **server certificate hash** and **encryption key derivative**:
+Two 64-character hex strings (SHA-256 hashes) are embedded  - likely the **server certificate hash** and **encryption key derivative**:
 
 | Role | Value |
 |------|-------|
@@ -129,7 +129,7 @@ Two 64-character hex strings (SHA-256 hashes) are embedded — likely the **serv
 | Debug mode | `EnterDebugMode` (SeDebugPrivilege) |
 | AV enumeration | WMI `Select * from AntivirusProduct` |
 | Sandbox evasion | On detection: "[DEBUG] Sandbox detected - sending heavy suspicious traffic" |
-| Long sleeps | `Thread.Sleep` — VT tagged `long-sleeps` |
+| Long sleeps | `Thread.Sleep`  - VT tagged `long-sleeps` |
 
 ### 4.4 Persistence
 
@@ -139,7 +139,7 @@ Two 64-character hex strings (SHA-256 hashes) are embedded — likely the **serv
 | Install path | `C:\Windows\ett1h.exe` (random name) |
 | Startup class | `NormalStartup` |
 | Install class | `Client.Install` with `InstallFile` / `InstallFolder` methods |
-| Mutex | `MutexControl` — `CreateMutex` / `CloseMutex` for single-instance |
+| Mutex | `MutexControl`  - `CreateMutex` / `CloseMutex` for single-instance |
 
 ### 4.5 Web Panel / Payload Paths
 
@@ -198,7 +198,7 @@ Embedded URL paths suggest a web-based C2 panel or secondary payload staging:
 | No SEH | Set (uses .NET exception handling) |
 | Control Flow Guard | Not set |
 
-Standard .NET security flags — ASLR/DEP are enabled by default by the .NET compiler.
+Standard .NET security flags  - ASLR/DEP are enabled by default by the .NET compiler.
 
 ---
 
@@ -279,7 +279,7 @@ This is a **minimally customised AsyncRAT build** compiled by a Vietnamese-speak
 
 Despite the operator's inexperience, the AsyncRAT framework itself provides substantial capabilities: AES-256 encrypted C2 communications, comprehensive anti-analysis evasion (VM, sandbox, debugger), keylogging, screenshot capture, system fingerprinting, multi-stage payload delivery, and registry-based persistence.
 
-This analysis demonstrates Arkana's **.NET analysis capabilities** — even with stripped metadata (0 types, 0 methods, 0 user strings), the combination of assembly references, member references, FLOSS string extraction, StringSifter ML ranking, and YARA rule matching provided full visibility into the RAT's configuration, C2 infrastructure, and anti-analysis techniques without requiring .NET decompilation.
+This analysis demonstrates Arkana's **.NET analysis capabilities**  - even with stripped metadata (0 types, 0 methods, 0 user strings), the combination of assembly references, member references, FLOSS string extraction, StringSifter ML ranking, and YARA rule matching provided full visibility into the RAT's configuration, C2 infrastructure, and anti-analysis techniques without requiring .NET decompilation.
 
 ---
 

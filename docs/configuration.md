@@ -13,7 +13,7 @@ Arkana stores API keys persistently in `~/.arkana/config.json` with restricted f
 - Use the `get_config` tool to view current configuration (keys are masked)
 
 **Setting keys via environment variables:**
-- `VT_API_KEY` — VirusTotal API key (overrides stored value)
+- `VT_API_KEY`  - VirusTotal API key (overrides stored value)
 
 **Setting keys via `.mcp.json`:**
 ```json

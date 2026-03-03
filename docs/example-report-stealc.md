@@ -10,7 +10,7 @@
 
 ## 1. Executive Summary
 
-This report documents the analysis of a **StealC** information stealer — a commodity malware-as-a-service (MaaS) stealer that targets browser credentials, Steam gaming tokens, and cryptocurrency wallets. The binary masquerades as an **FL Studio installer** (`FL.Studio.v25.1.6.49971.exe`) and was compiled 2026-01-23 with MSVC (linker 14.44).
+This report documents the analysis of a **StealC** information stealer  - a commodity malware-as-a-service (MaaS) stealer that targets browser credentials, Steam gaming tokens, and cryptocurrency wallets. The binary masquerades as an **FL Studio installer** (`FL.Studio.v25.1.6.49971.exe`) and was compiled 2026-01-23 with MSVC (linker 14.44).
 
 Unlike the packed samples in this report series, StealC is **not heavily packed** (max entropy 6.462) and yields rich static analysis results: 32 capa capability rules matched, extensive browser and application targeting strings are visible, and RC4/XOR/Base64/FNV hash implementations are identifiable. The binary dynamically resolves additional APIs via `GetProcAddress` and loads `wininet.dll` and `crypt32.dll` at runtime for HTTP communication and certificate/credential manipulation.
 
@@ -87,27 +87,27 @@ The stealer extracts Steam authentication tokens (for session hijacking) and Ste
 | **Encode data using Base64** | Data manipulation | 2 | T1027 |
 | **Encode data using XOR** | Data manipulation | 7 | T1027 |
 | **Encrypt data using RC4 PRGA** | Encryption | 2 | T1027 |
-| **Mersenne Twister PRNG** | Data manipulation | 2 | — |
-| **Hash data using FNV** | Hashing | 1 | — |
+| **Mersenne Twister PRNG** | Data manipulation | 2 |  - |
+| **Hash data using FNV** | Hashing | 1 |  - |
 | **Link function at runtime** | Runtime linking | 6 | T1129 |
-| **PEB access** | Anti-debug | 2 | — |
-| **Load assembly via IAssembly** | Code loading | 1 | — |
+| **PEB access** | Anti-debug | 2 |  - |
+| **Load assembly via IAssembly** | Code loading | 1 |  - |
 | **Parse PE header** | Reflective loading | 7 | T1129 |
-| **Enumerate PE sections** | Code discovery | 2 | — |
+| **Enumerate PE sections** | Code discovery | 2 |  - |
 | **Enumerate files** | Discovery | 2 | T1083 |
-| **Read file** | File I/O | 4 | — |
-| **Write file** | File I/O | 5 | — |
-| **Create/open file** | File I/O | 5 | — |
+| **Read file** | File I/O | 4 |  - |
+| **Write file** | File I/O | 5 |  - |
+| **Create/open file** | File I/O | 5 |  - |
 | **Get file size** | File I/O | 1 | T1083 |
-| **Clear file content** | Anti-forensics | 1 | — |
+| **Clear file content** | Anti-forensics | 1 |  - |
 | **Accept command line args** | Execution | 1 | T1059 |
 | **Query environment variable** | Discovery | 1 | T1082 |
-| **Set environment variable** | Persistence | 2 | — |
-| **Change memory protection** | Memory | 3 | — |
-| **Delay execution** | Anti-sandbox | 1 | — |
-| **Terminate process** | Process control | 3 | — |
-| **Print debug messages** | Debug | 1 | — |
-| **TLS storage operations** | Thread mgmt | 3 | — |
+| **Set environment variable** | Persistence | 2 |  - |
+| **Change memory protection** | Memory | 3 |  - |
+| **Delay execution** | Anti-sandbox | 1 |  - |
+| **Terminate process** | Process control | 3 |  - |
+| **Print debug messages** | Debug | 1 |  - |
+| **TLS storage operations** | Thread mgmt | 3 |  - |
 
 ### 4.2 Cryptographic Implementations
 
@@ -116,11 +116,11 @@ The stealer extracts Steam authentication tokens (for session hijacking) and Ste
 | **RC4** | 20 identity permutation instances in .rdata; PRGA detected by capa (2 functions) |
 | **XOR** | 7 XOR encoding loops detected |
 | **Base64** | Base64 encoding (2 functions) + Base64 table in data section |
-| **FNV hash** | FNV-1/FNV-1a hash (1 function) — likely for API name hashing |
+| **FNV hash** | FNV-1/FNV-1a hash (1 function)  - likely for API name hashing |
 | **CRC32** | CRC32 polynomial constant detected (YARA match) |
 | **Mersenne Twister** | MT19937 PRNG (2 functions) |
 
-RC4 is used for **C2 communication encryption** and **configuration decryption** — a hallmark of StealC.
+RC4 is used for **C2 communication encryption** and **configuration decryption**  - a hallmark of StealC.
 
 ### 4.3 Dynamic API Resolution
 
@@ -140,7 +140,7 @@ The binary imports only from KERNEL32.dll (97 functions) and dynamically loads a
 | Debugger detection | `IsDebuggerPresent` import |
 | Debug output | `OutputDebugStringW` import |
 | Timing check | `QueryPerformanceCounter` import |
-| PEB access | Direct PEB structure access (2 sites) — NtGlobalFlag check |
+| PEB access | Direct PEB structure access (2 sites)  - NtGlobalFlag check |
 | Delayed execution | Sleep-based sandbox evasion (VT: `long-sleeps`, `idle` tags) |
 | CPU fingerprinting | VT: `checks-cpu-name` tag |
 
@@ -188,7 +188,7 @@ The binary imports only from KERNEL32.dll (97 functions) and dynamically loads a
 | SEH Protection | Not set |
 | CET Shadow Stack | Not set |
 
-The binary has CFG instrumentation compiled in but the guard flag is not set — this may indicate the original legitimate application was compiled with CFG, and the malware author built on top of it.
+The binary has CFG instrumentation compiled in but the guard flag is not set  - this may indicate the original legitimate application was compiled with CFG, and the malware author built on top of it.
 
 ---
 
@@ -258,11 +258,11 @@ The binary has CFG instrumentation compiled in but the guard flag is not set —
 
 ## 9. Conclusion
 
-This is a **StealC v2** information stealer (also labelled "Marte" by some vendors), a commodity MaaS tool distributed via trojanised software installers. The sample masquerades as an **FL Studio** installer — a common social engineering vector targeting music producers and hobbyists.
+This is a **StealC v2** information stealer (also labelled "Marte" by some vendors), a commodity MaaS tool distributed via trojanised software installers. The sample masquerades as an **FL Studio** installer  - a common social engineering vector targeting music producers and hobbyists.
 
 The binary is well-engineered: compiled with modern MSVC (linker 14.44, January 2026), uses RC4 for C2 encryption, FNV hashing for API resolution, and implements targeted credential theft for Chromium browsers and Steam. The geographic location collection (8 capa matches) suggests the stealer fingerprints victims before exfiltrating data, potentially for filtering out researchers or targeting specific regions.
 
-Unlike the heavily packed LockBit sample, StealC yielded **extensive static analysis results** — 32 capa rules matched, all targeted applications identified, and the full cryptographic toolkit (RC4, XOR, Base64, FNV, CRC32, Mersenne Twister) mapped. This demonstrates Arkana's strength in analysing unpacked or lightly obfuscated malware where static analysis provides near-complete coverage without requiring dynamic execution.
+Unlike the heavily packed LockBit sample, StealC yielded **extensive static analysis results**  - 32 capa rules matched, all targeted applications identified, and the full cryptographic toolkit (RC4, XOR, Base64, FNV, CRC32, Mersenne Twister) mapped. This demonstrates Arkana's strength in analysing unpacked or lightly obfuscated malware where static analysis provides near-complete coverage without requiring dynamic execution.
 
 ---
 

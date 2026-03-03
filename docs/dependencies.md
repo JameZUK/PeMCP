@@ -6,7 +6,7 @@ after a `--no-cache` rebuild, start here.
 
 ---
 
-## Quick reference — build-time assertions
+## Quick reference  - build-time assertions
 
 The Dockerfile includes a build-time check that will **fail the build**
 if the unicorn module is broken:
@@ -90,14 +90,14 @@ is a git submodule that GitHub archive zips do not include).
 For Windows targets, Qiling's `RegistryManager` requires five registry
 hive files (`NTUSER.DAT`, `SAM`, `SECURITY`, `SOFTWARE`, `SYSTEM`)
 that cannot be legally distributed.  Arkana generates minimal valid
-stubs — structurally correct regf-format files with an empty root key
-node — at both Docker build time and at runtime (on first use).
+stubs  - structurally correct regf-format files with an empty root key
+node  - at both Docker build time and at runtime (on first use).
 These stubs satisfy Qiling's format parser so emulation can proceed.
 
 The rootfs directory (`/app/qiling-rootfs`) is pre-populated at Docker
 build time with Linux rootfs files.  Windows PE emulation additionally
 requires real DLL files (ntdll.dll, kernel32.dll, etc.) copied from a
-Windows installation — see `docs/QILING_ROOTFS.md` for instructions.
+Windows installation  - see `docs/QILING_ROOTFS.md` for instructions.
 
 ### Runtime safety net (arkana/config.py)
 
@@ -156,7 +156,7 @@ the others or the entire build.  They may have fragile or conflicting
 dependencies.
 
 If any of these break the build, the simplest fix is to comment them
-out — Arkana will detect their absence at runtime and disable the
+out  - Arkana will detect their absence at runtime and disable the
 corresponding tools.
 
 Note: unipacker was previously in this group but is now installed in
@@ -186,7 +186,7 @@ The bundled capa-rules must match the capa major version.  If you bump
 - `Dockerfile` → the `urllib.request.urlretrieve(...)` URL
 
 Current alignment: **flare-capa >=9.3,<9.4** with **capa-rules v9.3.0**.
-The minor version must match — rules use syntax from their matching capa release.
+The minor version must match  - rules use syntax from their matching capa release.
 
 ### Capa rule cache (`XDG_CACHE_HOME`)
 
@@ -241,7 +241,7 @@ ReversingLabs rules require.  If batch compilation fails for a group
 per-file compilation for that group, logging a warning for each file
 that fails.
 
-Matches are **deduplicated by rule name** after scanning — if both
+Matches are **deduplicated by rule name** after scanning  - if both
 sources define a rule with the same name (e.g. `IsPE64`), only the
 first match is kept.  String instances per rule match are capped at 25
 to prevent noisy rules (e.g. `contains_base64`) from inflating MCP
@@ -318,7 +318,7 @@ except SimIRSBError as ex:
 The **main** execution path (`self.project.factory.successors()`) works
 fine.  The crash only triggers when VFG encounters unsupported VEX
 instructions (`SimIRSBError`), Claripy solver errors (`ClaripyError`),
-or generic simulation errors (`SimError`) — all of which fall through
+or generic simulation errors (`SimError`)  - all of which fall through
 to the broken `ProcedureEngine()` calls.
 
 **Fix:** Arkana monkey-patches `VFG._get_simsuccessors` at import time
@@ -353,19 +353,19 @@ codebase that call `ProcedureEngine()` without arguments.
 delete the monkey-patch block in `tools_angr_dataflow.py` (the
 `try` block between the `import networkx` and the
 `# ---- Reaching Definitions Analysis` comment).  No other code
-changes are needed — the tool will use angr's native `VFG` method
+changes are needed  - the tool will use angr's native `VFG` method
 automatically.
 
 ---
 
 ## 9. PyPI version ceilings for optional packages
 
-Several optional packages have low version ceilings on PyPI — the latest
+Several optional packages have low version ceilings on PyPI  - the latest
 available version is *below* the minimum you might naively expect:
 
 | Package | Latest on PyPI | Notes |
 |---------|---------------|-------|
-| **nampa** | 0.1.1 | Last release 2017 — unmaintained but functional |
+| **nampa** | 0.1.1 | Last release 2017  - unmaintained but functional |
 | **dotnetfile** | 0.2.10 | Active; still pre-1.0 |
 | **binwalk** | 2.1.0 | PyPI release is from 2015; 2.3.x+ only via GitHub |
 | **pygore** | 0.5.0 | Last release Oct 2021 |

@@ -39,7 +39,7 @@ VT_API_KEY=abc123 ARKANA_PORT=9000 ./run.sh
 ARKANA_SAMPLES=~/malware-zoo ./run.sh --stdio
 ```
 
-Or copy `.env.example` to `.env` and fill in your values — `run.sh` loads it automatically.
+Or copy `.env.example` to `.env` and fill in your values  - `run.sh` loads it automatically.
 
 ### Docker Compose
 
@@ -57,8 +57,8 @@ docker compose build
 ```
 
 The `docker-compose.yml` defines two services:
-- **`arkana-http`** — Network-accessible MCP server with healthcheck and restart policy
-- **`arkana-stdio`** — For Claude Code / MCP client integration (behind the `stdio` profile)
+- **`arkana-http`**  - Network-accessible MCP server with healthcheck and restart policy
+- **`arkana-stdio`**  - For Claude Code / MCP client integration (behind the `stdio` profile)
 
 Both services bind-mount `~/.arkana` from the host for persistent cache and configuration (override with `ARKANA_CACHE`).
 
@@ -122,28 +122,28 @@ pip install pefile networkx "mcp[cli]"
 ```
 
 Optional packages can be added individually:
-- `pip install cryptography signify` — Digital signature analysis
-- `pip install yara-python` — YARA scanning (bundled rules from ReversingLabs and Yara-Rules Community are auto-downloaded on first run)
-- `pip install requests` — VirusTotal integration
-- `pip install rapidfuzz` — Fuzzy string search
-- `pip install flare-capa` — Capability detection
-- `pip install flare-floss vivisect` — Advanced string extraction
-- `pip install stringsifter joblib numpy` — ML-based string ranking
-- `pip install "angr[unicorn]"` — Decompilation, CFG, symbolic execution
-- `pip install lief` — Multi-format binary parsing (PE/ELF/Mach-O)
-- `pip install capstone` — Multi-architecture disassembly
-- `pip install keystone-engine` — Multi-architecture assembly
-- `pip install speakeasy-emulator` — Windows API emulation
-- `pip install ppdeep py-tlsh` — Fuzzy hashing (ssdeep/TLSH)
-- `pip install dnfile dncil` — .NET assembly analysis
-- `pip install pygore` — Go binary analysis
-- `pip install rustbininfo rust-demangler` — Rust binary analysis
-- `pip install pyelftools` — ELF/DWARF analysis
-- `pip install binwalk` — Embedded file detection
-- `pip install unipacker` — Automatic PE unpacking
-- `pip install qiling` — Cross-platform binary emulation (requires isolated venv with unicorn 1.x)
-- `pip install dotnetfile` — .NET PE metadata
-- `pip install binary-refinery` — Composable binary data transforms (encoding, crypto, compression, IOC extraction)
+- `pip install cryptography signify`  - Digital signature analysis
+- `pip install yara-python`  - YARA scanning (bundled rules from ReversingLabs and Yara-Rules Community are auto-downloaded on first run)
+- `pip install requests`  - VirusTotal integration
+- `pip install rapidfuzz`  - Fuzzy string search
+- `pip install flare-capa`  - Capability detection
+- `pip install flare-floss vivisect`  - Advanced string extraction
+- `pip install stringsifter joblib numpy`  - ML-based string ranking
+- `pip install "angr[unicorn]"`  - Decompilation, CFG, symbolic execution
+- `pip install lief`  - Multi-format binary parsing (PE/ELF/Mach-O)
+- `pip install capstone`  - Multi-architecture disassembly
+- `pip install keystone-engine`  - Multi-architecture assembly
+- `pip install speakeasy-emulator`  - Windows API emulation
+- `pip install ppdeep py-tlsh`  - Fuzzy hashing (ssdeep/TLSH)
+- `pip install dnfile dncil`  - .NET assembly analysis
+- `pip install pygore`  - Go binary analysis
+- `pip install rustbininfo rust-demangler`  - Rust binary analysis
+- `pip install pyelftools`  - ELF/DWARF analysis
+- `pip install binwalk`  - Embedded file detection
+- `pip install unipacker`  - Automatic PE unpacking
+- `pip install qiling`  - Cross-platform binary emulation (requires isolated venv with unicorn 1.x)
+- `pip install dotnetfile`  - .NET PE metadata
+- `pip install binary-refinery`  - Composable binary data transforms (encoding, crypto, compression, IOC extraction)
 
 ---
 
@@ -159,7 +159,7 @@ python arkana.py --input-file malware.exe --verbose > report.txt
 
 ### MCP Server Mode (Interactive)
 
-Starts the MCP server. The `--input-file` is optional — files can be loaded dynamically using the `open_file` tool.
+Starts the MCP server. The `--input-file` is optional  - files can be loaded dynamically using the `open_file` tool.
 
 ```bash
 # Start without a file (recommended for Claude Code)
@@ -201,7 +201,7 @@ open_file("/path/to/binary")  # Auto-detects PE, ELF, or Mach-O
 # CLI mode
 python arkana.py --input-file binary.elf --mode elf
 
-# MCP mode — use elf_analyze, elf_dwarf_info, plus all angr tools
+# MCP mode  - use elf_analyze, elf_dwarf_info, plus all angr tools
 open_file("/path/to/binary", mode="elf")
 ```
 
@@ -211,7 +211,7 @@ open_file("/path/to/binary", mode="elf")
 # CLI mode
 python arkana.py --input-file binary.macho --mode macho
 
-# MCP mode — use macho_analyze, plus all angr tools
+# MCP mode  - use macho_analyze, plus all angr tools
 open_file("/path/to/binary", mode="macho")
 ```
 
