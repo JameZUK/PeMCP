@@ -101,11 +101,19 @@ claude mcp add --scope project arkana -- ./run.sh --samples ~/your-samples --std
 claude
 ```
 
-Then ask:
+Then in Claude Code, use the `/arkana-analyse` skill to get the best results:
+
+```
+> /arkana-analyse suspicious.exe
+```
+
+Or just ask a question directly:
 
 ```
 > Open suspicious.exe and tell me if it's malicious
 ```
+
+There's also an `/arkana-learn` skill -- an interactive reverse engineering tutor that teaches you binary analysis hands-on using Arkana's tools.
 
 For other MCP clients, local Python installation, and detailed configuration, see the [Installation Guide](docs/installation.md).
 
