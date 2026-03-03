@@ -1,4 +1,4 @@
-# Arkana - AI-Powered Binary Analysis
+# Arkana -- Your Entire Malware Lab, Behind One AI Prompt
 
 ![Arkana Logo](docs/logo_banner.svg)
 
@@ -6,93 +6,74 @@
 [![CI](https://github.com/JameZUK/Arkana/actions/workflows/ci.yml/badge.svg)](https://github.com/JameZUK/Arkana/actions/workflows/ci.yml)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-green.svg)](https://www.python.org/)
 [![MCP Tools](https://img.shields.io/badge/MCP_Tools-190-purple.svg)](docs/tools-reference.md)
-
-Point an AI at a binary and ask questions. Arkana gives Claude Code (or any MCP client) **190 analysis tools**  - decompilation, emulation, string decoding, YARA scanning, and more  - so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by just describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
-
-### What does that look like?
+[![GitHub stars](https://img.shields.io/github/stars/JameZUK/Arkana?style=social)](https://github.com/JameZUK/Arkana)
 
 > *"Analyse asyncrat.exe and tell me what it does"*
 
-From a single prompt, Arkana opens the binary, triages it (CRITICAL  - 43/72 VT detections),
+From a single prompt, Arkana opens the binary, triages it (CRITICAL -- 43/72 VT detections),
 extracts the C2 server (`cveutb.sa.com`), identifies AES-256 encrypted communications via
 MessagePack, maps 12 MITRE ATT&CK techniques, detects anti-VM checks for VMware/VirtualBox/
 Sandboxie, finds the persistence mechanism (Registry Run key), and recovers the operator's
 PDB path revealing a Vietnamese-speaking threat actor.
-
-[See the full report →](docs/example-report-asyncrat.md)
-
-### Demos
-
-**AsyncRAT analysis**  - from a single prompt to full triage, C2 extraction, and MITRE ATT&CK mapping:
+[See the full report.](docs/example-report-asyncrat.md)
 
 ![Arkana analysing AsyncRAT](docs/demo-asyncrat.gif)
 
-<sub>For interactive playback: `asciinema play docs/demo-asyncrat.cast`</sub>
-
-**Multi-phase investigation**  - deep analysis with decompilation, emulation, and structured findings:
-
-![Arkana deep analysis](docs/demo-analysis.gif)
-
-<sub>For interactive playback: `asciinema play docs/demo-analysis.cast`</sub>
+Arkana is a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that gives **Claude Code** (or any MCP client) **190 analysis tools** -- decompilation, emulation, string decoding, YARA scanning, and more -- so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
 
 ---
+
 ## Why Arkana
 
-Malware analysis has traditionally required analysts to master a complex toolchain  - Ghidra for decompilation, IDA Pro for disassembly, CyberChef for data transforms, pestudio for PE triage, CFF Explorer for header inspection, YARA for signatures, and dozens more. Each tool has its own interface, scripting language, and learning curve. Investigating a single sample might mean switching between 5-10 tools, manually correlating findings across disconnected workflows.
+**The problem:** Malware analysis means juggling Ghidra, IDA, CyberChef, YARA, and a dozen other tools -- each with its own interface, scripting language, and learning curve. Investigating a single sample might mean switching between 5-10 tools, manually correlating findings across disconnected workflows.
 
-This creates three critical bottlenecks:
+Arkana eliminates this by putting **190 specialised analysis tools behind a single AI-driven interface** -- the equivalent of an entire malware lab in one MCP server. Describe what you want to know in natural language and the AI orchestrates the right tools automatically.
 
-1. **Skill barrier**  - Junior analysts spend months learning each tool before becoming productive. Even experienced analysts must memorise hundreds of commands, keyboard shortcuts, and scripting APIs across different tools.
-2. **Context fragmentation**  - Findings from one tool don't automatically inform analysis in another. The analyst becomes the integration layer, manually cross-referencing decompilation output with string analysis, import tables, and network IOCs.
-3. **Repetitive drudgery**  - The initial triage of every sample follows a predictable pattern (check hashes, scan signatures, extract strings, review imports, check entropy), yet analysts must manually execute these same steps every time.
+**What makes it different:**
 
-Arkana eliminates these bottlenecks by putting **190 specialised analysis tools behind a single AI-driven interface**  - the equivalent of an entire malware lab in one MCP server. Instead of learning 10 different tools, you describe what you want to know in natural language and the AI orchestrates the right tools automatically.
-
-**What makes Arkana unique:**
-
-1. **Breadth**  - 190 tools spanning PE/ELF/Mach-O parsing, Angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/Capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration.
-
-2. **AI reasoning over results**  - Unlike tools that just produce output, Arkana feeds results back to an AI that can reason about them. When the AI decompiles a function and sees `VirtualAlloc` followed by `memcpy` and an indirect call, it recognises the shellcode injection pattern, notes it as a finding, and suggests investigating the source buffer.
-
-3. **Session continuity**  - Analysis findings persist across the entire investigation. Notes, function summaries, and tool history survive context window limits and server restarts, enabling investigations that span hours or days without losing context.
+- **Breadth** -- 190 tools spanning PE/ELF/Mach-O parsing, angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, and VirusTotal integration.
+- **AI reasoning over results** -- Unlike tools that just produce output, Arkana feeds results back to an AI that can reason about them. When it decompiles a function and sees `VirtualAlloc` followed by `memcpy` and an indirect call, it recognises the shellcode injection pattern, notes it, and suggests investigating the source buffer.
+- **Session continuity** -- Notes, function summaries, and tool history survive context window limits and server restarts, enabling investigations that span hours or days without losing context.
 
 **Who benefits:**
 
-- **SOC analysts** triaging alerts  - automated risk assessment with evidence in seconds
-- **Malware analysts** doing deep RE  - natural language drives decompilation, symbolic execution, and data transforms
-- **Incident responders** under time pressure  - rapid IOC and C2 config extraction from multiple samples
-- **Junior analysts and learners** building skills  - an interactive RE tutor guides you through hands-on analysis with Socratic questioning, structured lessons, and progress tracking
-- **Threat intel teams** processing batches  - automated config, hash, and network indicator extraction
+- **SOC analysts** -- automated triage in seconds, not hours
+- **Malware reversers** -- natural language drives decompilation, symbolic execution, and data transforms
+- **Incident responders** -- rapid IOC and C2 extraction under time pressure
+- **Learners** -- built-in interactive RE tutor with Socratic guidance and progress tracking
+- **Threat intel teams** -- automated config, hash, and network indicator extraction
 
 ---
 
 ## Key Features
 
-- **Multi-format support**  - PE, ELF, Mach-O, .NET, Go, Rust, and raw shellcode with auto-detection
-- **Angr-powered analysis**  - 39 tools for decompilation, CFG, symbolic execution, data-flow, slicing, and emulation
-- **Comprehensive static analysis**  - 24 PE structure tools, YARA/Capa/PEiD/FLOSS signatures, crypto detection, IOC export
-- **Binary Refinery integration**  - 23 context-efficient tools wrapping 200+ composable data transforms (encoding, crypto, compression, forensics)
-- **Cross-platform emulation**  - Speakeasy (Windows APIs) and Qiling (Windows/Linux/macOS, x86/x64/ARM/MIPS)
-- **Session persistence**  - Notes, tool history, and analysis cache survive restarts and context window limits
-- **AI-optimised workflow**  - Compact triage, smart function ranking, digest summaries, and guided next steps
-- **Robust architecture**  - Docker-first, thread-safe state, background tasks, pagination, smart truncation, graceful degradation
+- **Multi-format support** -- PE, ELF, Mach-O, .NET, Go, Rust, and raw shellcode with auto-detection
+- **Angr-powered analysis** -- 39 tools for decompilation, CFG, symbolic execution, data-flow, slicing, and emulation
+- **Comprehensive static analysis** -- 24 PE structure tools, YARA/capa/PEiD/FLOSS signatures, crypto detection, IOC export
+- **Binary Refinery integration** -- 23 context-efficient tools wrapping 200+ composable data transforms (encoding, crypto, compression, forensics)
+- **Cross-platform emulation** -- Speakeasy (Windows APIs) and Qiling (Windows/Linux/macOS, x86/x64/ARM/MIPS)
+- **Session persistence** -- Notes, tool history, and analysis cache survive restarts and context window limits
+- **AI-optimised workflow** -- Compact triage, smart function ranking, digest summaries, and guided next steps
+- **Robust architecture** -- Docker-first, thread-safe state, background tasks, pagination, smart truncation, graceful degradation
 
 ### How It Compares
 
 | | Arkana | Ghidra | IDA Pro | CyberChef |
 |---|---|---|---|---|
 | **AI reasoning** | Native | No | No | No |
-| **Decompilation** | Angr (all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No |
+| **Decompilation** | Angr (multi-arch) | Ghidra Decompiler | Hex-Rays ($$$) | No |
 | **Data transforms** | 200+ via Refinery | Manual scripting | Manual scripting | 300+ (manual) |
 | **Emulation** | Speakeasy + Qiling | Limited | No | No |
 | **Learning curve** | Natural language | Months | Months | Moderate |
 | **Cost** | Free & open source | Free | $1,800+/yr | Free |
 
-Arkana complements rather than replaces Ghidra/IDA  - see [Scenarios & Comparisons](docs/scenarios.md) for detailed analysis.
+Arkana complements rather than replaces Ghidra/IDA -- see [Scenarios & Comparisons](docs/scenarios.md) for detailed analysis.
 
 ---
 
-## Example Analysis Reports
+## Example Reports
+
+Every report below was generated from a single prompt: *"Analyse this binary and tell me what it does."*
 
 | Report | Sample | Highlights |
 |--------|--------|-----------|
@@ -103,9 +84,9 @@ Arkana complements rather than replaces Ghidra/IDA  - see [Scenarios & Compariso
 
 ---
 
-## Quick Start
+## Get Started in 3 Commands
 
-The fastest way to get running with Claude Code and Docker:
+Arkana works with **Claude Code** and any MCP-compatible client. The fastest way to get running with Claude Code and Docker:
 
 ```bash
 # 1. Clone the repository
@@ -122,10 +103,26 @@ claude
 Then ask:
 
 ```
-> Open /your-samples/suspicious.exe and tell me if it's malicious
+> Open suspicious.exe and tell me if it's malicious
 ```
 
-For other installation methods (local Python, minimal install) and detailed configuration, see the [Installation Guide](docs/installation.md).
+For other MCP clients, local Python installation, and detailed configuration, see the [Installation Guide](docs/installation.md).
+
+---
+
+## Demos
+
+**AsyncRAT analysis** -- single prompt to full triage, C2 extraction, and MITRE ATT&CK mapping:
+
+![Arkana analysing AsyncRAT](docs/demo-asyncrat.gif)
+
+<sub>Interactive playback: `asciinema play docs/demo-asyncrat.cast`</sub>
+
+**Multi-phase investigation** -- deep analysis with decompilation, emulation, and structured findings:
+
+![Arkana deep analysis](docs/demo-analysis.gif)
+
+<sub>Interactive playback: `asciinema play docs/demo-analysis.cast`</sub>
 
 ---
 
@@ -147,13 +144,12 @@ For other installation methods (local Python, minimal install) and detailed conf
 
 ## Contributing
 
-Contributions are welcome!
+Contributions are welcome! See the [Contributing Guide](docs/CONTRIBUTING.md) for details.
 
-1. Fork the repository.
-2. Create a feature branch (`git checkout -b feature/your-enhancement`).
-3. Commit your changes.
-4. Push to the branch.
-5. Open a Pull Request.
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/your-enhancement`)
+3. Commit your changes
+4. Open a Pull Request
 
 ---
 
@@ -165,4 +161,10 @@ Distributed under the MIT Licence. See `LICENSE` for more information.
 
 ## Disclaimer
 
-This toolkit is provided "as-is" for educational and research purposes only. It is capable of executing parts of analysed binaries (via Angr emulation and symbolic execution) in a sandboxed environment. Always exercise caution when analysing untrusted files. The authors accept no responsibility for misuse or damages arising from the use of this software.
+This toolkit is provided "as-is" for educational and research purposes only. It is capable of executing parts of analysed binaries (via angr emulation and symbolic execution) in a sandboxed environment. Always exercise caution when analysing untrusted files. The authors accept no responsibility for misuse or damages arising from the use of this software.
+
+---
+
+If Arkana is useful to you, consider giving it a star -- it helps others discover the project.
+
+[Report a bug](https://github.com/JameZUK/Arkana/issues) | [Request a feature](https://github.com/JameZUK/Arkana/issues) | [Full tools reference](docs/tools-reference.md)
