@@ -84,16 +84,17 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 
 ---
 
-## Get Started in 3 Commands
+## Get Started in 4 Commands
 
 Arkana works with **Claude Code** and any MCP-compatible client. The fastest way to get running with Claude Code and Docker:
 
 ```bash
-# 1. Clone the repository
+# 1. Clone and build (first build takes a few minutes)
 git clone https://github.com/JameZUK/Arkana.git
 cd Arkana
+./run.sh --build
 
-# 2. Add Arkana to Claude Code (builds Docker image on first run)
+# 2. Add Arkana to Claude Code
 claude mcp add --scope project arkana -- ./run.sh --samples ~/your-samples --stdio
 
 # 3. Start Claude Code and analyse a binary
