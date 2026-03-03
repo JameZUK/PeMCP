@@ -1,4 +1,4 @@
-# Arkana -- Your Entire Malware Lab, Behind One AI Prompt
+# Arkana - Your Entire Malware Lab, Behind One AI Prompt
 
 ![Arkana Logo](docs/logo_banner.svg)
 
