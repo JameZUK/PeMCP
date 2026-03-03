@@ -48,3 +48,9 @@ Thumbs.db
 PeMCP_original.py
 backup_temp/
 WinIsoExtractor/
+reports/
+
+# Cast editing workspace
+cast/node_modules/
+cast/*_v2.cast
+cast/*_test.cast

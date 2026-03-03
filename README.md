@@ -2,7 +2,38 @@
 
 ![Arkana Logo](docs/logo_banner.svg)
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/JameZUK/Arkana/actions/workflows/ci.yml/badge.svg)](https://github.com/JameZUK/Arkana/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-green.svg)](https://www.python.org/)
+[![MCP Tools](https://img.shields.io/badge/MCP_Tools-190-purple.svg)](docs/tools-reference.md)
+
 Point an AI at a binary and ask questions. Arkana gives Claude Code (or any MCP client) **190 analysis tools** — decompilation, emulation, string decoding, YARA scanning, and more — so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by just describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
+
+### What does that look like?
+
+> *"Analyse asyncrat.exe and tell me what it does"*
+
+From a single prompt, Arkana opens the binary, triages it (CRITICAL — 43/72 VT detections),
+extracts the C2 server (`cveutb.sa.com`), identifies AES-256 encrypted communications via
+MessagePack, maps 12 MITRE ATT&CK techniques, detects anti-VM checks for VMware/VirtualBox/
+Sandboxie, finds the persistence mechanism (Registry Run key), and recovers the operator's
+PDB path revealing a Vietnamese-speaking threat actor.
+
+[See the full report →](docs/example-report-asyncrat.md)
+
+### Demos
+
+**AsyncRAT analysis** — from a single prompt to full triage, C2 extraction, and MITRE ATT&CK mapping:
+
+![Arkana analysing AsyncRAT](docs/demo-asyncrat.gif)
+
+<sub>For interactive playback: `asciinema play docs/demo-asyncrat.cast`</sub>
+
+**Multi-phase investigation** — deep analysis with decompilation, emulation, and structured findings:
+
+![Arkana deep analysis](docs/demo-analysis.gif)
+
+<sub>For interactive playback: `asciinema play docs/demo-analysis.cast`</sub>
 
 ---
 ## Why Arkana
@@ -45,6 +76,30 @@ Arkana eliminates these bottlenecks by putting **190 specialised analysis tools 
 - **Session persistence** — Notes, tool history, and analysis cache survive restarts and context window limits
 - **AI-optimised workflow** — Compact triage, smart function ranking, digest summaries, and guided next steps
 - **Robust architecture** — Docker-first, thread-safe state, background tasks, pagination, smart truncation, graceful degradation
+
+### How It Compares
+
+| | Arkana | Ghidra | IDA Pro | CyberChef |
+|---|---|---|---|---|
+| **AI reasoning** | Native | No | No | No |
+| **Decompilation** | Angr (all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No |
+| **Data transforms** | 200+ via Refinery | Manual scripting | Manual scripting | 300+ (manual) |
+| **Emulation** | Speakeasy + Qiling | Limited | No | No |
+| **Learning curve** | Natural language | Months | Months | Moderate |
+| **Cost** | Free & open source | Free | $1,800+/yr | Free |
+
+Arkana complements rather than replaces Ghidra/IDA — see [Scenarios & Comparisons](docs/scenarios.md) for detailed analysis.
+
+---
+
+## Example Analysis Reports
+
+| Report | Sample | Highlights |
+|--------|--------|-----------|
+| [Trojan.Delshad BYOVD Loader](docs/example-report.md) | Multi-stage dropper | Payload carving, attack chain diagram, 12 ATT&CK techniques |
+| [LockBit 3.0 Ransomware](docs/example-report-lockbit.md) | Packed ransomware | Entropy analysis, packing detection, stub extraction |
+| [AsyncRAT .NET RAT](docs/example-report-asyncrat.md) | .NET RAT | C2 config extraction despite obfuscated metadata |
+| [StealC Info Stealer](docs/example-report-stealc.md) | Credential stealer | 32 capa rules, browser/Steam targeting, crypto toolkit |
 
 ---
 
