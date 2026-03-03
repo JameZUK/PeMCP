@@ -51,6 +51,4 @@ WinIsoExtractor/
 reports/
 
 # Cast editing workspace
-cast/node_modules/
-cast/*_v2.cast
-cast/*_test.cast
+cast/
