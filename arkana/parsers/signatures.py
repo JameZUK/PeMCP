@@ -3,6 +3,7 @@ import os
 import re
 import concurrent.futures
 import logging
+import threading
 
 from typing import Dict, Any, Optional, List
 
@@ -11,6 +12,12 @@ from arkana.utils import safe_print
 
 if YARA_AVAILABLE:
     import yara
+
+# --- Module-level YARA rule compilation cache ---
+# Compiled rules are cached per rules-path so that repeated open_file /
+# perform_yara_scan calls don't recompile 100+ .yar files from disk.
+_compiled_rules_cache: Dict[str, List] = {}
+_compiled_rules_lock = threading.Lock()
 
 
 def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, Any]]:
@@ -87,6 +94,80 @@ def find_pattern_in_data_regex(data_block: bytes, signature_dict: Dict[str, Any]
         if verbose: safe_print(f"       [VERBOSE-PEID-REGEX-ERROR] Error searching for pattern '{pattern_name}': {e_re_search}", verbose_prefix=" ")
     return None
 
+def _compile_yara_rules(yara_rules_path: str, verbose: bool = False) -> Optional[List]:
+    """Compile YARA rules from *yara_rules_path* (file or directory).
+
+    Returns a list of compiled rule sets, or ``None`` if nothing could be
+    compiled.  Raises on unexpected errors so callers can decide whether to
+    cache the result.
+    """
+    if os.path.isdir(yara_rules_path):
+        filepaths: Dict[str, str] = {}
+        for dirname, _, files in os.walk(yara_rules_path):
+            for f_name in files:
+                if f_name.lower().endswith(('.yar', '.yara')):
+                    full = os.path.join(dirname, f_name)
+                    rel = os.path.relpath(full, yara_rules_path).replace(os.sep, '/')
+                    if '/deprecated/' in rel or rel.startswith('deprecated/'):
+                        continue
+                    filepaths[rel] = full
+        if not filepaths:
+            logger.warning("   No .yar or .yara files in dir: %s", yara_rules_path)
+            return None
+
+        groups: Dict[str, Dict[str, str]] = {}
+        for rel, full in filepaths.items():
+            group_key = rel.split('/')[0] if '/' in rel else '__root__'
+            groups.setdefault(group_key, {})[rel] = full
+
+        compiled_list = []
+        for group_key, group_files in groups.items():
+            try:
+                compiled_list.append(yara.compile(filepaths=group_files))
+                if verbose:
+                    logger.info("   [VERBOSE-YARA] Batch-compiled %d rules from %s/", len(group_files), group_key)
+            except yara.Error as e_batch:
+                logger.info("   YARA batch compile failed for %s/ (%s) -- trying per-file.", group_key, e_batch)
+                for key, path in group_files.items():
+                    try:
+                        compiled_list.append(yara.compile(filepath=path))
+                    except yara.Error as e_comp:
+                        logger.warning("   YARA compile error in %s: %s -- skipping.", key, e_comp)
+
+        if not compiled_list:
+            logger.warning("   All YARA rule files failed to compile in: %s", yara_rules_path)
+            return None
+        return compiled_list
+    elif os.path.isfile(yara_rules_path):
+        return [yara.compile(filepath=yara_rules_path)]
+    else:
+        logger.warning("   YARA rules path not valid: %s", yara_rules_path)
+        return None
+
+
+def _get_compiled_rules(yara_rules_path: str, verbose: bool = False) -> Optional[List]:
+    """Return cached compiled YARA rules, compiling on first call.
+
+    Uses double-checked locking so the fast path (cache hit) is lock-free.
+    Failed compilations are *not* cached so they can be retried.
+    """
+    resolved = os.path.realpath(yara_rules_path)
+    cached = _compiled_rules_cache.get(resolved)
+    if cached is not None:
+        if verbose:
+            logger.info("   [VERBOSE-YARA] Using cached compiled rules for: %s", resolved)
+        return cached
+    with _compiled_rules_lock:
+        # Re-check after acquiring the lock.
+        cached = _compiled_rules_cache.get(resolved)
+        if cached is not None:
+            return cached
+        compiled = _compile_yara_rules(resolved, verbose)
+        if compiled is not None:
+            _compiled_rules_cache[resolved] = compiled
+        return compiled
+
+
 def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional[str], yara_available_flag: bool, verbose: bool = False) -> List[Dict[str, Any]]:
     scan_results: List[Dict[str, Any]] = []
     if not yara_available_flag:
@@ -98,54 +179,9 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
         return scan_results
     try:
         if verbose: logger.info("   [VERBOSE-YARA] Loading rules from: %s", yara_rules_path)
-        rules = None
-        if os.path.isdir(yara_rules_path):
-            # Collect rule files grouped by immediate subdirectory so that
-            # rules within the same source (e.g. reversinglabs/, community/)
-            # are compiled together — this preserves YARA `import` support.
-            # Use relative path as key to avoid collisions when multiple
-            # subdirectories contain files with the same basename.
-            filepaths: Dict[str, str] = {}
-            for dirname, _, files in os.walk(yara_rules_path):
-                for f_name in files:
-                    if f_name.lower().endswith(('.yar', '.yara')):
-                        full = os.path.join(dirname, f_name)
-                        rel = os.path.relpath(full, yara_rules_path).replace(os.sep, '/')
-                        # Skip deprecated rules (e.g. community/deprecated/Android/)
-                        # which use YARA module features not available at compile time
-                        if '/deprecated/' in rel or rel.startswith('deprecated/'):
-                            continue
-                        filepaths[rel] = full
-            if not filepaths: logger.warning("   No .yar or .yara files in dir: %s", yara_rules_path); return scan_results
-
-            # Group files by top-level subdirectory for batch compilation.
-            groups: Dict[str, Dict[str, str]] = {}
-            for rel, full in filepaths.items():
-                group_key = rel.split('/')[0] if '/' in rel else '__root__'
-                groups.setdefault(group_key, {})[rel] = full
-
-            compiled_list = []
-            for group_key, group_files in groups.items():
-                # Try batch compilation first (preserves `import "pe"` etc.)
-                try:
-                    compiled_list.append(yara.compile(filepaths=group_files))
-                    if verbose:
-                        logger.info("   [VERBOSE-YARA] Batch-compiled %d rules from %s/", len(group_files), group_key)
-                except yara.Error as e_batch:
-                    # Batch failed — fall back to per-file compilation for this group
-                    logger.info("   YARA batch compile failed for %s/ (%s) — trying per-file.", group_key, e_batch)
-                    for key, path in group_files.items():
-                        try:
-                            compiled_list.append(yara.compile(filepath=path))
-                        except yara.Error as e_comp:
-                            logger.warning("   YARA compile error in %s: %s — skipping.", key, e_comp)
-
-            if not compiled_list:
-                logger.warning("   All YARA rule files failed to compile in: %s", yara_rules_path)
-                return scan_results
-            rules = compiled_list  # list of compiled rule sets
-        elif os.path.isfile(yara_rules_path): rules = [yara.compile(filepath=yara_rules_path)]
-        else: logger.warning("   YARA rules path not valid: %s", yara_rules_path); return scan_results
+        rules = _get_compiled_rules(yara_rules_path, verbose)
+        if rules is None:
+            return scan_results
 
         # rules is now a list of compiled rule sets
         all_matches = []

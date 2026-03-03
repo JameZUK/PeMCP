@@ -994,56 +994,66 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         # Set minimal defaults for raw mode to avoid UI errors in subsequent tools
         pe_info_dict['digital_signature'] = {"status": "Not applicable for raw shellcode"}
 
-    _report(40, 100, "Running signature scans...")
+    # --- Parallel signature / capability / string analysis ---
+    # PEiD, YARA, Capa, and FLOSS are completely independent; run them
+    # concurrently for ~2-3x wall-clock speedup on cache-miss opens.
+    _report(40, 100, "Running signature & capability scans...")
+
+    # Build list of (dict_key, func, args) for analyses that need to run.
+    _parallel_tasks: List[Tuple[str, Callable, tuple]] = []
+
     if "peid" not in analyses_to_skip:
         if is_raw_mode:
-             pe_info_dict['peid_matches'] = {"status": "Skipped (Raw Shellcode Mode)"}
+            pe_info_dict['peid_matches'] = {"status": "Skipped (Raw Shellcode Mode)"}
         else:
-             pe_info_dict['peid_matches'] = _safe_parse(
-                 'peid_matches', _perform_peid_scan, pe, peid_db_path,
-                 verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically,
-             )
+            _parallel_tasks.append((
+                'peid_matches', _perform_peid_scan,
+                (pe, peid_db_path, verbose, skip_full_peid_scan, peid_scan_all_sigs_heuristically),
+            ))
     else:
         pe_info_dict['peid_matches'] = {"status": "Skipped by user request", "ep_matches": [], "heuristic_matches": []}
         logger.info("PEiD analysis skipped by request.")
 
-    _report(50, 100, "Running YARA scan...")
     if "yara" not in analyses_to_skip:
-        pe_info_dict['yara_matches'] = _safe_parse(
-            'yara_matches', perform_yara_scan, filepath, pe.__data__,
-            yara_rules_path, YARA_AVAILABLE, verbose,
-        )
+        _parallel_tasks.append((
+            'yara_matches', perform_yara_scan,
+            (filepath, pe.__data__, yara_rules_path, YARA_AVAILABLE, verbose),
+        ))
     else:
         pe_info_dict['yara_matches'] = [{"status": "Skipped by user request"}]
         logger.info("YARA analysis skipped by request.")
 
-    _report(60, 100, "Running capa analysis...")
     if "capa" not in analyses_to_skip:
-        pe_info_dict['capa_analysis'] = _safe_parse(
-            'capa_analysis', _parse_capa_analysis, pe, filepath,
-            capa_rules_path, capa_sigs_path, verbose,
-        )
+        _parallel_tasks.append((
+            'capa_analysis', _parse_capa_analysis,
+            (pe, filepath, capa_rules_path, capa_sigs_path, verbose),
+        ))
     else:
         pe_info_dict['capa_analysis'] = {"status": "Skipped by user request", "results": None, "error": None}
         logger.info("Capa analysis skipped by request.")
 
-    _report(75, 100, "Running FLOSS string analysis...")
     if "floss" not in analyses_to_skip:
-        pe_info_dict['floss_analysis'] = _safe_parse(
+        _parallel_tasks.append((
             'floss_analysis', _parse_floss_analysis,
-            filepath,
-            floss_min_len_arg,
-            floss_verbose_level_arg,
-            floss_script_debug_level_arg,
-            floss_format_hint_arg,
-            floss_disabled_types_arg,
-            floss_only_types_arg,
-            floss_functions_to_analyze_arg,
-            floss_quiet_mode_arg,
-        )
+            (filepath, floss_min_len_arg, floss_verbose_level_arg,
+             floss_script_debug_level_arg, floss_format_hint_arg,
+             floss_disabled_types_arg, floss_only_types_arg,
+             floss_functions_to_analyze_arg, floss_quiet_mode_arg),
+        ))
     else:
         pe_info_dict['floss_analysis'] = {"status": "Skipped by user request", "strings": {}}
         logger.info("FLOSS analysis skipped by request.")
+
+    if _parallel_tasks:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(_parallel_tasks)) as pool:
+            futures = {
+                pool.submit(_safe_parse, key, func, *args): key
+                for key, func, args in _parallel_tasks
+            }
+            for future in concurrent.futures.as_completed(futures):
+                pe_info_dict[futures[future]] = future.result()
+
+    _report(85, 100, "Signature & capability scans complete.")
 
     _report(90, 100, "Extracting basic strings...")
     pe_info_dict['basic_ascii_strings'] = [
