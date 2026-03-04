@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **196 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **209 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -22,7 +22,7 @@ Arkana automatically detects and analyses binaries across all major platforms:
 
 ### Advanced Binary Analysis (Powered by Angr)
 
-40 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
+41 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
 
 - **Decompilation**  - Convert assembly into human-readable C-like pseudocode on the fly.
 - **Control Flow Graph (CFG)**  - Generate and traverse function blocks and edges.
@@ -150,7 +150,7 @@ Many PE extended analysis tools support pagination via `limit` and `offset` para
 
 > **Note:** PEiD matches and YARA matches are now accessed via `get_pe_data(key='peid_matches')` and `get_pe_data(key='yara_matches')`.
 
-## String Analysis (13 tools)
+## String Analysis (14 tools)
 
 All string tools that return lists support pagination via `limit` (default 20) and `offset` (default 0) parameters.
 
@@ -168,6 +168,7 @@ All string tools that return lists support pagination via `limit` (default 20) a
 | `get_strings_summary` | Categorised string intelligence  - groups strings by type (URLs, IPs, file paths, registry keys, mutex names, base64 blobs) with counts and top examples. |
 | `search_yara_custom` | Compile and run custom YARA rules (provided as a string) against the loaded binary. Returns matching rules with offsets. Useful for validating hypotheses about byte patterns or structures. Paginated (default limit 20). |
 | `get_string_at_va` | Extract a string at a virtual address by resolving VA to file offset. Reads bytes until null terminator with auto-encoding detection (ASCII/UTF-16LE). Useful when decompilation references a string pointer. |
+| `search_hex_pattern` | Search the loaded binary for hex byte patterns with `??` wildcards. Example: `"4D 5A ?? ?? ?? ?? ?? ?? 50 45"` finds PE headers at any offset. Optional section filter restricts search to a named PE section. Max 200 tokens, 5000 matches. |
 
 ## Triage & Forensics
 
@@ -186,7 +187,7 @@ All string tools that return lists support pagination via `limit` (default 20) a
 | `is_mostly_printable_ascii` | Check if a string is mostly printable. |
 | `get_hex_dump` | Hex dump of a file region. |
 
-## Binary Analysis  - Core Angr (17 tools)
+## Binary Analysis  - Core Angr (18 tools)
 
 All angr tools that return lists support pagination via `limit` and `offset` parameters. The default `limit` is 20 for most tools.
 
@@ -194,7 +195,8 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 |---|---|
 | `list_angr_analyses` | **Discovery tool**  - lists all available angr analysis capabilities grouped by category (decompilation, CFG, symbolic, slicing, forensic, hooks, modification) with parameter descriptions. Call this first to understand available analyses. |
 | `get_angr_partial_functions` | List functions discovered in angr's knowledge base, even while CFG is still building or has timed out. Works without full CFG. Paginated (default limit 50). |
-| `decompile_function_with_angr` | C-like pseudocode for a function at a given address. Works without full CFG by building a local region CFG. |
+| `decompile_function_with_angr` | C-like pseudocode for a function at a given address. Works without full CFG by building a local region CFG. Applies user-assigned renames (function names and variables) to the output. |
+| `batch_decompile` | Decompile up to 20 functions in a single call. Per-function timeout of 60s. Results cached per-function via `_ToolResultCache`. Applies rename helpers. Use `summary_mode=True` for signature + first 5 lines only. Self-reporting progress. |
 | `get_function_cfg` | Control flow graph (nodes and edges) for a function. |
 | `find_path_to_address` | Symbolic execution to find inputs reaching a target address. |
 | `emulate_function_execution` | Emulate a function with concrete arguments. |
@@ -514,6 +516,31 @@ Notes and tool history are the primary mechanism for preserving analysis context
 | `get_analysis_timeline` | Merge tool history with notes into a single chronological timeline. Paginated (default limit 20). |
 | `export_project` | Export session (analysis + notes + history + optionally the binary) as `.arkana_project.tar.gz`. |
 | `import_project` | Import a previously exported project archive. |
+
+## Rename / Annotation Layer (6 tools)
+
+Persistent function renames, variable renames, and address labels. Renames are automatically applied to decompilation and disassembly output. Persisted via cache alongside notes  - restored when the same binary is reopened.
+
+| Tool | Description |
+|---|---|
+| `rename_function` | Assign a user-defined name to a function at a given address. The name is applied in `decompile_function_with_angr`, `batch_decompile`, and `get_function_map` output. |
+| `rename_variable` | Rename a variable within a function scope. Applied in decompilation output for that function. |
+| `add_label` | Add a labelled marker at a given address with a category (`general`, `ioc`, `crypto`, `c2`, `function`). Labels appear in `get_annotated_disassembly` output. |
+| `list_renames` | List all renames and labels, optionally filtered by type (`functions`, `variables`, `labels`). |
+| `delete_rename` | Remove a specific rename or label by address and type. |
+| `batch_rename` | Bulk apply up to 50 renames/labels in a single call. Accepts a list of `{type, address, name, ...}` dicts. |
+
+## Custom Types (5 tools)
+
+User-defined structs and enums for parsing binary data. Struct field types reuse `parse_binary_struct` types (uint8-64 LE/BE, cstring, wstring, ipv4, bytes:N, padding:N). Persisted via cache.
+
+| Tool | Description |
+|---|---|
+| `create_struct` | Define a named struct with typed fields. Validates field types against the `parse_binary_struct` schema. |
+| `create_enum` | Define a named enum with name-to-integer mappings and a byte size. |
+| `apply_type_at_offset` | Parse binary data at a file offset using a previously defined custom type. Supports parsing multiple consecutive instances via `count` parameter (max 100). |
+| `list_custom_types` | List all defined structs and enums with their definitions. |
+| `delete_custom_type` | Remove a type definition by name. |
 
 ## Learner Progress Tracking (4 tools)
 

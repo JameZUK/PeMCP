@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 196 MCP tools organized by use case.
+Complete catalog of all 209 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -21,6 +21,8 @@ Source files: `arkana/mcp/tools_*.py`
 | Extracting payload without `output_path` | `refinery_xor/pipeline/carve(..., output_path=...)` | Saves to disk AND registers as artifact with hashes and type detection |
 | Writing a Python crypto script (RC4, XOR, AES) | `refinery_pipeline` / `refinery_decrypt` | Internal tools are logged, reproducible, auditable |
 | Repeated single-item tool calls (e.g., 50× `get_string_at_va`) | Batch parameters (`data_hex_list`, `virtual_addresses`, `function_addresses`, `rule_ids`) | Single call, cleaner history, per-item error isolation |
+| Calling `decompile_function_with_angr` many times | `batch_decompile(addresses)` | Decompile up to 20 in one call; per-function caching and 60s timeout |
+| `get_hex_dump()` + manual byte matching | `search_hex_pattern(pattern)` | Direct hex pattern search with `??` wildcards, section filter support |
 
 ---
 
@@ -101,12 +103,14 @@ Source files: `arkana/mcp/tools_*.py`
 | `search_floss_strings` | Regex search against FLOSS results | `pattern` |
 | `search_yara_custom` | Custom YARA rule scanning | `rule` |
 | `detect_format_strings` | Find printf-style format strings (vuln audit) | — |
+| `search_hex_pattern` | Search binary for hex byte patterns with `??` wildcards | `pattern`, `section` (optional), `limit` (default 50) |
 
 ## Decompilation & Disassembly
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `decompile_function_with_angr` | Get C-like pseudocode for a function (paginated); works without full CFG | `address`, `line_offset` (default 0), `line_limit` (default 80) |
+| `decompile_function_with_angr` | Get C-like pseudocode for a function (paginated); works without full CFG; applies user renames | `address`, `line_offset` (default 0), `line_limit` (default 80) |
+| `batch_decompile` | Decompile up to 20 functions in one call; per-function 60s timeout; applies renames | `addresses`, `max_lines_per_function` (default 30), `summary_mode` |
 | `get_angr_partial_functions` | List functions discovered so far (works during/after CFG build) | `limit` (default 50) |
 | `get_annotated_disassembly` | Disassembly with variable names and xrefs | `address`, `limit` (default 50) |
 | `disassemble_at_address` | Raw disassembly at arbitrary address; works without full CFG | `address`, `count` |
@@ -383,6 +387,27 @@ Source files: `arkana/mcp/tools_*.py`
 | `identify_malware_family` | After decompiling API hash routines, finding config encryption, or identifying distinctive constants — matches evidence against 123-family knowledge base | `hash_algorithm`, `hash_seed`, `hash_constants`, `config_encryption`, `config_pattern`, `compiler`, `command_count`, `network_headers`, `network_uris`, `constants`, `dll_names`, `matched_strings`, `matched_hex_patterns` |
 | `list_malware_signatures` | To browse known malware families and their fingerprints before analysis, or review a specific family's full indicator profile | `family` (optional — omit for summary of all families) |
 | `verify_malware_attribution` | After `identify_malware_family()` returns a candidate — confirms attribution with per-evidence pass/fail verdicts. Catches misattribution between similar families | `family` (required), plus same evidence params as `identify_malware_family` |
+
+## Rename / Annotation Layer
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `rename_function` | Assign user-defined name to function (persisted, applied in decompilation output) | `address`, `new_name` |
+| `rename_variable` | Rename variable within function scope (applied in decompilation) | `function_address`, `old_name`, `new_name` |
+| `add_label` | Add labelled marker at address (shown in annotated disassembly) | `address`, `label_name`, `category` |
+| `list_renames` | List all renames and labels | `rename_type` (optional: functions, variables, labels) |
+| `delete_rename` | Remove a specific rename or label | `address`, `rename_type` |
+| `batch_rename` | Bulk apply up to 50 renames in one call | `renames` (list of dicts) |
+
+## Custom Types
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `create_struct` | Define named struct for parsing binary data | `name`, `fields` |
+| `create_enum` | Define named enum with value mappings | `name`, `values`, `size` (default 4) |
+| `apply_type_at_offset` | Parse binary at offset using a custom type | `type_name`, `file_offset`, `count` (default 1) |
+| `list_custom_types` | List all defined structs and enums | — |
+| `delete_custom_type` | Remove a type definition | `name` |
 
 ## Entropy Analysis
 

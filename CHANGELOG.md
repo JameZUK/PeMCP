@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Persistent rename/annotation layer (6 new tools, 209 total): `rename_function`, `rename_variable`, `add_label`, `list_renames`, `delete_rename`, `batch_rename`. Renames are automatically applied to decompilation and disassembly output. Persisted via cache alongside notes — restored on `open_file()`
+- Custom type system (5 new tools): `create_struct`, `create_enum`, `apply_type_at_offset`, `list_custom_types`, `delete_custom_type`. Reuses `parse_binary_struct` field types. Persisted via cache
+- `batch_decompile` — decompile up to 20 functions in a single call with per-function 60s timeout, result caching, and rename integration. `summary_mode` returns signature + first 5 lines only
+- `search_hex_pattern` — search binary data for hex byte patterns with `??` wildcards. Optional section filter for PE binaries. Max 200 tokens, 5000 matches
+
 ### Fixed
 - Unified address/offset parsing: all tools now accept both hex (`0x401000`) and decimal (`4198400`) for address parameters. Previously 7 tools required hex-only input for some parameters (e.g. `unhook_function` used hex-only while `hook_function` accepted both)
 - `get_strings_for_function` and `get_string_usage_context` now accept hex string addresses in addition to plain integers
