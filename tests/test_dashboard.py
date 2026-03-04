@@ -3,7 +3,7 @@ import os
 import tempfile
 import pytest
 
-from arkana.state import AnalyzerState, _default_state
+from arkana.state import AnalyzerState, _default_state, _session_registry, _registry_lock
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +58,17 @@ class TestTriageStatus:
 # ---------------------------------------------------------------------------
 
 class TestStateApi:
+    def setup_method(self):
+        """Clear session registry so _get_state() uses _default_state."""
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+
     def test_overview_no_file(self):
         from arkana.dashboard.state_api import get_overview_data
         # Temporarily clear default state

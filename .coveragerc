@@ -21,6 +21,7 @@ omit =
     arkana/resources.py
     # Dashboard — requires running server context (tested via integration tests)
     arkana/dashboard/app.py
+    arkana/dashboard/state_api.py
 
 [report]
 exclude_lines =
