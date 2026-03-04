@@ -225,12 +225,14 @@ async def open_file(
                         )
                     _loaded_from_cache = True
 
-                    # Restore notes, previous session history, and artifacts from cache
+                    # Restore notes, previous session history, artifacts, renames, and types from cache
                     session_meta = analysis_cache.get_session_metadata(_file_sha256)
                     if session_meta:
                         state.notes = session_meta.get("notes", [])
                         state.previous_session_history = session_meta.get("tool_history", [])
                         state.artifacts = session_meta.get("artifacts", [])
+                        state.renames = session_meta.get("renames", {"functions": {}, "variables": {}, "labels": {}})
+                        state.custom_types = session_meta.get("custom_types", {"structs": {}, "enums": {}})
 
                     # Restore cached triage data if available in pe_data
                     cached_triage = cached.get('_cached_triage')
@@ -489,6 +491,8 @@ async def close_file(ctx: Context) -> Dict[str, str]:
             notes=state.get_all_notes_snapshot(),
             tool_history=state.get_tool_history_snapshot(),
             artifacts=state.get_all_artifacts_snapshot(),
+            renames=state.get_all_renames_snapshot(),
+            custom_types=state.get_all_types_snapshot(),
         )
 
     # Use atomic reset methods (safe for shared references from default state)
@@ -500,6 +504,8 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     state.clear_notes()
     state.clear_tool_history()
     state.clear_artifacts()
+    state.clear_renames()
+    state.clear_custom_types()
     state.previous_session_history = []
 
     await ctx.info(f"Closed file: {closed_path}")

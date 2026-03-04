@@ -7,6 +7,7 @@ from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _format_cc_info, _raise_on_error_dict
+from arkana.mcp._rename_helpers import get_display_name
 
 if ANGR_AVAILABLE:
     import angr
@@ -467,6 +468,12 @@ async def get_annotated_disassembly(
                     "op_str": insn.op_str,
                 }
 
+                # Add user label annotation
+                addr_hex = hex(insn.address).lower()
+                labels = state.renames.get("labels", {})
+                if addr_hex in labels:
+                    entry["label"] = labels[addr_hex]
+
                 # Add xref annotation
                 if insn.address in xref_map:
                     entry["xref"] = xref_map[insn.address]
@@ -686,6 +693,7 @@ async def get_function_map(
             entry = {
                 "addr": hex(addr),
                 "name": func.name,
+                "display_name": get_display_name(hex(addr), func.name),
                 "score": score,
                 "reason": reason,
                 "blocks": block_count,

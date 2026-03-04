@@ -8,12 +8,14 @@ import sys
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE, ANGR_ANALYSIS_TIMEOUT
+from arkana.constants import MAX_BATCH_DECOMPILE, BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT
 from arkana.state import TASK_RUNNING, TASK_FAILED
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
 from arkana.mcp._input_helpers import _ToolResultCache
+from arkana.mcp._rename_helpers import apply_function_renames_to_lines, apply_variable_renames_to_lines, get_display_name
 
 # Cache for paginated decompilation results — avoids re-decompiling when
 # the client requests subsequent pages of the same function.
@@ -269,10 +271,14 @@ async def decompile_function_with_angr(
 
     if cached_lines is not None:
         meta = _decompile_meta.get(cache_key, {})
-        page = cached_lines[line_offset:line_offset + line_limit]
-        has_more = (line_offset + line_limit) < len(cached_lines)
+        # Apply user renames to output
+        renamed_lines = apply_function_renames_to_lines(cached_lines)
+        renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
+        page = renamed_lines[line_offset:line_offset + line_limit]
+        has_more = (line_offset + line_limit) < len(renamed_lines)
+        display_name = get_display_name(hex(target_addr), meta.get("function_name", "unknown"))
         return {
-            "function_name": meta.get("function_name", "unknown"),
+            "function_name": display_name,
             "address": meta.get("address", hex(target_addr)),
             "lines": page,
             "count": len(page),
@@ -378,7 +384,7 @@ async def decompile_function_with_angr(
         raise RuntimeError(f"Decompilation timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
     _raise_on_error_dict(result)
 
-    # Cache full result and return paginated
+    # Cache full result (raw, before renames) and return paginated
     all_lines = result["c_pseudocode"].splitlines()
     _decompile_cache.set("decompile_function_with_angr", cache_key, all_lines)
     _decompile_meta[cache_key] = {
@@ -386,10 +392,15 @@ async def decompile_function_with_angr(
         "address": result["address"],
     }
 
-    page = all_lines[line_offset:line_offset + line_limit]
-    has_more = (line_offset + line_limit) < len(all_lines)
+    # Apply user renames to output
+    renamed_lines = apply_function_renames_to_lines(all_lines)
+    renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
+    display_name = get_display_name(hex(target_addr), result["function_name"])
+
+    page = renamed_lines[line_offset:line_offset + line_limit]
+    has_more = (line_offset + line_limit) < len(renamed_lines)
     paginated_result = {
-        "function_name": result["function_name"],
+        "function_name": display_name,
         "address": result["address"],
         "lines": page,
         "count": len(page),
@@ -1535,3 +1546,131 @@ async def get_cross_reference_map(
     }
 
     return await _check_mcp_response_size(ctx, result, "get_cross_reference_map")
+
+
+@tool_decorator
+async def batch_decompile(
+    ctx: Context,
+    addresses: List[str],
+    max_lines_per_function: int = 30,
+    summary_mode: bool = False,
+) -> Dict[str, Any]:
+    """
+    [Phase: deep-dive] Decompile multiple functions in a single call. Returns
+    truncated pseudocode for each function. Results are cached per-function so
+    subsequent single-function requests hit cache.
+
+    When to use: After get_function_map identifies several interesting functions,
+    batch-decompile them to get a quick overview before deep-diving into specifics.
+
+    Args:
+        ctx: The MCP Context object.
+        addresses: (List[str]) List of function addresses to decompile (max 20).
+        max_lines_per_function: (int) Max lines per function (default 30).
+        summary_mode: (bool) If True, return only signature + first 5 lines.
+
+    Returns:
+        Decompilation results for each function.
+    """
+    _check_angr_ready("batch_decompile", require_cfg=False)
+
+    if not addresses:
+        raise ValueError("addresses must not be empty.")
+    if len(addresses) > MAX_BATCH_DECOMPILE:
+        raise ValueError(f"Maximum {MAX_BATCH_DECOMPILE} functions per batch call.")
+
+    lines_limit = 5 if summary_mode else max_lines_per_function
+    results = []
+    succeeded = 0
+    failed = 0
+
+    for i, addr_str in enumerate(addresses):
+        await ctx.report_progress(i, len(addresses))
+        target_addr = _parse_addr(addr_str)
+        cache_key = (target_addr,)
+        func_result: Dict[str, Any] = {"address": addr_str}
+
+        # Check per-function cache first
+        cached_lines = _decompile_cache.get("decompile_function_with_angr", cache_key)
+        if cached_lines is not None:
+            meta = _decompile_meta.get(cache_key, {})
+            renamed_lines = apply_function_renames_to_lines(cached_lines)
+            renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
+            display_name = get_display_name(hex(target_addr), meta.get("function_name", "unknown"))
+            page = renamed_lines[:lines_limit]
+            func_result["function_name"] = display_name
+            func_result["lines"] = page
+            func_result["total_lines"] = len(renamed_lines)
+            func_result["from_cache"] = True
+            results.append(func_result)
+            succeeded += 1
+            continue
+
+        # Fresh decompilation with per-function timeout
+        def _decompile_one(t_addr=target_addr):
+            try:
+                func, addr_used = _resolve_function_address(t_addr)
+            except (KeyError, RuntimeError) as e:
+                return {"error": f"No function at {hex(t_addr)}: {e}"}
+            project, cfg = state.get_angr_snapshot()
+            cfg_model = cfg.model if cfg else None
+            try:
+                dec = project.analyses.Decompiler(func, cfg=cfg_model)
+                if dec.codegen is None:
+                    return {"error": f"Decompilation produced no output for {hex(t_addr)}."}
+                return {
+                    "function_name": func.name,
+                    "address": hex(func.addr),
+                    "c_pseudocode": dec.codegen.text,
+                }
+            except Exception as e:
+                return {"error": f"Decompilation failed for {hex(t_addr)}: {e}"}
+
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(_decompile_one),
+                timeout=BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            func_result["error"] = f"Timed out after {BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT}s."
+            results.append(func_result)
+            failed += 1
+            continue
+
+        if "error" in result:
+            func_result["error"] = result["error"]
+            results.append(func_result)
+            failed += 1
+            continue
+
+        # Cache raw lines and apply renames
+        all_lines = result["c_pseudocode"].splitlines()
+        _decompile_cache.set("decompile_function_with_angr", cache_key, all_lines)
+        _decompile_meta[cache_key] = {
+            "function_name": result["function_name"],
+            "address": result["address"],
+        }
+        renamed_lines = apply_function_renames_to_lines(all_lines)
+        renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
+        display_name = get_display_name(hex(target_addr), result["function_name"])
+
+        page = renamed_lines[:lines_limit]
+        func_result["function_name"] = display_name
+        func_result["lines"] = page
+        func_result["total_lines"] = len(renamed_lines)
+        func_result["from_cache"] = False
+        results.append(func_result)
+        succeeded += 1
+
+    await ctx.report_progress(len(addresses), len(addresses))
+    output = {
+        "functions": results,
+        "summary": {
+            "requested": len(addresses),
+            "succeeded": succeeded,
+            "failed": failed,
+            "summary_mode": summary_mode,
+            "max_lines_per_function": lines_limit,
+        },
+    }
+    return await _check_mcp_response_size(ctx, output, "batch_decompile")

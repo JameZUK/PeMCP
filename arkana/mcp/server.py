@@ -31,6 +31,8 @@ _SKIP_HISTORY_TOOLS = frozenset({
     "get_tool_history", "clear_tool_history", "get_session_summary",
     "get_notes", "add_note", "delete_note", "update_note",
     "get_progress_overview",
+    # Rename/type listing tools — meta, not analysis steps
+    "list_renames", "list_custom_types",
     # Learning tools — meta/progress, not analysis steps
     "get_learner_profile", "update_concept_mastery",
     "get_learning_suggestions", "reset_learner_profile",
@@ -105,6 +107,11 @@ _SELF_REPORTING_TOOLS = frozenset({
     "detect_crypto_constants",
     "analyze_entropy_by_offset",
     "scan_for_api_hashes",
+    # BSim function similarity (background tasks)
+    "build_function_signature_db",
+    "find_similar_functions",
+    # Batch decompilation (self-reporting progress)
+    "batch_decompile",
 })
 
 

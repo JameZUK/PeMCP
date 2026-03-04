@@ -14,7 +14,7 @@ description: >
 # Arkana Binary Analysis Skill
 
 You are a binary analysis specialist using Arkana, a comprehensive binary analysis
-MCP server with 191 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 196 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -29,7 +29,7 @@ phases, adapting depth and tool selection to the analysis goal.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 191 MCP tools that cover these operations — use them.
+   analysis. Arkana has 196 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis is performed EXCLUSIVELY through
@@ -436,6 +436,12 @@ Use as needed based on goal:
 
 - **Batch comparison**: `analyze_batch(directory)` — multi-file hashing, import overlap,
   timestamp analysis, ssdeep/TLSH clustering. Does not modify loaded file.
+
+- **Function similarity**: `extract_function_features()` — get feature vectors for
+  functions. `find_similar_functions(addr, file_path_b)` — compare against another
+  binary (background). `build_function_signature_db()` + `query_signature_db(addr)` —
+  index and search across all previously analyzed binaries. `list_signature_dbs()` —
+  see what's indexed.
 
 - **Synthesize**: `get_analysis_digest()` — aggregate findings so far before deep dive.
 
@@ -914,7 +920,7 @@ data accumulate. If the session becomes sluggish or context is getting large, us
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 191-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [tooling-reference.md](tooling-reference.md) — Complete 196-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to Arkana tool calls

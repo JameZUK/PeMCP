@@ -1509,3 +1509,152 @@ async def get_string_at_va(
 
     va = _parse_int_param(virtual_address, "virtual_address")
     return _extract_string_at_va(pe, state.filepath, va, max_length, encoding)
+
+
+# ---- Hex Pattern Search -----------------------------------------
+
+def _hex_pattern_to_regex(pattern: str) -> bytes:
+    """Convert a space-separated hex pattern with ?? wildcards to a bytes regex.
+
+    Example: "4D 5A ?? ?? 50 45" → re pattern matching MZ..PE
+    """
+    from arkana.constants import MAX_HEX_PATTERN_TOKENS
+    tokens = pattern.strip().split()
+    if len(tokens) > MAX_HEX_PATTERN_TOKENS:
+        raise ValueError(f"Pattern too long ({len(tokens)} tokens). Maximum is {MAX_HEX_PATTERN_TOKENS}.")
+    if not tokens:
+        raise ValueError("Empty hex pattern.")
+
+    regex_parts = []
+    for token in tokens:
+        token = token.strip()
+        if token == "??" or token == "?":
+            regex_parts.append(b".")
+        else:
+            if len(token) != 2:
+                raise ValueError(f"Invalid hex token '{token}'. Each token must be 2 hex chars or '??'.")
+            try:
+                byte_val = int(token, 16)
+            except ValueError:
+                raise ValueError(f"Invalid hex token '{token}'.") from None
+            regex_parts.append(re.escape(bytes([byte_val])))
+
+    return b"".join(regex_parts)
+
+
+def _find_section_for_offset(pe, offset: int) -> Optional[str]:
+    """Resolve which PE section contains a file offset."""
+    try:
+        if hasattr(pe, 'sections'):
+            for section in pe.sections:
+                start = section.PointerToRawData
+                end = start + section.SizeOfRawData
+                if start <= offset < end:
+                    return section.Name.rstrip(b'\x00').decode('ascii', errors='replace')
+    except Exception:
+        pass
+    return None
+
+
+@tool_decorator
+async def search_hex_pattern(
+    ctx: Context,
+    pattern: str,
+    section: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Search for hex byte patterns in the loaded binary. Supports
+    wildcard bytes (??) for flexible matching.
+
+    When to use: To find specific byte sequences — magic bytes, shellcode signatures,
+    XOR keys, crypto constants, or known opcode patterns.
+
+    Args:
+        ctx: The MCP Context object.
+        pattern: (str) Space-separated hex bytes with ?? wildcards.
+            Example: "4D 5A ?? ?? 50 45" to find MZ..PE patterns.
+        section: (Optional[str]) Restrict search to a named PE section (e.g. '.text').
+            Only applies to PE files; ignored for ELF/Mach-O.
+        limit: (int) Maximum number of matches to return (default 50, max 5000).
+
+    Returns:
+        List of match offsets with surrounding context.
+    """
+    _check_pe_loaded("search_hex_pattern")
+    if state.pe_object is None or not hasattr(state.pe_object, '__data__'):
+        raise RuntimeError("No binary data available for hex pattern search.")
+
+    if not pattern or not pattern.strip():
+        raise ValueError("pattern must be a non-empty hex string.")
+
+    from arkana.constants import MAX_HEX_PATTERN_MATCHES
+    effective_limit = min(max(1, limit), MAX_HEX_PATTERN_MATCHES)
+
+    # Compile pattern
+    regex_pattern = _hex_pattern_to_regex(pattern)
+
+    file_data = state.pe_object.__data__
+
+    # Determine search range
+    search_data = file_data
+    search_offset_base = 0
+    section_info = None
+
+    if section and hasattr(state.pe_object, 'sections'):
+        found_section = None
+        try:
+            for sec in state.pe_object.sections:
+                sec_name = sec.Name.rstrip(b'\x00').decode('ascii', errors='replace')
+                if sec_name == section:
+                    found_section = sec
+                    break
+        except Exception:
+            pass
+        if found_section is None:
+            raise ValueError(f"Section '{section}' not found in this binary.")
+        search_offset_base = found_section.PointerToRawData
+        search_data = file_data[found_section.PointerToRawData:
+                                found_section.PointerToRawData + found_section.SizeOfRawData]
+        section_info = section
+
+    await ctx.info(f"Searching {len(search_data)} bytes for pattern: {pattern}")
+
+    def _do_search():
+        compiled = re.compile(regex_pattern, re.DOTALL)
+        matches = []
+        for m in compiled.finditer(search_data):
+            file_offset = search_offset_base + m.start()
+            # Get a small context window around the match
+            ctx_start = max(0, m.start() - 8)
+            ctx_end = min(len(search_data), m.end() + 8)
+            context_hex = search_data[ctx_start:ctx_end].hex()
+
+            match_entry = {
+                "offset": hex(file_offset),
+                "offset_decimal": file_offset,
+                "matched_bytes": search_data[m.start():m.end()].hex(),
+                "context": context_hex,
+            }
+            # Try to identify containing section
+            sec_name = _find_section_for_offset(state.pe_object, file_offset)
+            if sec_name:
+                match_entry["section"] = sec_name
+
+            matches.append(match_entry)
+            if len(matches) >= effective_limit:
+                break
+        return matches
+
+    matches = await asyncio.to_thread(_do_search)
+
+    result = {
+        "pattern": pattern,
+        "matches": matches,
+        "match_count": len(matches),
+        "limit_applied": len(matches) >= effective_limit,
+        "searched_bytes": len(search_data),
+    }
+    if section_info:
+        result["section_filter"] = section_info
+    return await _check_mcp_response_size(ctx, result, "search_hex_pattern")

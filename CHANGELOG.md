@@ -19,7 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Dependabot configuration for weekly pip dependency updates
 - Manual CI trigger via `workflow_dispatch`
 - Branch coverage enabled in `.coveragerc`
-- `get_angr_partial_functions()` - list functions discovered in angr's knowledge base even while the CFG is still building or has timed out (191 tools total)
+- `get_angr_partial_functions()` - list functions discovered in angr's knowledge base even while the CFG is still building or has timed out
+- BSim-inspired function similarity tools (5 new tools, 196 total): `extract_function_features`, `find_similar_functions`, `build_function_signature_db`, `query_signature_db`, `list_signature_dbs`. Architecture-independent feature extraction using 6 feature groups (CFG structural, API calls, VEX IR profile, string refs, constants, size metrics) with weighted similarity scoring. Persistent SQLite signature database at `~/.arkana/bsim/` enables cross-binary function search with two-phase query (SQL pre-filter + full scoring)
 - CFG build timeout (10-minute default, configurable via `ARKANA_ANGR_CFG_TIMEOUT`) prevents indefinite hangs on packed or obfuscated binaries
 - CFG stall detection monitor - `check_task_status('startup-angr')` now reports `functions_discovered_so_far` and a `stall_detection` verdict
 - Background task timeout for all 10 angr background tools (default 600s, configurable via `ARKANA_BACKGROUND_TASK_TIMEOUT`). Tools that previously could hang indefinitely now time out with actionable error messages

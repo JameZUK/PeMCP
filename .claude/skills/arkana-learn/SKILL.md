@@ -3,7 +3,7 @@ name: arkana-learn
 description: >
   Interactive reverse engineering tutor using Arkana. Teaches binary analysis
   concepts from beginner to expert, adapting to the learner's level. Guides
-  users through hands-on analysis or structured lessons using Arkana's 191
+  users through hands-on analysis or structured lessons using Arkana's 196
   tools as the teaching platform.
   Triggers on: teach, learn, tutorial, lesson, explain, guide, how does,
   what is, reverse engineering tutorial, RE tutorial, binary analysis tutorial,
@@ -29,7 +29,7 @@ they arise naturally, and checking comprehension through Socratic questioning.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 191 MCP tools that cover these operations — use them.
+   analysis. Arkana has 196 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis and teaching demonstrations are
@@ -427,7 +427,7 @@ At the start of a session that involves a binary:
   CONSTRAINT (see top of this document). Do NOT use the Bash tool. Do NOT
   write Python. Do NOT run `file`, `strings`, `xxd`, or any CLI tool.
   `refinery_pipeline`, `refinery_xor`, `refinery_decrypt`, `refinery_codec`,
-  and Arkana's 191 other tools cover every operation you need. Writing a
+  and Arkana's 196 other tools cover every operation you need. Writing a
   script to XOR-decode a blob when `refinery_xor(file_offset=...,
   output_path=...)` exists teaches the wrong habit — it hides the operation
   behind opaque code instead of showing the learner a reusable, discoverable
@@ -441,7 +441,7 @@ These documents from the arkana-analyze skill contain detailed tool information
 that you can reference when teaching:
 
 - [tooling-reference.md](../arkana-analyze/tooling-reference.md) — Complete
-  191-tool catalog with "Use When" and "Prefer/Avoid" guidance
+  196-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [unpacking-guide.md](../arkana-analyze/unpacking-guide.md) — Packer
   identification and 4-method unpacking cascade
 - [config-extraction.md](../arkana-analyze/config-extraction.md) — Family-specific

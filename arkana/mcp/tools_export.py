@@ -89,6 +89,8 @@ async def export_project(
         "notes_count": len(state.get_all_notes_snapshot()),
         "tool_history_count": len(state.get_tool_history_snapshot()),
         "artifacts_count": len(artifacts_snapshot),
+        "renames_count": sum(len(v) for v in state.get_all_renames_snapshot().values()),
+        "custom_types_count": sum(len(v) for v in state.get_all_types_snapshot().values()),
     }
 
     # Build the cache wrapper (same format as disk cache)
@@ -105,6 +107,8 @@ async def export_project(
         "notes": state.get_all_notes_snapshot(),
         "tool_history": state.get_tool_history_snapshot(),
         "artifacts": artifacts_snapshot,
+        "renames": state.get_all_renames_snapshot(),
+        "custom_types": state.get_all_types_snapshot(),
     }
 
     await ctx.info(f"Creating project archive: {abs_output}")

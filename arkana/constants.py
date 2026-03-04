@@ -44,9 +44,29 @@ YARA_REVERSINGLABS_SUBDIR = "reversinglabs"
 YARA_COMMUNITY_ZIP_URL = "https://github.com/Yara-Rules/rules/archive/refs/heads/master.zip"
 YARA_COMMUNITY_SUBDIR = "community"
 
+# --- BSim Function Similarity ---
+BSIM_DB_DIR = Path.home() / ".arkana" / "bsim"
+BSIM_DEFAULT_THRESHOLD = 0.5
+BSIM_BACKGROUND_TIMEOUT = 600  # seconds (env: ARKANA_BSIM_BACKGROUND_TIMEOUT)
+
 # --- Artifact Limits ---
 MAX_ARTIFACT_FILE_SIZE = 100 * 1024 * 1024        # 100 MB per artifact
 MAX_TOTAL_ARTIFACT_EXPORT_SIZE = 50 * 1024 * 1024  # 50 MB total in exports
+
+# --- Rename / Annotation Limits ---
+MAX_BATCH_RENAMES = 50
+
+# --- Custom Type Limits ---
+MAX_STRUCT_FIELDS = 100
+MAX_ENUM_VALUES = 500
+
+# --- Batch Decompile Limits ---
+MAX_BATCH_DECOMPILE = 20
+BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT = 60  # seconds per function
+
+# --- Hex Pattern Search Limits ---
+MAX_HEX_PATTERN_TOKENS = 200
+MAX_HEX_PATTERN_MATCHES = 5000
 
 # --- FLOSS Fallback Constants ---
 MIN_STR_LEN_FALLBACK_FLOSS = 4

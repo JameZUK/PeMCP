@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **191 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **196 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -433,6 +433,18 @@ The real power of Arkana's Binary Refinery integration emerges when tools are ch
 | Tool | Description |
 |---|---|
 | `diff_payloads` | Compare two binary payloads byte-by-byte  - reports identical/different regions, similarity percentage, and XOR relationship detection. For PE files, includes structural comparison (sections, imports). |
+
+## Function Similarity  - BSim-style (5 tools)
+
+Architecture-independent function similarity matching inspired by Ghidra's BSim. Uses 6 feature groups extracted from angr's CFG and VEX IR: CFG structure, API calls, VEX operation profile, string references, constants, and size metrics. Supports pairwise comparison and persistent SQLite signature database for cross-binary search.
+
+| Tool | Description |
+|---|---|
+| `extract_function_features` | Extract feature vectors from functions in the loaded binary. Features include CFG structure (block/edge count, cyclomatic complexity, loops), API calls with semantic categories, VEX IR operation histogram, string reference hashes, constants, and size metrics. |
+| `find_similar_functions` | Compare a function against all functions in another binary. Background task that loads the second binary, extracts features, and scores pairwise similarity. Returns ranked matches above threshold. |
+| `build_function_signature_db` | Index all non-trivial functions from the loaded binary into a persistent SQLite database at `~/.arkana/bsim/signatures.db`. Background task with progress reporting. Skips simprocedures, syscalls, and single-block thunks. |
+| `query_signature_db` | Search the signature database for functions similar to one in the loaded binary. Two-phase query: SQL pre-filter on structural features eliminates ~80-90% of candidates, then full feature vector scoring on the remainder. |
+| `list_signature_dbs` | List all binaries indexed in the function signature database with metadata (SHA256, filename, architecture, function count, indexing date). No angr dependency  - reads only SQLite metadata. |
 
 ## Workflow & Reporting (2 tools)
 

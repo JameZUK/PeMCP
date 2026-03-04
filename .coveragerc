@@ -5,6 +5,7 @@ omit =
     arkana/mcp/tools_*.py
     arkana/mcp/server.py
     arkana/mcp/_angr_helpers.py
+    arkana/mcp/_bsim_features.py
     # Parsers requiring optional heavy deps
     arkana/parsers/capa.py
     arkana/parsers/floss.py

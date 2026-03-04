@@ -72,6 +72,9 @@ import arkana.mcp.tools_pe_forensic
 import arkana.mcp.tools_threat_intel
 import arkana.mcp.tools_batch
 import arkana.mcp.tools_struct
+import arkana.mcp.tools_rename
+import arkana.mcp.tools_types
+import arkana.mcp.tools_bsim
 # Only register refinery tools when binary-refinery is installed.
 # When absent this saves ~20 tool definitions from the MCP catalog,
 # avoiding wasted context tokens for tools that would fail at runtime.

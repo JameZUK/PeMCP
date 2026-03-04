@@ -208,7 +208,9 @@ class AnalysisCache:
 
     def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str,
             notes: Optional[list] = None, tool_history: Optional[list] = None,
-            artifacts: Optional[list] = None) -> bool:
+            artifacts: Optional[list] = None,
+            renames: Optional[dict] = None,
+            custom_types: Optional[dict] = None) -> bool:
         """
         Store a ``pe_data`` dict in the cache.  Returns True on success.
 
@@ -244,6 +246,8 @@ class AnalysisCache:
             "notes": notes or [],
             "tool_history": tool_history or [],
             "artifacts": artifacts or [],
+            "renames": renames or {"functions": {}, "variables": {}, "labels": {}},
+            "custom_types": custom_types or {"structs": {}, "enums": {}},
         }
 
         # Compress OUTSIDE the lock — this can be slow for large analyses
@@ -381,13 +385,17 @@ class AnalysisCache:
             "notes": wrapper.get("notes", []),
             "tool_history": wrapper.get("tool_history", []),
             "artifacts": wrapper.get("artifacts", []),
+            "renames": wrapper.get("renames", {"functions": {}, "variables": {}, "labels": {}}),
+            "custom_types": wrapper.get("custom_types", {"structs": {}, "enums": {}}),
         }
 
     def update_session_data(self, sha256: str,
                             notes: Optional[list] = None,
                             tool_history: Optional[list] = None,
-                            artifacts: Optional[list] = None) -> bool:
-        """Update notes, tool_history, and/or artifacts for an existing cache entry.
+                            artifacts: Optional[list] = None,
+                            renames: Optional[dict] = None,
+                            custom_types: Optional[dict] = None) -> bool:
+        """Update notes, tool_history, artifacts, renames, and/or custom_types for an existing cache entry.
 
         Reads the gzip wrapper, replaces the specified keys, and writes
         it back atomically.  Returns True on success.
@@ -410,6 +418,10 @@ class AnalysisCache:
                     wrapper["tool_history"] = tool_history
                 if artifacts is not None:
                     wrapper["artifacts"] = artifacts
+                if renames is not None:
+                    wrapper["renames"] = renames
+                if custom_types is not None:
+                    wrapper["custom_types"] = custom_types
                 tmp = entry_path.with_suffix(".tmp")
                 with gzip.open(tmp, "wt", encoding="utf-8") as f:
                     json.dump(wrapper, f)

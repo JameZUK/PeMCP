@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 191 MCP tools organized by use case.
+Complete catalog of all 196 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -277,6 +277,16 @@ Source files: `arkana/mcp/tools_*.py`
 | `assemble_instruction` | Assemble instructions to bytes | `instructions`, `arch` |
 | `modify_pe_section` | Modify PE section content | `section_name`, `data` |
 | `save_patched_binary` | Save patched binary to disk | `output_path` |
+
+## Function Similarity (BSim-style)
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `extract_function_features` | Extract feature vectors (CFG, API, VEX IR, strings, constants) from functions | `function_address` (optional), `limit`, `include_vex` |
+| `find_similar_functions` | Compare a function against all functions in another binary (background, timeout 600s) | `function_address`, `file_path_b`, `threshold`, `metrics` |
+| `build_function_signature_db` | Index all functions into persistent SQLite DB for cross-binary search (background) | `limit` |
+| `query_signature_db` | Search signature DB for similar functions (two-phase: SQL pre-filter + scoring) | `function_address`, `threshold`, `metrics` |
+| `list_signature_dbs` | List all indexed binaries in the signature database | — |
 
 ## Comparison & Diffing
 

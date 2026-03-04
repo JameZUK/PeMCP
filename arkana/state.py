@@ -78,6 +78,21 @@ class AnalyzerState:
         self._artifacts_counter: int = 0
         self.artifacts: List[Dict[str, Any]] = []
 
+        # Renames (persisted per-binary via cache)
+        self._renames_lock = threading.Lock()
+        self.renames: Dict[str, Any] = {
+            "functions": {},   # addr_hex -> new_name
+            "variables": {},   # func_addr_hex -> {old_name: new_name}
+            "labels": {},      # addr_hex -> {"name": str, "category": str}
+        }
+
+        # Custom types (persisted per-binary via cache)
+        self._types_lock = threading.Lock()
+        self.custom_types: Dict[str, Any] = {
+            "structs": {},   # name -> {"fields": [...], "size": int, "created_at": str}
+            "enums": {},     # name -> {"values": {name: int}, "size": int, "created_at": str}
+        }
+
         # Previous session context (populated from cache on open_file)
         self.previous_session_history: List[Dict[str, Any]] = []
 
@@ -307,6 +322,152 @@ class AnalyzerState:
             count = len(self.artifacts)
             self.artifacts = []
             self._artifacts_counter = 0
+            return count
+
+    # ------------------------------------------------------------------
+    #  Rename accessors
+    # ------------------------------------------------------------------
+
+    def rename_function(self, address: str, new_name: str) -> Dict[str, Any]:
+        """Thread-safe function rename. Returns the rename entry."""
+        addr = address.lower()
+        with self._renames_lock:
+            self.renames["functions"][addr] = new_name
+            return {"address": addr, "new_name": new_name, "type": "function"}
+
+    def rename_variable(self, func_addr: str, old_name: str, new_name: str) -> Dict[str, Any]:
+        """Thread-safe variable rename within function scope."""
+        faddr = func_addr.lower()
+        with self._renames_lock:
+            if faddr not in self.renames["variables"]:
+                self.renames["variables"][faddr] = {}
+            self.renames["variables"][faddr][old_name] = new_name
+            return {"function_address": faddr, "old_name": old_name, "new_name": new_name, "type": "variable"}
+
+    def add_label(self, address: str, name: str, category: str = "general") -> Dict[str, Any]:
+        """Thread-safe label creation at an address."""
+        addr = address.lower()
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._renames_lock:
+            self.renames["labels"][addr] = {"name": name, "category": category, "created_at": now}
+            return {"address": addr, "name": name, "category": category, "type": "label"}
+
+    def get_renames(self, rename_type: Optional[str] = None) -> Dict[str, Any]:
+        """Thread-safe read of renames, optionally filtered by type."""
+        with self._renames_lock:
+            if rename_type and rename_type in self.renames:
+                return {rename_type: dict(self.renames[rename_type])}
+            return {k: dict(v) if isinstance(v, dict) else v for k, v in self.renames.items()}
+
+    def delete_rename(self, address: str, rename_type: str) -> bool:
+        """Thread-safe removal of a rename/label. Returns True if found."""
+        addr = address.lower()
+        with self._renames_lock:
+            if rename_type == "function":
+                return self.renames["functions"].pop(addr, None) is not None
+            elif rename_type == "variable":
+                return self.renames["variables"].pop(addr, None) is not None
+            elif rename_type == "label":
+                return self.renames["labels"].pop(addr, None) is not None
+            return False
+
+    def get_all_renames_snapshot(self) -> Dict[str, Any]:
+        """Thread-safe snapshot for cache persistence."""
+        with self._renames_lock:
+            return {
+                "functions": dict(self.renames["functions"]),
+                "variables": {k: dict(v) for k, v in self.renames["variables"].items()},
+                "labels": {k: dict(v) for k, v in self.renames["labels"].items()},
+            }
+
+    def clear_renames(self) -> int:
+        """Thread-safe clear. Returns total count removed."""
+        with self._renames_lock:
+            count = (len(self.renames["functions"])
+                     + len(self.renames["variables"])
+                     + len(self.renames["labels"]))
+            self.renames = {"functions": {}, "variables": {}, "labels": {}}
+            return count
+
+    def get_function_display_name(self, address: str) -> Optional[str]:
+        """Return user-assigned name for a function address, or None."""
+        addr = address.lower()
+        with self._renames_lock:
+            return self.renames["functions"].get(addr)
+
+    # ------------------------------------------------------------------
+    #  Custom type accessors
+    # ------------------------------------------------------------------
+
+    def create_struct(self, name: str, fields: list, size: int) -> Dict[str, Any]:
+        """Thread-safe struct creation. Returns the struct definition."""
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._types_lock:
+            self.custom_types["structs"][name] = {
+                "fields": list(fields),
+                "size": size,
+                "created_at": now,
+            }
+            return {"name": name, "fields": fields, "size": size, "type": "struct", "created_at": now}
+
+    def create_enum(self, name: str, values: dict, size: int = 4) -> Dict[str, Any]:
+        """Thread-safe enum creation. Returns the enum definition."""
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._types_lock:
+            self.custom_types["enums"][name] = {
+                "values": dict(values),
+                "size": size,
+                "created_at": now,
+            }
+            return {"name": name, "values": values, "size": size, "type": "enum", "created_at": now}
+
+    def get_custom_type(self, name: str) -> Optional[Dict[str, Any]]:
+        """Thread-safe lookup of a custom type by name."""
+        with self._types_lock:
+            if name in self.custom_types["structs"]:
+                result = dict(self.custom_types["structs"][name])
+                result["type"] = "struct"
+                result["name"] = name
+                return result
+            if name in self.custom_types["enums"]:
+                result = dict(self.custom_types["enums"][name])
+                result["type"] = "enum"
+                result["name"] = name
+                return result
+        return None
+
+    def get_all_custom_types(self) -> Dict[str, Any]:
+        """Thread-safe read of all custom types."""
+        with self._types_lock:
+            return {
+                "structs": {k: dict(v) for k, v in self.custom_types["structs"].items()},
+                "enums": {k: dict(v) for k, v in self.custom_types["enums"].items()},
+            }
+
+    def delete_custom_type(self, name: str) -> bool:
+        """Thread-safe removal. Returns True if found."""
+        with self._types_lock:
+            if name in self.custom_types["structs"]:
+                del self.custom_types["structs"][name]
+                return True
+            if name in self.custom_types["enums"]:
+                del self.custom_types["enums"][name]
+                return True
+        return False
+
+    def get_all_types_snapshot(self) -> Dict[str, Any]:
+        """Thread-safe snapshot for cache persistence."""
+        with self._types_lock:
+            return {
+                "structs": {k: dict(v) for k, v in self.custom_types["structs"].items()},
+                "enums": {k: dict(v) for k, v in self.custom_types["enums"].items()},
+            }
+
+    def clear_custom_types(self) -> int:
+        """Thread-safe clear. Returns total count removed."""
+        with self._types_lock:
+            count = len(self.custom_types["structs"]) + len(self.custom_types["enums"])
+            self.custom_types = {"structs": {}, "enums": {}}
             return count
 
     # ------------------------------------------------------------------
