@@ -85,7 +85,9 @@ Arkana includes a real-time web dashboard that launches automatically on port 80
 - **Notes** -- Category-filtered view of all analysis notes (function, tool_result, IOC, hypothesis, manual)
 - **Real-time updates** -- SSE-driven live refresh as the AI runs tools
 
-The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard_token`). Access URL with token is printed at server startup.
+![Arkana Dashboard Overview](docs/Dashboard-Overview.png)
+
+The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard_token`). Access URL with token is printed at server startup. See the [Dashboard Gallery](docs/dashboard.md) for screenshots of all views.
 
 ---
 
@@ -164,7 +166,7 @@ For other MCP clients, local Python installation, and detailed configuration, se
 | **[Scenarios & Comparisons](docs/scenarios.md)** | Five real-world analysis walkthroughs; Arkana vs Ghidra, IDA Pro, CyberChef |
 | **[Architecture](docs/architecture.md)** | Package structure, design principles, pagination and result limits |
 | **[Security & Testing](docs/security.md)** | Path sandboxing, security measures, testing and CI/CD |
-| **Web Dashboard** | Real-time analysis dashboard on port 8082; function triage, call graph, timeline, notes |
+| **[Web Dashboard](docs/dashboard.md)** | Real-time analysis dashboard on port 8082; function triage, call graph, timeline, notes |
 | **[Qiling Rootfs Setup](docs/QILING_ROOTFS.md)** | Windows DLL setup for Qiling cross-platform emulation |
 | **[Contributing](docs/CONTRIBUTING.md)** | Contribution guidelines and development workflow |
 
