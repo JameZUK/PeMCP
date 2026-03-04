@@ -1,0 +1,21 @@
+{% if data and data.background_tasks %}
+<div class="task-list">
+    {% for task in data.background_tasks %}
+    <div class="task-item task-{{ task.status }}">
+        <div class="task-header">
+            <span class="task-id mono">{{ task.id }}</span>
+            <span class="badge badge-{{ task.status }}">{{ task.status|upper }}</span>
+        </div>
+        <div class="task-tool">{{ task.tool }}</div>
+        {% if task.status == 'running' %}
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: {{ task.progress_percent }}%"></div>
+        </div>
+        <div class="task-msg dim">{{ task.progress_message }}</div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-msg dim">No background tasks.</div>
+{% endif %}

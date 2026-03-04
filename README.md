@@ -57,6 +57,7 @@ Arkana eliminates this by putting **209 specialised analysis tools behind a sing
 - **Session persistence** -- Notes, renames, custom types, tool history, and analysis cache survive restarts and context window limits
 - **AI-optimised workflow** -- Compact triage, smart function ranking, batch decompilation, digest summaries, and guided next steps
 - **Robust architecture** -- Docker-first, thread-safe state, background tasks, pagination, smart truncation, graceful degradation
+- **Web dashboard** -- Real-time CRT-themed web interface on port 8082 with binary summary, function triage, call graph visualisation, analysis timeline, and notes browser -- analyst flags feed back into AI tool suggestions
 
 ### How It Compares
 
@@ -71,6 +72,20 @@ Arkana eliminates this by putting **209 specialised analysis tools behind a sing
 | **Cost** | Free & open source | Free | $1,800+/yr | Free |
 
 Arkana complements rather than replaces Ghidra/IDA -- see [Scenarios & Comparisons](docs/scenarios.md) for detailed analysis.
+
+### Web Dashboard
+
+Arkana includes a real-time web dashboard that launches automatically on port 8082. It provides a visual companion to the AI-driven analysis, letting you observe and interact with the investigation as it happens.
+
+- **Overview** -- Binary summary with risk score, packing status, security mitigations, key findings, and recent notes
+- **Functions** -- Sortable function explorer with triage buttons (FLAG / SUS / CLN) -- flagged functions are automatically prioritised by the AI in subsequent analysis
+- **Call Graph** -- Interactive Cytoscape.js call graph with zoom, pan, and node selection
+- **Sections** -- PE/ELF section permissions with anomaly highlighting (W+X detection)
+- **Timeline** -- Chronological log of every tool call and note, with expandable detail panels showing request parameters and result summaries
+- **Notes** -- Category-filtered view of all analysis notes (function, tool_result, IOC, hypothesis, manual)
+- **Real-time updates** -- SSE-driven live refresh as the AI runs tools
+
+The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard_token`). Access URL with token is printed at server startup.
 
 ---
 
@@ -149,6 +164,7 @@ For other MCP clients, local Python installation, and detailed configuration, se
 | **[Scenarios & Comparisons](docs/scenarios.md)** | Five real-world analysis walkthroughs; Arkana vs Ghidra, IDA Pro, CyberChef |
 | **[Architecture](docs/architecture.md)** | Package structure, design principles, pagination and result limits |
 | **[Security & Testing](docs/security.md)** | Path sandboxing, security measures, testing and CI/CD |
+| **Web Dashboard** | Real-time analysis dashboard on port 8082; function triage, call graph, timeline, notes |
 | **[Qiling Rootfs Setup](docs/QILING_ROOTFS.md)** | Windows DLL setup for Qiling cross-platform emulation |
 | **[Contributing](docs/CONTRIBUTING.md)** | Contribution guidelines and development workflow |
 

@@ -52,6 +52,7 @@ RUN pip install --no-cache-dir \
     joblib \
     numpy \
     "mcp[cli]" \
+    Jinja2 \
     rapidfuzz \
     networkx
 

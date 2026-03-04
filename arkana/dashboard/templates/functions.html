@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Function Explorer{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">FUNCTION EXPLORER</h1>
+</div>
+
+<div class="panel">
+    <div class="panel-header">FILTERS</div>
+    <div class="filter-bar">
+        <div class="filter-group">
+            <label>TRIAGE:</label>
+            <select id="filter-triage" onchange="reloadFunctions()">
+                <option value="all">ALL</option>
+                <option value="unreviewed">UNREVIEWED</option>
+                <option value="suspicious">SUSPICIOUS</option>
+                <option value="flagged">FLAGGED</option>
+                <option value="clean">CLEAN</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>SEARCH:</label>
+            <input type="text" id="filter-search" placeholder="function name or address" onkeyup="debounceReload()">
+        </div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">FUNCTIONS <span id="func-count" class="badge badge-dim">{{ data|length if data else 0 }}</span></div>
+    <div class="table-wrap">
+        <table class="data-table" id="func-table">
+            <thead>
+                <tr>
+                    <th class="sortable active" data-sort="address" onclick="sortBy('address')">ADDRESS <span class="sort-arrow">&#9650;</span></th>
+                    <th class="sortable" data-sort="name" onclick="sortBy('name')">NAME <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="size" onclick="sortBy('size')">SIZE <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="complexity" onclick="sortBy('complexity')">COMPLEXITY <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="triage" onclick="sortBy('triage')">TRIAGE <span class="sort-arrow"></span></th>
+                    <th>ACTIONS</th>
+                </tr>
+            </thead>
+            <tbody id="func-tbody">
+                {% if data %}
+                {% for f in data %}
+                {% include "partials/_function_row.html" %}
+                {% endfor %}
+                {% else %}
+                <tr><td colspan="6" class="empty-msg">No functions loaded. Load a binary and wait for angr CFG analysis.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+var _debounceTimer;
+var _currentSort = 'address';
+var _sortAsc = true;
+
+function debounceReload() {
+    clearTimeout(_debounceTimer);
+    _debounceTimer = setTimeout(reloadFunctions, 300);
+}
+function sortBy(col) {
+    if (_currentSort === col) {
+        _sortAsc = !_sortAsc;
+    } else {
+        _currentSort = col;
+        _sortAsc = true;
+    }
+    // Update header arrows
+    document.querySelectorAll('#func-table th.sortable').forEach(function(th) {
+        var arrow = th.querySelector('.sort-arrow');
+        if (th.dataset.sort === col) {
+            th.classList.add('active');
+            arrow.innerHTML = _sortAsc ? '&#9650;' : '&#9660;';
+        } else {
+            th.classList.remove('active');
+            arrow.innerHTML = '';
+        }
+    });
+    reloadFunctions();
+}
+function reloadFunctions() {
+    var triage = document.getElementById('filter-triage').value;
+    var search = document.getElementById('filter-search').value;
+    var url = '/dashboard/api/functions?triage=' + encodeURIComponent(triage) +
+              '&search=' + encodeURIComponent(search) +
+              '&sort=' + encodeURIComponent(_currentSort) +
+              '&asc=' + (_sortAsc ? '1' : '0');
+    fetch(url).then(r => r.json()).then(function(data) {
+        var tbody = document.getElementById('func-tbody');
+        document.getElementById('func-count').textContent = data.length;
+        if (!data.length) {
+            tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">No matching functions.</td></tr>';
+            return;
+        }
+        var html = '';
+        data.forEach(function(f) {
+            var noteClass = f.has_note ? ' has-note' : '';
+            var noteIndicator = f.has_note ? ' <span class="note-indicator" title="Has notes">*</span>' : '';
+            html += '<tr class="triage-' + f.triage_status + noteClass + '">';
+            html += '<td class="mono">' + f.address + '</td>';
+            html += '<td>' + escapeHtml(f.name) + noteIndicator + '</td>';
+            html += '<td>' + f.size + '</td>';
+            html += '<td>' + f.complexity + '</td>';
+            html += '<td><span class="badge badge-' + f.triage_status + '">' + f.triage_status.toUpperCase() + '</span></td>';
+            html += '<td class="triage-btns">';
+            html += '<button class="btn-triage btn-flag' + (f.triage_status === 'flagged' ? ' active' : '') + '" onclick="setTriage(\'' + f.address + '\',\'flagged\')">FLAG</button>';
+            html += '<button class="btn-triage btn-suspicious' + (f.triage_status === 'suspicious' ? ' active' : '') + '" onclick="setTriage(\'' + f.address + '\',\'suspicious\')">SUS</button>';
+            html += '<button class="btn-triage btn-clean' + (f.triage_status === 'clean' ? ' active' : '') + '" onclick="setTriage(\'' + f.address + '\',\'clean\')">CLN</button>';
+            html += '</td></tr>';
+            if (f.has_note && f.notes) {
+                html += '<tr class="note-row">';
+                html += '<td colspan="6"><div class="func-notes">';
+                f.notes.forEach(function(n) {
+                    html += '<div class="func-note-text">' + escapeHtml(n) + '</div>';
+                });
+                html += '</div></td></tr>';
+            }
+        });
+        tbody.innerHTML = html;
+    });
+}
+function escapeHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+function setTriage(addr, status) {
+    fetch('/dashboard/api/triage', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({address: addr, status: status})
+    }).then(function() { reloadFunctions(); });
+}
+</script>
+{% endblock %}

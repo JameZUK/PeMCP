@@ -295,6 +295,9 @@ Establish what we're looking at. One or two calls maximum.
    - Rust: `rust_analyze()`
    - Unknown: `detect_binary_format()`
 5. **Reputation** (malware goals, risk_score >= 4): `get_virustotal_report_for_loaded_file()`
+6. **Check analyst flags**: `get_session_summary()` — if `user_triage_flags` is present,
+   the analyst has flagged functions via the web dashboard. Prioritise investigating
+   `flagged` functions in Phase 3. `suggest_next_action()` also surfaces these.
 
 **Decision point**: If packing is detected (likely_packed=true, max_section_entropy > 7.2,
 import count < 10, or PEiD matches), proceed to Phase 2. Otherwise skip to Phase 3.

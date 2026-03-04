@@ -48,6 +48,9 @@ class AnalyzerState:
         # API key for HTTP bearer token authentication (None = no auth required)
         self.api_key: Optional[str] = None
 
+        # Dashboard token (set by dashboard app on startup)
+        self.dashboard_token: Optional[str] = None
+
         # PE close guard
         self._pe_lock = threading.Lock()
 
@@ -85,6 +88,10 @@ class AnalyzerState:
             "variables": {},   # func_addr_hex -> {old_name: new_name}
             "labels": {},      # addr_hex -> {"name": str, "category": str}
         }
+
+        # Triage status (persisted per-binary via cache)
+        self._triage_lock = threading.Lock()
+        self.triage_status: Dict[str, str] = {}  # addr_hex -> "unreviewed"|"suspicious"|"clean"|"flagged"
 
         # Custom types (persisted per-binary via cache)
         self._types_lock = threading.Lock()
@@ -468,6 +475,38 @@ class AnalyzerState:
         with self._types_lock:
             count = len(self.custom_types["structs"]) + len(self.custom_types["enums"])
             self.custom_types = {"structs": {}, "enums": {}}
+            return count
+
+    # ------------------------------------------------------------------
+    #  Triage status accessors
+    # ------------------------------------------------------------------
+
+    def set_triage_status(self, address: str, status: str) -> Dict[str, str]:
+        """Thread-safe triage status update. Returns the entry."""
+        addr = address.lower()
+        if status not in ("unreviewed", "suspicious", "clean", "flagged"):
+            raise ValueError(f"Invalid triage status: {status}")
+        with self._triage_lock:
+            self.triage_status[addr] = status
+            return {"address": addr, "status": status}
+
+    def get_triage_status(self, address: Optional[str] = None) -> Any:
+        """Thread-safe read of triage status."""
+        with self._triage_lock:
+            if address:
+                return self.triage_status.get(address.lower(), "unreviewed")
+            return dict(self.triage_status)
+
+    def get_all_triage_snapshot(self) -> Dict[str, str]:
+        """Thread-safe snapshot for cache persistence."""
+        with self._triage_lock:
+            return dict(self.triage_status)
+
+    def clear_triage(self) -> int:
+        """Thread-safe clear. Returns count removed."""
+        with self._triage_lock:
+            count = len(self.triage_status)
+            self.triage_status = {}
             return count
 
     # ------------------------------------------------------------------

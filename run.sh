@@ -163,9 +163,11 @@ cmd_stdio() {
     echo "[*] Starting Arkana in stdio MCP mode..." >&2
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)" >&2
     echo "[*] Config/cache (.arkana): $CACHE_DIR" >&2
+    echo "[*] Dashboard will be available at: http://127.0.0.1:$CONTAINER_PORT/dashboard/" >&2
     # shellcheck disable=SC2046
     $RUNTIME run -i \
         $(common_args) \
+        -p "$CONTAINER_PORT:8082" \
         "$IMAGE_NAME" \
         --mcp-server \
         --samples-path "$CONTAINER_SAMPLES" \

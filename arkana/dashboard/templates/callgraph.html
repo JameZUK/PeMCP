@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Call Graph{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/cytoscape.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">CALL GRAPH</h1>
+    <div class="header-controls">
+        <label>LAYOUT:</label>
+        <select id="layout-select" onchange="changeLayout()">
+            <option value="dagre">DAGRE</option>
+            <option value="breadthfirst">BREADTHFIRST</option>
+            <option value="cose">COSE</option>
+            <option value="circle">CIRCLE</option>
+        </select>
+        <button class="btn" onclick="fitGraph()">FIT</button>
+        <button class="btn" onclick="loadGraph()">RELOAD</button>
+    </div>
+</div>
+
+<div class="panel graph-panel">
+    <div id="cy" class="cytoscape-container"></div>
+    <div id="node-info" class="node-sidebar hidden">
+        <div class="panel-header">FUNCTION DETAILS</div>
+        <div id="node-details"></div>
+    </div>
+</div>
+
+<script>
+var cy = null;
+function initCytoscape(elements) {
+    cy = cytoscape({
+        container: document.getElementById('cy'),
+        elements: elements,
+        style: [
+            {selector: 'node', style: {
+                'background-color': '#001a00',
+                'border-color': '#00ff41',
+                'border-width': 2,
+                'label': 'data(label)',
+                'color': '#00ff41',
+                'font-family': 'Courier New, monospace',
+                'font-size': '10px',
+                'text-valign': 'bottom',
+                'text-margin-y': 4,
+                'width': 'mapData(complexity, 0, 50, 20, 60)',
+                'height': 'mapData(complexity, 0, 50, 20, 60)',
+            }},
+            {selector: 'node[triage="clean"]', style: {'border-color': '#00ff41', 'background-color': '#003300'}},
+            {selector: 'node[triage="flagged"]', style: {'border-color': '#ff4141', 'background-color': '#330000'}},
+            {selector: 'node[triage="suspicious"]', style: {'border-color': '#ffaa00', 'background-color': '#332200'}},
+            {selector: 'node[triage="unreviewed"]', style: {'border-color': '#009922', 'background-color': '#001200'}},
+            {selector: 'edge', style: {
+                'width': 1,
+                'line-color': '#009922',
+                'target-arrow-color': '#009922',
+                'target-arrow-shape': 'triangle',
+                'curve-style': 'bezier',
+                'opacity': 0.7,
+            }},
+            {selector: ':selected', style: {
+                'border-color': '#ccffcc',
+                'border-width': 3,
+            }},
+        ],
+        layout: {name: 'breadthfirst', directed: true, spacingFactor: 1.2},
+        minZoom: 0.1,
+        maxZoom: 5,
+        wheelSensitivity: 0.5,
+    });
+
+    cy.on('tap', 'node', function(evt) {
+        var data = evt.target.data();
+        var info = document.getElementById('node-info');
+        var details = document.getElementById('node-details');
+        details.innerHTML =
+            '<div class="detail-row"><span class="detail-label">ADDRESS:</span> ' + data.id + '</div>' +
+            '<div class="detail-row"><span class="detail-label">NAME:</span> ' + data.label + '</div>' +
+            '<div class="detail-row"><span class="detail-label">COMPLEXITY:</span> ' + data.complexity + '</div>' +
+            '<div class="detail-row"><span class="detail-label">TRIAGE:</span> <span class="badge badge-' + data.triage + '">' + data.triage.toUpperCase() + '</span></div>';
+        info.classList.remove('hidden');
+    });
+}
+function loadGraph() {
+    fetch('/dashboard/api/callgraph').then(r => r.json()).then(function(data) {
+        var elements = data.nodes.concat(data.edges);
+        if (cy) cy.destroy();
+        if (!elements.length) {
+            document.getElementById('cy').innerHTML = '<div class="empty-msg">No call graph data. Load a binary and wait for angr CFG analysis.</div>';
+            return;
+        }
+        initCytoscape(elements);
+    });
+}
+function changeLayout() {
+    if (!cy) return;
+    var name = document.getElementById('layout-select').value;
+    cy.layout({name: name, directed: true, spacingFactor: 1.2, animate: true}).run();
+}
+function fitGraph() {
+    if (cy) cy.fit();
+}
+document.addEventListener('DOMContentLoaded', loadGraph);
+</script>
+{% endblock %}

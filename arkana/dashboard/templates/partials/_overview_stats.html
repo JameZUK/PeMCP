@@ -1,0 +1,162 @@
+{% if data and data.file_loaded %}
+{% set bs = data.binary_summary or {} %}
+<div class="stats-grid">
+    <div class="panel stat-card">
+        <div class="panel-header">FILE</div>
+        <div class="stat-value">{{ data.filename or 'None' }}</div>
+        <div class="stat-detail mono">{{ data.format }}{% if bs.file_size %} &middot; {{ (bs.file_size / 1024)|round(1) }} KB{% endif %}{% if bs.language %} &middot; {{ bs.language }}{% endif %}</div>
+    </div>
+    <div class="panel stat-card">
+        <div class="panel-header">RISK</div>
+        {% if bs.risk_level %}
+        <div class="stat-value {% if bs.risk_level == 'CRITICAL' %}danger{% elif bs.risk_level == 'HIGH' %}warning{% endif %}">
+            {{ bs.risk_level }} <span class="dim">({{ bs.risk_score }})</span>
+        </div>
+        {% else %}
+        <div class="stat-value dim">NOT TRIAGED</div>
+        {% endif %}
+    </div>
+    <div class="panel stat-card">
+        <div class="panel-header">PHASE</div>
+        <div class="stat-value">
+            <span class="badge badge-phase-{{ data.phase }}">{{ data.phase|upper|replace('_', ' ') }}</span>
+        </div>
+    </div>
+    <div class="panel stat-card">
+        <div class="panel-header">FUNCTIONS</div>
+        <div class="stat-value">{{ data.explored_functions }} / {{ data.total_functions }}</div>
+        {% if data.total_functions > 0 %}
+        <div class="progress-bar">
+            <div class="progress-fill" style="width: {{ (data.explored_functions / data.total_functions * 100)|int }}%"></div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Binary Summary Panel -->
+{% if bs.risk_level or bs.peid %}
+<div class="panel">
+    <div class="panel-header">BINARY ANALYSIS SUMMARY</div>
+    <div class="summary-grid">
+        <div class="summary-section">
+            <div class="summary-section-title">PROPERTIES</div>
+            <div class="summary-row">
+                <span class="summary-label">PACKING:</span>
+                <span>{% if bs.likely_packed %}<span class="danger">PACKED</span>{% if bs.packer_name %} ({{ bs.packer_name }}){% endif %}{% else %}<span class="safe">NOT PACKED</span>{% endif %}</span>
+            </div>
+            <div class="summary-row">
+                <span class="summary-label">SIGNATURE:</span>
+                <span>{% if bs.signed %}<span class="safe">SIGNED</span>{% if bs.signer %} — {{ bs.signer }}{% endif %}{% else %}<span class="warning">UNSIGNED</span>{% endif %}</span>
+            </div>
+            {% if bs.entropy %}
+            <div class="summary-row">
+                <span class="summary-label">ENTROPY:</span>
+                <span>{{ bs.entropy|round(2) }}{% if bs.entropy > 7.0 %} <span class="danger">(HIGH)</span>{% endif %}</span>
+            </div>
+            {% endif %}
+            {% if bs.compile_time %}
+            <div class="summary-row">
+                <span class="summary-label">COMPILED:</span>
+                <span>{{ bs.compile_time }}{% if bs.timestamp_suspicious %} <span class="danger">(SUSPICIOUS)</span>{% endif %}</span>
+            </div>
+            {% endif %}
+            <div class="summary-row">
+                <span class="summary-label">IMPORTS:</span>
+                <span>{{ bs.import_functions or 0 }} functions from {{ bs.import_dlls or 0 }} DLLs{% if bs.suspicious_import_count %} &middot; <span class="warning">{{ bs.suspicious_import_count }} suspicious</span>{% endif %}</span>
+            </div>
+            {% if bs.peid %}
+            <div class="summary-row">
+                <span class="summary-label">PEID:</span>
+                <span class="dim">{{ bs.peid|join(', ') }}</span>
+            </div>
+            {% endif %}
+        </div>
+        <div class="summary-section">
+            <div class="summary-section-title">SECURITY MITIGATIONS</div>
+            {% if bs.aslr is defined %}
+            <div class="summary-row">
+                <span class="summary-label">ASLR:</span>
+                <span>{% if bs.aslr %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
+            </div>
+            <div class="summary-row">
+                <span class="summary-label">DEP:</span>
+                <span>{% if bs.dep %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
+            </div>
+            <div class="summary-row">
+                <span class="summary-label">CFG:</span>
+                <span>{% if bs.cfg %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
+            </div>
+            {% else %}
+            <div class="summary-row dim">Run triage to see mitigations</div>
+            {% endif %}
+        </div>
+    </div>
+    {% if bs.top_findings %}
+    <div class="summary-findings">
+        <div class="summary-section-title">KEY FINDINGS</div>
+        {% for finding in bs.top_findings %}
+        <div class="finding-item">&#9656; {{ finding }}</div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% if bs.ioc_count and bs.ioc_count > 0 %}
+    <div class="summary-row" style="padding: 4px 12px;">
+        <span class="summary-label">NETWORK IOCs:</span>
+        <span class="danger">{{ bs.ioc_count }} indicators found</span>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+<!-- Activity Panel -->
+<div class="stats-grid">
+    <div class="panel stat-card">
+        <div class="panel-header">ACTIVITY</div>
+        <div class="stat-row"><span class="stat-label">TOOL CALLS:</span> <span>{{ data.tool_calls }}</span></div>
+        <div class="stat-row"><span class="stat-label">NOTES:</span> <span>{{ data.notes_count }}</span></div>
+        <div class="stat-row"><span class="stat-label">RENAMES:</span> <span>{{ data.rename_count or 0 }}</span></div>
+        <div class="stat-row"><span class="stat-label">ARTIFACTS:</span> <span>{{ data.artifacts_count }}</span></div>
+        {% if data.triage_counts %}
+        <div class="stat-row" style="margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--primary-ghost);">
+            <span class="stat-label">FLAGGED:</span>
+            <span>{% if data.triage_counts.get('flagged') %}<span class="danger">{{ data.triage_counts.flagged }}</span>{% else %}0{% endif %}</span>
+        </div>
+        <div class="stat-row">
+            <span class="stat-label">SUSPICIOUS:</span>
+            <span>{% if data.triage_counts.get('suspicious') %}<span class="warning">{{ data.triage_counts.suspicious }}</span>{% else %}0{% endif %}</span>
+        </div>
+        {% endif %}
+    </div>
+    <div class="panel stat-card">
+        <div class="panel-header">RECENT NOTES</div>
+        {% if data.recent_notes %}
+        {% for n in data.recent_notes %}
+        <div class="recent-note">
+            <div class="recent-note-header">
+                <span class="badge badge-cat-{{ n.category }}">{{ n.category }}</span>
+                {% if n.address %}<span class="mono dim">{{ n.address }}</span>{% endif %}
+                <span class="dim" style="margin-left: auto; font-size: 10px;">{{ n.timestamp }}</span>
+            </div>
+            <div class="recent-note-content">{{ n.content }}</div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-msg dim" style="padding: 12px;">No notes yet.</div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Hashes -->
+<div class="panel hash-panel">
+    <div class="panel-header">HASHES</div>
+    <div class="hash-row"><span class="hash-label">SHA256:</span> <span class="mono hash-value">{{ data.sha256 or 'N/A' }}</span></div>
+    <div class="hash-row"><span class="hash-label">MD5:</span> <span class="mono hash-value">{{ data.md5 or 'N/A' }}</span></div>
+</div>
+{% else %}
+<div class="panel">
+    <div class="empty-msg">
+        NO FILE LOADED<br>
+        <span class="dim">Load a binary via MCP tools (open_file) to begin analysis.</span>
+    </div>
+</div>
+{% endif %}

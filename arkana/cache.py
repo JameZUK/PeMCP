@@ -210,7 +210,8 @@ class AnalysisCache:
             notes: Optional[list] = None, tool_history: Optional[list] = None,
             artifacts: Optional[list] = None,
             renames: Optional[dict] = None,
-            custom_types: Optional[dict] = None) -> bool:
+            custom_types: Optional[dict] = None,
+            triage_status: Optional[dict] = None) -> bool:
         """
         Store a ``pe_data`` dict in the cache.  Returns True on success.
 
@@ -248,6 +249,7 @@ class AnalysisCache:
             "artifacts": artifacts or [],
             "renames": renames or {"functions": {}, "variables": {}, "labels": {}},
             "custom_types": custom_types or {"structs": {}, "enums": {}},
+            "triage_status": triage_status or {},
         }
 
         # Compress OUTSIDE the lock — this can be slow for large analyses
@@ -387,6 +389,7 @@ class AnalysisCache:
             "artifacts": wrapper.get("artifacts", []),
             "renames": wrapper.get("renames", {"functions": {}, "variables": {}, "labels": {}}),
             "custom_types": wrapper.get("custom_types", {"structs": {}, "enums": {}}),
+            "triage_status": wrapper.get("triage_status", {}),
         }
 
     def update_session_data(self, sha256: str,
@@ -394,8 +397,9 @@ class AnalysisCache:
                             tool_history: Optional[list] = None,
                             artifacts: Optional[list] = None,
                             renames: Optional[dict] = None,
-                            custom_types: Optional[dict] = None) -> bool:
-        """Update notes, tool_history, artifacts, renames, and/or custom_types for an existing cache entry.
+                            custom_types: Optional[dict] = None,
+                            triage_status: Optional[dict] = None) -> bool:
+        """Update notes, tool_history, artifacts, renames, custom_types, and/or triage_status for an existing cache entry.
 
         Reads the gzip wrapper, replaces the specified keys, and writes
         it back atomically.  Returns True on success.
@@ -422,6 +426,8 @@ class AnalysisCache:
                     wrapper["renames"] = renames
                 if custom_types is not None:
                     wrapper["custom_types"] = custom_types
+                if triage_status is not None:
+                    wrapper["triage_status"] = triage_status
                 tmp = entry_path.with_suffix(".tmp")
                 with gzip.open(tmp, "wt", encoding="utf-8") as f:
                     json.dump(wrapper, f)

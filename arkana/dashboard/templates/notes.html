@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Notes{% endblock %}
+
+{% block content %}
+{% set cat = active_category if active_category is defined else 'all' %}
+<div class="page-header">
+    <h1 class="glow">NOTES &amp; ANNOTATIONS</h1>
+</div>
+
+<div class="panel">
+    <div class="panel-header">CATEGORIES</div>
+    <div class="tab-bar">
+        <a href="/dashboard/notes" class="tab {% if cat == 'all' %}active{% endif %}">ALL</a>
+        <a href="/dashboard/notes?category=general" class="tab {% if cat == 'general' %}active{% endif %}">GENERAL</a>
+        <a href="/dashboard/notes?category=function" class="tab {% if cat == 'function' %}active{% endif %}">FUNCTION</a>
+        <a href="/dashboard/notes?category=tool_result" class="tab {% if cat == 'tool_result' %}active{% endif %}">TOOL RESULT</a>
+        <a href="/dashboard/notes?category=ioc" class="tab {% if cat == 'ioc' %}active{% endif %}">IOC</a>
+        <a href="/dashboard/notes?category=hypothesis" class="tab {% if cat == 'hypothesis' %}active{% endif %}">HYPOTHESIS</a>
+        <a href="/dashboard/notes?category=manual" class="tab {% if cat == 'manual' %}active{% endif %}">MANUAL</a>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">NOTES <span class="badge badge-dim">{{ data|length if data else 0 }}</span></div>
+    {% if data %}
+    <div class="notes-list">
+        {% for n in data %}
+        <div class="note-card">
+            <div class="note-header">
+                <span class="badge badge-cat-{{ n.category }}">{{ n.category|upper }}</span>
+                {% if n.address %}
+                <span class="mono note-addr">{{ n.address }}</span>
+                {% endif %}
+                {% if n.tool_name %}
+                <span class="dim" style="font-size: 11px;">via {{ n.tool_name }}</span>
+                {% endif %}
+                <span class="note-time">{{ n.created_at[:19] if n.created_at else '' }}</span>
+            </div>
+            <div class="note-content">{{ n.content }}</div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-msg">No {% if cat != 'all' %}{{ cat }}{% endif %} notes yet.</div>
+    {% endif %}
+</div>
+{% endblock %}

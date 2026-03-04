@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Arkana Dashboard{% endblock %}</title>
+    <link rel="stylesheet" href="/dashboard/static/crt.css">
+    <link rel="icon" href="/dashboard/static/logo_icon.svg" type="image/svg+xml">
+</head>
+<body>
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+
+    <nav class="top-nav">
+        <div class="nav-brand">
+            <img src="/dashboard/static/logo_icon.svg" alt="Arkana" class="nav-logo">
+            <span class="nav-title">ARKANA</span>
+        </div>
+        <div class="nav-links">
+            <a href="/dashboard/" class="nav-link {% if nav_active == 'overview' %}active{% endif %}">OVERVIEW</a>
+            <a href="/dashboard/functions" class="nav-link {% if nav_active == 'functions' %}active{% endif %}">FUNCTIONS</a>
+            <a href="/dashboard/callgraph" class="nav-link {% if nav_active == 'callgraph' %}active{% endif %}">CALL GRAPH</a>
+            <a href="/dashboard/sections" class="nav-link {% if nav_active == 'sections' %}active{% endif %}">SECTIONS</a>
+            <a href="/dashboard/timeline" class="nav-link {% if nav_active == 'timeline' %}active{% endif %}">TIMELINE</a>
+            <a href="/dashboard/notes" class="nav-link {% if nav_active == 'notes' %}active{% endif %}">NOTES</a>
+        </div>
+    </nav>
+
+    <main class="content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script src="/dashboard/static/htmx.min.js"></script>
+    {% block scripts %}{% endblock %}
+    <script src="/dashboard/static/dashboard.js"></script>
+</body>
+</html>

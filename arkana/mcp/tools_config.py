@@ -502,9 +502,21 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
         "file_loaded": state.filepath is not None,
         "loaded_filepath": state.filepath,
         "samples_path": state.samples_path,
+        "state_id": id(state),
+        "pid": os.getpid(),
     }
 
     # Add environment/path information
     config["_environment"] = _get_environment_info()
+
+    # Add dashboard info if available
+    dashboard_token = getattr(state, "dashboard_token", None)
+    if dashboard_token:
+        dashboard_port = os.environ.get("ARKANA_DASHBOARD_PORT", "8082")
+        config["_dashboard"] = {
+            "dashboard_url": f"http://127.0.0.1:{dashboard_port}/dashboard/",
+            "dashboard_token": dashboard_token,
+            "dashboard_login_url": f"http://127.0.0.1:{dashboard_port}/dashboard/?token={dashboard_token}",
+        }
 
     return config

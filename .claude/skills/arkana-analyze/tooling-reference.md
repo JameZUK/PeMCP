@@ -358,10 +358,12 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `get_analysis_digest` | Aggregated findings summary (call at phase transitions) | — |
+| `get_analysis_digest` | Aggregated findings summary (call at phase transitions); includes `user_flagged_functions` from dashboard triage | — |
 | `get_progress_overview` | Analysis coverage and gaps | — |
-| `suggest_next_action` | AI-suggested next analysis steps | — |
+| `suggest_next_action` | AI-suggested next analysis steps; prioritises dashboard-flagged functions | — |
 | `list_tools_by_phase` | Tools organized by workflow phase | — |
+
+> **Dashboard triage integration:** The web dashboard (port 8082) allows the analyst to flag functions as FLAG/SUS/CLN via the Functions page. These triage flags are surfaced in `get_session_summary()` (`user_triage_flags`), `get_analysis_digest()` (`user_flagged_functions`), and `suggest_next_action()` (flagged functions inserted at top priority). Always check these tools for analyst-flagged targets before selecting your own.
 
 ## Reporting & Export
 

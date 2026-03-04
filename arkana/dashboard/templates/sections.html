@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Section Map{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">BINARY SECTION MAP</h1>
+</div>
+
+<div class="panel">
+    <div class="panel-header">SECTIONS</div>
+    {% if data %}
+    <div class="section-bars">
+        {% for s in data %}
+        <div class="section-bar-row">
+            <div class="section-label">{{ s.name }}</div>
+            <div class="section-bar-track">
+                <div class="section-bar-fill perm-{{ s.permissions|lower|replace('?','u') }}"
+                     style="width: {{ [100, (s.virtual_size / (data|map(attribute='virtual_size')|max or 1) * 100)|int]|min }}%"
+                     title="{{ s.name }} | VA: {{ s.virtual_address }} | VSize: {{ s.virtual_size }} | Raw: {{ s.raw_size }} | Entropy: {{ '%.2f'|format(s.entropy) }} | Perms: {{ s.permissions }}">
+                    <span class="section-bar-text">{{ s.permissions }}</span>
+                </div>
+            </div>
+            <div class="section-meta">
+                <span class="badge badge-dim">{{ '%.2f'|format(s.entropy) }}H</span>
+                {% if s.entropy > 7.0 %}
+                <span class="badge badge-danger">HIGH ENTROPY</span>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>NAME</th>
+                    <th>VIRTUAL ADDR</th>
+                    <th>VIRTUAL SIZE</th>
+                    <th>RAW SIZE</th>
+                    <th>ENTROPY</th>
+                    <th>PERMISSIONS</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for s in data %}
+                <tr>
+                    <td>{{ s.name }}</td>
+                    <td class="mono">{{ s.virtual_address }}</td>
+                    <td>{{ s.virtual_size }}</td>
+                    <td>{{ s.raw_size }}</td>
+                    <td>{{ '%.2f'|format(s.entropy) }}</td>
+                    <td><span class="badge badge-perm-{{ s.permissions|lower|replace('?','u') }}">{{ s.permissions }}</span></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="empty-msg">No section data. Load a PE binary to view sections.</div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -147,6 +147,21 @@ async def get_session_summary(
                 "cfg_available": cfg is not None,
             }
 
+    # Dashboard triage flags (user-tagged functions)
+    triage_snapshot = state.get_all_triage_snapshot()
+    if triage_snapshot:
+        flagged = [addr for addr, s in triage_snapshot.items() if s == "flagged"]
+        suspicious = [addr for addr, s in triage_snapshot.items() if s == "suspicious"]
+        clean = [addr for addr, s in triage_snapshot.items() if s == "clean"]
+        triage_info = {"total_tagged": len(triage_snapshot)}
+        if flagged:
+            triage_info["flagged"] = flagged
+        if suspicious:
+            triage_info["suspicious"] = suspicious
+        if clean:
+            triage_info["clean"] = clean
+        result["user_triage_flags"] = triage_info
+
     # Suggested next tools
     suggested = []
     ran_tools = set(h["tool_name"] for h in current_history)
@@ -326,6 +341,22 @@ async def get_analysis_digest(
     ]
     if general_notes:
         result["analyst_notes"] = general_notes[:10]
+
+    # Dashboard triage flags (user-tagged functions)
+    triage_snapshot = state.get_all_triage_snapshot()
+    if triage_snapshot:
+        flagged = [addr for addr, s in triage_snapshot.items() if s == "flagged"]
+        suspicious = [addr for addr, s in triage_snapshot.items() if s == "suspicious"]
+        if flagged or suspicious:
+            result["user_flagged_functions"] = {}
+            if flagged:
+                result["user_flagged_functions"]["flagged"] = flagged
+            if suspicious:
+                result["user_flagged_functions"]["suspicious"] = suspicious
+            result["user_flagged_functions"]["hint"] = (
+                "These functions were flagged by the analyst via the dashboard. "
+                "Prioritize investigating them with decompile_function_with_angr()."
+            )
 
     # Analysis phase
     result["analysis_phase"] = _detect_analysis_phase()
@@ -683,6 +714,26 @@ def _build_suggestions(max_suggestions: int = 5) -> List[Dict[str, str]]:
                 suggestions.append({
                     "tool": "try_all_unpackers()",
                     "rationale": f"Binary appears packed ({packing.get('packer_name', 'unknown')}). Try automated unpacking.",
+                })
+
+    # --- User-flagged functions from dashboard (highest priority) ---
+    user_triage = state.get_all_triage_snapshot()
+    if user_triage and ANGR_AVAILABLE:
+        flagged_addrs = [addr for addr, s in user_triage.items() if s == "flagged"]
+        suspicious_addrs = [addr for addr, s in user_triage.items() if s == "suspicious"]
+        explored_addrs_for_triage = {n.get("address") for n in notes if n.get("category") == "function"}
+        # Prioritize flagged functions that haven't been noted yet
+        for addr in flagged_addrs[:3]:
+            if addr not in explored_addrs_for_triage:
+                suggestions.insert(0, {
+                    "tool": f"decompile_function_with_angr(function_address='{addr}')",
+                    "rationale": f"FLAGGED by analyst via dashboard — priority investigation target.",
+                })
+        for addr in suspicious_addrs[:2]:
+            if addr not in explored_addrs_for_triage:
+                suggestions.append({
+                    "tool": f"decompile_function_with_angr(function_address='{addr}')",
+                    "rationale": f"Marked SUSPICIOUS by analyst via dashboard — investigate.",
                 })
 
     # --- Phase: exploring / advanced ---

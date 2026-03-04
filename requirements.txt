@@ -43,6 +43,8 @@ requests>=2.28
 # --- Server Infrastructure ---
 # Model Context Protocol SDK
 mcp[cli]>=1.0
+# Template engine (for dashboard)
+Jinja2>=3.1
 
 # --- Graph Analysis (used directly for angr CFG processing) ---
 networkx>=3.0

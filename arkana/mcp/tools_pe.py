@@ -233,6 +233,7 @@ async def open_file(
                         state.artifacts = session_meta.get("artifacts", [])
                         state.renames = session_meta.get("renames", {"functions": {}, "variables": {}, "labels": {}})
                         state.custom_types = session_meta.get("custom_types", {"structs": {}, "enums": {}})
+                        state.triage_status = session_meta.get("triage_status", {})
 
                     # Restore cached triage data if available in pe_data
                     cached_triage = cached.get('_cached_triage')
@@ -493,6 +494,7 @@ async def close_file(ctx: Context) -> Dict[str, str]:
             artifacts=state.get_all_artifacts_snapshot(),
             renames=state.get_all_renames_snapshot(),
             custom_types=state.get_all_types_snapshot(),
+            triage_status=state.get_all_triage_snapshot(),
         )
 
     # Use atomic reset methods (safe for shared references from default state)
@@ -506,6 +508,7 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     state.clear_artifacts()
     state.clear_renames()
     state.clear_custom_types()
+    state.clear_triage()
     state.previous_session_history = []
 
     await ctx.info(f"Closed file: {closed_path}")

@@ -1,0 +1,56 @@
+{% set entries = entries if entries is defined else (data if data is defined else []) %}
+{% if entries %}
+<div class="timeline">
+    {% for e in entries %}
+    <div class="timeline-entry type-{{ e.type }}" data-entry-id="{{ e.type }}-{{ e.name }}-{{ e.timestamp[:19] if e.timestamp else loop.index }}" onclick="toggleTimelineDetail(this)">
+        <div class="timeline-dot"></div>
+        <div class="timeline-content">
+            <div class="timeline-header">
+                <span class="badge badge-{{ e.type }}">{{ e.type|upper }}</span>
+                <span class="timeline-name">{{ e.name }}</span>
+                {% if e.duration_ms > 0 %}
+                <span class="dim">{{ e.duration_ms }}ms</span>
+                {% endif %}
+                <span class="timeline-expand dim">&#9654;</span>
+            </div>
+            <div class="timeline-summary">{{ e.summary }}</div>
+            <div class="timeline-time dim">{{ e.timestamp[:19] if e.timestamp else '' }}</div>
+            {% if e.type == 'tool' and e.parameters %}
+            <div class="timeline-detail hidden">
+                <div class="detail-section">
+                    <div class="detail-section-title">REQUEST PARAMETERS</div>
+                    <div class="detail-section-body">
+                        {% for key, val in e.parameters.items() %}
+                        <div class="detail-param">
+                            <span class="detail-param-key">{{ key }}:</span>
+                            <span class="detail-param-val">{{ val }}</span>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% if e.summary %}
+                <div class="detail-section">
+                    <div class="detail-section-title">RESULT SUMMARY</div>
+                    <div class="detail-section-body">
+                        <div class="detail-result">{{ e.summary }}</div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% elif e.type == 'note' %}
+            <div class="timeline-detail hidden">
+                <div class="detail-section">
+                    <div class="detail-section-title">FULL NOTE</div>
+                    <div class="detail-section-body">
+                        <div class="detail-result">{{ e.summary }}</div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-msg dim">No timeline events yet.</div>
+{% endif %}

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arkana — Access Terminal</title>
+    <link rel="stylesheet" href="/dashboard/static/crt.css">
+    <link rel="icon" href="/dashboard/static/logo_icon.svg" type="image/svg+xml">
+</head>
+<body>
+    <div class="scanlines"></div>
+    <div class="vignette"></div>
+
+    <div class="login-container">
+        <div class="login-box">
+            <img src="/dashboard/static/logo_icon.svg" alt="Arkana" class="login-logo">
+            <div class="login-title">ARKANA TERMINAL</div>
+            <div class="login-subtitle">AUTHORIZATION REQUIRED</div>
+
+            {% if error %}
+            <div class="login-error">ACCESS DENIED — INVALID TOKEN</div>
+            {% endif %}
+
+            <form method="POST" action="/dashboard/login" class="login-form">
+                <label class="login-label" for="token">ENTER ACCESS TOKEN:</label>
+                <div class="login-input-row">
+                    <span class="login-prompt">&gt;</span>
+                    <input type="password" name="token" id="token" class="login-input" autofocus autocomplete="off" placeholder="&#x2588;">
+                </div>
+                <button type="submit" class="login-btn">AUTHENTICATE</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+    // Auto-login if ?token= is present
+    (function() {
+        var params = new URLSearchParams(window.location.search);
+        var token = params.get('token');
+        if (token) {
+            document.getElementById('token').value = token;
+            document.querySelector('.login-form').submit();
+        }
+    })();
+    </script>
+</body>
+</html>

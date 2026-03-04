@@ -179,6 +179,7 @@ def _parse_arguments() -> argparse.Namespace:
     mcp_group.add_argument("--allowed-paths", nargs="+", default=None, help="Restrict open_file to these directories (security sandbox for HTTP mode). Required for HTTP/SSE transports. Accepts multiple paths.")
     mcp_group.add_argument("--api-key", type=str, default=None, help="Bearer token for HTTP mode authentication. Clients must send 'Authorization: Bearer <key>' header. Can also be set via ARKANA_API_KEY env var.")
     mcp_group.add_argument("--samples-path", type=str, default=None, help="Path to the directory containing sample files for analysis. Exposed via the list_samples tool. Falls back to ARKANA_SAMPLES env var if not set.")
+    mcp_group.add_argument("--no-dashboard", action="store_true", help="Disable the web dashboard entirely. Can also be set via ARKANA_NO_DASHBOARD=1 env var.")
 
     args = None
     try:
@@ -504,6 +505,10 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
 
     logger.info("The MCP server is ready.")
 
+    # --- Dashboard configuration ---
+    dashboard_disabled = args.no_dashboard or os.environ.get("ARKANA_NO_DASHBOARD", "") == "1"
+    dashboard_port = int(os.environ.get("ARKANA_DASHBOARD_PORT", "8082"))
+
     if args.mcp_transport in ("sse", "streamable-http"):
         mcp_server.settings.host = args.mcp_host
         mcp_server.settings.port = args.mcp_port
@@ -512,6 +517,16 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
         logger.info("Starting MCP server (%s) on http://%s:%d", transport_label, args.mcp_host, args.mcp_port)
     else:
         logger.info("Starting MCP server (stdio).")
+        # Start dashboard in background thread for stdio mode
+        if not dashboard_disabled and dashboard_port > 0:
+            try:
+                from arkana.dashboard.app import start_dashboard_thread
+                # Bind to 0.0.0.0 so the dashboard is reachable from
+                # outside a container (port is mapped via -p in run.sh).
+                dashboard_host = os.environ.get("ARKANA_DASHBOARD_HOST", "0.0.0.0")
+                start_dashboard_thread(host=dashboard_host, port=dashboard_port)
+            except Exception as e:
+                logger.warning("Failed to start dashboard server: %s", e)
 
     # Translate SIGTERM into KeyboardInterrupt so the existing cleanup
     # path (finally block) runs identically for both Ctrl-C and container
@@ -523,25 +538,53 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
 
     server_exc = None
     try:
-        # If API key is configured for HTTP transport, wrap with auth middleware
-        if api_key and args.mcp_transport in ("sse", "streamable-http"):
+        # If using HTTP transport, compose the ASGI app
+        if args.mcp_transport in ("sse", "streamable-http"):
             try:
                 import uvicorn
                 from arkana.auth import BearerAuthMiddleware
 
                 if args.mcp_transport == "streamable-http":
-                    app = mcp_server.streamable_http_app()
+                    mcp_app = mcp_server.streamable_http_app()
                 else:
-                    app = mcp_server.sse_app()
-                secured_app = BearerAuthMiddleware(app, api_key)
+                    mcp_app = mcp_server.sse_app()
+
+                if api_key:
+                    mcp_app = BearerAuthMiddleware(mcp_app, api_key)
+
+                # Mount dashboard alongside MCP in HTTP mode
+                if not dashboard_disabled:
+                    try:
+                        from starlette.applications import Starlette
+                        from starlette.routing import Mount
+                        from arkana.dashboard.app import create_dashboard_app
+
+                        dashboard_app = create_dashboard_app()
+                        combined = Starlette(routes=[
+                            Mount("/dashboard", app=dashboard_app),
+                            Mount("/", app=mcp_app),
+                        ])
+                        from arkana.dashboard.app import _ensure_token
+                        token = _ensure_token()
+                        logger.info(
+                            "Dashboard: http://%s:%d/dashboard/?token=%s",
+                            args.mcp_host, args.mcp_port, token,
+                        )
+                        app = combined
+                    except Exception as e:
+                        logger.warning("Could not mount dashboard (%s), running MCP only", e)
+                        app = mcp_app
+                else:
+                    app = mcp_app
+
                 uvicorn.run(
-                    secured_app,
+                    app,
                     host=args.mcp_host,
                     port=args.mcp_port,
                     log_level=logging.getLevelName(log_level).lower(),
                 )
             except (ImportError, AttributeError) as e:
-                logger.warning("Could not apply auth middleware (%s), falling back to unauthenticated mode", e)
+                logger.warning("Could not start HTTP server (%s), falling back to basic mode", e)
                 mcp_server.run(transport=args.mcp_transport)
         else:
             mcp_server.run(transport=args.mcp_transport)

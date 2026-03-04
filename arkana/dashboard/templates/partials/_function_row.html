@@ -1,0 +1,23 @@
+<tr class="triage-{{ f.triage_status }}{% if f.has_note %} has-note{% endif %}">
+    <td class="mono">{{ f.address }}</td>
+    <td>{{ f.name }}{% if f.has_note %} <span class="note-indicator" title="Has notes">*</span>{% endif %}</td>
+    <td>{{ f.size }}</td>
+    <td>{{ f.complexity }}</td>
+    <td><span class="badge badge-{{ f.triage_status }}">{{ f.triage_status|upper }}</span></td>
+    <td class="triage-btns">
+        <button class="btn-triage btn-flag{% if f.triage_status == 'flagged' %} active{% endif %}" onclick="setTriage('{{ f.address }}','flagged')">FLAG</button>
+        <button class="btn-triage btn-suspicious{% if f.triage_status == 'suspicious' %} active{% endif %}" onclick="setTriage('{{ f.address }}','suspicious')">SUS</button>
+        <button class="btn-triage btn-clean{% if f.triage_status == 'clean' %} active{% endif %}" onclick="setTriage('{{ f.address }}','clean')">CLN</button>
+    </td>
+</tr>
+{% if f.has_note %}
+<tr class="note-row">
+    <td colspan="6">
+        <div class="func-notes">
+            {% for note in f.notes %}
+            <div class="func-note-text">{{ note }}</div>
+            {% endfor %}
+        </div>
+    </td>
+</tr>
+{% endif %}
