@@ -1,5 +1,6 @@
 """MCP tools for angr-based binary analysis - decompilation, CFG, symbolic execution, etc."""
 import datetime
+import time
 import uuid
 import asyncio
 import sys
@@ -7,10 +8,11 @@ import sys
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE, ANGR_ANALYSIS_TIMEOUT
+from arkana.state import TASK_RUNNING, TASK_FAILED
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
-from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
+from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
 from arkana.mcp._input_helpers import _ToolResultCache
 
 # Cache for paginated decompilation results — avoids re-decompiling when
@@ -45,11 +47,13 @@ async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, A
     analyses = {
         "decompilation": [
             {"tool": "decompile_function_with_angr", "params": "function_address",
-             "description": "Decompile a function to C-like pseudocode."},
+             "description": "Decompile a function to C-like pseudocode. Works without full CFG (builds local region CFG)."},
             {"tool": "get_annotated_disassembly", "params": "function_address, include_xrefs",
              "description": "Disassembly with variable names, xrefs, and comments."},
             {"tool": "disassemble_at_address", "params": "address, num_instructions",
-             "description": "Raw disassembly at a specific address."},
+             "description": "Raw disassembly at a specific address. Works without full CFG."},
+            {"tool": "get_angr_partial_functions", "params": "limit",
+             "description": "List functions discovered so far, even while CFG is building or timed out."},
         ],
         "cfg": [
             {"tool": "get_function_cfg", "params": "function_address",
@@ -158,6 +162,74 @@ async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, A
 
 
 @tool_decorator
+async def get_angr_partial_functions(
+    ctx: Context,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Lists functions discovered in angr's knowledge base, even
+    while CFG is still building or has timed out. Useful to see what angr has
+    found so far on packed/slow binaries.
+
+    When to use: When check_task_status('startup-angr') shows CFG is stalled or
+    timed out, use this to see which functions were discovered before it stopped.
+
+    Next steps: decompile_function_with_angr() on any discovered function (it will
+    build a local CFG automatically), or disassemble_at_address() for quick inspection.
+
+    Args:
+        limit: Max number of functions to return (default 50).
+    """
+    await ctx.info("Listing partially discovered angr functions")
+    _check_angr_ready("get_angr_partial_functions", require_cfg=False)
+
+    def _list_partial():
+        project = state.angr_project
+        if project is None:
+            return {"error": "No angr project loaded yet."}
+
+        functions = []
+        try:
+            kb_funcs = project.kb.functions
+        except Exception:
+            return {"error": "Could not access angr knowledge base."}
+
+        for addr, func in list(kb_funcs.items())[:limit]:
+            try:
+                block_count = len(list(func.blocks))
+            except Exception:
+                block_count = 0
+            functions.append({
+                "address": hex(addr),
+                "name": func.name,
+                "size": func.size,
+                "blocks": block_count,
+            })
+
+        cfg_status = "available" if state.angr_cfg is not None else "not_available"
+        startup_task = state.get_task("startup-angr")
+        if startup_task and startup_task["status"] == TASK_RUNNING:
+            cfg_status = "building"
+        elif startup_task and startup_task["status"] == TASK_FAILED:
+            cfg_status = "failed"
+
+        return {
+            "cfg_status": cfg_status,
+            "total_discovered": len(kb_funcs),
+            "returned": len(functions),
+            "functions": functions,
+            "hint": (
+                "decompile_function_with_angr() works on any of these functions — "
+                "it will build a local CFG automatically when the full CFG is unavailable."
+            ),
+        }
+
+    result = await asyncio.to_thread(_list_partial)
+    _raise_on_error_dict(result)
+    return await _check_mcp_response_size(ctx, result, "get_angr_partial_functions", "the 'limit' parameter")
+
+
+@tool_decorator
 async def decompile_function_with_angr(
     ctx: Context,
     function_address: str,
@@ -188,7 +260,7 @@ async def decompile_function_with_angr(
     """
 
     await ctx.info(f"Requesting Angr decompilation for: {function_address}")
-    _check_angr_ready("decompile_function_with_angr")
+    _check_angr_ready("decompile_function_with_angr", require_cfg=False)
     target_addr = _parse_addr(function_address)
 
     # Check cache first — serves subsequent pages without re-decompiling
@@ -220,32 +292,83 @@ async def decompile_function_with_angr(
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _decompile():
+        project, cfg = state.get_angr_snapshot()
+        used_local_cfg = False
 
-        _ensure_project_and_cfg()
+        if project is None:
+            _ensure_project_and_cfg()
+            project, cfg = state.get_angr_snapshot()
+
         bridge.report_progress(5, 100)
         bridge.info("Resolving function...")
 
-        try:
-            func, addr_to_use = _resolve_function_address(target_addr)
-        except KeyError:
-            return {
-                "error": f"No function found at {hex(target_addr)} (or adjusted VA).",
-                "hint": "Verify the address. If using an offset, ensure it matches the ImageBase."
-            }
+        if cfg is not None:
+            # Fast path: full CFG available
+            addr_to_use = target_addr
+            if addr_to_use not in cfg.functions:
+                if (state.pe_object
+                        and hasattr(state.pe_object, 'OPTIONAL_HEADER')
+                        and state.pe_object.OPTIONAL_HEADER):
+                    image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
+                    potential_va = target_addr + image_base
+                    if potential_va in cfg.functions:
+                        addr_to_use = potential_va
+            try:
+                func = cfg.functions[addr_to_use]
+            except KeyError:
+                return {
+                    "error": f"No function found at {hex(target_addr)} (or adjusted VA).",
+                    "hint": "Verify the address. If using an offset, ensure it matches the ImageBase."
+                }
+            decompiler_cfg = cfg.model
+        else:
+            # Fallback: no full CFG — build a region-scoped CFG
+            bridge.info("No full CFG available — building local CFG around target...")
+            try:
+                local_cfg = _build_region_cfg(project, target_addr)
+            except Exception as e:
+                return {"error": f"Failed to build local CFG around {hex(target_addr)}: {e}"}
+            used_local_cfg = True
+            addr_to_use = target_addr
+            if addr_to_use not in local_cfg.functions:
+                # Try RVA correction
+                if (state.pe_object
+                        and hasattr(state.pe_object, 'OPTIONAL_HEADER')
+                        and state.pe_object.OPTIONAL_HEADER):
+                    image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
+                    potential_va = target_addr + image_base
+                    if potential_va in local_cfg.functions:
+                        addr_to_use = potential_va
+            try:
+                func = local_cfg.functions[addr_to_use]
+            except KeyError:
+                return {
+                    "error": f"No function found at {hex(target_addr)} in local CFG region.",
+                    "hint": "The address may not be a valid function start. "
+                            "Use get_angr_partial_functions() to see discovered functions."
+                }
+            decompiler_cfg = local_cfg.model
 
         bridge.report_progress(20, 100)
         bridge.info(f"Decompiling {func.name}...")
         try:
-            dec = state.angr_project.analyses.Decompiler(func, cfg=state.angr_cfg.model)
+            dec = project.analyses.Decompiler(func, cfg=decompiler_cfg)
             bridge.report_progress(90, 100)
             bridge.info("Formatting output...")
             if not dec.codegen:
                 return {"error": "Decompilation produced no code."}
-            return {
+            result = {
                 "function_name": func.name,
                 "address": hex(addr_to_use),
                 "c_pseudocode": dec.codegen.text,
             }
+            if used_local_cfg:
+                result["note"] = (
+                    "Decompiled using a local region CFG (full binary CFG was not available). "
+                    "Results may be less complete — cross-references and callee resolution "
+                    "are limited to the local region."
+                )
+            return result
         except Exception as e:
             return {"error": f"Decompilation failed: {e}"}
 
@@ -396,6 +519,8 @@ async def find_path_to_address(
     # -----------------------------------------
 
     # --- Internal Logic ---
+    _partial = {}  # shared state for on_timeout callback
+
     def _solve_path(task_id_for_progress=None, _progress_bridge=None):
 
         _ensure_project_and_cfg()
@@ -446,6 +571,8 @@ async def find_path_to_address(
 
                 simgr.step()
                 steps += 1
+                _partial['steps'] = steps
+                _partial['active'] = len(simgr.active)
 
                 if task_id_for_progress and steps % 10 == 0:
                     active = len(simgr.active)
@@ -472,6 +599,14 @@ async def find_path_to_address(
         except Exception as e:
             return {"status": "error", "error_message": str(e)}
 
+    def _on_timeout_path():
+        return {
+            "steps_completed": _partial.get('steps', 0),
+            "active_states": _partial.get('active', 0),
+            "message": f"Timed out after {_partial.get('steps', 0)} steps. No path found.",
+            "hint": "Try: smaller max_steps, add avoid addresses, or decompile first.",
+        }
+
     # --- Background Handling ---
     if run_in_background:
         task_id = str(uuid.uuid4())
@@ -480,9 +615,12 @@ async def find_path_to_address(
             "progress_percent": 0,
             "progress_message": "Initializing solver...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "find_path_to_address"
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _solve_path, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _solve_path, ctx=ctx,
+            timeout=600, on_timeout=_on_timeout_path))
         task.add_done_callback(_log_task_exception(task_id))
         return {
             "status": "queued",
@@ -517,8 +655,10 @@ async def emulate_function_execution(
     _check_angr_ready("emulate_function_execution")
     target = _parse_addr(function_address)
     try:
-        args = [int(a, 16) for a in args_hex]
+        args = [_parse_addr(a, "argument") for a in args_hex]
     except ValueError: raise ValueError("Invalid format for arguments.")
+
+    _partial_emu = {}  # shared state for on_timeout callback
 
     def _core_emulation(task_id_for_progress=None, _progress_bridge=None):
 
@@ -542,6 +682,11 @@ async def emulate_function_execution(
                 if not simgr.active: break
                 simgr.run(n=chunk_size)
                 steps_taken += chunk_size
+                _partial_emu['steps'] = steps_taken
+                try:
+                    _partial_emu['stdout'] = simgr.active[0].posix.dumps(1).decode('utf-8', 'ignore') if simgr.active else ""
+                except Exception:
+                    pass
 
                 if task_id_for_progress:
                     percent = min(99, int((steps_taken / max_steps) * 100))
@@ -588,6 +733,14 @@ async def emulate_function_execution(
         except Exception as e:
             return {"status": "crash", "error": str(e)}
 
+    def _on_timeout_emu():
+        return {
+            "steps_taken": _partial_emu.get('steps', 0),
+            "partial_stdout": _partial_emu.get('stdout', ''),
+            "message": f"Timed out after {_partial_emu.get('steps', 0)} steps.",
+            "hint": "Try: smaller max_steps, or hook_function() to stub complex callees.",
+        }
+
     if run_in_background:
         task_id = str(uuid.uuid4())
         state.set_task(task_id, {
@@ -595,9 +748,12 @@ async def emulate_function_execution(
             "progress_percent": 0,
             "progress_message": "Initializing emulation...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "emulate_function_execution"
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _core_emulation, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _core_emulation, ctx=ctx,
+            timeout=300, on_timeout=_on_timeout_emu))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Emulation queued."}
 
@@ -724,9 +880,11 @@ async def analyze_binary_loops(
             "progress_percent": 0,
             "progress_message": "Starting loop analysis...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "analyze_binary_loops"
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _core_logic, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _core_logic, ctx=ctx, timeout=300))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Loop analysis queued."}
 

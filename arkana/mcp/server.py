@@ -465,7 +465,9 @@ async def _check_mcp_response_size(
                         if v_len > largest_len:
                             largest_len = v_len
                             largest_key = k
-                    except Exception: continue
+                    except Exception:
+                        logger.debug("Failed to serialize key %r during truncation", k)
+                        continue
 
                 if largest_key:
                     val = modified_data[largest_key]

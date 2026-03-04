@@ -215,6 +215,31 @@ if top.exists():
     shutil.rmtree(str(top))
 PYEOF
 
+# --- Pre-populate capa FLIRT library signatures ---
+# Without these, capa analyses ALL functions (including library code),
+# causing timeouts on large binaries.
+RUN python <<'PYEOF' && rm -f /tmp/capa-src.zip
+import urllib.request, zipfile, shutil, os, pathlib
+urllib.request.urlretrieve(
+    "https://github.com/mandiant/capa/archive/refs/tags/v9.3.0.zip",
+    "/tmp/capa-src.zip")
+with zipfile.ZipFile("/tmp/capa-src.zip") as zf:
+    sigs_prefix = None
+    for name in zf.namelist():
+        if "/sigs/" in name and name.endswith(".sig"):
+            if sigs_prefix is None:
+                sigs_prefix = name[:name.index("/sigs/") + len("/sigs/")]
+            zf.extract(name, "/tmp")
+    if sigs_prefix:
+        src = pathlib.Path("/tmp") / sigs_prefix.rstrip("/")
+        dest = pathlib.Path("/app/capa_rules_store/sigs")
+        if dest.exists(): shutil.rmtree(str(dest))
+        shutil.copytree(str(src), str(dest))
+        print(f"  Capa FLIRT sigs: {sum(1 for f in dest.iterdir() if f.suffix == '.sig')} files in {dest}")
+for d in pathlib.Path("/tmp").iterdir():
+    if d.name.startswith("capa-") and d.is_dir(): shutil.rmtree(str(d))
+PYEOF
+
 # --- Pre-populate YARA rules store (avoids runtime download) ---
 # Two sources are bundled:
 #   1. ReversingLabs YARA Rules (MIT licence)  — general malware detection

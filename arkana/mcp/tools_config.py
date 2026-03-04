@@ -1,6 +1,7 @@
 """MCP tools for configuration, task status, and utility functions."""
 import datetime
 import os
+import time
 from typing import Dict, Any, List, Optional
 from arkana.config import (
     state, Context,
@@ -325,6 +326,76 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
         "tool": task.get("tool", "unknown")
     }
 
+    # --- Elapsed time (always shown) ---
+    created_epoch = task.get("created_at_epoch")
+    if created_epoch is None:
+        try:
+            created_epoch = datetime.datetime.fromisoformat(task["created_at"]).timestamp()
+        except Exception:
+            created_epoch = None
+    if created_epoch:
+        elapsed = time.time() - created_epoch
+        response["elapsed_seconds"] = round(elapsed)
+        response["elapsed_human"] = str(datetime.timedelta(seconds=int(elapsed)))
+
+    # Angr CFG stall detection — report function discovery progress
+    if task_id.startswith("startup-angr"):
+        func_count = task.get("cfg_functions_discovered", 0)
+        snapshots = task.get("cfg_func_snapshots", [])
+        if func_count > 0:
+            response["functions_discovered_so_far"] = func_count
+
+        if task["status"] == "running" and len(snapshots) >= 2:
+            latest_time, latest_count = snapshots[-1]
+            stall_start = latest_time
+            for ts, count in reversed(snapshots):
+                if count != latest_count:
+                    break
+                stall_start = ts
+            seconds_stalled = latest_time - stall_start
+            is_stalled = seconds_stalled >= 30
+
+            response["stall_detection"] = {
+                "is_stalled": is_stalled,
+                "seconds_since_last_change": round(seconds_stalled),
+                "functions_discovered": latest_count,
+            }
+            if is_stalled:
+                response["stall_detection"]["verdict"] = (
+                    f"CFG analysis appears STALLED — no new functions discovered "
+                    f"in {round(seconds_stalled)}s. Binary is likely packed/obfuscated. "
+                    "Recommended: unpack first (auto_unpack_pe → try_all_unpackers → "
+                    "qiling_dump_unpacked_binary), or use get_angr_partial_functions() "
+                    "to see what was discovered, or decompile_function_with_angr() "
+                    "on a discovered function (it will build a local CFG)."
+                )
+                response["hint"] = response["stall_detection"]["verdict"]
+            else:
+                response["stall_detection"]["verdict"] = (
+                    f"CFG analysis is progressing ({latest_count} functions found). "
+                    "Wait and retry shortly."
+                )
+
+    # --- Generic stall detection (for non-CFG running tasks) ---
+    if task["status"] == "running" and "stall_detection" not in response:
+        last_progress = task.get("last_progress_epoch")
+        if last_progress is not None:
+            since_update = time.time() - last_progress
+            is_stalled = since_update >= 60
+            response["stall_detection"] = {
+                "is_stalled": is_stalled,
+                "seconds_since_last_progress": round(since_update),
+                "last_progress_percent": task.get("progress_percent", 0),
+            }
+            if is_stalled:
+                tool = task.get("tool", "unknown")
+                response["stall_detection"]["verdict"] = (
+                    f"Task '{tool}' appears STALLED - no progress in {round(since_update)}s "
+                    f"(last at {task.get('progress_percent', 0)}%). "
+                    "The task will time out automatically. You can wait or start a new analysis."
+                )
+                response["hint"] = response["stall_detection"]["verdict"]
+
     if task["status"] == "completed":
         result_data = task.get("result")
         full_response = {**response, "result": result_data}
@@ -332,9 +403,18 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
 
     elif task["status"] == "failed":
         response["error"] = task.get("error", "Unknown error")
+        # Timeout + partial results
+        if task.get("timed_out"):
+            response["timed_out"] = True
+            partial = task.get("partial_result")
+            if partial:
+                response["partial_result"] = partial
+                response["hint"] = ("Task timed out but partial results are available. "
+                                    "Review the partial_result field.")
 
     elif task["status"] == "running":
-        response["hint"] = "Task is still processing. Poll again shortly with check_task_status."
+        if "hint" not in response:
+            response["hint"] = "Task is still processing. Poll again shortly with check_task_status."
 
     return response
 

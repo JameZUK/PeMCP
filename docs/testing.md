@@ -1,6 +1,6 @@
 # Testing Guide
 
-Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 190 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
+Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 191 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
 
 ---
 
@@ -46,20 +46,21 @@ pytest -v
 
 ## CI/CD Pipeline
 
-Arkana uses **GitHub Actions** to run unit tests automatically on every push and pull request to the `main`/`master` branches. The workflow is defined in `.github/workflows/ci.yml`.
+Arkana uses **GitHub Actions** to run unit tests automatically on every push and pull request to the `main`/`master` branches, and supports manual runs via `workflow_dispatch`. The workflow is defined in `.github/workflows/ci.yml`.
 
 ### What CI runs
 
-1. **Unit tests**  - Runs `pytest tests/` with coverage on Python 3.10, 3.11, and 3.12.
-2. **Coverage enforcement**  - Fails the build if code coverage drops below **60%**.
+1. **Unit tests**  - Runs `pytest tests/` with coverage (including branch coverage) on Python 3.10, 3.11, and 3.12.
+2. **Coverage enforcement**  - Fails the build if code coverage drops below **65%** (with branch coverage enabled).
 3. **Syntax checking**  - Verifies core modules compile without errors.
+4. **Dependency updates**  - Dependabot checks for pip dependency updates weekly.
 
 ### Running locally (same as CI)
 
 ```bash
 # Replicate the CI pipeline locally
 pip install -r requirements.txt -r requirements-test.txt
-pytest tests/ -v --cov=arkana --cov-report=term-missing --cov-fail-under=60
+pytest tests/ -v --cov=arkana --cov-report=term-missing --cov-config=.coveragerc --cov-fail-under=65
 ```
 
 ---
@@ -116,35 +117,37 @@ pytest tests/
 
 ### Running with Coverage
 
-Arkana uses `pytest-cov` for code coverage measurement. A **60% minimum** coverage floor is enforced in CI.
+Arkana uses `pytest-cov` for code coverage measurement. A **65% minimum** coverage floor (with branch coverage) is enforced in CI.
 
 ```bash
 # Terminal report with missing lines highlighted
-pytest tests/ -v --cov=arkana --cov-report=term-missing
+pytest tests/ -v --cov=arkana --cov-report=term-missing --cov-config=.coveragerc
 
 # Generate HTML coverage report
-pytest tests/ -v --cov=arkana --cov-report=html
+pytest tests/ -v --cov=arkana --cov-report=html --cov-config=.coveragerc
 # Open htmlcov/index.html in a browser
 
 # Generate XML report (for CI upload)
-pytest tests/ -v --cov=arkana --cov-report=xml
+pytest tests/ -v --cov=arkana --cov-report=xml --cov-config=.coveragerc
 
 # Fail if coverage drops below threshold
-pytest tests/ --cov=arkana --cov-fail-under=60
+pytest tests/ --cov=arkana --cov-config=.coveragerc --cov-fail-under=65
 ```
 
-Coverage configuration is in `pytest.ini`:
+Coverage configuration is in `.coveragerc` (single source of truth):
 
 ```ini
-[coverage:run]
-source = arkana
+[run]
+branch = True
+omit =
+    arkana/mcp/tools_*.py
+    arkana/mcp/server.py
+    ...
 
-[coverage:report]
-fail_under = 60
-show_missing = true
+[report]
 exclude_lines =
     pragma: no cover
-    if __name__ == .__main__
+    if TYPE_CHECKING
     raise NotImplementedError
 ```
 
@@ -219,7 +222,7 @@ When adding new unit tests, follow these conventions:
 
 ## Integration Tests
 
-The integration test suite (`mcp_test_client.py`) covers all **190 MCP tools** across 19 test categories. Tests connect to a running Arkana server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
+The integration test suite (`mcp_test_client.py`) covers all **191 MCP tools** across 19 test categories. Tests connect to a running Arkana server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
 
 ### Prerequisites
 
@@ -285,7 +288,7 @@ pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
 pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
 pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
 pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 190 tools exist
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 191 tools exist
 ```
 
 ### Environment Variables
@@ -335,7 +338,7 @@ The integration test suite is organised into 19 classes:
 
 ## Pytest Configuration
 
-The `pytest.ini` file configures test discovery, markers, and coverage settings:
+The `pytest.ini` file configures test discovery and markers:
 
 ```ini
 [pytest]
@@ -347,17 +350,9 @@ markers =
     optional_lib: test requires an optional library
     unit: fast unit tests with no external dependencies
 
-[coverage:run]
-source = arkana
-
-[coverage:report]
-fail_under = 60
-show_missing = true
-exclude_lines =
-    pragma: no cover
-    if __name__ == .__main__
-    raise NotImplementedError
 ```
+
+Coverage configuration lives in `.coveragerc` (not `pytest.ini`). See the "Running with Coverage" section above for details.
 
 The `testpaths = tests` directive means `pytest` (with no arguments) runs unit tests by default. To run integration tests, specify the file explicitly:
 

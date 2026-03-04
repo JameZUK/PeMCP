@@ -100,6 +100,25 @@ def _ensure_project_and_cfg():
                     state.set_angr_results(project, new_cfg, state.angr_loop_cache, state.angr_loop_cache_config)
 
 
+def _build_region_cfg(project, target_addr: int, region_size: int = 0x10000):
+    """Build a small CFG around *target_addr* without a full-binary scan.
+
+    Uses ``CFGFast(regions=..., function_starts=...)`` to restrict analysis
+    to a region around the target.  Much faster than full-binary CFG and
+    sufficient for single-function decompilation.
+    """
+    obj = project.loader.find_object_containing(target_addr)
+    if obj is None:
+        raise RuntimeError(f"Address {hex(target_addr)} not in any loaded object.")
+    region_start = max(target_addr - region_size // 2, obj.min_addr)
+    region_end = min(target_addr + region_size // 2, obj.max_addr)
+    return project.analyses.CFGFast(
+        normalize=True,
+        regions=[(region_start, region_end)],
+        function_starts=[target_addr],
+    )
+
+
 def _parse_addr(hex_string: str, name: str = "address") -> int:
     """Parse an address string (hex or decimal) to int."""
     try:

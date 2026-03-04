@@ -1,5 +1,6 @@
 """MCP tools for angr-based data flow analysis."""
 import datetime
+import time
 import traceback
 import uuid
 import asyncio
@@ -210,9 +211,11 @@ async def get_reaching_definitions(
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing RDA...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "get_reaching_definitions",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _rda, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _rda, ctx=ctx, timeout=300))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Reaching definitions analysis queued."}
 
@@ -393,9 +396,11 @@ async def get_data_dependencies(
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing data dependency analysis...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "get_data_dependencies",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _ddg, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _ddg, ctx=ctx, timeout=300))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Data dependency analysis queued."}
 
@@ -710,9 +715,11 @@ async def get_value_set_analysis(
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing VFG...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "get_value_set_analysis",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _vsa, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _vsa, ctx=ctx, timeout=600))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Value-set analysis queued."}
 

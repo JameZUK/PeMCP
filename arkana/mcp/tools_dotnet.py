@@ -306,7 +306,7 @@ async def dotnet_disassemble_method(
     with a custom_summary for the .NET method.
 
     Args:
-        method_rva: Hex RVA of the method (from dotnet_analyze's method_definitions).
+        method_rva: Hex or decimal RVA of the method (from dotnet_analyze's method_definitions).
         file_path: Optional path. If None, uses the loaded file.
         limit: Max CIL instructions to return.
     """
@@ -315,7 +315,7 @@ async def dotnet_disassemble_method(
     _check_lib("dncil", DNCIL_AVAILABLE, "dotnet_disassemble_method")
     target = _get_filepath(file_path)
 
-    rva = int(method_rva, 16)
+    rva = int(method_rva, 0)
 
     def _disasm():
         try:

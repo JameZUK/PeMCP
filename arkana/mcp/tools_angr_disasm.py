@@ -37,11 +37,13 @@ async def disassemble_at_address(
         num_bytes: If >0, disassemble this many bytes instead of counting instructions.
     """
     await ctx.info(f"Disassembling at {address}")
-    _check_angr_ready("disassemble_at_address")
+    _check_angr_ready("disassemble_at_address", require_cfg=False)
     target = _parse_addr(address)
 
     def _disasm():
-        _ensure_project_and_cfg()
+        project = state.angr_project
+        if project is None:
+            _ensure_project_and_cfg()
 
         kwargs = {}
         if num_bytes > 0:

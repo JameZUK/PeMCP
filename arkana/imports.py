@@ -179,7 +179,7 @@ except ImportError as e_floss_setup:
     FLOSS_IMPORT_ERROR_SETUP = str(e_floss_setup)
     logger.warning("Warning: Error importing basic FLOSS components (logging, main, const): %s", e_floss_setup)
     logger.warning("Using fallback values for FLOSS script setup. Full FLOSS functionality may be impaired.")
-except Exception as e_floss_setup_generic:
+except (ImportError, OSError, ValueError) as e_floss_setup_generic:
     FLOSS_IMPORT_ERROR_SETUP = f"Generic error during FLOSS setup import: {e_floss_setup_generic}"
     logger.error("FLOSS setup import failed unexpectedly: %s", e_floss_setup_generic, exc_info=True)
 
@@ -202,7 +202,7 @@ if FLOSS_SETUP_OK:
         FLOSS_IMPORT_ERROR_ANALYSIS = str(e_floss_analysis)
         logger.error("Error importing FLOSS analysis functions (or their dependencies like vivisect): %s", e_floss_analysis)
         FLOSS_ANALYSIS_OK = False
-    except Exception as e_floss_analysis_generic:
+    except (ImportError, OSError, ValueError) as e_floss_analysis_generic:
         FLOSS_IMPORT_ERROR_ANALYSIS = f"Generic error during FLOSS analysis import: {e_floss_analysis_generic}"
         logger.error("FLOSS analysis import failed unexpectedly: %s", e_floss_analysis_generic, exc_info=True)
         FLOSS_ANALYSIS_OK = False

@@ -89,15 +89,32 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
              effective_capa_sigs_path_str_for_mock_args = str((DATA_DIR / CAPA_RULES_DEFAULT_DIR_NAME / "sigs").resolve())
              logger.info("Found 'sigs' directory near default rules store: %s", effective_capa_sigs_path_str_for_mock_args)
         else:
-            logger.warning("Capa signatures directory not found locally (e.g., ./capa_sigs or next to default rules). Explicitly telling Capa to load no library function signatures to prevent potential errors if Capa's internal default path is problematic.")
-            effective_capa_sigs_path_str_for_mock_args = "" # Tell capa to load no library sigs
+            # Last resort: check capa's own bundled sigs directory
+            _capa_default_root = None
+            try:
+                if hasattr(capa.main, 'get_default_root'):
+                    _capa_default_root = capa.main.get_default_root() / "sigs"
+            except Exception:
+                pass
+
+            if _capa_default_root and _capa_default_root.is_dir() and any(_capa_default_root.glob("*.sig")):
+                effective_capa_sigs_path_str_for_mock_args = str(_capa_default_root)
+                logger.info("Using capa's bundled signatures directory: %s", effective_capa_sigs_path_str_for_mock_args)
+            else:
+                logger.warning(
+                    "Capa library function signatures not found "
+                    "(checked ./capa_sigs, %s/sigs, and capa's default root). "
+                    "Capa will analyse ALL functions including library code, "
+                    "which may be very slow. Provide --capa-sigs-dir or place "
+                    ".sig files in %s/sigs/ to fix.",
+                    CAPA_RULES_DEFAULT_DIR_NAME, CAPA_RULES_DEFAULT_DIR_NAME,
+                )
+                effective_capa_sigs_path_str_for_mock_args = ""
 
     setattr(mock_args, 'signatures', effective_capa_sigs_path_str_for_mock_args)
-    if hasattr(mock_args, 'is_default_signatures'):
-        is_capa_internal_default_path = False
-        if hasattr(capa.main, 'SIGNATURES_PATH_DEFAULT_STRING'): # Check if this attribute exists in the capa version
-             is_capa_internal_default_path = (effective_capa_sigs_path_str_for_mock_args == getattr(capa.main, 'SIGNATURES_PATH_DEFAULT_STRING'))
-        setattr(mock_args, 'is_default_signatures', (not bool(capa_sigs_dir_path)) and is_capa_internal_default_path and effective_capa_sigs_path_str_for_mock_args != "")
+    # We always resolve to an actual filesystem path (never the sentinel
+    # SIGNATURES_PATH_DEFAULT_STRING), so is_default_signatures is False.
+    setattr(mock_args, 'is_default_signatures', False)
 
 
     setattr(mock_args, 'format', getattr(capa.features.common, 'FORMAT_PE', 'pe')) # Default to PE

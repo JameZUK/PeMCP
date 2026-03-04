@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 190 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
+Arkana is a Model Context Protocol (MCP) server exposing 191 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
 
 ## Project Structure
 
@@ -17,7 +17,7 @@ arkana/                  # Main package
 ├── auth.py             # Bearer token ASGI middleware
 ├── utils.py            # ReDoS-safe regex, safe_slice, safe_env_int
 ├── parsers/            # PE/FLOSS/capa/YARA/strings parsers
-└── mcp/                # MCP tool modules (190 tools across 47 files)
+└── mcp/                # MCP tool modules (191 tools across 47 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery)
     └── tools_*.py      # Tool modules grouped by domain
@@ -57,6 +57,7 @@ ruff check arkana/ tests/ \
 - **Response truncation**: `_check_mcp_response_size()` enforces a dual-limit system — soft character limit (8K chars by default, for Claude Code CLI compatibility) plus hard byte limit (64KB backstop). The `tool_decorator` includes a safety net that auto-enforces the soft limit even for tools that don't call `_check_mcp_response_size` explicitly. Set `ARKANA_MCP_RESPONSE_LIMIT_CHARS=65536` to restore 64KB-only behavior for non-Claude-Code clients.
 - **Pagination**: Large-output tools like `decompile_function_with_angr` use line-based pagination (`line_offset`/`line_limit`). Results are cached via `_ToolResultCache` so subsequent page requests don't re-execute analysis.
 - **`tool_decorator`**: Wraps every MCP tool — handles session activation, heartbeat, history recording, and error enrichment.
+- **Background task timeout**: All 10 angr background tools (`find_path_to_address`, `emulate_function_execution`, `analyze_binary_loops`, `get_reaching_definitions`, `get_data_dependencies`, `get_value_set_analysis`, `diff_binaries`, `find_path_with_custom_input`, `emulate_with_watchpoints`, `identify_cpp_classes`) time out automatically via `_run_background_task_wrapper(timeout=N)`. Default `BACKGROUND_TASK_TIMEOUT` is 600s, overridable via `ARKANA_BACKGROUND_TASK_TIMEOUT`. Four tools support `on_timeout` callbacks that capture partial results (steps completed, active states, captured events). `_update_progress()` records `last_progress_epoch` on every call, enabling generic stall detection in `check_task_status()`. Tasks include `created_at_epoch` for elapsed time reporting.
 - **Notes system**: `add_note()` categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `manual`.
 - **Artifacts system**: `state.register_artifact()` tracks extracted files (path, hashes, source tool, type detection). Artifacts persist via cache alongside notes/tool_history, and are included in `export_project` / `import_project` archives. Constants: `MAX_ARTIFACT_FILE_SIZE` (100 MB), `MAX_TOTAL_ARTIFACT_EXPORT_SIZE` (50 MB).
 
@@ -72,4 +73,4 @@ The Docker image uses 4 venvs to isolate incompatible unicorn versions (angr nee
 
 ## CI
 
-GitHub Actions runs on every push/PR: unit tests (Python 3.10-3.12), ruff lint, and smoke tests. Coverage floor is 65%.
+GitHub Actions runs on every push/PR (plus manual `workflow_dispatch`): unit tests (Python 3.10-3.12), ruff lint, and smoke tests. Coverage floor is 65% with branch coverage enabled. Dependabot is configured for weekly pip dependency updates.

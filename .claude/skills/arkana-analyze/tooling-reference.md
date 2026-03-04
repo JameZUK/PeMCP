@@ -1,7 +1,9 @@
 # Arkana Tool Reference
 
-Complete catalog of all 190 MCP tools organized by use case.
+Complete catalog of all 191 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
+
+> **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
 
 ---
 
@@ -38,7 +40,7 @@ Source files: `arkana/mcp/tools_*.py`
 |------|----------|----------------|
 | `get_config` | **First call** — discover libraries, paths, container mode | — |
 | `get_current_datetime` | Need timestamp for notes or reports | — |
-| `check_task_status` | Checking background task completion | `task_id` |
+| `check_task_status` | Checking background task progress/completion. Returns `elapsed_seconds`/`elapsed_human`, `stall_detection` (triggers after 60s without progress), and `timed_out`/`partial_result` for tasks that exceeded their timeout | `task_id` |
 | `set_api_key` | Configuring VT or other API keys | `service`, `key` |
 
 ## Triage & Risk Assessment
@@ -104,9 +106,10 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `decompile_function_with_angr` | Get C-like pseudocode for a function (paginated) | `address`, `line_offset` (default 0), `line_limit` (default 80) |
+| `decompile_function_with_angr` | Get C-like pseudocode for a function (paginated); works without full CFG | `address`, `line_offset` (default 0), `line_limit` (default 80) |
+| `get_angr_partial_functions` | List functions discovered so far (works during/after CFG build) | `limit` (default 50) |
 | `get_annotated_disassembly` | Disassembly with variable names and xrefs | `address`, `limit` (default 50) |
-| `disassemble_at_address` | Raw disassembly at arbitrary address | `address`, `count` |
+| `disassemble_at_address` | Raw disassembly at arbitrary address; works without full CFG | `address`, `count` |
 | `disassemble_raw_bytes` | Disassemble arbitrary byte sequences | `bytes`, `arch` |
 | `get_function_map` | List functions ranked by interestingness | `limit` (default 15) |
 | `get_function_complexity_list` | Functions sorted by cyclomatic complexity | — |
@@ -119,28 +122,28 @@ Source files: `arkana/mcp/tools_*.py`
 | `extract_function_constants` | Constant values used in a function | `address` |
 | `get_global_data_refs` | Global data references across binary | — |
 | `scan_for_indirect_jumps` | Find jump tables, vtables, indirect calls | — |
-| `identify_cpp_classes` | C++ class structure identification | — |
+| `identify_cpp_classes` | C++ class structure identification (background, timeout 300s) | — |
 | `get_call_graph` | Inter-procedural call graph from a function | `address`, `limit` (default 20) |
 
 ## Data Flow Analysis
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `get_reaching_definitions` | Track where variable values come from | `address` |
-| `get_data_dependencies` | Def-use chains within a function | `address` |
+| `get_reaching_definitions` | Track where variable values come from (background, timeout 300s) | `address` |
+| `get_data_dependencies` | Def-use chains within a function (background, timeout 300s) | `address` |
 | `get_control_dependencies` | Which conditions control which blocks | `address` |
 | `propagate_constants` | Resolve constant values through computation | `address` |
-| `get_value_set_analysis` | Pointer target tracking | `address` |
+| `get_value_set_analysis` | Pointer target tracking (background, timeout 600s) | `address` |
 | `get_backward_slice` | Trace data origin backward from a point | `address`, `variable` |
 | `get_forward_slice` | Trace data propagation forward | `address`, `variable` |
 | `get_dominators` | Dominator tree for CFG analysis | `address` |
-| `analyze_binary_loops` | Loop detection and analysis | — |
+| `analyze_binary_loops` | Loop detection and analysis (background, timeout 300s) | — |
 
 ## Emulation
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `emulate_function_execution` | Execute a single function with concrete args | `address`, `args` |
+| `emulate_function_execution` | Execute a single function with concrete args (background, timeout 300s, partial results on timeout: steps/stdout) | `address`, `args` |
 | `emulate_binary_with_qiling` | Full binary emulation with API tracking | `timeout`, `rootfs`, `trace_syscalls`, `syscall_filter`, `track_memory` |
 | `emulate_shellcode_with_qiling` | Shellcode emulation (x86/x64/ARM/MIPS) | `shellcode`, `arch` |
 | `qiling_trace_execution` | Detailed API call tracing during emulation | — |
@@ -151,9 +154,9 @@ Source files: `arkana/mcp/tools_*.py`
 | `qiling_setup_check` | Verify Qiling rootfs setup | — |
 | `emulate_pe_with_windows_apis` | PE emulation with Windows API sim (Speakeasy) | — |
 | `emulate_shellcode_with_speakeasy` | Shellcode with Speakeasy | `shellcode`, `arch` |
-| `emulate_with_watchpoints` | Emulation with memory/register breakpoints | `address`, `watchpoints` |
-| `find_path_to_address` | Symbolic execution to find reaching inputs | `target_address` |
-| `find_path_with_custom_input` | Path finding with custom constraints | `target`, `constraints` |
+| `emulate_with_watchpoints` | Emulation with memory/register breakpoints (timeout 300s, partial results on timeout: captured events) | `address`, `watchpoints` |
+| `find_path_to_address` | Symbolic execution to find reaching inputs (timeout 600s, partial results on timeout: steps/active states) | `target_address` |
+| `find_path_with_custom_input` | Path finding with custom constraints (timeout 600s, partial results on timeout: steps/active states) | `target`, `constraints` |
 
 ## Cryptography
 
@@ -279,7 +282,7 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `diff_binaries` | Compare two binaries (matching/differing functions) | `file_path_2` |
+| `diff_binaries` | Compare two binaries (matching/differing functions, background, timeout 600s) | `file_path_2` |
 | `diff_payloads` | Byte-by-byte comparison of two payloads | `payload_1`, `payload_2` |
 | `compute_similarity_hashes` | ssdeep/TLSH/imphash similarity hashes | — |
 | `compare_file_similarity` | Compare two files for similarity scores | `file_path_2` |

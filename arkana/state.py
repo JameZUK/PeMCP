@@ -333,6 +333,11 @@ class AnalyzerState:
             self.angr_loop_cache = None
             self.angr_loop_cache_config = None
             self.angr_hooks = {}
+        # Also clear background tasks (angr startup task) so a stalled
+        # "startup-angr" task doesn't persist across file reloads and
+        # block angr-dependent tools with "still in progress" errors.
+        with self._task_lock:
+            self.background_tasks.clear()
 
     def close_pe(self):
         with self._pe_lock:

@@ -31,7 +31,7 @@ async def hook_function(
 
     Args:
         address_or_name: Hex address (e.g. '0x401000') or symbol name (e.g. 'malloc').
-        return_value_hex: Hex value the hooked function should return (e.g. '0x1'). None = void.
+        return_value_hex: Hex or decimal value the hooked function should return (e.g. '0x1' or '1'). None = void.
         nop: If True, the function does nothing and returns 0.
     """
     await ctx.info(f"Hooking {address_or_name}")
@@ -43,7 +43,7 @@ async def hook_function(
 
         ret_val = None
         if return_value_hex is not None:
-            ret_val = int(return_value_hex, 16)
+            ret_val = int(return_value_hex, 0)
         elif nop:
             ret_val = 0
 
@@ -153,7 +153,7 @@ async def unhook_function(ctx: Context, address_or_name: str) -> Dict[str, Any]:
         proj = state.angr_project
 
         try:
-            addr = int(address_or_name, 16)
+            addr = int(address_or_name, 0)
             proj.unhook(addr)
             key = hex(addr)
         except ValueError:

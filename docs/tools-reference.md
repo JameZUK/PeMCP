@@ -1,6 +1,8 @@
 # MCP Tools Reference
 
-Arkana exposes **190 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **191 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+
+> **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
 ---
 
@@ -20,7 +22,7 @@ Arkana automatically detects and analyses binaries across all major platforms:
 
 ### Advanced Binary Analysis (Powered by Angr)
 
-39 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
+40 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
 
 - **Decompilation**  - Convert assembly into human-readable C-like pseudocode on the fly.
 - **Control Flow Graph (CFG)**  - Generate and traverse function blocks and edges.
@@ -82,6 +84,7 @@ Arkana is designed for **large binary corpus analysis** where AI clients need to
 - **Analysis Caching**  - Results are cached to disk in `~/.arkana/cache/`, keyed by SHA256 hash and compressed with gzip (~12x compression). Re-opening a previously analysed file loads instantly from cache.
 - **Persistent Configuration**  - API keys are stored securely in `~/.arkana/config.json` and recalled automatically across sessions.
 - **Progress Reporting**  - Over 50 long-running tools report fine-grained progress to the MCP client in real time (percentage, stage descriptions). Tools running in background threads use a thread-safe `ProgressBridge` to push updates back to the async MCP context.
+- **Background Task Timeout & Stall Detection**  - All 10 angr background tools have automatic timeouts (300-600s depending on the tool, configurable via `ARKANA_BACKGROUND_TASK_TIMEOUT`). `check_task_status()` reports elapsed time, detects stalls (no progress in 60s), and surfaces partial results when available. Four symbolic execution and emulation tools capture partial results on timeout (steps completed, active states, captured events).
 
 ---
 
@@ -102,7 +105,7 @@ Arkana is designed for **large binary corpus analysis** where AI clients need to
 | `set_api_key` | Store an API key persistently in `~/.arkana/config.json`. |
 | `get_config` | View current configuration, available libraries, and loaded file status. |
 | `get_current_datetime` | Retrieve current UTC and local date/time. |
-| `check_task_status` | Monitor progress of background tasks (e.g., Angr CFG generation). |
+| `check_task_status` | Monitor progress of background tasks. Returns `elapsed_seconds`/`elapsed_human` for all tasks, generic `stall_detection` (triggers after 60s without progress), and `timed_out`/`partial_result` fields for tasks that exceeded their timeout. Works for all 10 angr background tools plus the startup CFG build. |
 | `get_extended_capabilities` | List all available tools and library versions. |
 | `get_cache_stats` | View analysis cache statistics (entries, size, utilisation). |
 | `clear_analysis_cache` | Clear the entire disk-based analysis cache. |
@@ -183,14 +186,15 @@ All string tools that return lists support pagination via `limit` (default 20) a
 | `is_mostly_printable_ascii` | Check if a string is mostly printable. |
 | `get_hex_dump` | Hex dump of a file region. |
 
-## Binary Analysis  - Core Angr (16 tools)
+## Binary Analysis  - Core Angr (17 tools)
 
 All angr tools that return lists support pagination via `limit` and `offset` parameters. The default `limit` is 20 for most tools.
 
 | Tool | Description |
 |---|---|
 | `list_angr_analyses` | **Discovery tool**  - lists all available angr analysis capabilities grouped by category (decompilation, CFG, symbolic, slicing, forensic, hooks, modification) with parameter descriptions. Call this first to understand available analyses. |
-| `decompile_function_with_angr` | C-like pseudocode for a function at a given address. |
+| `get_angr_partial_functions` | List functions discovered in angr's knowledge base, even while CFG is still building or has timed out. Works without full CFG. Paginated (default limit 50). |
+| `decompile_function_with_angr` | C-like pseudocode for a function at a given address. Works without full CFG by building a local region CFG. |
 | `get_function_cfg` | Control flow graph (nodes and edges) for a function. |
 | `find_path_to_address` | Symbolic execution to find inputs reaching a target address. |
 | `emulate_function_execution` | Emulate a function with concrete arguments. |
@@ -458,7 +462,7 @@ These tools are designed for progressive, context-efficient analysis by AI clien
 ### Recommended AI Workflow
 
 1. **`get_config()`**  - discover writable paths, container environment, and available libraries
-2. **`open_file(path)`**  - load binary, auto-starts background angr CFG. If `session_context` is present, call `get_analysis_digest()` first to review previous findings.
+2. **`open_file(path)`**  - load binary, auto-starts background angr CFG. If `session_context` is present, call `get_analysis_digest()` first to review previous findings. All background tasks (CFG build, symbolic execution, data flow, emulation) have automatic timeouts and stall detection  - use `check_task_status(task_id)` to monitor elapsed time and progress.
 3. **`get_triage_report(compact=True)`**  - initial risk assessment in ~2KB. **Key findings are auto-saved as notes.**
 4. **`get_focused_imports()`**  - understand what suspicious APIs are imported
 5. **`get_strings_summary()`**  - categorised string overview

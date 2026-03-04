@@ -40,7 +40,7 @@ arkana/
 │   ├── server.py       # MCP server setup + tool decorator
 │   ├── _format_helpers.py
 │   ├── _input_helpers.py
-│   └── tools_*.py      # MCP tool modules (190 tools)
+│   └── tools_*.py      # MCP tool modules (191 tools)
 ├── parsers/            # PE/FLOSS/capa/signature parsers
 ├── cli/                # CLI output formatting
 └── ...
@@ -63,7 +63,7 @@ arkana/
 pytest tests/ -v
 
 # Run with coverage
-pytest tests/ -v --cov=arkana --cov-config=.coveragerc --cov-fail-under=65
+pytest tests/ -v --cov=arkana --cov-config=.coveragerc --cov-fail-under=65  # branch coverage enabled via .coveragerc
 ```
 
 Unit tests live in `tests/` and require only `requirements-ci.txt` + `requirements-test.txt`. They do not need a running server or binary samples.
@@ -78,14 +78,14 @@ Unit tests live in `tests/` and require only `requirements-ci.txt` + `requiremen
 pytest tests/integration/mcp_test_client.py -v
 ```
 
-Integration tests exercise all 190 MCP tools against a running Arkana server.
+Integration tests exercise all 191 MCP tools against a running Arkana server.
 
 ### Writing Tests
 
 - Place unit tests in `tests/test_<module>.py`.
 - Use `pytest.importorskip()` for tests that need optional libraries.
 - Use `unittest.mock.patch` to mock `state` when testing tool logic.
-- The coverage threshold is 65%. New code should include tests.
+- The coverage threshold is 65% (with branch coverage). New code should include tests.
 
 ## Pull Request Process
 

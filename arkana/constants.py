@@ -20,6 +20,8 @@ MCP_SOFT_RESPONSE_LIMIT_CHARS = 8000
 # --- Timeout Constants (seconds) ---
 ANGR_ANALYSIS_TIMEOUT = 300    # angr symbolic execution / analysis operations
 ANGR_SHORT_TIMEOUT = 120       # shorter angr operations (e.g. anti-debug scan)
+ANGR_CFG_TIMEOUT = 600         # background CFGFast timeout (env: ARKANA_ANGR_CFG_TIMEOUT)
+BACKGROUND_TASK_TIMEOUT = 600  # background task timeout (env: ARKANA_BACKGROUND_TASK_TIMEOUT)
 HTTP_DOWNLOAD_TIMEOUT = 60     # downloading resources (YARA rules, capa rules)
 HTTP_API_TIMEOUT = 20          # external API calls (e.g. VirusTotal)
 HTTP_QUICK_TIMEOUT = 15        # quick HTTP requests (e.g. PEiD DB download)

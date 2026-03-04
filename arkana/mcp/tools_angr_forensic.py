@@ -1,5 +1,6 @@
 """MCP tools for angr-based forensic and advanced binary analysis."""
 import datetime
+import time
 import uuid
 import asyncio
 import os
@@ -140,9 +141,11 @@ async def diff_binaries(
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing BinDiff...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "diff_binaries",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _diff, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _diff, ctx=ctx, timeout=600))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "BinDiff queued."}
 
@@ -652,14 +655,16 @@ async def find_path_with_custom_input(
         target_address: Hex address to reach.
         avoid_address: Optional hex address to avoid.
         symbolic_registers: List of register names to make symbolic (e.g. ['eax', 'ebx']).
-        symbolic_memory_ranges: List of 'addr:size' strings (e.g. ['0x404000:64']).
-        concrete_memory: Dict of 'addr' -> 'hex_bytes' to pre-fill memory.
+        symbolic_memory_ranges: List of 'addr:size' strings — addr is hex or decimal (e.g. ['0x404000:64'] or ['4210688:64']).
+        concrete_memory: Dict of 'addr' -> 'hex_bytes' to pre-fill memory — addr keys are hex or decimal.
         max_steps: Max execution steps.
         run_in_background: Run as background task.
     """
     _check_angr_ready("find_path_with_custom_input")
     target = _parse_addr(target_address)
     avoid = _parse_addr(avoid_address, "avoid_address") if avoid_address else None
+
+    _partial_custom = {}  # shared state for on_timeout callback
 
     def _solve(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
@@ -689,7 +694,7 @@ async def find_path_with_custom_input(
             for spec in symbolic_memory_ranges:
                 try:
                     parts = spec.split(":")
-                    mem_addr = int(parts[0], 16)
+                    mem_addr = int(parts[0], 0)
                     mem_size = int(parts[1])
                     sym_mem = entry_state.solver.BVS(f"sym_mem_{hex(mem_addr)}", mem_size * 8)
                     entry_state.memory.store(mem_addr, sym_mem)
@@ -701,7 +706,7 @@ async def find_path_with_custom_input(
         if concrete_memory:
             for addr_hex, data_hex in concrete_memory.items():
                 try:
-                    mem_addr = int(addr_hex, 16)
+                    mem_addr = int(addr_hex, 0)
                     data = bytes.fromhex(data_hex)
                     entry_state.memory.store(mem_addr, data)
                 except Exception as e:
@@ -722,6 +727,8 @@ async def find_path_with_custom_input(
                 simgr.split(from_stash='active', to_stash='deferred', limit=30)
             simgr.step()
             steps += 1
+            _partial_custom['steps'] = steps
+            _partial_custom['active'] = len(simgr.active)
             if task_id_for_progress and steps % 20 == 0:
                 percent = min(95, int((steps / max_steps) * 100))
                 _update_progress(task_id_for_progress, percent, f"Step {steps}, active: {len(simgr.active)}", bridge=_progress_bridge)
@@ -757,7 +764,7 @@ async def find_path_with_custom_input(
                 for spec in symbolic_memory_ranges:
                     try:
                         parts = spec.split(":")
-                        mem_addr = int(parts[0], 16)
+                        mem_addr = int(parts[0], 0)
                         mem_size = int(parts[1])
                         data = found_state.solver.eval(
                             found_state.memory.load(mem_addr, mem_size), cast_to=bytes
@@ -771,15 +778,26 @@ async def find_path_with_custom_input(
 
         return {"status": "failure", "steps_taken": steps, "message": f"No path found after {steps} steps."}
 
+    def _on_timeout_custom():
+        return {
+            "steps_completed": _partial_custom.get('steps', 0),
+            "active_states": _partial_custom.get('active', 0),
+            "message": f"Timed out after {_partial_custom.get('steps', 0)} steps. No path found.",
+            "hint": "Try: smaller max_steps, add avoid addresses, or decompile first.",
+        }
+
     if run_in_background:
         task_id = str(uuid.uuid4())
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing custom solver...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "find_path_with_custom_input",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _solve, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _solve, ctx=ctx,
+            timeout=600, on_timeout=_on_timeout_custom))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Custom symbolic execution queued."}
 
@@ -815,10 +833,10 @@ async def emulate_with_watchpoints(
 
     Args:
         function_address: Hex address of the function to emulate.
-        watch_mem_writes: List of hex addresses to watch for memory writes.
-        watch_mem_reads: List of hex addresses to watch for memory reads.
+        watch_mem_writes: List of hex or decimal addresses to watch for memory writes.
+        watch_mem_reads: List of hex or decimal addresses to watch for memory reads.
         watch_registers: List of register names to watch for writes.
-        args_hex: Hex arguments to pass to the function.
+        args_hex: Hex or decimal arguments to pass to the function.
         max_steps: Max emulation steps.
         run_in_background: Run as background task.
     """
@@ -826,13 +844,16 @@ async def emulate_with_watchpoints(
     target = _parse_addr(function_address)
     if args_hex is None:
         args_hex = []
-    args = [int(a, 16) for a in args_hex]
+    args = [_parse_addr(a, "argument") for a in args_hex]
+
+    _partial_wp = {}  # shared state for on_timeout callback
 
     def _emulate(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
         proj = state.angr_project
 
         events = []  # Collected watchpoint hits
+        _partial_wp['events'] = events  # reference to the live list
 
         add_options = {
             angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
@@ -844,7 +865,7 @@ async def emulate_with_watchpoints(
         watch_write_addrs = set()
         if watch_mem_writes:
             for addr_hex in watch_mem_writes:
-                watch_write_addrs.add(int(addr_hex, 16))
+                watch_write_addrs.add(_parse_addr(addr_hex, "watch_mem_writes address"))
 
             def _on_mem_write(sim_state):
                 try:
@@ -870,7 +891,7 @@ async def emulate_with_watchpoints(
         watch_read_addrs = set()
         if watch_mem_reads:
             for addr_hex in watch_mem_reads:
-                watch_read_addrs.add(int(addr_hex, 16))
+                watch_read_addrs.add(_parse_addr(addr_hex, "watch_mem_reads address"))
 
             def _on_mem_read(sim_state):
                 try:
@@ -939,6 +960,7 @@ async def emulate_with_watchpoints(
                     "events": events[:500],
                 }
             steps_taken += 1
+            _partial_wp['steps'] = steps_taken
             if task_id_for_progress and steps_taken % 20 == 0:
                 percent = min(95, int((steps_taken / max_steps) * 100))
                 _update_progress(task_id_for_progress, percent, f"Step {steps_taken}, events: {len(events)}", bridge=_progress_bridge)
@@ -966,15 +988,27 @@ async def emulate_with_watchpoints(
             result["error"] = error_details
         return result
 
+    def _on_timeout_wp():
+        events = _partial_wp.get('events', [])
+        return {
+            "steps_taken": _partial_wp.get('steps', 0),
+            "total_events": len(events),
+            "events": events[:500],
+            "message": f"Timed out but {len(events)} watchpoint events were captured.",
+        }
+
     if run_in_background:
         task_id = str(uuid.uuid4())
         state.set_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing watchpoint emulation...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "emulate_with_watchpoints",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _emulate, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _emulate, ctx=ctx,
+            timeout=300, on_timeout=_on_timeout_wp))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Watchpoint emulation queued."}
 
@@ -1154,9 +1188,11 @@ async def identify_cpp_classes(
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing class identification...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
             "tool": "identify_cpp_classes",
         })
-        task = asyncio.create_task(_run_background_task_wrapper(task_id, _identify, ctx=ctx))
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _identify, ctx=ctx, timeout=300))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Class identification queued."}
 

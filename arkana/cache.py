@@ -197,8 +197,8 @@ class AnalysisCache:
                     if now - last > 60:
                         meta[sha256]["last_accessed"] = now
                         self._save_meta(meta)
-        except OSError:
-            pass  # Stale LRU timestamp is acceptable
+        except OSError as exc:
+            logger.debug("Failed to update LRU timestamp for %s: %s", sha256[:12], exc)
 
         # Patch session-specific field
         pe_data["filepath"] = current_filepath

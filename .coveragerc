@@ -1,4 +1,5 @@
 [run]
+branch = True
 omit =
     # MCP tool modules — require optional deps or full server context
     arkana/mcp/tools_*.py

@@ -14,7 +14,7 @@ description: >
 # Arkana Binary Analysis Skill
 
 You are a binary analysis specialist using Arkana, a comprehensive binary analysis
-MCP server with 190 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 191 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -29,11 +29,38 @@ phases, adapting depth and tool selection to the analysis goal.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 190 MCP tools that cover these operations — use them.
+   analysis. Arkana has 191 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis is performed EXCLUSIVELY through
    Arkana's MCP tools (the `mcp__arkana__*` tool family). Nothing else.
+
+4. **NO speculative decryption / decompression**: Do NOT attempt to decrypt,
+   decompress, or decode embedded data unless you have **concrete evidence from
+   decompiled or disassembled code** showing the algorithm and key source.
+   "Concrete evidence" means you decompiled the function that performs the
+   operation and can cite: the specific algorithm (e.g., "sub_401830 calls
+   CryptDecrypt with CALG_RC4"), the key source (e.g., "16-byte key loaded
+   from .rdata+0x5000"), and the data location (e.g., "reads 54KB from
+   RCDATA/202"). Entropy analysis, hex patterns, "this looks encrypted",
+   or partial known-plaintext matches are NOT sufficient to start decryption.
+
+   Specifically forbidden without decompilation evidence:
+   - Guessing XOR keys or trying `brute_force_simple_crypto` (this tool
+     produces false positives — a coincidental "MZ" match does NOT mean you
+     found the right key; it means 2 bytes out of thousands happened to align)
+   - Trying random decompression algorithms on high-entropy data
+   - Chaining speculative `refinery_pipeline` operations hoping something works
+   - Trying multiple RC4/AES/XOR key combinations from different resources
+   - Deriving keys from known-plaintext XOR and assuming they repeat
+
+   The ONLY exceptions:
+   - `extract_config_automated()` and `extract_config_for_family()`, which use
+     validated family-specific logic internally
+   - `brute_force_simple_crypto()` AFTER decompilation reveals the algorithm
+     is simple XOR but the key can't be traced statically — and even then,
+     validate results thoroughly (a valid PE needs more than just "MZ at
+     offset 0"; check e_lfanew, section count, import table)
 
 **The ONLY exception**: the user explicitly and specifically asks you to run a
 shell command. Even then, prefer suggesting the equivalent Arkana tool first.
@@ -116,6 +143,66 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
 - **Trust Arkana's built-in guidance**: When tools error, Arkana returns enriched
   error messages with actionable next steps and alternative tool suggestions.
   Follow those hints rather than guessing at workarounds.
+- **Packed binaries: unpack first, analyze second**: When triage identifies a
+  packed binary (likely_packed=true, entropy > 7.2, imports < 10, PEiD match),
+  do NOT attempt to decompile individual functions or decrypt embedded resources.
+  The packing stub is designed to defeat static analysis — angr's CFG builder
+  will stall or produce useless results on obfuscated/encrypted code. Instead:
+  1. Follow Phase 2 (Unpack / Prepare) IMMEDIATELY
+  2. Try `auto_unpack_pe()` → `try_all_unpackers()` → `qiling_dump_unpacked_binary()`
+  3. Only after obtaining an unpacked binary should you proceed to Phase 3+
+  4. If ALL unpacking methods fail, report what IS known and state clearly that
+     analysis is blocked by packing — do NOT fall back to guessing at decryption
+
+  The resources, strings, and encrypted blobs inside a packed binary are there
+  to be processed by the UNPACKED code. You cannot understand the decryption
+  without first understanding the code that performs it, and you cannot
+  understand that code until the binary is unpacked.
+- **Wait for angr on unpacked binaries**: When working with an unpacked (or
+  never-packed) binary and a tool returns "Angr background analysis is still
+  in progress", follow this sequence:
+  1. Call `check_task_status('startup-angr')` to check progress — it now shows
+     `functions_discovered_so_far` and `stall_detection` for angr CFG tasks
+  2. If progress is advancing (percentage increasing or new functions being
+     discovered), do ONE round of productive non-angr work (e.g.,
+     `get_strings_summary`, `extract_resources`)
+  3. Check status again and retry decompilation once complete
+  4. Do NOT substitute hex dump reading for decompilation — wait for the
+     real thing
+
+  If angr is STUCK (`stall_detection.is_stalled=true` or same percentage for
+  multiple checks), the CFG will time out after 10 minutes. You do NOT need
+  to wait — use these tools immediately:
+  - `get_angr_partial_functions()` — lists functions discovered so far
+  - `decompile_function_with_angr(address)` — works WITHOUT full CFG by
+    building a local region CFG automatically
+  - `disassemble_at_address(address)` — works immediately (no CFG needed)
+
+  For packed binaries, unpack first rather than waiting for the timeout.
+- **Background task monitoring**: All 10 angr background tools (symbolic
+  execution, emulation, data flow analysis, binary diffing, loop analysis,
+  class identification) have automatic timeouts (300-600s) and stall
+  detection. Use `check_task_status(task_id)` to monitor any background task:
+  - `elapsed_seconds` / `elapsed_human` — always shown
+  - `stall_detection.is_stalled` — true when no progress update in 60s
+  - `timed_out` + `partial_result` — on timeout, 4 tools capture partial
+    results: `find_path_to_address` and `find_path_with_custom_input` (steps
+    completed, active states), `emulate_function_execution` (steps, partial
+    stdout), `emulate_with_watchpoints` (captured events list)
+  - Tasks time out automatically — you do NOT need to wait indefinitely.
+    When a task times out, check `partial_result` for salvageable data.
+  - Configure with `ARKANA_BACKGROUND_TASK_TIMEOUT` env var (default 600s).
+- **Evidence hierarchy — decompilation first**: When understanding what code
+  does, always prefer higher-quality evidence:
+  1. **Decompiled C pseudocode** (`decompile_function_with_angr`) — gold standard
+  2. **Annotated disassembly** (`get_annotated_disassembly`) — reliable fallback
+  3. **Raw disassembly** (`disassemble_at_address`) — acceptable for short stubs
+  4. **Hex dump** (`get_hex_dump`) — for DATA only, never for understanding code
+
+  Do NOT read hex dumps to understand what code does. You cannot reliably
+  disassemble x86 machine code by reading hex bytes. Hex dumps are for
+  examining data regions (encrypted blobs, config structs, overlay content,
+  PE headers). For code, always use decompilation or disassembly tools.
 - **Handle tool limits gracefully**: MCP responses are soft-capped at 8K chars
   (configurable via `ARKANA_MCP_RESPONSE_LIMIT_CHARS`) to prevent Claude Code CLI
   from truncating responses. Responses that exceed the limit are auto-truncated
@@ -219,6 +306,21 @@ Goal: obtain an unpacked binary suitable for static analysis. **Do not stop at
 tools — use them to get past the packing and analyse the actual payload.
 
 See [unpacking-guide.md](unpacking-guide.md) for detailed strategies.
+
+**CRITICAL**: This phase takes priority over Phase 3-5 for packed binaries.
+Do NOT skip ahead to decompile functions, extract configs, or decrypt resources
+while the binary is still packed. The unpacked code is what you need to
+understand — the packing stub is irrelevant noise. Angr WILL stall on packed
+binaries; this is expected, not a bug.
+
+**ACTUALLY CALL THE UNPACKING TOOLS**: Do not just think about which unpacking
+tool to use — call it. The most common failure mode is recognizing the binary
+is packed, identifying the right tool in your reasoning, but then trying
+something else instead (hex dumps, refinery operations, manual stub analysis).
+The method cascade below exists for a reason: call `auto_unpack_pe()` first,
+then `try_all_unpackers()`, then `qiling_dump_unpacked_binary()`. Only attempt
+manual stub analysis (Method 5) after all three automated methods have been
+tried and have returned explicit failure results.
 
 **Method cascade** (try in order, stop when successful):
 
@@ -352,9 +454,28 @@ Progressive depth — use the minimum tier needed to answer your question.
   functions, not whole-binary analysis.
 - **Many functions (>1000)**: Use `get_function_map(limit=15)` to focus on the most
   interesting. Don't attempt to decompile exhaustively.
-- **Angr timeout**: If decompilation times out, try: (1) a smaller function first to
-  verify angr works, (2) `get_annotated_disassembly()` as a disassembly-only fallback,
-  (3) increasing timeout if the function is genuinely large and important.
+- **Angr on packed binaries**: If the binary is packed and angr is stuck at a
+  low percentage, the CFG build will time out after 10 minutes. Packed code
+  contains anti-analysis patterns that defeat CFG construction. Go back to
+  Phase 2 and unpack first. While waiting or after timeout, you can still:
+  - `get_angr_partial_functions()` to see what was discovered
+  - `decompile_function_with_angr(address)` builds a local CFG automatically
+  - `disassemble_at_address(address)` works without any CFG
+- **Angr startup delay on normal binaries**: For unpacked binaries, angr
+  typically builds its CFG within 30-120 seconds. During this window,
+  `check_task_status('startup-angr')` shows function discovery progress and
+  stall detection. Most angr tools wait for CFG completion, but
+  `decompile_function_with_angr`, `disassemble_at_address`, and
+  `get_angr_partial_functions` work without full CFG.
+- **Angr timeout**: If decompilation times out AFTER angr is ready (different
+  from startup delay), try: (1) a smaller function first to verify angr works,
+  (2) `get_annotated_disassembly()` as a fallback, (3) increasing timeout.
+- **Background task timeouts**: All 10 angr background tools time out
+  automatically (symbolic execution 600s, emulation/data-flow 300s, diffing
+  600s). `check_task_status(task_id)` shows elapsed time and detects stalls.
+  On timeout, check `partial_result` — `find_path_to_address`,
+  `find_path_with_custom_input`, `emulate_function_execution`, and
+  `emulate_with_watchpoints` capture partial results (steps, states, events).
 - **Emulation limits**: Qiling/Speakeasy may not terminate for complex binaries. Always
   set a `timeout` parameter. Check results even on partial execution.
 
@@ -412,6 +533,17 @@ Progressive depth — use the minimum tier needed to answer your question.
 
 Pull out IOCs, configs, and encoded data.
 **Reminder: NO Bash, NO Python scripts. Use ONLY Arkana MCP tools below.**
+
+**Evidence-first gate**: Before calling ANY manual decryption/decoding tool
+in this phase, you MUST have:
+1. Decompiled the function that performs the decryption (or read its disassembly)
+2. Identified the algorithm FROM THE CODE (not from guessing or entropy analysis)
+3. Identified the key/IV source FROM THE CODE (not from brute-forcing)
+4. Identified the encrypted data location and size FROM THE CODE
+
+If you cannot answer all four, go back to Phase 4 and decompile the relevant
+function. The automated tools (`extract_config_automated`,
+`extract_config_for_family`) are exempt from this requirement.
 
 ### Automated Extraction
 - `extract_config_automated()` — auto-detect and extract C2 configurations
@@ -782,7 +914,7 @@ data accumulate. If the session becomes sluggish or context is getting large, us
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 190-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [tooling-reference.md](tooling-reference.md) — Complete 191-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to Arkana tool calls

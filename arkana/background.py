@@ -1,4 +1,5 @@
 """Background task management: heartbeat monitoring, progress tracking, async wrappers."""
+import concurrent.futures
 import datetime
 import inspect
 import sys
@@ -8,6 +9,8 @@ import threading
 import logging
 
 from arkana.config import state, logger
+from arkana.constants import ANGR_CFG_TIMEOUT, BACKGROUND_TASK_TIMEOUT
+from arkana.utils import _safe_env_int
 from arkana.state import (
     get_current_state, set_current_state, get_all_session_states,
     TASK_RUNNING, TASK_COMPLETED, TASK_FAILED,
@@ -64,7 +67,8 @@ def _update_progress(task_id: str, percent: int, message: str, bridge=None):
     If a :class:`~arkana.mcp._progress_bridge.ProgressBridge` is provided,
     also push the progress notification to the MCP client in real-time.
     """
-    state.update_task(task_id, progress_percent=percent, progress_message=message)
+    state.update_task(task_id, progress_percent=percent, progress_message=message,
+                      last_progress_epoch=time.time())
     if bridge is not None:
         try:
             bridge.report_progress(percent, 100)
@@ -81,7 +85,8 @@ def _log_task_exception(task_id: str):
     return _callback
 
 
-async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None, **kwargs):
+async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
+                                       timeout=None, on_timeout=None, **kwargs):
     """Helper to run a blocking function in a thread and update the registry.
 
     Parameters
@@ -95,6 +100,13 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None, **kw
         *func* (as ``_progress_bridge`` kwarg) so that the worker can push
         real-time MCP progress notifications in addition to the pollable
         task registry.
+    timeout : int or None
+        Seconds before the task is cancelled.  Defaults to the
+        ``ARKANA_BACKGROUND_TASK_TIMEOUT`` env var / ``BACKGROUND_TASK_TIMEOUT``
+        constant (600 s).  Pass ``0`` to disable.
+    on_timeout : callable or None
+        Optional callback invoked on timeout to capture partial results.
+        Should return a dict (or None).
     """
 
     # Lazy-start the heartbeat monitor on the first background request
@@ -140,7 +152,14 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None, **kw
             ):
                 kwargs['_progress_bridge'] = bridge
 
-        result = await asyncio.to_thread(_thread_wrapper)
+        task_timeout = timeout if timeout is not None else _safe_env_int(
+            "ARKANA_BACKGROUND_TASK_TIMEOUT", BACKGROUND_TASK_TIMEOUT)
+
+        coro = asyncio.to_thread(_thread_wrapper)
+        if task_timeout > 0:
+            result = await asyncio.wait_for(coro, timeout=task_timeout)
+        else:
+            result = await coro
 
         state.update_task(task_id, result=result, status=TASK_COMPLETED,
                           progress_percent=100, progress_message="Analysis complete.")
@@ -149,10 +168,57 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None, **kw
             bridge.info("Background task complete.", force=True)
         print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
 
+    except asyncio.TimeoutError:
+        partial = None
+        if on_timeout is not None:
+            try:
+                partial = on_timeout()
+            except Exception:
+                logger.debug("on_timeout callback failed for task %s", task_id, exc_info=True)
+
+        error_msg = f"Task timed out after {task_timeout}s."
+        if partial:
+            error_msg += " Partial results are available."
+
+        state.update_task(task_id, status=TASK_FAILED, error=error_msg,
+                          timed_out=True, partial_result=partial,
+                          progress_message=f"Timed out after {task_timeout}s")
+        if bridge is not None:
+            bridge.info(f"Task timed out after {task_timeout}s.", force=True)
+        print(f"\n[!] Task {task_id[:8]} timed out after {task_timeout}s.", file=sys.stderr)
+
     except Exception as e:
         logger.error("Background task %s failed: %s: %s", task_id, type(e).__name__, e, exc_info=True)
         state.update_task(task_id, error=str(e), status=TASK_FAILED)
         print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
+
+
+def _cfg_stall_monitor(project, task_id, interval=15):
+    """Sample KB function count periodically during CFGFast.
+
+    Writes snapshots to task metadata so check_task_status can compute
+    stall detection. Runs until the task leaves TASK_RUNNING state.
+    """
+    snapshots = []  # list of (timestamp, func_count)
+    while True:
+        task = state.get_task(task_id)
+        if not task or task["status"] != TASK_RUNNING:
+            break
+        try:
+            count = len(project.kb.functions)
+        except Exception:
+            count = 0
+        now = time.time()
+        snapshots.append((now, count))
+        # Keep last 20 snapshots (~5 min at 15s interval)
+        if len(snapshots) > 20:
+            snapshots = snapshots[-20:]
+        state.update_task(
+            task_id,
+            cfg_func_snapshots=list(snapshots),
+            cfg_functions_discovered=count,
+        )
+        time.sleep(interval)
 
 
 def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch_hint: str = "amd64",
@@ -177,6 +243,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
     import angr  # imported here since this only runs when ANGR_AVAILABLE is True
 
+    cfg_timeout = _safe_env_int("ARKANA_ANGR_CFG_TIMEOUT", ANGR_CFG_TIMEOUT)
     bridge = _progress_bridge  # shorter alias
 
     try:
@@ -196,8 +263,47 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         state.set_angr_results(project, None, None, None)
         _update_progress(task_id, 20, "Building Control Flow Graph...", bridge=bridge)
 
-        # 2. Build CFG (the heaviest step)
-        cfg = project.analyses.CFGFast(normalize=True, resolve_indirect_jumps=True)
+        # 2. Build CFG (the heaviest step) — with timeout and stall monitor
+        monitor = threading.Thread(
+            target=_cfg_stall_monitor,
+            args=(project, task_id),
+            daemon=True,
+        )
+        monitor.start()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                project.analyses.CFGFast,
+                normalize=True,
+                resolve_indirect_jumps=True,
+            )
+            try:
+                cfg = future.result(timeout=cfg_timeout)
+            except concurrent.futures.TimeoutError:
+                try:
+                    funcs_found = len(project.kb.functions)
+                except Exception:
+                    funcs_found = 0
+                error_msg = (
+                    f"CFG build timed out after {cfg_timeout}s "
+                    f"(discovered {funcs_found} functions before stalling). "
+                    "Binary is likely packed/obfuscated. Try: auto_unpack_pe() → "
+                    "try_all_unpackers() → qiling_dump_unpacked_binary(). "
+                    "You can still decompile discovered functions — "
+                    "decompile_function_with_angr() will build a local CFG."
+                )
+                logger.warning("Background Angr CFG timed out after %ds for %s", cfg_timeout, filepath)
+                state.update_task(
+                    task_id,
+                    status=TASK_FAILED,
+                    error=error_msg,
+                    progress_message=f"CFG timed out ({funcs_found} functions discovered)",
+                )
+                if bridge is not None:
+                    bridge.info(f"CFG timed out after {cfg_timeout}s. {funcs_found} partial functions available.", force=True)
+                print(f"\n[!] Background Angr CFG timed out after {cfg_timeout}s ({funcs_found} functions found).", file=sys.stderr)
+                return  # monitor thread exits on next iteration (status != RUNNING)
+
         state.set_angr_results(project, cfg, None, None)
         _update_progress(task_id, 80, "Identifying loops...", bridge=bridge)
 

@@ -440,6 +440,7 @@ _TOOLS_BY_PHASE = {
     ],
     "explore": [
         ("get_function_map", "Scored function list — prioritize what to decompile."),
+        ("get_angr_partial_functions", "List functions discovered so far (works during/after CFG build)."),
         ("get_hex_dump", "Inspect raw bytes at a specific offset. Accepts hex: '0x1b22d8'."),
         ("detect_crypto_constants", "Scan for AES S-boxes, SHA constants, RC4 init."),
         ("identify_crypto_algorithm", "Deep crypto identification with confidence scoring."),

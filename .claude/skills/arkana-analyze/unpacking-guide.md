@@ -109,6 +109,12 @@ find_oep_heuristic()                       → heuristic OEP detection
 ```
 
 If heuristic fails, manual approach:
+
+**Note**: Angr CFG analysis typically stalls on packed binaries because the code
+is encrypted/obfuscated. If angr is stuck, try `disassemble_raw_bytes()` on
+specific hex regions, or prefer Method 3 (Qiling emulation) which executes the
+stub dynamically rather than analyzing it statically.
+
 ```
 decompile_function_with_angr(entry_point)  → understand the unpacking stub
 get_function_cfg(entry_point)              → map the stub's control flow

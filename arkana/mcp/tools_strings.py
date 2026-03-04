@@ -5,7 +5,7 @@ import copy
 import os
 import asyncio
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 
 from arkana.config import (
     state, logger, Context,
@@ -18,6 +18,7 @@ from arkana.mcp.server import (
 )
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.parsers.strings import _extract_strings_from_data, _search_specific_strings_in_data
+from arkana.mcp._input_helpers import _parse_int_param
 from arkana.utils import validate_regex_pattern as _validate_regex_pattern, safe_regex_search as _safe_regex_search
 
 # Upper bound on the 'limit' parameter to prevent excessive memory allocation
@@ -960,7 +961,7 @@ async def get_top_sifted_strings(
 @tool_decorator
 async def get_strings_for_function(
     ctx: Context,
-    function_va: int,
+    function_va: Union[int, str] = 0,
     limit: int = 20
 ) -> List[Dict[str, Any]]:
     """
@@ -975,12 +976,13 @@ async def get_strings_for_function(
 
     Args:
         ctx: The MCP Context object.
-        function_va: (int) The virtual address of the function to query.
+        function_va: Virtual address of the function — hex string (e.g. '0x401000') or int.
         limit: (int) The maximum number of strings to return. Defaults to 100.
 
     Returns:
         A list of string dictionaries that are associated with the given function.
     """
+    function_va = _parse_int_param(function_va, "function_va")
     await ctx.info(f"Request for strings referenced by function: {hex(function_va)}")
     _check_data_key_available("floss_analysis", "get_strings_for_function")
 
@@ -1017,7 +1019,7 @@ async def get_strings_for_function(
 @tool_decorator
 async def get_string_usage_context(
     ctx: Context,
-    string_offset: int,
+    string_offset: Union[int, str] = 0,
     limit: int = 20
 ) -> List[Dict[str, Any]]:
     """
@@ -1037,7 +1039,7 @@ async def get_string_usage_context(
 
     Args:
         ctx: The MCP Context object.
-        string_offset: (int) The file offset (e.g., 12345) of the static string to look up.
+        string_offset: File offset — hex string (e.g. '0x3039') or int (e.g. 12345).
         limit: (int) Max number of reference contexts to return. Defaults to 20.
 
     Returns:
@@ -1045,6 +1047,7 @@ async def get_string_usage_context(
         a snippet of disassembly code showing how the string is used. Returns an
         empty list if the offset is not found or has no references.
     """
+    string_offset = _parse_int_param(string_offset, "string_offset")
     await ctx.info(f"Request for usage context for string at offset: {hex(string_offset)}")
     _check_data_key_available("floss_analysis", "get_string_usage_context")
 

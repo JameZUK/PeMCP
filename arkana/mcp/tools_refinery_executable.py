@@ -111,8 +111,8 @@ async def refinery_executable(
         _check_pe_loaded("refinery_executable")
         data = _get_file_data()
         if not address:
-            return {"error": "virtual_read requires the 'address' parameter (hex, e.g. '0x00401000')."}
-        addr = int(address, 16) if isinstance(address, str) else address
+            return {"error": "virtual_read requires the 'address' parameter (hex or decimal, e.g. '0x00401000' or '4194304')."}
+        addr = int(address, 0) if isinstance(address, str) else address
         await ctx.info(f"Reading {size} bytes at VA {hex(addr)}...")
 
         def _run_vread():
@@ -134,8 +134,8 @@ async def refinery_executable(
         _check_pe_loaded("refinery_executable")
         data = _get_file_data()
         if not offset:
-            return {"error": "file_to_virtual requires the 'offset' parameter (hex, e.g. '0x400')."}
-        off = int(offset, 16) if isinstance(offset, str) else offset
+            return {"error": "file_to_virtual requires the 'offset' parameter (hex or decimal, e.g. '0x400' or '1024')."}
+        off = int(offset, 0) if isinstance(offset, str) else offset
         await ctx.info(f"Converting file offset {hex(off)} to virtual address...")
 
         def _run_f2v():

@@ -157,7 +157,11 @@ Single-byte XOR key, config is a TLV (type-length-value) structure.
 
 ```
 1. get_hex_dump(offset=<.data section start>, length=0x2000) → search for 0x1000-byte high-entropy region
-2. brute_force_simple_crypto(data_hex="<0x1000 bytes hex>", known_plaintext="MZ") or deobfuscate_xor_single_byte(data_hex="<0x1000 bytes hex>", key=0x69) — try common keys (0x69, 0x2e)
+2. Decompile the config decryption function to identify the XOR key.
+   Cobalt Strike commonly uses single-byte XOR (0x69 or 0x2e).
+   Only if key is not visible in decompiled code:
+   brute_force_simple_crypto(..., known_plaintext="MZ") — but validate
+   the FULL PE structure, not just the first 2 bytes
 3. Or: extract_config_automated() — has built-in Cobalt Strike parser
 4. Parse TLV: type (2 bytes) + length (2 bytes) + value
 5. Key fields: BeaconType (0x0001), Port (0x0002), SleepTime (0x0003),
@@ -376,6 +380,12 @@ When the malware family is unknown, use this systematic approach:
    After identifying the algorithm and key, re-run identify_malware_family()
    with the new evidence — you may now match a known family.
 ```
+
+**IMPORTANT**: Do NOT skip step 2 (decompile) and jump to `brute_force_simple_crypto`.
+Decompilation reveals the actual algorithm — brute-forcing guesses at it. Without
+decompiling the decryption function, you have no evidence for which algorithm is
+used, what the key size is, or whether the "encrypted" data is even encrypted
+(it could be compressed, serialized, or structured data).
 
 ### Step 4: Extract and Decrypt
 ```
