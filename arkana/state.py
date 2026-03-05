@@ -108,6 +108,12 @@ class AnalyzerState:
         self._cached_function_scores: Optional[List[Dict[str, Any]]] = None
         self.last_digest_timestamp: float = 0.0
 
+        # Active tool tracking (for dashboard live status)
+        self._active_tool_lock = threading.Lock()
+        self.active_tool: Optional[str] = None
+        self.active_tool_progress: int = 0
+        self.active_tool_total: int = 100
+
         # Paginated result cache (LRU per-tool, 5 slots each)
         from arkana.mcp._input_helpers import _ToolResultCache
         self.result_cache = _ToolResultCache()
