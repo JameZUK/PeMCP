@@ -47,6 +47,11 @@ _COOKIE_NAME = "arkana_dash"
 # Cookie max age: 30 days
 _COOKIE_MAX_AGE = 30 * 24 * 3600
 
+# SSE connection limit
+_MAX_SSE_CONNECTIONS = 10
+_sse_connection_count = 0
+_sse_lock = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 #  Token management
@@ -117,7 +122,7 @@ def _make_auth_response(request: Request, dashboard_token: str, response: Respon
             _COOKIE_NAME, token_param,
             max_age=_COOKIE_MAX_AGE,
             httponly=True,
-            samesite="lax",
+            samesite="strict",
         )
     return response
 
@@ -151,7 +156,7 @@ def _create_routes(dashboard_token: str) -> list:
                 _COOKIE_NAME, token,
                 max_age=_COOKIE_MAX_AGE,
                 httponly=True,
-                samesite="lax",
+                samesite="strict",
             )
             return resp
         return RedirectResponse("/dashboard/login?error=invalid", status_code=302)
@@ -181,38 +186,38 @@ def _create_routes(dashboard_token: str) -> list:
         return JSONResponse(get_overview_data())
 
     async def api_debug(request: Request) -> Response:
-        """Diagnostic endpoint — shows raw state identity to debug isolation issues."""
+        """Diagnostic endpoint — shows state isolation info (sanitized)."""
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         from arkana.state import _default_state as ds, _session_registry, _registry_lock
-        resolved = _get_state_for_debug()
+        from arkana.dashboard.state_api import _get_state
+        resolved = _get_state()
         sessions = []
         with _registry_lock:
             for key, st in _session_registry.items():
                 sessions.append({
-                    "key": key[:16] + "...",
-                    "filepath": st.filepath,
+                    "key": key[:8] + "...",
+                    "has_file": st.filepath is not None,
                     "notes": len(st.get_notes()),
                 })
         return JSONResponse({
-            "default_state_filepath": ds.filepath,
-            "resolved_state_filepath": resolved.filepath,
+            "default_has_file": ds.filepath is not None,
+            "resolved_has_file": resolved.filepath is not None,
             "resolved_is_default": resolved is ds,
             "session_count": len(sessions),
             "sessions": sessions,
-            "pid": os.getpid(),
         })
-
-    def _get_state_for_debug():
-        from arkana.dashboard.state_api import _get_state
-        return _get_state()
 
     async def api_functions(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         sort_by = request.query_params.get("sort", "address")
+        if sort_by not in ("address", "name", "size", "complexity", "triage"):
+            sort_by = "address"
         filter_triage = request.query_params.get("triage", "all")
-        search = request.query_params.get("search", "")
+        if filter_triage not in ("all", "unreviewed", "suspicious", "clean", "flagged"):
+            filter_triage = "all"
+        search = request.query_params.get("search", "")[:500]
         sort_asc = request.query_params.get("asc", "1") == "1"
         data = get_functions_data(sort_by=sort_by, filter_triage=filter_triage, search=search, sort_asc=sort_asc)
         return JSONResponse(data)
@@ -227,7 +232,7 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
             body = await request.json()
-        except Exception:
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
         address = body.get("address", "").strip().lower()
         status = body.get("status", "").strip()
@@ -241,14 +246,18 @@ def _create_routes(dashboard_token: str) -> list:
             try:
                 from arkana.config import analysis_cache
                 analysis_cache.update_session_data(sha, triage_status=st.get_all_triage_snapshot())
-            except Exception:
+            except (OSError, IOError, KeyError):
                 pass
         return JSONResponse({"ok": True, "address": address, "status": status})
 
     async def api_timeline(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        limit = int(request.query_params.get("limit", "100"))
+        try:
+            limit = int(request.query_params.get("limit", "100"))
+            limit = max(1, min(limit, 5000))
+        except (ValueError, TypeError):
+            limit = 100
         return JSONResponse(get_timeline_data(limit=limit))
 
     async def api_events(request: Request) -> Response:
@@ -256,24 +265,50 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
 
+        global _sse_connection_count
+        with _sse_lock:
+            if _sse_connection_count >= _MAX_SSE_CONNECTIONS:
+                return JSONResponse(
+                    {"error": "too many SSE connections"},
+                    status_code=429,
+                )
+            _sse_connection_count += 1
+
         async def event_generator():
-            last_tool_count = 0
-            last_notes_count = 0
-            while True:
-                await asyncio.sleep(2)
-                try:
-                    overview = get_overview_data()
-                    current_tools = overview["tool_calls"]
-                    current_notes = overview["notes_count"]
-                    if current_tools != last_tool_count or current_notes != last_notes_count:
-                        last_tool_count = current_tools
-                        last_notes_count = current_notes
-                        data = json.dumps(overview)
-                        yield f"event: state-update\ndata: {data}\n\n"
-                except asyncio.CancelledError:
-                    return
-                except Exception:
-                    pass
+            global _sse_connection_count
+            try:
+                last_tool_count = 0
+                last_notes_count = 0
+                last_active_tool = None
+                last_progress = 0
+                while True:
+                    await asyncio.sleep(2)
+                    try:
+                        overview = get_overview_data()
+                        current_tools = overview["tool_calls"]
+                        current_notes = overview["notes_count"]
+                        current_active = overview.get("active_tool")
+                        current_progress = overview.get("active_tool_progress", 0)
+                        changed = (
+                            current_tools != last_tool_count
+                            or current_notes != last_notes_count
+                            or current_active != last_active_tool
+                            or current_progress != last_progress
+                        )
+                        if changed:
+                            last_tool_count = current_tools
+                            last_notes_count = current_notes
+                            last_active_tool = current_active
+                            last_progress = current_progress
+                            data = json.dumps(overview)
+                            yield f"event: state-update\ndata: {data}\n\n"
+                    except asyncio.CancelledError:
+                        return
+                    except Exception:
+                        logger.debug("SSE event generation error", exc_info=True)
+            finally:
+                with _sse_lock:
+                    _sse_connection_count = max(0, _sse_connection_count - 1)
 
         from starlette.responses import StreamingResponse
         return StreamingResponse(
@@ -394,7 +429,7 @@ def start_dashboard_thread(host: str = "127.0.0.1", port: int = 8082) -> threadi
     t = threading.Thread(target=_run, daemon=True, name="arkana-dashboard")
     t.start()
     logger.info(
-        "Dashboard: http://%s:%d/dashboard/?token=%s",
-        host, port, dashboard_token,
+        "Dashboard: http://%s:%d/dashboard/ (token: %s...)",
+        host, port, dashboard_token[:8],
     )
     return t

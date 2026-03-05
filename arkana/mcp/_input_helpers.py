@@ -75,6 +75,12 @@ class _ToolResultCache:
             while len(bucket) > _LRU_SLOTS_PER_TOOL:
                 bucket.popitem(last=False)
 
+    def keys(self, tool_name: str) -> List:
+        """Return a snapshot of cached param keys for *tool_name*."""
+        with self._lock:
+            bucket = self._store.get(tool_name)
+            return list(bucket.keys()) if bucket else []
+
     def clear(self, tool_name: Optional[str] = None) -> None:
         """Clear cache for a specific tool, or all tools if *tool_name* is ``None``."""
         with self._lock:

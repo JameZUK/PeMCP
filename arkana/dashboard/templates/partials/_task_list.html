@@ -5,13 +5,31 @@
         <div class="task-header">
             <span class="task-id mono">{{ task.id }}</span>
             <span class="badge badge-{{ task.status }}">{{ task.status|upper }}</span>
+            {% if task.elapsed_s > 0 %}
+            <span class="dim" style="margin-left: auto; font-size: 11px;">
+                {% if task.elapsed_s >= 3600 %}{{ (task.elapsed_s // 3600) }}h {{ ((task.elapsed_s % 3600) // 60) }}m
+                {% elif task.elapsed_s >= 60 %}{{ (task.elapsed_s // 60) }}m {{ (task.elapsed_s % 60) }}s
+                {% else %}{{ task.elapsed_s }}s{% endif %}
+            </span>
+            {% endif %}
         </div>
         <div class="task-tool">{{ task.tool }}</div>
         {% if task.status == 'running' %}
         <div class="progress-bar">
             <div class="progress-fill" style="width: {{ task.progress_percent }}%"></div>
         </div>
-        <div class="task-msg dim">{{ task.progress_message }}</div>
+        <div class="task-progress-row">
+            <span class="task-msg dim">{{ task.progress_message }}</span>
+            <span class="task-percent">{{ task.progress_percent }}%</span>
+        </div>
+        {% if task.stall_s > 0 %}
+        <div class="task-stall warning">
+            &#9888; STALLED — no progress for
+            {% if task.stall_s >= 3600 %}{{ (task.stall_s // 3600) }}h {{ ((task.stall_s % 3600) // 60) }}m
+            {% elif task.stall_s >= 60 %}{{ (task.stall_s // 60) }}m {{ (task.stall_s % 60) }}s
+            {% else %}{{ task.stall_s }}s{% endif %}
+        </div>
+        {% endif %}
         {% endif %}
     </div>
     {% endfor %}

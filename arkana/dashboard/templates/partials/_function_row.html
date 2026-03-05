@@ -1,13 +1,13 @@
-<tr class="triage-{{ f.triage_status }}{% if f.has_note %} has-note{% endif %}">
+<tr class="triage-{{ f.triage_status }}{% if f.has_note %} has-note{% endif %}{% if f.is_decompiled %} explored{% endif %}{% if f.is_renamed %} renamed{% endif %}">
     <td class="mono">{{ f.address }}</td>
-    <td>{{ f.name }}{% if f.has_note %} <span class="note-indicator" title="Has notes">*</span>{% endif %}</td>
+    <td>{% if f.is_renamed %}<span class="badge badge-renamed" title="Renamed">REN</span> {% endif %}{% if f.is_decompiled %}<span class="badge badge-explored" title="Decompiled">DEC</span> {% endif %}{{ f.name }}{% if f.has_note %} <span class="note-indicator" title="Has notes">*</span>{% endif %}</td>
     <td>{{ f.size }}</td>
     <td>{{ f.complexity }}</td>
     <td><span class="badge badge-{{ f.triage_status }}">{{ f.triage_status|upper }}</span></td>
     <td class="triage-btns">
-        <button class="btn-triage btn-flag{% if f.triage_status == 'flagged' %} active{% endif %}" onclick="setTriage('{{ f.address }}','flagged')">FLAG</button>
-        <button class="btn-triage btn-suspicious{% if f.triage_status == 'suspicious' %} active{% endif %}" onclick="setTriage('{{ f.address }}','suspicious')">SUS</button>
-        <button class="btn-triage btn-clean{% if f.triage_status == 'clean' %} active{% endif %}" onclick="setTriage('{{ f.address }}','clean')">CLN</button>
+        <button class="btn-triage btn-flag{% if f.triage_status == 'flagged' %} active{% endif %}" data-addr="{{ f.address }}" data-status="flagged">FLAG</button>
+        <button class="btn-triage btn-suspicious{% if f.triage_status == 'suspicious' %} active{% endif %}" data-addr="{{ f.address }}" data-status="suspicious">SUS</button>
+        <button class="btn-triage btn-clean{% if f.triage_status == 'clean' %} active{% endif %}" data-addr="{{ f.address }}" data-status="clean">CLN</button>
     </td>
 </tr>
 {% if f.has_note %}

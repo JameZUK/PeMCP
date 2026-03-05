@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
     <title>Arkana — Access Terminal</title>
     <link rel="stylesheet" href="/dashboard/static/crt.css">
     <link rel="icon" href="/dashboard/static/logo_icon.svg" type="image/svg+xml">
@@ -32,16 +34,6 @@
         </div>
     </div>
 
-    <script>
-    // Auto-login if ?token= is present
-    (function() {
-        var params = new URLSearchParams(window.location.search);
-        var token = params.get('token');
-        if (token) {
-            document.getElementById('token').value = token;
-            document.querySelector('.login-form').submit();
-        }
-    })();
-    </script>
+    <script src="/dashboard/static/login.js"></script>
 </body>
 </html>

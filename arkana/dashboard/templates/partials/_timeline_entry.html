@@ -2,17 +2,24 @@
 {% if entries %}
 <div class="timeline">
     {% for e in entries %}
-    <div class="timeline-entry type-{{ e.type }}" data-entry-id="{{ e.type }}-{{ e.name }}-{{ e.timestamp[:19] if e.timestamp else loop.index }}" onclick="toggleTimelineDetail(this)">
-        <div class="timeline-dot"></div>
+    <div class="timeline-entry type-{{ e.type }}{% if e.type != 'active' %} expandable{% endif %}" data-entry-id="{{ e.type }}-{{ e.name }}-{{ e.timestamp[:19] if e.timestamp else loop.index }}">
+        <div class="timeline-dot{% if e.type == 'active' %} dot-active{% endif %}"></div>
         <div class="timeline-content">
             <div class="timeline-header">
-                <span class="badge badge-{{ e.type }}">{{ e.type|upper }}</span>
+                <span class="badge badge-{{ e.type }}">{% if e.type == 'active' %}RUNNING{% else %}{{ e.type|upper }}{% endif %}</span>
                 <span class="timeline-name">{{ e.name }}</span>
-                {% if e.duration_ms > 0 %}
+                {% if e.type == 'active' and e.total > 0 %}
+                <span class="dim">{{ e.progress }}%</span>
+                {% elif e.duration_ms > 0 %}
                 <span class="dim">{{ e.duration_ms }}ms</span>
                 {% endif %}
-                <span class="timeline-expand dim">&#9654;</span>
+                {% if e.type != 'active' %}<span class="timeline-expand dim">&#9654;</span>{% endif %}
             </div>
+            {% if e.type == 'active' and e.total > 0 %}
+            <div class="progress-bar" style="margin: 4px 0 0 0;">
+                <div class="progress-fill" style="width: {{ (e.progress / e.total * 100)|int }}%"></div>
+            </div>
+            {% endif %}
             <div class="timeline-summary">{{ e.summary }}</div>
             <div class="timeline-time dim">{{ e.timestamp[:19] if e.timestamp else '' }}</div>
             {% if e.type == 'tool' and e.parameters %}

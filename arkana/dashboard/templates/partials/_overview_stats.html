@@ -1,5 +1,16 @@
 {% if data and data.file_loaded %}
 {% set bs = data.binary_summary or {} %}
+{% if data.active_tool %}
+<div class="panel active-tool-banner">
+    <span class="glow">&#9654; {{ data.active_tool }}</span>
+    {% if data.active_tool_total > 0 %}
+    <div class="progress-bar" style="flex: 1; margin-left: 16px;">
+        <div class="progress-fill" style="width: {{ (data.active_tool_progress / data.active_tool_total * 100)|int }}%"></div>
+    </div>
+    <span class="dim" style="margin-left: 8px;">{{ data.active_tool_progress }}%</span>
+    {% endif %}
+</div>
+{% endif %}
 <div class="stats-grid">
     <div class="panel stat-card">
         <div class="panel-header">FILE</div>
@@ -73,10 +84,55 @@
         </div>
         <div class="summary-section">
             <div class="summary-section-title">SECURITY MITIGATIONS</div>
-            {% if bs.aslr is defined %}
+            {% if bs.elf_security %}
+            {# ELF binary mitigations #}
+            {% set es = bs.elf_security %}
+            <div class="summary-row">
+                <span class="summary-label">PIE:</span>
+                <span>{% if es.pie %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
+            </div>
+            <div class="summary-row">
+                <span class="summary-label">NX:</span>
+                <span>{% if es.nx %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
+            </div>
+            <div class="summary-row">
+                <span class="summary-label">RELRO:</span>
+                <span>{% if es.full_relro %}<span class="safe">FULL</span>{% elif es.partial_relro %}<span class="warning">PARTIAL</span>{% else %}<span class="danger">NONE</span>{% endif %}</span>
+            </div>
+            <div class="summary-row">
+                <span class="summary-label">CANARY:</span>
+                <span>{% if es.canary %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
+            </div>
+            {% if es.stripped is defined %}
+            <div class="summary-row">
+                <span class="summary-label">STRIPPED:</span>
+                <span>{% if es.stripped %}<span class="warning">YES</span>{% else %}NO{% endif %}</span>
+            </div>
+            {% endif %}
+            {% elif bs.macho_security %}
+            {# Mach-O binary mitigations #}
+            {% set ms = bs.macho_security %}
+            <div class="summary-row">
+                <span class="summary-label">PIE:</span>
+                <span>{% if ms.pie %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
+            </div>
+            {% if ms.code_signing is defined %}
+            <div class="summary-row">
+                <span class="summary-label">CODE SIGN:</span>
+                <span>{% if ms.code_signing %}<span class="safe">SIGNED</span>{% else %}<span class="warning">UNSIGNED</span>{% endif %}</span>
+            </div>
+            {% endif %}
+            {% if ms.entitlements %}
+            <div class="summary-row">
+                <span class="summary-label">ENTITLEMENTS:</span>
+                <span>{{ ms.entitlements|length }} entries</span>
+            </div>
+            {% endif %}
+            {% elif bs.aslr is defined %}
+            {# PE binary mitigations #}
             <div class="summary-row">
                 <span class="summary-label">ASLR:</span>
-                <span>{% if bs.aslr %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
+                <span>{% if bs.aslr %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}{% if bs.high_entropy_aslr %} <span class="safe">(HIGH ENTROPY)</span>{% endif %}</span>
             </div>
             <div class="summary-row">
                 <span class="summary-label">DEP:</span>
@@ -86,6 +142,24 @@
                 <span class="summary-label">CFG:</span>
                 <span>{% if bs.cfg %}<span class="safe">ON</span>{% else %}<span class="danger">OFF</span>{% endif %}</span>
             </div>
+            {% if bs.cet %}
+            <div class="summary-row">
+                <span class="summary-label">CET:</span>
+                <span class="safe">ON</span>
+            </div>
+            {% endif %}
+            {% if bs.xfg %}
+            <div class="summary-row">
+                <span class="summary-label">XFG:</span>
+                <span class="safe">ON</span>
+            </div>
+            {% endif %}
+            {% if bs.no_seh %}
+            <div class="summary-row">
+                <span class="summary-label">NO SEH:</span>
+                <span class="safe">ON</span>
+            </div>
+            {% endif %}
             {% else %}
             <div class="summary-row dim">Run triage to see mitigations</div>
             {% endif %}
@@ -108,6 +182,200 @@
 </div>
 {% endif %}
 
+<!-- Panel A: Detected Capabilities -->
+{% if bs.capabilities or bs.yara_matches %}
+<div class="panel">
+    <div class="panel-header">DETECTED CAPABILITIES</div>
+    <div class="summary-grid">
+        <div class="summary-section">
+            <div class="summary-section-title">BEHAVIORAL CAPABILITIES</div>
+            {% if bs.capabilities %}
+            {% for cap in bs.capabilities %}
+            <div class="capability-item">
+                <span class="badge badge-severity-{{ cap.severity|lower }}">{{ cap.severity|upper }}</span>
+                <span class="capability-name">{{ cap.capability }}</span>
+                {% if cap.namespace %}<span class="capability-ns">{{ cap.namespace }}</span>{% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="dim" style="padding: 6px 0; font-size: 12px;">No capa matches</div>
+            {% endif %}
+        </div>
+        <div class="summary-section">
+            <div class="summary-section-title">YARA MATCHES</div>
+            {% if bs.yara_matches %}
+            {% for ym in bs.yara_matches %}
+            <div class="summary-row">
+                <span class="summary-label">{{ ym.rule }}</span>
+                <span>{{ ym.description }}</span>
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="dim" style="padding: 6px 0; font-size: 12px;">No YARA matches</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Panel B: Indicators of Compromise -->
+{% if bs.ioc_urls or bs.ioc_ips or bs.ioc_domains or bs.ioc_registry or bs.high_value_strings %}
+<div class="panel">
+    <div class="panel-header">INDICATORS OF COMPROMISE</div>
+    <div class="summary-grid">
+        <div class="summary-section">
+            <div class="summary-section-title">NETWORK INDICATORS</div>
+            {% if bs.ioc_urls %}
+            <div class="ioc-group">
+                <div class="ioc-group-label">URLS</div>
+                {% for u in bs.ioc_urls %}<div class="ioc-item">{{ u }}</div>{% endfor %}
+            </div>
+            {% endif %}
+            {% if bs.ioc_ips %}
+            <div class="ioc-group">
+                <div class="ioc-group-label">IP ADDRESSES</div>
+                {% for ip in bs.ioc_ips %}<div class="ioc-item">{{ ip }}</div>{% endfor %}
+            </div>
+            {% endif %}
+            {% if bs.ioc_domains %}
+            <div class="ioc-group">
+                <div class="ioc-group-label">DOMAINS</div>
+                {% for d in bs.ioc_domains %}<div class="ioc-item">{{ d }}</div>{% endfor %}
+            </div>
+            {% endif %}
+            {% if bs.ioc_registry %}
+            <div class="ioc-group">
+                <div class="ioc-group-label">REGISTRY</div>
+                {% for r in bs.ioc_registry %}<div class="ioc-item">{{ r }}</div>{% endfor %}
+            </div>
+            {% endif %}
+            {% if not bs.ioc_urls and not bs.ioc_ips and not bs.ioc_domains and not bs.ioc_registry %}
+            <div class="dim" style="padding: 6px 0; font-size: 12px;">No network indicators</div>
+            {% endif %}
+        </div>
+        <div class="summary-section">
+            <div class="summary-section-title">HIGH-VALUE STRINGS</div>
+            {% if bs.high_value_strings %}
+            {% for s in bs.high_value_strings %}
+            <div class="capability-item">
+                <span class="string-score">{{ s.sifter_score|round(1) }}</span>
+                <span class="capability-name mono">{{ s.string }}</span>
+                {% if s.category %}<span class="badge badge-dim">{{ s.category }}</span>{% endif %}
+            </div>
+            {% endfor %}
+            {% else %}
+            <div class="dim" style="padding: 6px 0; font-size: 12px;">No high-value strings</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Panel C: Binary Anomalies -->
+{% if bs.header_anomalies or (bs.tls_callbacks and bs.tls_callbacks.present) or (bs.overlay and bs.overlay.present) or bs.resource_anomalies or bs.version_info or bs.export_anomalies or bs.delay_load %}
+<div class="panel">
+    <div class="panel-header">BINARY ANOMALIES</div>
+    <div class="summary-rows">
+        {% if bs.header_anomalies %}
+        {% for a in bs.header_anomalies %}
+        <div class="anomaly-item">
+            <span class="anomaly-label">HEADER:</span>
+            <span class="anomaly-detail">
+                <span class="badge badge-severity-{{ a.severity|lower }}">{{ a.severity|upper }}</span>
+                {{ a.issue }}
+            </span>
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% if bs.tls_callbacks and bs.tls_callbacks.present %}
+        <div class="anomaly-item">
+            <span class="anomaly-label">TLS:</span>
+            <span class="anomaly-detail warning">{{ bs.tls_callbacks.callback_count }} callback(s){% if bs.tls_callbacks.warning %} &mdash; {{ bs.tls_callbacks.warning }}{% endif %}</span>
+        </div>
+        {% endif %}
+        {% if bs.overlay and bs.overlay.present %}
+        <div class="anomaly-item">
+            <span class="anomaly-label">OVERLAY:</span>
+            <span class="anomaly-detail">{{ (bs.overlay.size / 1024)|round(1) }} KB{% if bs.overlay.entropy %}, entropy {{ bs.overlay.entropy|round(2) }}{% endif %}{% if bs.overlay.suspected_type and bs.overlay.suspected_type != 'Unknown' %} &mdash; {{ bs.overlay.suspected_type }}{% endif %}</span>
+        </div>
+        {% endif %}
+        {% if bs.resource_anomalies %}
+        {% for r in bs.resource_anomalies %}
+        <div class="anomaly-item">
+            <span class="anomaly-label">RESOURCE:</span>
+            <span class="anomaly-detail">{{ r.type }}{% if r.anomaly %} &mdash; {{ r.anomaly }}{% endif %}{% if r.entropy %} (entropy {{ r.entropy|round(2) }}){% endif %}</span>
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% if bs.version_info and bs.version_info.anomalies %}
+        {% for va in bs.version_info.anomalies %}
+        <div class="anomaly-item">
+            <span class="anomaly-label">VERSION:</span>
+            <span class="anomaly-detail warning">{{ va }}</span>
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% if bs.export_anomalies %}
+        <div class="anomaly-item">
+            <span class="anomaly-label">EXPORTS:</span>
+            <span class="anomaly-detail">{{ bs.export_anomalies.ordinal_only_count }} ordinal-only, {{ bs.export_anomalies.forwarded_count }} forwarded</span>
+        </div>
+        {% endif %}
+        {% if bs.delay_load %}
+        <div class="anomaly-item">
+            <span class="anomaly-label">DELAY-LOAD:</span>
+            <span class="anomaly-detail">{{ bs.delay_load.dll_count }} DLLs{% if bs.delay_load.suspicious_apis %} &mdash; <span class="warning">{{ bs.delay_load.suspicious_apis|join(', ') }}</span>{% endif %}</span>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
+<!-- Panel D: Build Environment -->
+{% if (bs.rich_header and bs.rich_header.present) or bs.compiler_detail or bs.dotnet %}
+<div class="panel">
+    <div class="panel-header">BUILD ENVIRONMENT</div>
+    <div class="summary-rows">
+        {% if bs.compiler_detail and bs.compiler_detail.detected_languages %}
+        <div class="summary-row">
+            <span class="summary-label">COMPILER:</span>
+            <span>{{ bs.compiler_detail.detected_languages|join(', ') }}</span>
+        </div>
+        {% endif %}
+        {% if bs.rich_header and bs.rich_header.present %}
+        <div class="summary-row">
+            <span class="summary-label">RICH HEADER:</span>
+            <span>{% if bs.rich_header.raw_hash %}hash {{ bs.rich_header.raw_hash }}{% endif %}{% if bs.rich_header.entry_count %} &middot; {{ bs.rich_header.entry_count }} entries{% endif %}{% if bs.rich_header.anomaly %} &mdash; <span class="warning">{{ bs.rich_header.anomaly }}</span>{% endif %}</span>
+        </div>
+        {% endif %}
+        {% if bs.dotnet %}
+        <div class="summary-row">
+            <span class="summary-label">.NET:</span>
+            <span>CLR {{ bs.dotnet.clr_version }}{% if bs.dotnet.assembly_name %} &middot; {{ bs.dotnet.assembly_name }}{% endif %}</span>
+        </div>
+        {% endif %}
+        {% if bs.compiler_detail and bs.compiler_detail.go_indicators %}
+        <div class="summary-row">
+            <span class="summary-label">GO:</span>
+            <span class="dim">{{ bs.compiler_detail.go_indicators|join(', ') }}</span>
+        </div>
+        {% endif %}
+        {% if bs.compiler_detail and bs.compiler_detail.rust_indicators %}
+        <div class="summary-row">
+            <span class="summary-label">RUST:</span>
+            <span class="dim">{{ bs.compiler_detail.rust_indicators|join(', ') }}</span>
+        </div>
+        {% endif %}
+        {% if bs.compiler_detail and bs.compiler_detail.delphi_indicators %}
+        <div class="summary-row">
+            <span class="summary-label">DELPHI:</span>
+            <span class="dim">{{ bs.compiler_detail.delphi_indicators|join(', ') }}</span>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
 <!-- Activity Panel -->
 <div class="stats-grid">
     <div class="panel stat-card">
@@ -115,6 +383,9 @@
         <div class="stat-row"><span class="stat-label">TOOL CALLS:</span> <span>{{ data.tool_calls }}</span></div>
         <div class="stat-row"><span class="stat-label">NOTES:</span> <span>{{ data.notes_count }}</span></div>
         <div class="stat-row"><span class="stat-label">RENAMES:</span> <span>{{ data.rename_count or 0 }}</span></div>
+        <div class="stat-row"><span class="stat-label">VAR RENAMES:</span> <span>{{ data.rename_var_count or 0 }}</span></div>
+        <div class="stat-row"><span class="stat-label">LABELS:</span> <span>{{ data.label_count or 0 }}</span></div>
+        <div class="stat-row"><span class="stat-label">CUSTOM TYPES:</span> <span>{{ data.custom_type_count or 0 }}</span></div>
         <div class="stat-row"><span class="stat-label">ARTIFACTS:</span> <span>{{ data.artifacts_count }}</span></div>
         {% if data.triage_counts %}
         <div class="stat-row" style="margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--primary-ghost);">
@@ -144,6 +415,18 @@
         <div class="empty-msg dim" style="padding: 12px;">No notes yet.</div>
         {% endif %}
     </div>
+    {% if data.recent_artifacts %}
+    <div class="panel stat-card">
+        <div class="panel-header">RECENT ARTIFACTS</div>
+        {% for a in data.recent_artifacts %}
+        <div class="artifact-item" style="padding: 4px 12px;">
+            {% if a.detected_type %}<span class="artifact-type badge badge-dim">{{ a.detected_type }}</span>{% endif %}
+            <span class="artifact-desc">{{ a.description }}</span>
+            {% if a.source_tool %}<span class="artifact-tool">{{ a.source_tool }}</span>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
 </div>
 
 <!-- Hashes -->
@@ -151,6 +434,19 @@
     <div class="panel-header">HASHES</div>
     <div class="hash-row"><span class="hash-label">SHA256:</span> <span class="mono hash-value">{{ data.sha256 or 'N/A' }}</span></div>
     <div class="hash-row"><span class="hash-label">MD5:</span> <span class="mono hash-value">{{ data.md5 or 'N/A' }}</span></div>
+</div>
+{% elif data and data.active_tool %}
+<div class="panel">
+    <div class="panel-header">ACTIVE OPERATION</div>
+    <div style="padding: 16px;">
+        <div class="stat-value glow">{{ data.active_tool }}</div>
+        {% if data.active_tool_total > 0 %}
+        <div class="progress-bar" style="margin-top: 12px;">
+            <div class="progress-fill" style="width: {{ (data.active_tool_progress / data.active_tool_total * 100)|int }}%"></div>
+        </div>
+        <div class="dim" style="margin-top: 6px; text-align: center;">{{ data.active_tool_progress }}%</div>
+        {% endif %}
+    </div>
 </div>
 {% else %}
 <div class="panel">
