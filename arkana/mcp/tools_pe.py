@@ -189,6 +189,18 @@ async def open_file(
         state.reset_angr()
         state.pe_data = None
         state.filepath = None
+        # Clear cached dashboard data from previous file
+        state._cached_triage = None
+        state._cached_function_scores = None
+        state.notes = []
+        state._notes_counter = 0
+        state.tool_history = []
+        state.artifacts = []
+        state._artifacts_counter = 0
+        state.renames = {"functions": {}, "variables": {}, "labels": {}}
+        state.triage_status = {}
+        state.custom_types = {"structs": {}, "enums": {}}
+        state.previous_session_history = []
 
     _loaded_from_cache = False
 

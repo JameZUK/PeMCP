@@ -16,6 +16,8 @@ from arkana.config import (
     CRYPTOGRAPHY_AVAILABLE, SIGNIFY_AVAILABLE, YARA_AVAILABLE,
     PEID_USERDB_URL,
 )
+from arkana.constants import CAPA_ANALYSIS_TIMEOUT, FLOSS_ANALYSIS_TIMEOUT
+from arkana.utils import _safe_env_int
 from arkana.utils import (
     safe_print, format_timestamp,
     get_file_characteristics, get_dll_characteristics, get_section_characteristics,
@@ -1044,6 +1046,13 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         pe_info_dict['floss_analysis'] = {"status": "Skipped by user request", "strings": {}}
         logger.info("FLOSS analysis skipped by request.")
 
+    # Per-task timeouts (env-overridable) prevent capa/FLOSS from blocking
+    # open_file indefinitely on complex binaries.
+    _task_timeouts = {
+        "capa_analysis": _safe_env_int("ARKANA_CAPA_ANALYSIS_TIMEOUT", CAPA_ANALYSIS_TIMEOUT),
+        "floss_analysis": _safe_env_int("ARKANA_FLOSS_ANALYSIS_TIMEOUT", FLOSS_ANALYSIS_TIMEOUT),
+    }
+
     if _parallel_tasks:
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(_parallel_tasks)) as pool:
             futures = {
@@ -1051,7 +1060,18 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                 for key, func, args in _parallel_tasks
             }
             for future in concurrent.futures.as_completed(futures):
-                pe_info_dict[futures[future]] = future.result()
+                key = futures[future]
+                timeout = _task_timeouts.get(key)
+                try:
+                    pe_info_dict[key] = future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    logger.warning("%s timed out after %ds — storing error result.", key, timeout)
+                    pe_info_dict[key] = {
+                        "status": f"Timed out after {timeout}s",
+                        "error": f"{key} exceeded the {timeout}s timeout. "
+                                 f"Override via ARKANA_{key.upper()}_TIMEOUT env var.",
+                        "results": None,
+                    }
 
     _report(85, 100, "Signature & capability scans complete.")
 

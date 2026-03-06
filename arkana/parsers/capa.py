@@ -2,6 +2,8 @@
 import os
 import json
 import logging
+import time
+import threading
 
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -27,6 +29,38 @@ if CAPA_AVAILABLE:
         InvalidArgument, EmptyReportError, UnsupportedOSError,
         UnsupportedArchError, UnsupportedFormatError, UnsupportedRuntimeError,
     )
+
+# Module-level capa rules cache — mirrors the YARA caching pattern in
+# signatures.py.  Keyed by resolved rules directory path so re-opening
+# a different sample with the same rules skips the expensive YAML parse.
+_capa_rules_cache: Dict[str, Any] = {}
+_capa_rules_lock = threading.Lock()
+
+
+def _get_cached_capa_rules(mock_args):
+    """Return cached capa rules, loading on first call.
+
+    Uses double-checked locking so the fast path (cache hit) is lock-free.
+    Failed loads are *not* cached so they can be retried.
+    """
+    rules_key = os.path.realpath(str(mock_args.rules[0])) if mock_args.rules else ""
+    cached = _capa_rules_cache.get(rules_key)
+    if cached is not None:
+        logger.info("Using cached capa rules for: %s", rules_key)
+        return cached
+    with _capa_rules_lock:
+        cached = _capa_rules_cache.get(rules_key)
+        if cached is not None:
+            logger.info("Using cached capa rules for: %s (after lock)", rules_key)
+            return cached
+        t0 = time.monotonic()
+        rules = capa.main.get_rules_from_cli(mock_args)
+        elapsed = time.monotonic() - t0
+        logger.info("Capa rules loaded from disk in %.1fs. Rule count: %s",
+                     elapsed,
+                     len(rules.rules) if hasattr(rules, 'rules') and hasattr(rules.rules, '__len__') else 'N/A')
+        _capa_rules_cache[rules_key] = rules
+        return rules
 
 
 def _parse_capa_analysis(pe_obj: pefile.PE,
@@ -151,8 +185,7 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
             input_format = capa.main.get_input_format_from_cli(mock_args)
         mock_args.format = input_format # Update mock_args with potentially deduced format
 
-        rules = capa.main.get_rules_from_cli(mock_args)
-        logger.info("Rules loaded via capa.main.get_rules_from_cli. Rule count: %s", len(rules.rules) if hasattr(rules, 'rules') and hasattr(rules.rules, '__len__') else 'N/A')
+        rules = _get_cached_capa_rules(mock_args)
 
         backend = mock_args.backend
         if hasattr(capa.main, 'get_backend_from_cli'):
@@ -162,11 +195,13 @@ def _parse_capa_analysis(pe_obj: pefile.PE,
         if hasattr(capa.main, 'get_os_from_cli'): # os might be deduced
             mock_args.os = capa.main.get_os_from_cli(mock_args, backend)
 
+        t_ext = time.monotonic()
         extractor = capa.main.get_extractor_from_cli(mock_args, input_format, backend)
-        logger.info("Extractor obtained via capa.main.get_extractor_from_cli: %s", type(extractor).__name__)
+        logger.info("Capa extractor created in %.1fs: %s", time.monotonic() - t_ext, type(extractor).__name__)
 
+        t_cap = time.monotonic()
         capabilities = capa.capabilities.common.find_capabilities(rules, extractor, disable_progress=True)
-        logger.info("Capabilities search complete.")
+        logger.info("Capa capability search complete in %.1fs.", time.monotonic() - t_cap)
 
         # Prepare metadata for the ResultDocument
         # Simulate argv for capa's metadata collection

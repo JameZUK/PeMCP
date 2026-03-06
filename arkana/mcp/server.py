@@ -180,6 +180,23 @@ def tool_decorator(func):
 
         tool_name = func.__name__
 
+        # Track active tool on state for dashboard visibility
+        if tool_name not in _SKIP_HISTORY_TOOLS:
+            with current_state._active_tool_lock:
+                current_state.active_tool = tool_name
+                current_state.active_tool_progress = 0
+                current_state.active_tool_total = 100
+
+            # Wrap ctx.report_progress to also update state for dashboard
+            if ctx is not None:
+                _orig_report_progress = ctx.report_progress
+                async def _wrapped_report_progress(progress, total=100):
+                    with current_state._active_tool_lock:
+                        current_state.active_tool_progress = progress
+                        current_state.active_tool_total = total
+                    return await _orig_report_progress(progress, total)
+                object.__setattr__(ctx, "report_progress", _wrapped_report_progress)
+
         # Set up automatic heartbeat for tools that don't self-report progress.
         # Lightweight meta-tools and self-reporting tools are excluded.
         heartbeat_task = None
@@ -221,6 +238,11 @@ def tool_decorator(func):
                     await heartbeat_task
                 except asyncio.CancelledError:
                     pass
+            # Clear active tool on state for dashboard
+            if tool_name not in _SKIP_HISTORY_TOOLS:
+                with current_state._active_tool_lock:
+                    current_state.active_tool = None
+                    current_state.active_tool_progress = 0
 
         # Safety net: enforce soft char limit for tools that don't call
         # _check_mcp_response_size explicitly.  Fast no-op when the response

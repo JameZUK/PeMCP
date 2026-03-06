@@ -3,6 +3,7 @@ import re
 import json
 import logging
 import datetime
+import time
 
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Set
@@ -14,6 +15,7 @@ from arkana.config import (
     Actual_DebugLevel_Floss, Actual_StringType_Floss,
     FLOSS_TRACE_LEVEL_CONST, FLOSS_LOGGERS_LIST,
 )
+from arkana.constants import MAX_FLOSS_ENRICHMENT_STRINGS
 
 if FLOSS_ANALYSIS_OK:
     import viv_utils
@@ -85,6 +87,7 @@ def _load_floss_vivisect_workspace(sample_path_obj: Path, format_hint: str) -> O
         return None
 
     logger.info("FLOSS: Loading Vivisect workspace for: %s (format: %s)", sample_path_obj, format_hint)
+    t_vw = time.monotonic()
     vw = None
     try:
         if format_hint == "auto":
@@ -100,8 +103,8 @@ def _load_floss_vivisect_workspace(sample_path_obj: Path, format_hint: str) -> O
         else: # "pe" or other formats viv_utils can handle
             vw = viv_utils.getWorkspace(str(sample_path_obj), analyze=True, should_save=False)
 
-        if vw: logger.info("FLOSS: Vivisect workspace analysis complete.")
-        else: logger.warning("FLOSS: Vivisect workspace loading returned None.")
+        if vw: logger.info("FLOSS: Vivisect workspace loaded in %.1fs.", time.monotonic() - t_vw)
+        else: logger.warning("FLOSS: Vivisect workspace loading returned None (%.1fs).", time.monotonic() - t_vw)
         return vw
     except Exception as e:
         logger.error("FLOSS: Error loading Vivisect workspace: %s", e, exc_info=True)
@@ -249,8 +252,15 @@ def _parse_floss_analysis(
 
             static_strings_list = floss_results_dict["strings"]["static_strings"]
             total_enriched_strings = 0
-            logger.debug("Attempting to enrich %d static strings.", len(static_strings_list))
+            enrich_count = min(len(static_strings_list), MAX_FLOSS_ENRICHMENT_STRINGS)
+            logger.info("Enriching up to %d of %d static strings (cap=%d).",
+                        enrich_count, len(static_strings_list), MAX_FLOSS_ENRICHMENT_STRINGS)
+            t_enrich = time.monotonic()
             for i, string_item in enumerate(static_strings_list):
+                if i >= MAX_FLOSS_ENRICHMENT_STRINGS:
+                    logger.info("FLOSS: Reached enrichment cap (%d strings). Skipping remaining %d strings.",
+                                MAX_FLOSS_ENRICHMENT_STRINGS, len(static_strings_list) - i)
+                    break
                 try:
                     string_offset = int(string_item["offset"], 16)
                     string_va = _file_offset_to_va(string_offset)
@@ -282,7 +292,8 @@ def _parse_floss_analysis(
                             })
                 except Exception as e_xref:
                     logger.warning("Could not get xrefs for string at %s: %s", string_item['offset'], e_xref)
-            logger.info("FLOSS: Context enrichment complete. Enriched %d out of %d static strings with references.", total_enriched_strings, len(static_strings_list))
+            logger.info("FLOSS: Context enrichment complete in %.1fs. Enriched %d out of %d static strings with references.",
+                        time.monotonic() - t_enrich, total_enriched_strings, len(static_strings_list))
         else:
             logger.warning("FLOSS: Skipping static string context enrichment because imagebase could not be determined.")
 

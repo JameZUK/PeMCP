@@ -20,8 +20,10 @@ MCP_SOFT_RESPONSE_LIMIT_CHARS = 8000
 # --- Timeout Constants (seconds) ---
 ANGR_ANALYSIS_TIMEOUT = 300    # angr symbolic execution / analysis operations
 ANGR_SHORT_TIMEOUT = 120       # shorter angr operations (e.g. anti-debug scan)
-ANGR_CFG_TIMEOUT = 600         # background CFGFast timeout (env: ARKANA_ANGR_CFG_TIMEOUT)
-BACKGROUND_TASK_TIMEOUT = 600  # background task timeout (env: ARKANA_BACKGROUND_TASK_TIMEOUT)
+ANGR_CFG_TIMEOUT = 1800        # background CFGFast timeout (env: ARKANA_ANGR_CFG_TIMEOUT)
+BACKGROUND_TASK_TIMEOUT = 1800 # background task timeout (env: ARKANA_BACKGROUND_TASK_TIMEOUT)
+CAPA_ANALYSIS_TIMEOUT = 300    # capa analysis during open_file (env: ARKANA_CAPA_ANALYSIS_TIMEOUT)
+FLOSS_ANALYSIS_TIMEOUT = 300   # FLOSS analysis during open_file (env: ARKANA_FLOSS_ANALYSIS_TIMEOUT)
 HTTP_DOWNLOAD_TIMEOUT = 60     # downloading resources (YARA rules, capa rules)
 HTTP_API_TIMEOUT = 20          # external API calls (e.g. VirusTotal)
 HTTP_QUICK_TIMEOUT = 15        # quick HTTP requests (e.g. PEiD DB download)
@@ -47,7 +49,7 @@ YARA_COMMUNITY_SUBDIR = "community"
 # --- BSim Function Similarity ---
 BSIM_DB_DIR = Path.home() / ".arkana" / "bsim"
 BSIM_DEFAULT_THRESHOLD = 0.5
-BSIM_BACKGROUND_TIMEOUT = 600  # seconds (env: ARKANA_BSIM_BACKGROUND_TIMEOUT)
+BSIM_BACKGROUND_TIMEOUT = 1800 # seconds (env: ARKANA_BSIM_BACKGROUND_TIMEOUT)
 
 # --- Artifact Limits ---
 MAX_ARTIFACT_FILE_SIZE = 100 * 1024 * 1024        # 100 MB per artifact
@@ -70,6 +72,7 @@ MAX_HEX_PATTERN_MATCHES = 5000
 
 # --- FLOSS Fallback Constants ---
 MIN_STR_LEN_FALLBACK_FLOSS = 4
+MAX_FLOSS_ENRICHMENT_STRINGS = 500  # cap xref enrichment of static strings
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

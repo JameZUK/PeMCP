@@ -510,7 +510,12 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
     config["_environment"] = _get_environment_info()
 
     # Add dashboard info if available
+    # Token is stored on _default_state (set at dashboard startup), but the
+    # StateProxy may resolve to a per-session state, so check both.
     dashboard_token = getattr(state, "dashboard_token", None)
+    if not dashboard_token:
+        from arkana.state import _default_state
+        dashboard_token = getattr(_default_state, "dashboard_token", None)
     if dashboard_token:
         dashboard_port = os.environ.get("ARKANA_DASHBOARD_PORT", "8082")
         config["_dashboard"] = {
