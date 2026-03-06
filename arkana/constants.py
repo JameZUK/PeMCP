@@ -74,6 +74,10 @@ MAX_HEX_PATTERN_MATCHES = 5000
 MIN_STR_LEN_FALLBACK_FLOSS = 4
 MAX_FLOSS_ENRICHMENT_STRINGS = 500  # cap xref enrichment of static strings
 
+# --- FLOSS Vivisect Progress Estimation ---
+VIVISECT_BYTES_PER_SECOND_ESTIMATE = 50_000  # ~50 KB/s for time-based progress curve
+VIVISECT_POLL_INTERVAL = 3  # seconds between function count polls during analysis
+
 # --- list_samples Pagination ---
 MAX_LIST_SAMPLES_LIMIT = 500  # maximum files per page in list_samples
 

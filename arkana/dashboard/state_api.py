@@ -609,17 +609,31 @@ def get_callgraph_data() -> Dict[str, Any]:
                 }
             })
 
-        # Build edges from call graph
+        # Build edges from call graph and compute degree counts
+        in_deg: Dict[str, int] = {}
+        out_deg: Dict[str, int] = {}
         if hasattr(kb, "callgraph"):
             cg = kb.callgraph
             for caller, callee in cg.edges():
                 if caller in addr_set and callee in addr_set:
-                    edges.append({
-                        "data": {
-                            "source": hex(caller),
-                            "target": hex(callee),
-                        }
-                    })
+                    src = hex(caller)
+                    tgt = hex(callee)
+                    edges.append({"data": {"source": src, "target": tgt}})
+                    out_deg[src] = out_deg.get(src, 0) + 1
+                    in_deg[tgt] = in_deg.get(tgt, 0) + 1
+
+        # Enrich nodes with degree counts and function size
+        for node in nodes:
+            d = node["data"]
+            addr_hex = d["id"]
+            d["in_deg"] = in_deg.get(addr_hex, 0)
+            d["out_deg"] = out_deg.get(addr_hex, 0)
+            # Function byte size
+            try:
+                func = kb.functions[int(addr_hex, 16)]
+                d["size"] = func.size if hasattr(func, "size") else 0
+            except (KeyError, ValueError, TypeError):
+                d["size"] = 0
 
     except (AttributeError, KeyError, TypeError, RuntimeError):
         logger.debug("Error building call graph data from angr KB", exc_info=True)
@@ -1272,6 +1286,128 @@ def global_search(query: str, limit_per_category: int = 10) -> Dict[str, Any]:
             })
 
     return results
+
+
+def get_function_analysis_data(address_hex: str) -> Dict[str, Any]:
+    """Return combined xrefs, strings, suspicious APIs, and complexity for a function.
+
+    Used by the callgraph sidebar tabbed panel.
+    """
+    st = _get_state()
+    result: Dict[str, Any] = {
+        "address": address_hex,
+        "name": "",
+        "callers": [],
+        "callees": [],
+        "suspicious_apis": [],
+        "strings": [],
+        "complexity": {"blocks": 0, "edges": 0},
+    }
+
+    if st.angr_project is None or st.angr_cfg is None:
+        # Still try strings even without angr
+        str_data = get_function_strings_data(address_hex)
+        result["strings"] = str_data.get("strings", [])[:20]
+        return result
+
+    try:
+        addr_int = int(address_hex, 16)
+    except (ValueError, TypeError):
+        return result
+
+    try:
+        from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB
+    except ImportError:
+        CATEGORIZED_IMPORTS_DB = {}
+
+    try:
+        kb = st.angr_project.kb
+        renames = st.get_renames().get("functions", {})
+
+        # Function name
+        if hasattr(kb, "functions") and addr_int in kb.functions:
+            func = kb.functions[addr_int]
+            result["name"] = renames.get(hex(addr_int), func.name)
+            # Complexity
+            try:
+                result["complexity"]["blocks"] = len(func.block_addrs_set)
+            except (AttributeError, TypeError):
+                pass
+            try:
+                result["complexity"]["edges"] = len(list(func.graph.edges()))
+            except (AttributeError, TypeError):
+                pass
+        else:
+            result["name"] = renames.get(hex(addr_int), address_hex)
+
+        # Callers / callees from callgraph
+        if hasattr(kb, "callgraph") and addr_int in kb.callgraph:
+            cg = kb.callgraph
+            seen_suspicious = set()
+
+            # Callers (predecessors)
+            for pred in cg.predecessors(addr_int):
+                pred_hex = hex(pred)
+                name = renames.get(pred_hex, "")
+                if not name and hasattr(kb, "functions") and pred in kb.functions:
+                    name = kb.functions[pred].name
+                name = name or pred_hex
+                complexity = 0
+                if hasattr(kb, "functions") and pred in kb.functions:
+                    try:
+                        complexity = len(kb.functions[pred].block_addrs_set)
+                    except (AttributeError, TypeError):
+                        pass
+                triage = st.get_triage_status(pred_hex)
+                result["callers"].append({
+                    "address": pred_hex,
+                    "name": name,
+                    "triage": triage,
+                    "complexity": complexity,
+                })
+
+            # Callees (successors)
+            for succ in cg.successors(addr_int):
+                succ_hex = hex(succ)
+                name = renames.get(succ_hex, "")
+                if not name and hasattr(kb, "functions") and succ in kb.functions:
+                    name = kb.functions[succ].name
+                name = name or succ_hex
+                complexity = 0
+                if hasattr(kb, "functions") and succ in kb.functions:
+                    try:
+                        complexity = len(kb.functions[succ].block_addrs_set)
+                    except (AttributeError, TypeError):
+                        pass
+                triage = st.get_triage_status(succ_hex)
+                callee_entry: Dict[str, Any] = {
+                    "address": succ_hex,
+                    "name": name,
+                    "triage": triage,
+                    "complexity": complexity,
+                }
+                # Check for suspicious API
+                api_info = CATEGORIZED_IMPORTS_DB.get(name)
+                if api_info:
+                    risk, category = api_info
+                    callee_entry["suspicious"] = {"risk": risk, "category": category}
+                    if name not in seen_suspicious:
+                        seen_suspicious.add(name)
+                        result["suspicious_apis"].append({
+                            "name": name,
+                            "risk": risk,
+                            "category": category,
+                        })
+                result["callees"].append(callee_entry)
+
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        logger.debug("Error reading analysis for %s", address_hex, exc_info=True)
+
+    # Strings (reuse existing function, limit 20)
+    str_data = get_function_strings_data(address_hex)
+    result["strings"] = str_data.get("strings", [])[:20]
+
+    return result
 
 
 def get_function_xrefs_data(address_hex: str) -> Dict[str, Any]:

@@ -2,11 +2,14 @@
 import re
 import json
 import logging
+import math
+import os
 import datetime
 import time
+import threading
 
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Set
+from typing import Callable, Dict, Any, Optional, List, Set
 
 from arkana.config import (
     logger, state,
@@ -15,7 +18,11 @@ from arkana.config import (
     Actual_DebugLevel_Floss, Actual_StringType_Floss,
     FLOSS_TRACE_LEVEL_CONST, FLOSS_LOGGERS_LIST,
 )
-from arkana.constants import MAX_FLOSS_ENRICHMENT_STRINGS
+from arkana.constants import (
+    MAX_FLOSS_ENRICHMENT_STRINGS,
+    VIVISECT_BYTES_PER_SECOND_ESTIMATE,
+    VIVISECT_POLL_INTERVAL,
+)
 
 if FLOSS_ANALYSIS_OK:
     import viv_utils
@@ -80,9 +87,20 @@ def _setup_floss_logging(script_verbose_level: int, floss_internal_verbose_level
     else:
         logger.debug("FLOSS analysis components (like floss.utils) not available, cannot set Vivisect log level via FLOSS.")
 
-def _load_floss_vivisect_workspace(sample_path_obj: Path, format_hint: str) -> Optional[VivWorkspace]:
-    """Loads a Vivisect workspace for FLOSS analysis."""
-    if not FLOSS_ANALYSIS_OK or not viv_utils: # Check if viv_utils was imported
+def _load_floss_vivisect_workspace(
+    sample_path_obj: Path,
+    format_hint: str,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> Optional[VivWorkspace]:
+    """Loads a Vivisect workspace for FLOSS analysis.
+
+    For PE files, splits workspace creation (``analyze=False``) from analysis
+    (``vw.analyze()``) so we can poll ``vw.getFunctions()`` for progress while
+    the analysis runs in a sub-thread.  Shellcode formats still use the
+    original one-shot path because ``getShellcodeWorkspaceFromFile`` doesn't
+    support ``analyze=False``.
+    """
+    if not FLOSS_ANALYSIS_OK or not viv_utils:
         logger.error("Vivisect utilities (viv_utils) required by FLOSS are not available. Cannot load workspace.")
         return None
 
@@ -91,24 +109,89 @@ def _load_floss_vivisect_workspace(sample_path_obj: Path, format_hint: str) -> O
     vw = None
     try:
         if format_hint == "auto":
-            # Basic auto-detection based on suffix, FLOSS might do more internally
             if sample_path_obj.suffix.lower() in (".sc32", ".raw32"): format_hint = "sc32"
             elif sample_path_obj.suffix.lower() in (".sc64", ".raw64"): format_hint = "sc64"
-            # else, it will be treated as 'pe' by default by viv_utils.getWorkspace
 
         if format_hint == "sc32":
+            if progress_callback:
+                progress_callback(10, "Loading shellcode workspace (i386)...")
             vw = viv_utils.getShellcodeWorkspaceFromFile(str(sample_path_obj), arch="i386", analyze=True)
         elif format_hint == "sc64":
+            if progress_callback:
+                progress_callback(10, "Loading shellcode workspace (amd64)...")
             vw = viv_utils.getShellcodeWorkspaceFromFile(str(sample_path_obj), arch="amd64", analyze=True)
-        else: # "pe" or other formats viv_utils can handle
-            vw = viv_utils.getWorkspace(str(sample_path_obj), analyze=True, should_save=False)
+        else:
+            # Split load + analyze so we can poll function discovery
+            if progress_callback:
+                progress_callback(10, "Loading Vivisect workspace...")
+            vw = viv_utils.getWorkspace(str(sample_path_obj), analyze=False, should_save=False)
+            if vw:
+                vw = _run_vivisect_analysis_with_polling(
+                    vw, sample_path_obj, progress_callback,
+                )
 
-        if vw: logger.info("FLOSS: Vivisect workspace loaded in %.1fs.", time.monotonic() - t_vw)
-        else: logger.warning("FLOSS: Vivisect workspace loading returned None (%.1fs).", time.monotonic() - t_vw)
+        elapsed = time.monotonic() - t_vw
+        if vw:
+            logger.info("FLOSS: Vivisect workspace loaded in %.1fs.", elapsed)
+        else:
+            logger.warning("FLOSS: Vivisect workspace loading returned None (%.1fs).", elapsed)
         return vw
     except Exception as e:
         logger.error("FLOSS: Error loading Vivisect workspace: %s", e, exc_info=True)
         return None
+
+
+def _run_vivisect_analysis_with_polling(
+    vw: "VivWorkspace",
+    sample_path_obj: Path,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
+) -> "VivWorkspace":
+    """Run ``vw.analyze()`` in a sub-thread, polling function count for progress.
+
+    Progress is reported via *progress_callback* using a time-based exponential
+    curve (range 12-38%) combined with live function-discovery counts.
+    """
+    file_size = os.path.getsize(sample_path_obj)
+    estimated_seconds = max(file_size / VIVISECT_BYTES_PER_SECOND_ESTIMATE, 10)
+
+    analysis_done = threading.Event()
+    analysis_error: list = []  # mutable container for exception from sub-thread
+
+    def _run_analysis():
+        try:
+            vw.analyze()
+        except Exception as exc:
+            analysis_error.append(exc)
+        finally:
+            analysis_done.set()
+
+    t = threading.Thread(target=_run_analysis, daemon=True)
+    t.start()
+
+    start = time.monotonic()
+    last_func_count = 0
+    while not analysis_done.wait(timeout=VIVISECT_POLL_INTERVAL):
+        elapsed = time.monotonic() - start
+        func_count = len(vw.getFunctions())
+        # Exponential curve: asymptotically approaches 38% (cap)
+        time_pct = 1 - math.exp(-elapsed / estimated_seconds)
+        pct = 12 + int(time_pct * 26)  # range 12–38%
+        delta = f" (+{func_count - last_func_count})" if func_count > last_func_count else ""
+        msg = f"Vivisect analysis... {func_count} functions discovered{delta}"
+        last_func_count = func_count
+        if progress_callback:
+            progress_callback(pct, msg)
+
+    t.join(timeout=5)
+
+    # Re-raise any exception from the analysis thread
+    if analysis_error:
+        raise analysis_error[0]
+
+    func_count = len(vw.getFunctions())
+    if progress_callback:
+        progress_callback(40, f"Vivisect complete \u2014 {func_count} functions. Starting string enrichment...")
+    return vw
 
 def _parse_floss_static_only(
     pe_filepath_str: str,
@@ -169,7 +252,8 @@ def _parse_floss_analysis(
     floss_only_types: List[str],
     floss_functions_to_analyze: List[int], # List of function RVAs/VAs
     quiet_mode_for_floss_progress: bool, # For disabling FLOSS's own progress bars
-    regex_search_pattern: Optional[str] = None
+    regex_search_pattern: Optional[str] = None,
+    progress_callback: Optional[Callable[[int, str], None]] = None,
     ) -> Dict[str, Any]:
     """
     Performs string extraction using FLOSS, enriches with context, ranks with StringSifter,
@@ -243,7 +327,7 @@ def _parse_floss_analysis(
 
     if needs_vivisect:
         if log_progress: logger.info("FLOSS: Preparing Vivisect workspace for deeper analysis...")
-        vw = _load_floss_vivisect_workspace(sample_path, floss_format_hint)
+        vw = _load_floss_vivisect_workspace(sample_path, floss_format_hint, progress_callback)
         if vw:
             try:
                 imagebase = get_imagebase(vw)
@@ -274,6 +358,8 @@ def _parse_floss_analysis(
 
     if vw and analysis_conf.enable_static_strings and floss_results_dict["strings"]["static_strings"]:
         logger.info("FLOSS: Starting static string context enrichment...")
+        if progress_callback:
+            progress_callback(42, "Enriching strings with xref context...")
         image_base_from_meta = floss_results_dict.get("metadata", {}).get("imagebase")
         if image_base_from_meta:
             # Build file-offset-to-VA conversion table from PE sections
@@ -315,6 +401,11 @@ def _parse_floss_analysis(
                     string_va = _file_offset_to_va(string_offset)
                     xrefs = vw.getXrefsTo(string_va)
 
+                    if i > 0 and i % 50 == 0:
+                        if progress_callback:
+                            # Map enrichment progress across 42-54% range
+                            enrich_pct = 42 + int((i / enrich_count) * 12)
+                            progress_callback(enrich_pct, f"Enriching strings with xref context... {i}/{enrich_count} processed")
                     if i > 0 and i % 100 == 0:
                         logger.debug("Processing string %d/%d at VA %s...", i, len(static_strings_list), hex(string_va))
 
@@ -350,6 +441,8 @@ def _parse_floss_analysis(
         decoding_features_map: Dict[int, Any] = {}
         if analysis_conf.enable_decoded_strings or analysis_conf.enable_tight_strings:
             if log_progress: logger.info("FLOSS: Identifying decoding function features...")
+            if progress_callback:
+                progress_callback(55, "Identifying function features for emulation...")
             try:
                 decoding_features_map, _ = find_decoding_function_features(vw, list(selected_functions_fvas_set), disable_progress=quiet_mode_for_floss_progress)
                 if log_progress: logger.info("FLOSS: Found decoding features for %d functions.", len(decoding_features_map))
@@ -361,6 +454,8 @@ def _parse_floss_analysis(
 
         if analysis_conf.enable_stack_strings:
             if log_progress: logger.info("FLOSS: Extracting stack strings...")
+            if progress_callback:
+                progress_callback(60, "Extracting stack strings... (emulating function construction)")
             try:
                 stack_strings_gen = extract_stackstrings(
                     vw, list(selected_functions_fvas_set), min_length,
@@ -382,6 +477,8 @@ def _parse_floss_analysis(
 
         if analysis_conf.enable_tight_strings:
             if log_progress: logger.info("FLOSS: Extracting tight strings...")
+            if progress_callback:
+                progress_callback(70, "Extracting tight strings... (analyzing compact encodings)")
             try:
                 if not decoding_features_map and (analysis_conf.enable_decoded_strings or analysis_conf.enable_tight_strings):
                     logger.warning("FLOSS: Decoding features map is empty, cannot identify functions with tight loops.")
@@ -416,6 +513,8 @@ def _parse_floss_analysis(
 
         if analysis_conf.enable_decoded_strings:
             if log_progress: logger.info("FLOSS: Extracting decoded strings...")
+            if progress_callback:
+                progress_callback(80, "Extracting decoded strings... (emulating decoding routines)")
             try:
                 if not decoding_features_map and (analysis_conf.enable_decoded_strings or analysis_conf.enable_tight_strings):
                     logger.warning("FLOSS: Decoding features map is empty, cannot identify top candidate functions for decoding.")
@@ -446,6 +545,8 @@ def _parse_floss_analysis(
                 logger.error("FLOSS: Error extracting decoded strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
                 floss_results_dict["strings"]["decoded_strings"] = [{"error": str(e)}]
 
+        if progress_callback:
+            progress_callback(90, "Finalizing \u2014 merging FLOSS results with string database...")
         floss_results_dict["status"] = "FLOSS analysis complete."
     elif needs_vivisect and not vw:
         floss_results_dict["status"] = "FLOSS analysis incomplete due to Vivisect workspace load failure."

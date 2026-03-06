@@ -33,6 +33,7 @@ from arkana.dashboard.state_api import (
     global_search,
     get_function_xrefs_data,
     get_function_strings_data,
+    get_function_analysis_data,
     get_floss_summary,
 )
 
@@ -346,6 +347,14 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "missing address"}, status_code=400)
         return JSONResponse(get_function_xrefs_data(address))
 
+    async def api_function_analysis(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        address = request.query_params.get("address", "").strip()
+        if not address:
+            return JSONResponse({"error": "missing address"}, status_code=400)
+        return JSONResponse(get_function_analysis_data(address))
+
     async def api_function_strings(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -525,6 +534,7 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/search", endpoint=api_search, methods=["GET"]),
         Route("/api/function-xrefs", endpoint=api_function_xrefs, methods=["GET"]),
         Route("/api/function-strings", endpoint=api_function_strings, methods=["GET"]),
+        Route("/api/function-analysis", endpoint=api_function_analysis, methods=["GET"]),
         Route("/api/debug", endpoint=api_debug, methods=["GET"]),
         Route("/api/events", endpoint=api_events, methods=["GET"]),
         Route("/api/floss-summary", endpoint=api_floss_summary, methods=["GET"]),

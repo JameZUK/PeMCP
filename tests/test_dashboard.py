@@ -615,6 +615,77 @@ class TestGlobalSearch:
             _default_state.pe_data = old_pd
 
 
+class TestFunctionAnalysis:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+
+    def test_analysis_no_angr(self):
+        from arkana.dashboard.state_api import get_function_analysis_data
+        data = get_function_analysis_data("0x401000")
+        assert data["address"] == "0x401000"
+        assert data["callers"] == []
+        assert data["callees"] == []
+        assert data["suspicious_apis"] == []
+        assert data["complexity"] == {"blocks": 0, "edges": 0}
+
+    def test_analysis_invalid_address(self):
+        from arkana.dashboard.state_api import get_function_analysis_data
+        data = get_function_analysis_data("not_hex")
+        assert data["callers"] == []
+        assert data["callees"] == []
+
+    def test_analysis_includes_strings(self):
+        from arkana.dashboard.state_api import get_function_analysis_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "floss_analysis": {
+                "strings": {
+                    "static_strings": [],
+                    "stack_strings": [
+                        {"string": "secret", "function_va": "0x401000", "string_va": "0x500"},
+                    ],
+                    "decoded_strings": [],
+                    "tight_strings": [],
+                },
+            },
+        }
+        try:
+            data = get_function_analysis_data("0x401000")
+            assert len(data["strings"]) == 1
+            assert data["strings"][0]["string"] == "secret"
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_analysis_strings_limited_to_20(self):
+        from arkana.dashboard.state_api import get_function_analysis_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "floss_analysis": {
+                "strings": {
+                    "static_strings": [],
+                    "stack_strings": [
+                        {"string": "s" + str(i), "function_va": "0x401000", "string_va": hex(0x500 + i)}
+                        for i in range(30)
+                    ],
+                    "decoded_strings": [],
+                    "tight_strings": [],
+                },
+            },
+        }
+        try:
+            data = get_function_analysis_data("0x401000")
+            assert len(data["strings"]) == 20
+        finally:
+            _default_state.pe_data = old_pd
+
+
 class TestFunctionXrefs:
     def setup_method(self):
         with _registry_lock:
@@ -820,3 +891,205 @@ class TestGlobalStatusPartial:
         finally:
             _default_state.filepath = old_fp
             _default_state.pe_data = old_pd
+
+
+# ---------------------------------------------------------------------------
+#  FLOSS progress reporting
+# ---------------------------------------------------------------------------
+
+class TestFlossVivisectProgress:
+    """Tests for split Vivisect load/analyze with progress polling."""
+
+    def test_load_workspace_calls_progress_callback(self):
+        """Verify _load_floss_vivisect_workspace fires progress_callback during analysis."""
+        from unittest.mock import patch, MagicMock
+        from arkana.parsers.floss import _load_floss_vivisect_workspace
+
+        calls = []
+
+        def _record(pct, msg):
+            calls.append((pct, msg))
+
+        mock_vw = MagicMock()
+        # getFunctions returns increasing counts across calls
+        func_counts = [[], [1, 2, 3], [1, 2, 3, 4, 5]]
+        mock_vw.getFunctions.side_effect = func_counts
+
+        # analyze() completes quickly so polling loop fires once before done
+        def fast_analyze():
+            import time
+            time.sleep(0.1)
+
+        mock_vw.analyze.side_effect = fast_analyze
+
+        from pathlib import Path
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".exe") as tmp:
+            tmp.write(b"\x00" * 1024)
+            tmp.flush()
+            sample = Path(tmp.name)
+
+            with patch("arkana.parsers.floss.viv_utils", create=True) as mock_vu, \
+                 patch("arkana.parsers.floss.FLOSS_ANALYSIS_OK", True), \
+                 patch("arkana.parsers.floss.VIVISECT_POLL_INTERVAL", 0.05):
+                mock_vu.getWorkspace.return_value = mock_vw
+                result = _load_floss_vivisect_workspace(sample, "pe", progress_callback=_record)
+
+        assert result is mock_vw
+        # Should have at least the initial "Loading" and final "Vivisect complete" callbacks
+        assert any(pct == 10 for pct, _ in calls), f"Expected 10% callback, got: {calls}"
+        assert any("Vivisect complete" in msg for _, msg in calls), f"Expected completion message, got: {calls}"
+        # Final callback should be at 40%
+        assert any(pct == 40 for pct, _ in calls)
+
+    def test_load_workspace_shellcode_no_split(self):
+        """Shellcode format uses one-shot path, still fires progress callback."""
+        from unittest.mock import patch, MagicMock
+        from arkana.parsers.floss import _load_floss_vivisect_workspace
+
+        calls = []
+        mock_vw = MagicMock()
+
+        from pathlib import Path
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".sc32") as tmp:
+            tmp.write(b"\x90" * 64)
+            tmp.flush()
+            sample = Path(tmp.name)
+
+            with patch("arkana.parsers.floss.viv_utils", create=True) as mock_vu, \
+                 patch("arkana.parsers.floss.FLOSS_ANALYSIS_OK", True):
+                mock_vu.getShellcodeWorkspaceFromFile.return_value = mock_vw
+                result = _load_floss_vivisect_workspace(
+                    sample, "sc32", progress_callback=lambda p, m: calls.append((p, m)),
+                )
+
+        assert result is mock_vw
+        assert any(pct == 10 for pct, _ in calls)
+        # No polling loop for shellcode — no "Vivisect complete" at 40%
+        assert not any(pct == 40 for pct, _ in calls)
+
+    def test_analysis_exception_propagates(self):
+        """If vw.analyze() raises, the exception is caught and returns None."""
+        from unittest.mock import patch, MagicMock
+        from arkana.parsers.floss import _load_floss_vivisect_workspace
+
+        mock_vw = MagicMock()
+        mock_vw.analyze.side_effect = RuntimeError("vivisect boom")
+        mock_vw.getFunctions.return_value = []
+
+        from pathlib import Path
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".exe") as tmp:
+            tmp.write(b"\x00" * 512)
+            tmp.flush()
+            sample = Path(tmp.name)
+
+            with patch("arkana.parsers.floss.viv_utils", create=True) as mock_vu, \
+                 patch("arkana.parsers.floss.FLOSS_ANALYSIS_OK", True), \
+                 patch("arkana.parsers.floss.VIVISECT_POLL_INTERVAL", 0.05):
+                mock_vu.getWorkspace.return_value = mock_vw
+                # The exception from analyze() is caught by the outer try/except
+                result = _load_floss_vivisect_workspace(sample, "pe")
+
+        assert result is None  # error is caught and returns None
+
+
+class TestFlossParseProgressCallback:
+    """Tests that _parse_floss_analysis fires progress_callback at expected stages."""
+
+    def _floss_patches(self, mock_vw):
+        """Return a stack of patches for a full FLOSS analysis with mocked deps."""
+        from unittest.mock import patch
+        import contextlib
+        return contextlib.ExitStack(), [
+            patch("arkana.parsers.floss.FLOSS_AVAILABLE", True),
+            patch("arkana.parsers.floss.FLOSS_ANALYSIS_OK", True),
+            patch("arkana.parsers.floss._setup_floss_logging"),
+            patch("arkana.parsers.floss._load_floss_vivisect_workspace", return_value=mock_vw),
+            patch("arkana.parsers.floss.get_imagebase", create=True, return_value=0x400000),
+            patch("arkana.parsers.floss.get_static_strings", create=True, return_value=[]),
+            patch("arkana.parsers.floss.find_decoding_function_features", create=True, return_value=({}, {})),
+            patch("arkana.parsers.floss.extract_stackstrings", create=True, return_value=[]),
+            patch("arkana.parsers.floss.get_functions_with_tightloops", create=True, return_value={}),
+            patch("arkana.parsers.floss.extract_tightstrings", create=True, return_value=[]),
+            patch("arkana.parsers.floss.get_top_functions", create=True, return_value={}),
+            patch("arkana.parsers.floss.get_function_fvas", create=True, return_value=set()),
+            patch("arkana.parsers.floss.decode_strings", create=True, return_value=[]),
+            patch("arkana.parsers.floss.FlossAnalysis", create=True),
+        ]
+
+    def test_progress_stages_full_analysis(self):
+        """Verify progress callback fires at all expected stages during a complete analysis."""
+        from unittest.mock import patch, MagicMock
+        from arkana.parsers.floss import _parse_floss_analysis
+
+        calls = []
+
+        def _record(pct, msg):
+            calls.append((pct, msg))
+
+        mock_vw = MagicMock()
+        mock_vw.getFunctions.return_value = [0x401000, 0x402000]
+        mock_vw.getXrefsTo.return_value = []
+
+        import tempfile
+        _, patches = self._floss_patches(mock_vw)
+        with tempfile.NamedTemporaryFile(suffix=".exe") as tmp:
+            tmp.write(b"\x00" * 1024)
+            tmp.flush()
+
+            import contextlib
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+
+                _parse_floss_analysis(
+                    tmp.name, 4, 0, 0, "pe",
+                    [], [], [], True,
+                    progress_callback=_record,
+                )
+
+        # Verify stage progression
+        pcts = [pct for pct, _ in calls]
+        msgs = [msg for _, msg in calls]
+
+        # Feature identification at 55%
+        assert 55 in pcts, f"Expected 55% for feature identification, got {pcts}"
+        # Stack strings at 60%
+        assert 60 in pcts, f"Expected 60% for stack strings, got {pcts}"
+        # Decoded strings at 80%
+        assert 80 in pcts, f"Expected 80% for decoded strings, got {pcts}"
+        # Finalization at 90%
+        assert 90 in pcts, f"Expected 90% for finalization, got {pcts}"
+
+        # Verify messages are descriptive
+        assert any("function features" in m for m in msgs)
+        assert any("stack strings" in m.lower() for m in msgs)
+        assert any("decoded strings" in m.lower() for m in msgs)
+        assert any("Finalizing" in m for m in msgs)
+
+    def test_no_callback_does_not_error(self):
+        """Verify analysis works fine without a progress_callback."""
+        from unittest.mock import MagicMock
+        from arkana.parsers.floss import _parse_floss_analysis
+
+        mock_vw = MagicMock()
+        mock_vw.getFunctions.return_value = []
+        mock_vw.getXrefsTo.return_value = []
+
+        import tempfile, contextlib
+        _, patches = self._floss_patches(mock_vw)
+        with tempfile.NamedTemporaryFile(suffix=".exe") as tmp:
+            tmp.write(b"\x00" * 1024)
+            tmp.flush()
+
+            with contextlib.ExitStack() as stack:
+                for p in patches:
+                    stack.enter_context(p)
+
+                _parse_floss_analysis(
+                    tmp.name, 4, 0, 0, "pe",
+                    [], [], [], True,
+                    # No progress_callback — just verify no exception
+                )

@@ -50,7 +50,14 @@ def _start_floss_background_task(current_state, floss_args: tuple):
     """
     import threading
     import time as _time
-    from arkana.state import TASK_RUNNING, TASK_COMPLETED, TASK_FAILED, set_current_state
+    from arkana.state import TASK_RUNNING, TASK_COMPLETED, TASK_FAILED, set_current_state, get_current_state, AnalyzerState
+
+    # Resolve StateProxy to actual AnalyzerState — threading.Thread doesn't
+    # inherit contextvars, so we must capture the concrete instance here.
+    # Note: hasattr() won't work because StateProxy delegates attribute
+    # lookups to the underlying AnalyzerState via __getattr__.
+    if not isinstance(current_state, AnalyzerState):
+        current_state = get_current_state()
 
     task_id = "floss-deep-analysis"
 
@@ -76,9 +83,8 @@ def _start_floss_background_task(current_state, floss_args: tuple):
     def _worker():
         set_current_state(current_state)
         try:
-            _update(5, "Starting full FLOSS analysis...")
-            _update(10, "Loading Vivisect workspace (this is the slow part)...")
-            result = _parse_floss_analysis(*floss_args)
+            _update(5, "Starting FLOSS deep analysis...")
+            result = _parse_floss_analysis(*floss_args, progress_callback=_update)
 
             # Merge into pe_data in place — preserve static strings if deep failed
             if current_state.pe_data:

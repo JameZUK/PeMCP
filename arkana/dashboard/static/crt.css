@@ -893,9 +893,34 @@ tr.note-row > td {
 
 /* === CALL GRAPH === */
 
+/* Full-bleed: remove max-width on callgraph page */
+.content:has(.graph-panel-full) {
+    max-width: none;
+    padding: 12px;
+}
+
 .graph-panel {
     display: flex;
     min-height: 600px;
+}
+
+.graph-panel-full {
+    display: flex;
+    height: calc(100vh - 160px);
+    min-height: calc(100vh - 160px);
+}
+
+.graph-panel-full .cytoscape-container {
+    flex: 1;
+    min-width: 0;
+    min-height: 100%;
+}
+
+.graph-panel-full .node-sidebar {
+    width: 320px;
+    flex-shrink: 0;
+    max-height: calc(100vh - 160px);
+    overflow-y: auto;
 }
 
 .cytoscape-container {
@@ -907,6 +932,8 @@ tr.note-row > td {
     width: 280px;
     border-left: 1px solid var(--primary-ghost);
     padding: 12px;
+    display: flex;
+    flex-direction: column;
 }
 
 .node-sidebar.hidden { display: none; }
@@ -1552,16 +1579,406 @@ details[open] > .import-dll-header::before {
     letter-spacing: 1px;
 }
 
+/* === GRAPH CONTEXT MENU === */
+
+.graph-context-menu {
+    position: absolute;
+    z-index: 50;
+    background: var(--bg-surface);
+    border: 1px solid var(--primary-muted);
+    min-width: 160px;
+    box-shadow: 0 0 12px rgba(0, 255, 65, 0.15);
+}
+
+.ctx-item {
+    padding: 6px 14px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--primary);
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.ctx-item:hover {
+    background: var(--bg-raised);
+    color: var(--highlight);
+    text-shadow: 0 0 4px var(--primary);
+}
+
+.ctx-item[data-action="flag"]:hover { color: var(--danger); }
+.ctx-item[data-action="suspicious"]:hover { color: var(--warning); }
+.ctx-item[data-action="clean"]:hover { color: var(--safe); }
+.ctx-item[data-action="unreviewed"]:hover { color: var(--primary-muted); }
+
+.ctx-separator {
+    height: 1px;
+    background: var(--primary-ghost);
+    margin: 2px 0;
+}
+
+/* === GRAPH TOOLTIP === */
+
+.graph-tooltip {
+    position: absolute;
+    z-index: 40;
+    background: var(--bg-surface);
+    border: 1px solid var(--primary-muted);
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--primary);
+    white-space: pre-line;
+    pointer-events: none;
+    max-width: 280px;
+    box-shadow: 0 0 8px rgba(0, 255, 65, 0.1);
+}
+
+/* === GRAPH LEGEND === */
+
+.graph-legend {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 30;
+    background: var(--bg-surface);
+    border: 1px solid var(--primary-ghost);
+    min-width: 130px;
+    font-size: 11px;
+}
+
+.graph-legend.hidden { display: none; }
+
+.legend-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 10px;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--primary-dim);
+    border-bottom: 1px solid var(--primary-ghost);
+}
+
+.legend-close-btn {
+    background: none;
+    border: none;
+    color: var(--primary-muted);
+    cursor: pointer;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 10px;
+    padding: 0;
+}
+
+.legend-close-btn:hover { color: var(--primary); }
+
+.legend-body { padding: 6px 10px; }
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px 0;
+    color: var(--primary-dim);
+}
+
+.legend-swatch {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    border-radius: 2px;
+}
+
+/* === GRAPH MINIMAP === */
+
+.graph-minimap {
+    position: absolute;
+    bottom: 12px;
+    right: 12px;
+    z-index: 30;
+    width: 180px;
+    height: 120px;
+    background: #0a0a0a;
+    border: 1px solid var(--primary-ghost);
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.graph-panel:has(.node-sidebar:not(.hidden)) .graph-minimap {
+    right: 332px;
+}
+
+.minimap-viewport {
+    position: absolute;
+    border: 1px solid var(--primary);
+    background: rgba(0, 255, 65, 0.06);
+    pointer-events: none;
+}
+
+/* === SIDEBAR XREF ROWS === */
+
+.sidebar-xref-row {
+    padding: 3px 8px;
+    margin-left: 4px;
+    font-size: 12px;
+    border-left: 2px solid var(--primary-ghost);
+    cursor: pointer;
+    color: var(--primary-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: background 0.1s, border-color 0.1s;
+}
+
+.sidebar-xref-row:hover {
+    background: var(--bg-raised);
+    border-left-color: var(--primary);
+    color: var(--primary);
+}
+
+/* === BOOKMARK DROPDOWN === */
+
+.bookmark-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    z-index: 200;
+    min-width: 220px;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--bg-surface);
+    border: 1px solid var(--primary-muted);
+    margin-top: 2px;
+}
+
+.bookmark-dropdown.hidden { display: none; }
+
+.bookmark-empty {
+    padding: 10px;
+    text-align: center;
+    color: var(--primary-muted);
+    font-size: 11px;
+}
+
+.bookmark-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--primary-ghost);
+    font-size: 11px;
+}
+
+.bookmark-row:last-child { border-bottom: none; }
+
+.bookmark-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--primary);
+}
+
+.bookmark-go, .bookmark-del {
+    padding: 1px 6px !important;
+    font-size: 9px !important;
+}
+
+.bookmark-del { border-color: var(--danger) !important; color: var(--danger) !important; }
+
+/* === SIDEBAR TABS (callgraph) === */
+
+.sidebar-tab-bar {
+    display: flex;
+    border-bottom: 1px solid var(--primary-ghost);
+    margin-bottom: 0;
+}
+
+.sidebar-tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--primary-muted);
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.sidebar-tab:hover {
+    color: var(--primary);
+}
+
+.sidebar-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
+.sidebar-tab-content {
+    overflow-y: auto;
+    flex: 1;
+    padding: 8px 0;
+}
+
+/* === SUSPICIOUS API ROWS === */
+
+.suspicious-section {
+    border-left: 2px solid var(--danger);
+    padding-left: 8px;
+    margin-bottom: 10px;
+}
+
+.suspicious-section-header {
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: var(--danger);
+    margin-bottom: 4px;
+    font-weight: bold;
+}
+
+.suspicious-api-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 2px 0;
+}
+
+.suspicious-api-row .badge {
+    font-size: 9px;
+    padding: 0 4px;
+}
+
+.suspicious-api-category {
+    font-size: 10px;
+    color: var(--primary-muted);
+}
+
+.xref-triage-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.xref-triage-dot.dot-flagged { background: var(--danger); }
+.xref-triage-dot.dot-suspicious { background: var(--warning); }
+.xref-triage-dot.dot-clean { background: var(--safe); }
+.xref-triage-dot.dot-unreviewed { background: var(--primary-ghost); }
+
+/* === SIDEBAR CODE === */
+
+.sidebar-code {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #88ccff;
+    background: var(--bg-deep);
+    padding: 8px;
+    overflow: auto;
+    max-height: calc(100vh - 280px);
+    white-space: pre;
+    tab-size: 4;
+    margin: 0;
+    border: 1px solid rgba(68,136,255,0.2);
+}
+
+/* === CLICKABLE XREF ENTRIES === */
+
+.xref-entry {
+    font-size: 12px;
+    padding: 3px 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: 2px;
+    transition: background 0.15s;
+}
+.xref-entry:hover {
+    background: rgba(0, 255, 65, 0.08);
+}
+
+/* === ANALYSIS BUTTON === */
+
+.btn-analysis {
+    border-color: var(--primary-dim) !important;
+    color: var(--primary-dim) !important;
+}
+.btn-analysis:hover {
+    border-color: var(--primary) !important;
+    color: var(--primary) !important;
+}
+
+/* === HIGHLIGHT FLASH (navigate-to-function) === */
+
+@keyframes highlight-flash {
+    0% { background: rgba(0, 255, 65, 0.25); }
+    100% { background: transparent; }
+}
+.highlight-flash {
+    animation: highlight-flash 2s ease-out;
+}
+
+/* === DECOMPILE OVERLAY (callgraph page) === */
+
+.decompile-overlay {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    right: 20px;
+    bottom: 20px;
+    z-index: 200;
+    background: #000a14;
+    border: 1px solid #4488ff;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 0 24px rgba(68, 136, 255, 0.3);
+}
+
+.decompile-overlay.hidden { display: none; }
+
+.decompile-overlay-header {
+    display: flex;
+    align-items: center;
+    padding: 6px 12px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: #4488ff;
+    border-bottom: 1px solid rgba(68,136,255,0.3);
+    background: rgba(68,136,255,0.06);
+}
+
+.decompile-overlay .decompile-code {
+    flex: 1;
+    overflow: auto;
+    padding: 10px 12px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: #88ccff;
+    white-space: pre;
+    tab-size: 4;
+    margin: 0;
+}
+
 /* === RESPONSIVE === */
 
 @media (max-width: 768px) {
     .nav-links { overflow-x: auto; }
     .stats-grid { grid-template-columns: 1fr; }
     .graph-panel { flex-direction: column; }
+    .graph-panel-full { height: auto; min-height: auto; }
+    .graph-panel-full .cytoscape-container { min-height: 400px; }
+    .graph-panel-full .node-sidebar { width: 100%; max-height: none; }
     .node-sidebar { width: 100%; border-left: none; border-top: 1px solid var(--primary-ghost); }
     .filter-bar { flex-direction: column; }
     .nav-filename { max-width: 100px; font-size: 10px; }
     .sse-disconnect { font-size: 9px; padding: 1px 4px; }
     .data-table tbody td { max-width: 150px; }
     .import-func-name { min-width: 120px; max-width: 200px; }
+    .graph-minimap { display: none; }
+    .graph-legend { bottom: 4px; left: 4px; }
 }
