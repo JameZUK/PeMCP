@@ -32,6 +32,29 @@ function showToast(message, type) {
     var evtSource = null;
     var lastActiveTool = null;
     var lastTaskRunning = 0;
+    var reconnectDelay = 2000;
+    var maxReconnectDelay = 30000;
+    var disconnected = false;
+
+    function setDisconnected(state) {
+        disconnected = state;
+        var indicator = document.getElementById('sse-disconnect');
+        if (!indicator) {
+            // Create the indicator in the nav bar
+            var nav = document.querySelector('.top-nav');
+            if (nav) {
+                indicator = document.createElement('span');
+                indicator.id = 'sse-disconnect';
+                indicator.className = 'sse-disconnect';
+                indicator.textContent = 'DISCONNECTED';
+                indicator.style.display = 'none';
+                nav.appendChild(indicator);
+            }
+        }
+        if (indicator) {
+            indicator.style.display = state ? 'inline-block' : 'none';
+        }
+    }
 
     function refreshPageElements() {
         if (!window.htmx) return;
@@ -76,6 +99,9 @@ function showToast(message, type) {
         evtSource = new EventSource('/dashboard/api/events');
 
         evtSource.addEventListener('state-update', function(e) {
+            // Reset backoff on successful message
+            reconnectDelay = 2000;
+            setDisconnected(false);
             try {
                 var data = JSON.parse(e.data);
                 handleStateUpdate(data);
@@ -85,15 +111,25 @@ function showToast(message, type) {
         });
 
         evtSource.addEventListener('file-changed', function(e) {
+            reconnectDelay = 2000;
+            setDisconnected(false);
             showToast('New file loaded — refreshing...', 'info');
             setTimeout(function() {
                 window.location.reload();
             }, 500);
         });
 
+        evtSource.onopen = function() {
+            reconnectDelay = 2000;
+            setDisconnected(false);
+        };
+
         evtSource.onerror = function() {
             if (evtSource) evtSource.close();
-            setTimeout(connectSSE, 5000);
+            setDisconnected(true);
+            // Exponential backoff: 2s, 4s, 8s, 16s, max 30s
+            setTimeout(connectSSE, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
         };
     }
     connectSSE();

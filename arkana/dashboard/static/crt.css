@@ -136,6 +136,21 @@ body {
     white-space: nowrap;
 }
 
+.sse-disconnect {
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: var(--danger);
+    border: 1px solid var(--danger);
+    padding: 2px 8px;
+    margin-left: 8px;
+    animation: pulse-danger 2s ease-in-out infinite;
+}
+
+@keyframes pulse-danger {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
 /* === TOAST NOTIFICATIONS === */
 
 .toast-container {
@@ -203,6 +218,8 @@ body {
     border: 1px solid var(--primary-ghost);
     margin-bottom: 16px;
     position: relative;
+    overflow: hidden;
+    min-width: 0;
 }
 
 .panel::before,
@@ -420,6 +437,9 @@ body {
 .data-table tbody td {
     padding: 6px 12px;
     border-bottom: 1px solid var(--primary-ghost);
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .data-table tbody tr:hover {
@@ -1192,6 +1212,10 @@ details[open] > .import-dll-header::before {
 }
 .import-func-name {
     min-width: 200px;
+    max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .filter-input:focus {
     outline: none;
@@ -1215,4 +1239,8 @@ details[open] > .import-dll-header::before {
     .graph-panel { flex-direction: column; }
     .node-sidebar { width: 100%; border-left: none; border-top: 1px solid var(--primary-ghost); }
     .filter-bar { flex-direction: column; }
+    .nav-filename { max-width: 100px; font-size: 10px; }
+    .sse-disconnect { font-size: 9px; padding: 1px 4px; }
+    .data-table tbody td { max-width: 150px; }
+    .import-func-name { min-width: 120px; max-width: 200px; }
 }

@@ -317,7 +317,7 @@ def _create_routes(dashboard_token: str) -> list:
                         if changed:
                             file_changed = (
                                 current_sha256 != last_file_sha256
-                                and last_file_sha256 is not None
+                                and current_sha256 is not None
                             )
                             last_tool_count = current_tools
                             last_notes_count = current_notes

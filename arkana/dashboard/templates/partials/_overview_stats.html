@@ -11,6 +11,23 @@
     {% endif %}
 </div>
 {% endif %}
+{% if data.background_tasks %}
+{% set running_tasks = data.background_tasks|selectattr('status', 'equalto', 'running')|list %}
+{% if running_tasks %}
+{% for task in running_tasks %}
+<div class="panel active-tool-banner" style="border-color: var(--warning);">
+    <span class="warning">&#9654; {{ task.tool }}</span>
+    <div class="progress-bar" style="flex: 1; margin-left: 16px;">
+        <div class="progress-fill" style="width: {{ task.progress_percent }}%; background: var(--warning); box-shadow: 0 0 6px var(--warning);"></div>
+    </div>
+    <span class="dim" style="margin-left: 8px;">{{ task.progress_percent }}%</span>
+    {% if task.progress_message %}
+    <span class="dim" style="margin-left: 8px; font-size: 11px;">{{ task.progress_message[:60] }}</span>
+    {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+{% endif %}
 <div class="stats-grid">
     <div class="panel stat-card">
         <div class="panel-header">FILE</div>

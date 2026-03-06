@@ -35,11 +35,11 @@
                         {% endfor %}
                     </div>
                 </div>
-                {% if e.summary %}
+                {% if e.full_summary or e.summary %}
                 <div class="detail-section">
-                    <div class="detail-section-title">RESULT SUMMARY</div>
+                    <div class="detail-section-title">RESULT{% if e.full_summary %} (FULL){% endif %}</div>
                     <div class="detail-section-body">
-                        <div class="detail-result">{{ e.summary }}</div>
+                        <div class="detail-result">{{ e.full_summary or e.summary }}</div>
                     </div>
                 </div>
                 {% endif %}

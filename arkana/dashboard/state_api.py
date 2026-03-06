@@ -19,14 +19,28 @@ def _get_state():
     In stdio mode the MCP SDK still creates a session, so tools write to a
     per-session state instead of ``_default_state``.  We check the session
     registry for any state that has a file loaded and prefer that over the
-    (potentially empty) default state.  Also checks for states with an active
-    tool running (e.g. open_file in progress).
+    (potentially empty) default state.
+
+    When multiple sessions exist, prefer the one with the most recent activity
+    (latest tool_history timestamp) to avoid nondeterministic dict iteration.
     """
     with _registry_lock:
-        # Prefer a session with a file loaded
-        for st in _session_registry.values():
-            if st.filepath is not None:
-                return st
+        # Collect candidates with a loaded file
+        file_candidates = [
+            st for st in _session_registry.values()
+            if st.filepath is not None
+        ]
+        if file_candidates:
+            if len(file_candidates) == 1:
+                return file_candidates[0]
+            # Pick the session with the most recent tool call
+            def _last_activity(st):
+                hist = st.get_tool_history()
+                if hist:
+                    return hist[-1].get("timestamp_epoch", 0)
+                return 0
+            return max(file_candidates, key=_last_activity)
+
         # Fall back to a session with an active tool (e.g. open_file loading)
         for st in _session_registry.values():
             if getattr(st, "active_tool", None) is not None:
@@ -759,12 +773,14 @@ def get_timeline_data(limit: int = 100) -> List[Dict[str, Any]]:
                 display_params[k] = s[:300] + "..." if len(s) > 300 else s
             else:
                 display_params[k] = str(v)[:300]
+        full_summary = h.get("result_summary", "")
         entries.append({
             "type": "tool",
             "timestamp": h.get("timestamp", ""),
             "timestamp_epoch": h.get("timestamp_epoch", 0),
             "name": h.get("tool_name", "?"),
-            "summary": h.get("result_summary", "")[:200],
+            "summary": full_summary[:200],
+            "full_summary": full_summary[:2000] if len(full_summary) > 200 else "",
             "duration_ms": h.get("duration_ms", 0),
             "parameters": display_params,
         })
