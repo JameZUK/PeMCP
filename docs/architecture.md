@@ -23,9 +23,15 @@ arkana/
 ├── parsers/
 │   ├── pe.py                   # PE structure parsing
 │   ├── capa.py                 # Capa integration
-│   ├── floss.py                # FLOSS integration
+│   ├── floss.py                # FLOSS integration (with Vivisect progress polling)
 │   ├── signatures.py           # PEiD/YARA scanning
 │   └── strings.py              # String utilities
+├── dashboard/                  # Web dashboard (Starlette + htmx + Jinja2)
+│   ├── app.py                  # ASGI app factory, routes, auth, SSE events
+│   ├── state_api.py            # Data extraction layer (reads AnalyzerState for views)
+│   ├── templates/              # Jinja2 templates (overview, functions, callgraph, etc.)
+│   │   └── partials/           # htmx partials (_global_status, _overview_stats, etc.)
+│   └── static/                 # CSS (CRT theme), JS (htmx, Cytoscape.js, dagre)
 ├── cli/
 │   └── printers.py             # CLI output formatting
 └── mcp/

@@ -57,7 +57,7 @@ Arkana eliminates this by putting **209 specialised analysis tools behind a sing
 - **Session persistence** -- Notes, renames, custom types, tool history, and analysis cache survive restarts and context window limits
 - **AI-optimised workflow** -- Compact triage, smart function ranking, batch decompilation, digest summaries, and guided next steps
 - **Robust architecture** -- Docker-first, thread-safe state, background tasks, pagination, smart truncation, graceful degradation
-- **Web dashboard** -- Real-time CRT-themed web interface on port 8082 with binary summary, function triage, call graph visualisation, analysis timeline, and notes browser -- analyst flags feed back into AI tool suggestions
+- **Web dashboard** -- Real-time CRT-themed web interface on port 8082 with binary summary, function triage with XREF analysis panel, dagre-layout call graph with tabbed sidebar, analysis timeline, strings explorer, and notes browser -- analyst flags feed back into AI tool suggestions
 
 ### How It Compares
 
@@ -78,11 +78,14 @@ Arkana complements rather than replaces Ghidra/IDA -- see [Scenarios & Compariso
 Arkana includes a real-time web dashboard that launches automatically on port 8082. It provides a visual companion to the AI-driven analysis, letting you observe and interact with the investigation as it happens.
 
 - **Overview** -- Binary summary with risk score, packing status, security mitigations, key findings, and recent notes
-- **Functions** -- Sortable function explorer with triage buttons (FLAG / SUS / CLN) -- flagged functions are automatically prioritised by the AI in subsequent analysis
-- **Call Graph** -- Interactive Cytoscape.js call graph with zoom, pan, and node selection
+- **Functions** -- Sortable function explorer with triage buttons (FLAG / SUS / CLN) and XREF analysis panel -- click XREF to see cross-references with suspicious API badges, clickable callers/callees that navigate to the target function, and associated strings, all without requiring decompilation first
+- **Call Graph** -- Interactive Cytoscape.js call graph with dagre hierarchical layout, tabbed sidebar (INFO / XREFS / STRINGS / CODE) on node selection, neighbourhood highlighting with marching-ant edges, search, bookmarks, and PNG/SVG export
 - **Sections** -- PE/ELF section permissions with anomaly highlighting (W+X detection)
+- **Imports** -- DLL import tables with export/function grouping
+- **Strings** -- Unified string explorer with FLOSS detail panel (type breakdown, decoded/stack string preview), type/category filtering, and sifter scores
 - **Timeline** -- Chronological log of every tool call and note, with expandable detail panels showing request parameters and result summaries
 - **Notes** -- Category-filtered view of all analysis notes (function, tool_result, IOC, hypothesis, manual)
+- **Global status bar** -- Active tool and background task progress visible from every page
 - **Real-time updates** -- SSE-driven live refresh as the AI runs tools
 
 ![Arkana Dashboard Overview](docs/Dashboard-Overview.png)
