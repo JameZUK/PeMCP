@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Imports / Exports{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">IMPORTS / EXPORTS</h1>
+</div>
+
+{% if data and data.total_import_dlls %}
+<div class="stats-grid">
+    <div class="panel stat-card">
+        <div class="panel-header">IMPORT DLLs</div>
+        <div class="stat-value">{{ data.total_import_dlls }}</div>
+    </div>
+    <div class="panel stat-card">
+        <div class="panel-header">IMPORT FUNCTIONS</div>
+        <div class="stat-value">{{ data.total_import_functions }}</div>
+    </div>
+    <div class="panel stat-card">
+        <div class="panel-header">EXPORTS</div>
+        <div class="stat-value">{{ data.total_exports }}</div>
+    </div>
+    {% if data.suspicious_apis %}
+    <div class="panel stat-card">
+        <div class="panel-header">SUSPICIOUS APIs</div>
+        <div class="stat-value warning">{{ data.suspicious_apis|length }}</div>
+    </div>
+    {% endif %}
+</div>
+
+{% if data.suspicious_apis %}
+<div class="panel">
+    <div class="panel-header">SUSPICIOUS IMPORTS</div>
+    <div class="summary-rows">
+        {% for api in data.suspicious_apis %}
+        <div class="anomaly-item">
+            <span class="anomaly-label danger">&#9888;</span>
+            <span class="anomaly-detail mono">{{ api }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if data.import_categories %}
+<div class="panel">
+    <div class="panel-header">IMPORT CATEGORIES</div>
+    <div class="summary-grid">
+        {% for cat, apis in data.import_categories.items() %}
+        <div class="summary-section">
+            <div class="summary-section-title">{{ cat|upper }}</div>
+            {% if apis is iterable and apis is not string %}
+            {% for api in apis %}
+            <div class="summary-row">
+                <span class="mono dim" style="font-size: 11px;">{{ api.function if api is mapping else api }}</span>
+            </div>
+            {% endfor %}
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="panel">
+    <div class="panel-header">IMPORT TABLE</div>
+    <div id="import-filter" style="padding: 8px 12px;">
+        <input type="text" id="import-search" placeholder="Filter by DLL or function name..."
+               class="filter-input" oninput="filterImports()"
+               style="background: var(--bg-deep); color: var(--primary); border: 1px solid var(--primary-ghost); padding: 6px 12px; width: 100%; font-family: inherit; font-size: 12px;">
+    </div>
+    {% for dll in data.imports %}
+    <div class="import-dll-group" data-dll="{{ dll.dll|lower }}">
+        <details {% if dll.count <= 20 %}open{% endif %}>
+            <summary class="import-dll-header">
+                <span class="import-dll-name">{{ dll.dll }}</span>
+                <span class="dim" style="font-size: 11px; margin-left: 8px;">({{ dll.count }} functions)</span>
+            </summary>
+            <div class="import-func-list">
+                {% for f in dll.functions %}
+                <div class="import-func-row" data-func="{{ f.name|lower }}">
+                    <span class="mono import-func-name{% if f.name in data.suspicious_apis %} danger{% endif %}">{{ f.name }}</span>
+                    {% if f.address %}<span class="mono dim" style="font-size: 10px;">{{ f.address }}</span>{% endif %}
+                    {% if f.ordinal %}<span class="dim" style="font-size: 10px;">ord:{{ f.ordinal }}</span>{% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </details>
+    </div>
+    {% endfor %}
+</div>
+
+{% if data.exports %}
+<div class="panel">
+    <div class="panel-header">EXPORT TABLE</div>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>NAME</th>
+                    <th>ADDRESS</th>
+                    <th>ORDINAL</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for e in data.exports %}
+                <tr>
+                    <td class="mono">{{ e.name }}</td>
+                    <td class="mono dim">{{ e.address }}</td>
+                    <td>{{ e.ordinal }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% else %}
+<div class="panel">
+    <div class="empty-msg">No import data. Load a binary to view imports.</div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function filterImports() {
+    var q = document.getElementById('import-search').value.toLowerCase();
+    var groups = document.querySelectorAll('.import-dll-group');
+    for (var i = 0; i < groups.length; i++) {
+        var dll = groups[i].getAttribute('data-dll');
+        var rows = groups[i].querySelectorAll('.import-func-row');
+        var groupVisible = false;
+        if (!q || dll.indexOf(q) !== -1) {
+            groupVisible = true;
+            for (var j = 0; j < rows.length; j++) rows[j].style.display = '';
+        } else {
+            for (var j = 0; j < rows.length; j++) {
+                var fn = rows[j].getAttribute('data-func');
+                if (fn.indexOf(q) !== -1) {
+                    rows[j].style.display = '';
+                    groupVisible = true;
+                } else {
+                    rows[j].style.display = 'none';
+                }
+            }
+        }
+        groups[i].style.display = groupVisible ? '' : 'none';
+        if (groupVisible && q) {
+            groups[i].querySelector('details').open = true;
+        }
+    }
+}
+</script>
+{% endblock %}

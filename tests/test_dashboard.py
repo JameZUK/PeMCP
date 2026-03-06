@@ -147,7 +147,8 @@ class TestStateApi:
         _default_state.pe_data = None
         try:
             data = get_sections_data()
-            assert isinstance(data, list)
+            assert isinstance(data, dict)
+            assert data["sections"] == []
         finally:
             _default_state.pe_data = old_pd
 
@@ -162,9 +163,10 @@ class TestStateApi:
         }
         try:
             data = get_sections_data()
-            assert len(data) == 1
-            assert data[0]["name"] == ".text"
-            assert "R" in data[0]["permissions"]
+            assert isinstance(data, dict)
+            assert len(data["sections"]) == 1
+            assert data["sections"][0]["name"] == ".text"
+            assert "R" in data["sections"][0]["permissions"]
         finally:
             _default_state.pe_data = old_pd
 
@@ -177,6 +179,101 @@ class TestStateApi:
         from arkana.dashboard.state_api import get_notes_data
         data = get_notes_data()
         assert isinstance(data, list)
+
+    def test_imports_no_data(self):
+        from arkana.dashboard.state_api import get_imports_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = None
+        try:
+            data = get_imports_data()
+            assert isinstance(data, dict)
+            assert data["imports"] == []
+            assert data["total_import_dlls"] == 0
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_imports_with_data(self):
+        from arkana.dashboard.state_api import get_imports_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "imports": [
+                {
+                    "dll": "KERNEL32.dll",
+                    "symbols": [
+                        {"name": "CreateFileW", "address": "0x1000"},
+                        {"name": "ReadFile", "address": "0x1004"},
+                    ],
+                },
+                {
+                    "dll": "NTDLL.dll",
+                    "symbols": [
+                        {"name": "NtCreateProcess", "address": "0x2000"},
+                    ],
+                },
+            ],
+            "exports": {"functions": [
+                {"name": "DllMain", "address": "0x3000", "ordinal": 1},
+            ]},
+        }
+        try:
+            data = get_imports_data()
+            assert data["total_import_dlls"] == 2
+            assert data["total_import_functions"] == 3
+            assert data["total_exports"] == 1
+            # Search filter
+            data_filtered = get_imports_data(search="KERNEL32")
+            assert data_filtered["total_import_dlls"] == 1
+            assert data_filtered["imports"][0]["dll"] == "KERNEL32.dll"
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_overview_string_counts(self):
+        from arkana.dashboard.state_api import get_overview_data
+        old_pd = _default_state.pe_data
+        old_fp = _default_state.filepath
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {
+            "file_hashes": {"sha256": "abc123"},
+            "basic_ascii_strings": ["str1", "str2", "str3"],
+            "floss_analysis": {
+                "status": "Complete",
+                "strings": {
+                    "static_strings": [{"string": "a"}] * 10,
+                    "stack_strings": [{"string": "b"}] * 3,
+                    "decoded_strings": [{"string": "c"}] * 2,
+                },
+            },
+        }
+        try:
+            data = get_overview_data()
+            bs = data["binary_summary"]
+            assert bs["basic_string_count"] == 3
+            assert bs["floss_static_count"] == 10
+            assert bs["floss_stack_count"] == 3
+            assert bs["floss_decoded_count"] == 2
+        finally:
+            _default_state.pe_data = old_pd
+            _default_state.filepath = old_fp
+
+    def test_sections_includes_data_directories(self):
+        from arkana.dashboard.state_api import get_sections_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "sections": [],
+            "data_directories": [
+                {"name": "IMPORT_TABLE", "virtual_address": "0x2000", "size": 512},
+            ],
+            "resources_summary": [
+                {"type": "RT_VERSION", "name": "1", "size": 256, "language": "English"},
+            ],
+        }
+        try:
+            data = get_sections_data()
+            assert len(data["data_directories"]) == 1
+            assert len(data["resources"]) == 1
+            assert data["data_directories"][0]["name"] == "IMPORT_TABLE"
+        finally:
+            _default_state.pe_data = old_pd
 
 
 # ---------------------------------------------------------------------------

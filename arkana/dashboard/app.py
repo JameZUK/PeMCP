@@ -24,6 +24,7 @@ from arkana.dashboard.state_api import (
     get_functions_data,
     get_callgraph_data,
     get_sections_data,
+    get_imports_data,
     get_timeline_data,
     get_notes_data,
 )
@@ -281,6 +282,11 @@ def _create_routes(dashboard_token: str) -> list:
                 last_notes_count = 0
                 last_active_tool = None
                 last_progress = 0
+                last_task_count = 0
+                last_task_running = 0
+                last_file_sha256 = None
+                last_triage_counts = {}
+                last_artifacts_count = 0
                 while True:
                     await asyncio.sleep(2)
                     try:
@@ -289,19 +295,44 @@ def _create_routes(dashboard_token: str) -> list:
                         current_notes = overview["notes_count"]
                         current_active = overview.get("active_tool")
                         current_progress = overview.get("active_tool_progress", 0)
+                        current_tasks = overview.get("background_tasks", [])
+                        current_task_count = len(current_tasks)
+                        current_task_running = sum(
+                            1 for t in current_tasks if t.get("status") == "running"
+                        )
+                        current_sha256 = overview.get("sha256")
+                        current_triage = overview.get("triage_counts", {})
+                        current_artifacts = overview.get("artifacts_count", 0)
                         changed = (
                             current_tools != last_tool_count
                             or current_notes != last_notes_count
                             or current_active != last_active_tool
                             or current_progress != last_progress
+                            or current_task_count != last_task_count
+                            or current_task_running != last_task_running
+                            or current_triage != last_triage_counts
+                            or current_artifacts != last_artifacts_count
+                            or current_sha256 != last_file_sha256
                         )
                         if changed:
+                            file_changed = (
+                                current_sha256 != last_file_sha256
+                                and last_file_sha256 is not None
+                            )
                             last_tool_count = current_tools
                             last_notes_count = current_notes
                             last_active_tool = current_active
                             last_progress = current_progress
+                            last_task_count = current_task_count
+                            last_task_running = current_task_running
+                            last_file_sha256 = current_sha256
+                            last_triage_counts = current_triage
+                            last_artifacts_count = current_artifacts
                             data = json.dumps(overview)
-                            yield f"event: state-update\ndata: {data}\n\n"
+                            if file_changed:
+                                yield f"event: file-changed\ndata: {data}\n\n"
+                            else:
+                                yield f"event: state-update\ndata: {data}\n\n"
                     except asyncio.CancelledError:
                         return
                     except Exception:
@@ -355,6 +386,7 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/functions", endpoint=_auth_page("functions.html", "functions", get_functions_data), methods=["GET"]),
         Route("/callgraph", endpoint=_auth_page("callgraph.html", "callgraph"), methods=["GET"]),
         Route("/sections", endpoint=_auth_page("sections.html", "sections", get_sections_data), methods=["GET"]),
+        Route("/imports", endpoint=_auth_page("imports.html", "imports", get_imports_data), methods=["GET"]),
         Route("/timeline", endpoint=_auth_page("timeline.html", "timeline", lambda: get_timeline_data(100)), methods=["GET"]),
         Route("/notes", endpoint=page_notes, methods=["GET"]),
         # API

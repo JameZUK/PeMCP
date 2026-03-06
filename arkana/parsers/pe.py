@@ -29,7 +29,7 @@ from arkana.mock import MockPE
 from arkana.resources import ensure_peid_db_exists
 from arkana.parsers.signatures import parse_signature_file, find_pattern_in_data_regex, perform_yara_scan
 from arkana.parsers.capa import _parse_capa_analysis
-from arkana.parsers.floss import _parse_floss_analysis
+from arkana.parsers.floss import _parse_floss_analysis, _parse_floss_static_only
 from arkana.parsers.strings import _extract_strings_from_data
 
 if CRYPTOGRAPHY_AVAILABLE:
@@ -958,7 +958,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         # Each parser is individually guarded so that a failure in one
         # (e.g. due to a corrupted structure) does not prevent other
         # parsers from producing results.
-        _report(10, 100, "Parsing PE headers and structures...")
+        _report(10, 100, "Parsing PE headers...")
 
         # NT headers are special: they return magic_type_str needed by later parsers
         magic_type_str = "Unknown"
@@ -971,17 +971,21 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
 
         pe_info_dict['dos_header'] = _safe_parse('dos_header', _parse_dos_header, pe)
         pe_info_dict['data_directories'] = _safe_parse('data_directories', _parse_data_directories, pe)
+        _report(15, 100, "Parsing sections and imports...")
         pe_info_dict['sections'] = _safe_parse('sections', _parse_sections, pe)
         pe_info_dict['imports'] = _safe_parse('imports', _parse_imports, pe)
         pe_info_dict['exports'] = _safe_parse('exports', _parse_exports, pe)
+        _report(20, 100, "Parsing resources and metadata...")
         pe_info_dict['resources_summary'] = _safe_parse('resources_summary', _parse_resources_summary, pe)
         pe_info_dict['version_info'] = _safe_parse('version_info', _parse_version_info, pe)
         pe_info_dict['debug_info'] = _safe_parse('debug_info', _parse_debug_info, pe)
+        _report(25, 100, "Verifying digital signature...")
         pe_info_dict['digital_signature'] = _safe_parse(
             'digital_signature', _parse_digital_signature, pe, filepath,
             CRYPTOGRAPHY_AVAILABLE, SIGNIFY_AVAILABLE,
         )
         pe_info_dict['rich_header'] = _safe_parse('rich_header', _parse_rich_header, pe)
+        _report(30, 100, "Parsing advanced structures...")
         pe_info_dict['delay_load_imports'] = _safe_parse('delay_load_imports', _parse_delay_load_imports, pe, magic_type_str)
         pe_info_dict['tls_info'] = _safe_parse('tls_info', _parse_tls_info, pe, magic_type_str)
         pe_info_dict['load_config'] = _safe_parse('load_config', _parse_load_config, pe)
@@ -1035,13 +1039,19 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         logger.info("Capa analysis skipped by request.")
 
     if "floss" not in analyses_to_skip:
+        # Quick static-only extraction during open_file; deep analysis runs
+        # as a background task afterwards (started by tools_pe.py).
         _parallel_tasks.append((
-            'floss_analysis', _parse_floss_analysis,
-            (filepath, floss_min_len_arg, floss_verbose_level_arg,
-             floss_script_debug_level_arg, floss_format_hint_arg,
-             floss_disabled_types_arg, floss_only_types_arg,
-             floss_functions_to_analyze_arg, floss_quiet_mode_arg),
+            'floss_analysis', _parse_floss_static_only,
+            (filepath, floss_min_len_arg),
         ))
+        # Stash full args so the caller can launch the background task.
+        pe_info_dict['_floss_deep_args'] = (
+            filepath, floss_min_len_arg, floss_verbose_level_arg,
+            floss_script_debug_level_arg, floss_format_hint_arg,
+            floss_disabled_types_arg, floss_only_types_arg,
+            floss_functions_to_analyze_arg, floss_quiet_mode_arg,
+        )
     else:
         pe_info_dict['floss_analysis'] = {"status": "Skipped by user request", "strings": {}}
         logger.info("FLOSS analysis skipped by request.")

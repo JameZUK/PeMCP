@@ -2,20 +2,23 @@
 {% block title %}Arkana — Section Map{% endblock %}
 
 {% block content %}
+{% set sections = data.sections if data is mapping else data %}
+{% set data_dirs = data.data_directories if data is mapping else [] %}
+{% set resources = data.resources if data is mapping else [] %}
 <div class="page-header">
     <h1 class="glow">BINARY SECTION MAP</h1>
 </div>
 
 <div class="panel">
     <div class="panel-header">SECTIONS</div>
-    {% if data %}
+    {% if sections %}
     <div class="section-bars">
-        {% for s in data %}
+        {% for s in sections %}
         <div class="section-bar-row">
             <div class="section-label">{{ s.name }}</div>
             <div class="section-bar-track">
                 <div class="section-bar-fill perm-{{ s.permissions|lower|replace('?','u') }}"
-                     style="width: {{ [100, (s.virtual_size / (data|map(attribute='virtual_size')|max or 1) * 100)|int]|min }}%"
+                     style="width: {{ [100, (s.virtual_size / (sections|map(attribute='virtual_size')|max or 1) * 100)|int]|min }}%"
                      title="{{ s.name }} | VA: {{ s.virtual_address }} | VSize: {{ s.virtual_size }} | Raw: {{ s.raw_size }} | Entropy: {{ '%.2f'|format(s.entropy) }} | Perms: {{ s.permissions }}">
                     <span class="section-bar-text">{{ s.permissions }}</span>
                 </div>
@@ -43,7 +46,7 @@
                 </tr>
             </thead>
             <tbody>
-                {% for s in data %}
+                {% for s in sections %}
                 <tr>
                     <td>{{ s.name }}</td>
                     <td class="mono">{{ s.virtual_address }}</td>
@@ -60,4 +63,62 @@
     <div class="empty-msg">No section data. Load a PE binary to view sections.</div>
     {% endif %}
 </div>
+
+{% if data_dirs %}
+<div class="panel">
+    <div class="panel-header">DATA DIRECTORIES</div>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>NAME</th>
+                    <th>VIRTUAL ADDR</th>
+                    <th>SIZE</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for dd in data_dirs %}
+                {% if dd is mapping %}
+                <tr>
+                    <td>{{ dd.name if dd.name is defined else dd.get('entry', '?') }}</td>
+                    <td class="mono">{{ dd.virtual_address if dd.virtual_address is defined else dd.get('rva', '?') }}</td>
+                    <td>{{ dd.size if dd.size is defined else dd.get('size', 0) }}</td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
+{% if resources %}
+<div class="panel">
+    <div class="panel-header">RESOURCES</div>
+    <div class="table-wrap">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>TYPE</th>
+                    <th>NAME</th>
+                    <th>SIZE</th>
+                    <th>LANGUAGE</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in resources %}
+                {% if r is mapping %}
+                <tr>
+                    <td>{{ r.type if r.type is defined else r.get('resource_type', '?') }}</td>
+                    <td>{{ r.name if r.name is defined else r.get('resource_name', '?') }}</td>
+                    <td>{{ r.size if r.size is defined else r.get('size', 0) }}</td>
+                    <td>{{ r.language if r.language is defined else r.get('lang', '?') }}</td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
 {% endblock %}

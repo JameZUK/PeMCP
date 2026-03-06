@@ -189,6 +189,8 @@ def get_overview_data() -> Dict[str, Any]:
                 {
                     "rule": y.get("rule", ""),
                     "description": (y.get("meta", {}) or {}).get("description", ""),
+                    "tags": y.get("tags", []),
+                    "match_count": len(y.get("strings", [])),
                 }
                 for y in yara_matches
                 if isinstance(y, dict)
@@ -343,6 +345,20 @@ def get_overview_data() -> Dict[str, Any]:
         )
         binary_summary["import_dlls"] = dll_count
         binary_summary["import_functions"] = func_count
+
+    # String counts
+    basic_strings = pe_data.get("basic_ascii_strings", [])
+    binary_summary["basic_string_count"] = len(basic_strings) if isinstance(basic_strings, list) else 0
+
+    floss = pe_data.get("floss_analysis", {})
+    if isinstance(floss, dict):
+        floss_strings = floss.get("strings", {})
+        if isinstance(floss_strings, dict):
+            binary_summary["floss_static_count"] = len(floss_strings.get("static_strings", []))
+            binary_summary["floss_stack_count"] = len(floss_strings.get("stack_strings", []))
+            binary_summary["floss_decoded_count"] = len(floss_strings.get("decoded_strings", []))
+        floss_status = floss.get("status", "")
+        binary_summary["floss_status"] = floss_status
 
     # Triage flags from dashboard
     triage_status = st.get_all_triage_snapshot()
@@ -578,8 +594,113 @@ def get_callgraph_data() -> Dict[str, Any]:
     return {"nodes": nodes, "edges": edges}
 
 
-def get_sections_data() -> List[Dict[str, Any]]:
-    """Section names, VA ranges, sizes, permissions, entropy."""
+def get_imports_data(search: str = "") -> Dict[str, Any]:
+    """Import/export tables for the imports dashboard page."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+    search_lower = search.lower().strip()
+
+    # Imports
+    raw_imports = pe_data.get("imports", [])
+    import_dlls = []
+    total_import_funcs = 0
+    if isinstance(raw_imports, list):
+        for dll_entry in raw_imports:
+            if not isinstance(dll_entry, dict):
+                continue
+            dll_name = dll_entry.get("dll", dll_entry.get("name", "?"))
+            symbols = dll_entry.get("symbols", dll_entry.get("functions", []))
+            if not isinstance(symbols, list):
+                symbols = []
+            funcs = []
+            for sym in symbols:
+                if isinstance(sym, dict):
+                    fname = sym.get("name", sym.get("function", ""))
+                    addr = sym.get("address", sym.get("addr", ""))
+                    ordinal = sym.get("ordinal", "")
+                elif isinstance(sym, str):
+                    fname = sym
+                    addr = ""
+                    ordinal = ""
+                else:
+                    continue
+                if search_lower and search_lower not in fname.lower() and search_lower not in dll_name.lower():
+                    continue
+                funcs.append({
+                    "name": fname,
+                    "address": addr,
+                    "ordinal": ordinal,
+                })
+            if funcs or not search_lower:
+                total_import_funcs += len(funcs)
+                import_dlls.append({
+                    "dll": dll_name,
+                    "functions": funcs,
+                    "count": len(funcs),
+                })
+
+    # Exports
+    raw_exports = pe_data.get("exports", {})
+    exports = []
+    if isinstance(raw_exports, dict):
+        for exp in raw_exports.get("functions", raw_exports.get("symbols", [])):
+            if isinstance(exp, dict):
+                ename = exp.get("name", exp.get("function", ""))
+                addr = exp.get("address", exp.get("addr", ""))
+                ordinal = exp.get("ordinal", "")
+                if search_lower and search_lower not in ename.lower():
+                    continue
+                exports.append({
+                    "name": ename,
+                    "address": addr,
+                    "ordinal": ordinal,
+                })
+    elif isinstance(raw_exports, list):
+        for exp in raw_exports:
+            if isinstance(exp, dict):
+                ename = exp.get("name", exp.get("function", ""))
+                addr = exp.get("address", exp.get("addr", ""))
+                ordinal = exp.get("ordinal", "")
+                if search_lower and search_lower not in ename.lower():
+                    continue
+                exports.append({
+                    "name": ename,
+                    "address": addr,
+                    "ordinal": ordinal,
+                })
+
+    # Suspicious import info from triage
+    suspicious_apis = []
+    triage = getattr(st, "_cached_triage", None)
+    if triage and isinstance(triage, dict):
+        sus = triage.get("suspicious_imports", [])
+        if isinstance(sus, list):
+            suspicious_apis = [
+                s.get("function", str(s)) if isinstance(s, dict) else str(s)
+                for s in sus[:50]
+            ]
+        sus_summary = triage.get("suspicious_import_summary", {})
+        if isinstance(sus_summary, dict):
+            import_categories = sus_summary
+        else:
+            import_categories = {}
+    else:
+        import_categories = {}
+
+    return {
+        "imports": import_dlls,
+        "total_import_dlls": len(import_dlls),
+        "total_import_functions": total_import_funcs,
+        "exports": exports,
+        "total_exports": len(exports),
+        "suspicious_apis": suspicious_apis,
+        "import_categories": import_categories,
+        "search": search,
+    }
+
+
+def get_sections_data() -> Dict[str, Any]:
+    """Section names, VA ranges, sizes, permissions, entropy, plus PE metadata."""
     st = _get_state()
     pe_data = st.pe_data or {}
     sections = []
@@ -598,7 +719,21 @@ def get_sections_data() -> List[Dict[str, Any]]:
                     "permissions": _section_permissions(s),
                 })
 
-    return sections
+    # Data directories
+    data_dirs = pe_data.get("data_directories", [])
+    if not isinstance(data_dirs, list):
+        data_dirs = []
+
+    # Resources summary
+    resources = pe_data.get("resources", pe_data.get("resources_summary", []))
+    if not isinstance(resources, list):
+        resources = []
+
+    return {
+        "sections": sections,
+        "data_directories": data_dirs,
+        "resources": resources,
+    }
 
 
 def get_timeline_data(limit: int = 100) -> List[Dict[str, Any]]:

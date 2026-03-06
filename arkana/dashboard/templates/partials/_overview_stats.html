@@ -207,11 +207,58 @@
             {% for ym in bs.yara_matches %}
             <div class="summary-row">
                 <span class="summary-label">{{ ym.rule }}</span>
-                <span>{{ ym.description }}</span>
+                <span>{{ ym.description }}{% if ym.match_count %} <span class="dim">({{ ym.match_count }} matches)</span>{% endif %}{% if ym.tags %} {% for t in ym.tags %}<span class="badge badge-dim">{{ t }}</span> {% endfor %}{% endif %}</span>
             </div>
             {% endfor %}
             {% else %}
             <div class="dim" style="padding: 6px 0; font-size: 12px;">No YARA matches</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Panel: String Analysis Summary -->
+{% if bs.basic_string_count or bs.floss_static_count or bs.floss_stack_count or bs.floss_decoded_count %}
+<div class="panel">
+    <div class="panel-header">STRING ANALYSIS</div>
+    <div class="summary-grid">
+        <div class="summary-section">
+            <div class="summary-section-title">COUNTS</div>
+            {% if bs.basic_string_count %}
+            <div class="summary-row">
+                <span class="summary-label">BASIC ASCII:</span>
+                <span>{{ bs.basic_string_count }}</span>
+            </div>
+            {% endif %}
+            {% if bs.floss_static_count %}
+            <div class="summary-row">
+                <span class="summary-label">FLOSS STATIC:</span>
+                <span>{{ bs.floss_static_count }}</span>
+            </div>
+            {% endif %}
+            {% if bs.floss_stack_count %}
+            <div class="summary-row">
+                <span class="summary-label">STACK STRINGS:</span>
+                <span class="warning">{{ bs.floss_stack_count }}</span>
+            </div>
+            {% endif %}
+            {% if bs.floss_decoded_count %}
+            <div class="summary-row">
+                <span class="summary-label">DECODED:</span>
+                <span class="warning">{{ bs.floss_decoded_count }}</span>
+            </div>
+            {% endif %}
+        </div>
+        <div class="summary-section">
+            <div class="summary-section-title">STATUS</div>
+            {% if bs.floss_status %}
+            <div class="summary-row">
+                <span class="summary-label">FLOSS:</span>
+                <span class="dim">{{ bs.floss_status }}</span>
+            </div>
+            {% else %}
+            <div class="summary-row dim">FLOSS analysis not yet run</div>
             {% endif %}
         </div>
     </div>
@@ -228,25 +275,25 @@
             {% if bs.ioc_urls %}
             <div class="ioc-group">
                 <div class="ioc-group-label">URLS</div>
-                {% for u in bs.ioc_urls %}<div class="ioc-item">{{ u }}</div>{% endfor %}
+                {% for u in bs.ioc_urls %}<div class="ioc-item" title="{{ u }}">{{ u }}</div>{% endfor %}
             </div>
             {% endif %}
             {% if bs.ioc_ips %}
             <div class="ioc-group">
                 <div class="ioc-group-label">IP ADDRESSES</div>
-                {% for ip in bs.ioc_ips %}<div class="ioc-item">{{ ip }}</div>{% endfor %}
+                {% for ip in bs.ioc_ips %}<div class="ioc-item" title="{{ ip }}">{{ ip }}</div>{% endfor %}
             </div>
             {% endif %}
             {% if bs.ioc_domains %}
             <div class="ioc-group">
                 <div class="ioc-group-label">DOMAINS</div>
-                {% for d in bs.ioc_domains %}<div class="ioc-item">{{ d }}</div>{% endfor %}
+                {% for d in bs.ioc_domains %}<div class="ioc-item" title="{{ d }}">{{ d }}</div>{% endfor %}
             </div>
             {% endif %}
             {% if bs.ioc_registry %}
             <div class="ioc-group">
                 <div class="ioc-group-label">REGISTRY</div>
-                {% for r in bs.ioc_registry %}<div class="ioc-item">{{ r }}</div>{% endfor %}
+                {% for r in bs.ioc_registry %}<div class="ioc-item" title="{{ r }}">{{ r }}</div>{% endfor %}
             </div>
             {% endif %}
             {% if not bs.ioc_urls and not bs.ioc_ips and not bs.ioc_domains and not bs.ioc_registry %}

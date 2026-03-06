@@ -110,6 +110,55 @@ def _load_floss_vivisect_workspace(sample_path_obj: Path, format_hint: str) -> O
         logger.error("FLOSS: Error loading Vivisect workspace: %s", e, exc_info=True)
         return None
 
+def _parse_floss_static_only(
+    pe_filepath_str: str,
+    min_length: int = 4,
+) -> Dict[str, Any]:
+    """Fast static-only FLOSS extraction — no Vivisect workspace needed.
+
+    Returns the same structure as ``_parse_floss_analysis`` but with only
+    static_strings populated.  Used during ``open_file`` to provide quick
+    results while the full analysis runs in the background.
+    """
+    result: Dict[str, Any] = {
+        "status": "Static strings only (deep analysis pending)",
+        "error": None,
+        "metadata": {},
+        "analysis_config": {"static_enabled": True, "min_length": min_length},
+        "strings": {
+            "static_strings": [],
+            "stack_strings": [],
+            "tight_strings": [],
+            "decoded_strings": [],
+        },
+        "regex_matches": [],
+    }
+
+    if not FLOSS_AVAILABLE:
+        result["status"] = "FLOSS library not available."
+        result["error"] = f"Setup: {FLOSS_IMPORT_ERROR_SETUP}, Analysis: {FLOSS_IMPORT_ERROR_ANALYSIS}"
+        return result
+
+    try:
+        sample_path = Path(pe_filepath_str)
+        t0 = time.monotonic()
+        static_strings_gen = get_static_strings(sample_path, min_length)
+        static_list = [
+            {"offset": hex(s_obj.offset), "string": s_obj.string}
+            for s_obj in static_strings_gen
+        ]
+        result["strings"]["static_strings"] = static_list
+        result["status"] = f"Static extraction complete ({len(static_list)} strings in {time.monotonic() - t0:.1f}s). Deep analysis pending."
+        logger.info("FLOSS static-only: %d strings in %.1fs", len(static_list), time.monotonic() - t0)
+    except Exception as e:
+        logger.error("FLOSS static-only extraction failed: %s", e, exc_info=True)
+        result["strings"]["static_strings"] = [{"error": str(e)}]
+        result["status"] = f"Static extraction failed: {e}"
+        result["error"] = str(e)
+
+    return result
+
+
 def _parse_floss_analysis(
     pe_filepath_str: str,
     min_length: int,

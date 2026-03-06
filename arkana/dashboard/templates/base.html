@@ -23,14 +23,18 @@
             <a href="/dashboard/functions" class="nav-link {% if nav_active == 'functions' %}active{% endif %}">FUNCTIONS</a>
             <a href="/dashboard/callgraph" class="nav-link {% if nav_active == 'callgraph' %}active{% endif %}">CALL GRAPH</a>
             <a href="/dashboard/sections" class="nav-link {% if nav_active == 'sections' %}active{% endif %}">SECTIONS</a>
+            <a href="/dashboard/imports" class="nav-link {% if nav_active == 'imports' %}active{% endif %}">IMPORTS</a>
             <a href="/dashboard/timeline" class="nav-link {% if nav_active == 'timeline' %}active{% endif %}">TIMELINE</a>
             <a href="/dashboard/notes" class="nav-link {% if nav_active == 'notes' %}active{% endif %}">NOTES</a>
         </div>
+        <span id="nav-filename" class="nav-filename dim"></span>
     </nav>
 
     <main class="content">
         {% block content %}{% endblock %}
     </main>
+
+    <div id="toast-container" class="toast-container"></div>
 
     <script src="/dashboard/static/htmx.min.js"></script>
     {% block scripts %}{% endblock %}

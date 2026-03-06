@@ -74,6 +74,9 @@ MAX_HEX_PATTERN_MATCHES = 5000
 MIN_STR_LEN_FALLBACK_FLOSS = 4
 MAX_FLOSS_ENRICHMENT_STRINGS = 500  # cap xref enrichment of static strings
 
+# --- list_samples Pagination ---
+MAX_LIST_SAMPLES_LIMIT = 500  # maximum files per page in list_samples
+
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [
     ("cryptography", "cryptography", "Cryptography (for digital signatures)", False),

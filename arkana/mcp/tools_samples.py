@@ -7,6 +7,7 @@ from pathlib import Path
 from arkana.config import state, Context
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._format_helpers import get_magic_hint
+from arkana.constants import MAX_LIST_SAMPLES_LIMIT
 
 
 # Mapping from get_magic_hint() return values to filter categories.
@@ -60,6 +61,9 @@ async def list_samples(
     format_filter: str = "all",
     show_all: bool = False,
     sort_by: str = "name",
+    subdirectory: Optional[str] = None,
+    offset: int = 0,
+    limit: int = 100,
 ) -> Dict[str, Any]:
     """
     [Phase: load] Lists files available in the configured samples directory.
@@ -87,11 +91,17 @@ async def list_samples(
         show_all: (bool) If False (default), only shows analyzable binary formats
                   (PE, ELF, Mach-O). Set to True to include all files (PDFs, ZIPs, etc.).
         sort_by: (str) Sort results by: 'name' (default), 'size', or 'date'.
+        subdirectory: (Optional[str]) Scope the listing to a subdirectory within the samples path.
+                      For example, 'malware/dlls' lists only files in that subfolder.
+                      Must not escape the samples directory (no '..' traversal allowed).
+        offset: (int) Pagination offset — skip this many files from the start (default: 0).
+        limit: (int) Maximum number of files to return per page (default: 100, max: 500).
 
     Returns:
         A dictionary containing the samples directory path, file count,
-        and a list of files with name, full path, relative path, size, human-readable size,
-        modification date, and format hint.
+        pagination metadata, and a list of files with name, full path,
+        relative path, size, human-readable size, modification date,
+        and format hint.
     """
     if state.samples_path is None:
         return {
@@ -101,11 +111,32 @@ async def list_samples(
 
     samples_dir = state.samples_path
 
+    # Subdirectory scoping with path traversal safety
+    if subdirectory:
+        sub_path = os.path.normpath(os.path.join(samples_dir, subdirectory))
+        real_samples = os.path.realpath(samples_dir)
+        real_sub = os.path.realpath(sub_path)
+        if not real_sub.startswith(real_samples):
+            return {
+                "error": "subdirectory must be within the samples directory.",
+                "hint": "Path traversal (e.g. '..') is not allowed.",
+            }
+        if not os.path.isdir(sub_path):
+            return {
+                "error": f"Subdirectory not found: {subdirectory}",
+                "hint": f"Check that '{subdirectory}' exists under {samples_dir}.",
+            }
+        samples_dir = sub_path
+
     if not os.path.isdir(samples_dir):
         return {
             "error": f"Configured samples directory does not exist: {samples_dir}",
             "hint": "Check the --samples-path value or ARKANA_SAMPLES environment variable.",
         }
+
+    # Clamp pagination parameters
+    offset = max(0, offset)
+    limit = max(1, min(limit, MAX_LIST_SAMPLES_LIMIT))
 
     await ctx.info(f"Listing samples in: {samples_dir} (recursive={recursive})")
 
@@ -122,7 +153,7 @@ async def list_samples(
                     continue
                 full_path = os.path.join(root, filename)
                 try:
-                    files.append(_build_file_entry(full_path, samples_dir))
+                    files.append(_build_file_entry(full_path, state.samples_path))
                 except (OSError, ValueError):
                     # Skip broken symlinks, permission errors, etc.
                     continue
@@ -133,7 +164,7 @@ async def list_samples(
             if glob_pattern and not Path(entry.name).match(glob_pattern):
                 continue
             try:
-                files.append(_build_file_entry(entry.path, samples_dir))
+                files.append(_build_file_entry(entry.path, state.samples_path))
             except (OSError, ValueError):
                 continue
 
@@ -168,18 +199,34 @@ async def list_samples(
             rel = f["relative_path"]
             parts = Path(rel).parts
             if len(parts) > 1:
-                subdir = str(Path(*parts[:-1]))
-                if subdir not in seen:
-                    seen.add(subdir)
-                    subdirs.append(subdir)
+                subdir_name = str(Path(*parts[:-1]))
+                if subdir_name not in seen:
+                    seen.add(subdir_name)
+                    subdirs.append(subdir_name)
         subdirs.sort()
+
+    # --- Pagination ---
+    total_files = len(files)
+    paginated_files = files[offset:offset + limit]
+    has_more = (offset + limit) < total_files
 
     result: Dict[str, Any] = {
         "samples_path": samples_dir,
         "recursive": recursive,
-        "total_files": len(files),
-        "files": files,
+        "total_files": total_files,
+        "offset": offset,
+        "limit": limit,
+        "returned_files": len(paginated_files),
+        "has_more": has_more,
+        "files": paginated_files,
     }
+
+    if has_more:
+        result["next_offset"] = offset + limit
+        result["pagination_hint"] = (
+            f"Showing {offset + 1}-{offset + len(paginated_files)} of {total_files} files. "
+            f"Call list_samples(offset={offset + limit}) to see more."
+        )
 
     if glob_pattern:
         result["glob_pattern"] = glob_pattern
@@ -192,6 +239,9 @@ async def list_samples(
 
     if sort_by_lower != "name":
         result["sort_by"] = sort_by_lower
+
+    if subdirectory:
+        result["subdirectory"] = subdirectory
 
     if subdirs:
         result["subdirectories"] = subdirs
