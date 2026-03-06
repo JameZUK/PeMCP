@@ -1042,6 +1042,340 @@ def _get_decompiled_addresses() -> set:
     return addrs
 
 
+def _iter_string_sources(pe_data: dict):
+    """Yield (list_of_dicts, type_label) for each string source in pe_data."""
+    basic = pe_data.get("basic_ascii_strings", [])
+    if isinstance(basic, list):
+        yield basic, "ASCII"
+
+    floss = pe_data.get("floss_analysis", {})
+    if isinstance(floss, dict):
+        strings_dict = floss.get("strings", {})
+        if isinstance(strings_dict, dict):
+            static = strings_dict.get("static_strings", [])
+            if isinstance(static, list):
+                yield static, "STATIC"
+            stack = strings_dict.get("stack_strings", [])
+            if isinstance(stack, list):
+                yield stack, "STACK"
+            decoded = strings_dict.get("decoded_strings", [])
+            if isinstance(decoded, list):
+                yield decoded, "DECODED"
+            tight = strings_dict.get("tight_strings", [])
+            if isinstance(tight, list):
+                yield tight, "TIGHT"
+
+
+def get_strings_data(
+    search: str = "",
+    string_type: str = "all",
+    category: str = "",
+    min_score: float = 0.0,
+    sort_by: str = "score",
+    sort_asc: bool = False,
+    offset: int = 0,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """Unified string listing with search, filter, sort, and pagination."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+
+    all_strings = []
+    type_counts: Dict[str, int] = {}
+    category_counts: Dict[str, int] = {}
+
+    for items, type_label in _iter_string_sources(pe_data):
+        count = 0
+        for item in items:
+            if isinstance(item, str):
+                # basic_ascii_strings can be plain strings
+                item = {"string": item, "offset": ""}
+            if not isinstance(item, dict):
+                continue
+            if "error" in item:
+                continue
+            count += 1
+
+            s = item.get("string", str(item))
+            sifter_score = item.get("sifter_score", 0)
+            cat = item.get("category", "")
+            address = ""
+            function_va = ""
+            extra = ""
+
+            if type_label == "ASCII":
+                address = str(item.get("offset", ""))
+            elif type_label == "STATIC":
+                address = str(item.get("offset", ""))
+                refs = item.get("references", [])
+                if isinstance(refs, list) and refs:
+                    extra = f"{len(refs)} refs"
+            elif type_label == "STACK":
+                address = str(item.get("string_va", ""))
+                function_va = str(item.get("function_va", ""))
+            elif type_label == "DECODED":
+                address = str(item.get("string_va", ""))
+                dec_va = item.get("decoding_routine_va", item.get("decoder_va", ""))
+                if dec_va:
+                    extra = f"decoder: {dec_va}"
+            elif type_label == "TIGHT":
+                address = str(item.get("address_or_offset", ""))
+                function_va = str(item.get("function_va", ""))
+
+            # Track categories
+            if cat:
+                category_counts[cat] = category_counts.get(cat, 0) + 1
+
+            all_strings.append({
+                "string": s,
+                "type": type_label,
+                "address": address,
+                "sifter_score": sifter_score if isinstance(sifter_score, (int, float)) else 0,
+                "category": cat,
+                "function_va": function_va,
+                "extra": extra,
+            })
+
+        type_counts[type_label] = count
+
+    total_unfiltered = len(all_strings)
+
+    # Filters
+    search_lower = search[:500].lower().strip() if search else ""
+    type_lower = string_type.lower().strip() if string_type else "all"
+
+    if search_lower:
+        all_strings = [s for s in all_strings if search_lower in s["string"].lower()]
+    if type_lower and type_lower != "all":
+        all_strings = [s for s in all_strings if s["type"].lower() == type_lower]
+    if category:
+        cat_lower = category.lower().strip()
+        all_strings = [s for s in all_strings if s["category"].lower() == cat_lower]
+    if min_score > 0:
+        all_strings = [s for s in all_strings if s["sifter_score"] >= min_score]
+
+    # Sort
+    if sort_by == "length":
+        all_strings.sort(key=lambda s: len(s["string"]), reverse=not sort_asc)
+    elif sort_by == "type":
+        all_strings.sort(key=lambda s: s["type"], reverse=not sort_asc)
+    elif sort_by == "address":
+        all_strings.sort(key=lambda s: s["address"], reverse=not sort_asc)
+    else:  # score (default)
+        all_strings.sort(key=lambda s: s["sifter_score"], reverse=not sort_asc)
+
+    total = len(all_strings)
+    page = all_strings[offset:offset + limit]
+
+    return {
+        "strings": page,
+        "total": total,
+        "total_unfiltered": total_unfiltered,
+        "offset": offset,
+        "limit": limit,
+        "type_counts": type_counts,
+        "category_counts": category_counts,
+    }
+
+
+def global_search(query: str, limit_per_category: int = 10) -> Dict[str, Any]:
+    """Search across functions, strings, imports, and notes."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+    query_lower = query.lower().strip()
+    results: Dict[str, list] = {
+        "functions": [],
+        "strings": [],
+        "imports": [],
+        "notes": [],
+    }
+
+    if not query_lower:
+        return results
+
+    # Functions
+    if st.angr_project is not None and st.angr_cfg is not None:
+        try:
+            kb = st.angr_project.kb
+            renames = st.get_renames().get("functions", {})
+            if hasattr(kb, "functions"):
+                for addr, func in kb.functions.items():
+                    if len(results["functions"]) >= limit_per_category:
+                        break
+                    addr_hex = hex(addr)
+                    name = renames.get(addr_hex, func.name)
+                    if query_lower in name.lower() or query_lower in addr_hex.lower():
+                        results["functions"].append({
+                            "address": addr_hex,
+                            "name": name,
+                        })
+        except (AttributeError, KeyError, TypeError, RuntimeError):
+            pass
+
+    # Strings
+    for items, type_label in _iter_string_sources(pe_data):
+        if len(results["strings"]) >= limit_per_category:
+            break
+        for item in items:
+            if len(results["strings"]) >= limit_per_category:
+                break
+            if isinstance(item, str):
+                s = item
+                address = ""
+            elif isinstance(item, dict):
+                if "error" in item:
+                    continue
+                s = item.get("string", "")
+                address = str(item.get("offset", item.get("string_va", item.get("address_or_offset", ""))))
+            else:
+                continue
+            if query_lower in s.lower():
+                results["strings"].append({
+                    "string": s[:200],
+                    "type": type_label,
+                    "address": address,
+                })
+
+    # Imports
+    raw_imports = pe_data.get("imports", [])
+    if isinstance(raw_imports, list):
+        for dll_entry in raw_imports:
+            if len(results["imports"]) >= limit_per_category:
+                break
+            if not isinstance(dll_entry, dict):
+                continue
+            dll_name = dll_entry.get("dll", dll_entry.get("name", "?"))
+            symbols = dll_entry.get("symbols", dll_entry.get("functions", []))
+            if not isinstance(symbols, list):
+                symbols = []
+            dll_matched = query_lower in dll_name.lower()
+            for sym in symbols:
+                if len(results["imports"]) >= limit_per_category:
+                    break
+                fname = sym.get("name", sym.get("function", "")) if isinstance(sym, dict) else str(sym)
+                if dll_matched or query_lower in fname.lower():
+                    results["imports"].append({
+                        "dll": dll_name,
+                        "function": fname,
+                    })
+
+    # Notes
+    for n in st.get_notes():
+        if len(results["notes"]) >= limit_per_category:
+            break
+        content = n.get("content", "")
+        if query_lower in content.lower():
+            results["notes"].append({
+                "content": content[:200],
+                "category": n.get("category", "general"),
+                "address": n.get("address", ""),
+            })
+
+    return results
+
+
+def get_function_xrefs_data(address_hex: str) -> Dict[str, Any]:
+    """Return callers and callees for a function address."""
+    st = _get_state()
+    callers = []
+    callees = []
+
+    if st.angr_project is None or st.angr_cfg is None:
+        return {"callers": callers, "callees": callees}
+
+    try:
+        addr_int = int(address_hex, 16)
+    except (ValueError, TypeError):
+        return {"callers": callers, "callees": callees, "error": "invalid address"}
+
+    try:
+        kb = st.angr_project.kb
+        renames = st.get_renames().get("functions", {})
+        if hasattr(kb, "callgraph"):
+            cg = kb.callgraph
+            # Callers (predecessors)
+            if addr_int in cg:
+                for pred in cg.predecessors(addr_int):
+                    pred_hex = hex(pred)
+                    name = renames.get(pred_hex, "")
+                    if not name and hasattr(kb, "functions") and pred in kb.functions:
+                        name = kb.functions[pred].name
+                    callers.append({"address": pred_hex, "name": name or pred_hex})
+                # Callees (successors)
+                for succ in cg.successors(addr_int):
+                    succ_hex = hex(succ)
+                    name = renames.get(succ_hex, "")
+                    if not name and hasattr(kb, "functions") and succ in kb.functions:
+                        name = kb.functions[succ].name
+                    callees.append({"address": succ_hex, "name": name or succ_hex})
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        logger.debug("Error reading xrefs for %s", address_hex, exc_info=True)
+
+    return {"callers": callers, "callees": callees}
+
+
+def get_function_strings_data(address_hex: str) -> Dict[str, Any]:
+    """Return strings associated with a function address."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+    found = []
+    addr_lower = address_hex.lower().strip()
+
+    floss = pe_data.get("floss_analysis", {})
+    if not isinstance(floss, dict):
+        return {"strings": found}
+
+    strings_dict = floss.get("strings", {})
+    if not isinstance(strings_dict, dict):
+        return {"strings": found}
+
+    # Stack strings: match function_va
+    for item in strings_dict.get("stack_strings", []):
+        if len(found) >= 100:
+            break
+        if isinstance(item, dict) and "error" not in item:
+            fva = str(item.get("function_va", "")).lower()
+            if fva == addr_lower:
+                found.append({
+                    "string": item.get("string", ""),
+                    "type": "STACK",
+                    "address": str(item.get("string_va", "")),
+                })
+
+    # Tight strings: match function_va
+    for item in strings_dict.get("tight_strings", []):
+        if len(found) >= 100:
+            break
+        if isinstance(item, dict) and "error" not in item:
+            fva = str(item.get("function_va", "")).lower()
+            if fva == addr_lower:
+                found.append({
+                    "string": item.get("string", ""),
+                    "type": "TIGHT",
+                    "address": str(item.get("address_or_offset", "")),
+                })
+
+    # Static strings: match references[].function_va
+    for item in strings_dict.get("static_strings", []):
+        if len(found) >= 100:
+            break
+        if isinstance(item, dict) and "error" not in item:
+            refs = item.get("references", [])
+            if isinstance(refs, list):
+                for ref in refs:
+                    if isinstance(ref, dict):
+                        fva = str(ref.get("function_va", "")).lower()
+                        if fva == addr_lower:
+                            found.append({
+                                "string": item.get("string", ""),
+                                "type": "STATIC",
+                                "address": str(item.get("offset", "")),
+                            })
+                            break
+
+    return {"strings": found}
+
+
 def _section_permissions(section: dict) -> str:
     """Extract permission string from section data."""
     chars = section.get("characteristics", 0)
@@ -1058,3 +1392,62 @@ def _section_permissions(section: dict) -> str:
         if chars & 0x80000000:
             perms += "W"
     return perms or "?"
+
+
+def get_floss_summary() -> Dict[str, Any]:
+    """Extract FLOSS analysis summary for the strings page detail panel."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+    floss = pe_data.get("floss_analysis")
+
+    if not floss or not isinstance(floss, dict):
+        return {"available": False}
+
+    status = floss.get("status", "unknown")
+    strings_data = floss.get("strings", {})
+    if not isinstance(strings_data, dict):
+        strings_data = {}
+
+    static = strings_data.get("static_strings", [])
+    stack = strings_data.get("stack_strings", [])
+    decoded = strings_data.get("decoded_strings", [])
+    tight = strings_data.get("tight_strings", [])
+
+    # Filter out error entries
+    static = [s for s in static if isinstance(s, dict) and "string" in s]
+    stack = [s for s in stack if isinstance(s, dict) and "string" in s]
+    decoded = [s for s in decoded if isinstance(s, dict) and "string" in s]
+    tight = [s for s in tight if isinstance(s, dict) and "string" in s]
+
+    type_counts = {
+        "STATIC": len(static),
+        "STACK": len(stack),
+        "DECODED": len(decoded),
+        "TIGHT": len(tight),
+    }
+
+    # Top decoded strings (most interesting for malware analysis)
+    top_decoded = [s.get("string", "")[:200] for s in decoded[:10]]
+    top_stack = [s.get("string", "")[:200] for s in stack[:10]]
+
+    # Metadata
+    metadata = floss.get("metadata", {})
+    if not isinstance(metadata, dict):
+        metadata = {}
+    config = floss.get("analysis_config", {})
+    if not isinstance(config, dict):
+        config = {}
+
+    return {
+        "available": True,
+        "status": status,
+        "type_counts": type_counts,
+        "total_floss_strings": sum(type_counts.values()),
+        "top_decoded": top_decoded,
+        "top_stack": top_stack,
+        "floss_version": metadata.get("version", ""),
+        "analysis_config": {
+            k: v for k, v in config.items()
+            if k in ("min_length", "language", "timeout")
+        } if config else {},
+    }

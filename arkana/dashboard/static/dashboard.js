@@ -134,3 +134,119 @@ function showToast(message, type) {
     }
     connectSSE();
 })();
+
+// Global search (keyboard shortcut: "/")
+(function() {
+    var searchInput = document.getElementById('global-search-input');
+    var dropdown = document.getElementById('search-dropdown');
+    if (!searchInput || !dropdown) return;
+    var debounceTimer;
+
+    function escHtml(s) {
+        var d = document.createElement('div');
+        d.textContent = s;
+        return d.innerHTML;
+    }
+
+    function doSearch() {
+        var q = searchInput.value.trim();
+        if (q.length < 2) {
+            dropdown.classList.add('hidden');
+            return;
+        }
+        fetch('/dashboard/api/search?q=' + encodeURIComponent(q))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                renderDropdown(data, q);
+            })
+            .catch(function() {
+                dropdown.innerHTML = '<div class="search-empty">Search failed</div>';
+                dropdown.classList.remove('hidden');
+            });
+    }
+
+    function renderDropdown(data, q) {
+        var html = '';
+        var groups = [
+            {key: 'functions', label: 'FUNCTIONS', render: function(item) {
+                return '<a class="search-result" href="/dashboard/functions?search=' + encodeURIComponent(item.name) + '">' +
+                    '<span class="mono dim">' + escHtml(item.address) + '</span> ' + escHtml(item.name) + '</a>';
+            }},
+            {key: 'strings', label: 'STRINGS', render: function(item) {
+                return '<a class="search-result" href="/dashboard/strings?search=' + encodeURIComponent(q) + '">' +
+                    '<span class="badge badge-dim" style="font-size:9px;">' + item.type + '</span> ' + escHtml(item.string) + '</a>';
+            }},
+            {key: 'imports', label: 'IMPORTS', render: function(item) {
+                return '<a class="search-result" href="/dashboard/imports">' +
+                    '<span class="dim">' + escHtml(item.dll) + '</span> ' + escHtml(item.function) + '</a>';
+            }},
+            {key: 'notes', label: 'NOTES', render: function(item) {
+                return '<a class="search-result" href="/dashboard/notes">' +
+                    '<span class="badge badge-dim" style="font-size:9px;">' + escHtml(item.category) + '</span> ' + escHtml(item.content) + '</a>';
+            }}
+        ];
+
+        var hasResults = false;
+        for (var i = 0; i < groups.length; i++) {
+            var g = groups[i];
+            var items = data[g.key] || [];
+            if (!items.length) continue;
+            hasResults = true;
+            html += '<div class="search-group-title">' + g.label + '</div>';
+            for (var j = 0; j < items.length; j++) {
+                html += g.render(items[j]);
+            }
+        }
+
+        if (!hasResults) {
+            html = '<div class="search-empty">No results for "' + escHtml(q) + '"</div>';
+        }
+        dropdown.innerHTML = html;
+        dropdown.classList.remove('hidden');
+    }
+
+    searchInput.addEventListener('keyup', function(e) {
+        if (e.key === 'Escape') {
+            dropdown.classList.add('hidden');
+            searchInput.blur();
+            return;
+        }
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(doSearch, 300);
+    });
+
+    searchInput.addEventListener('focus', function() {
+        if (searchInput.value.trim().length >= 2) doSearch();
+    });
+
+    // Close on click outside
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#nav-search')) {
+            dropdown.classList.add('hidden');
+        }
+    });
+
+    // "/" keyboard shortcut
+    document.addEventListener('keydown', function(e) {
+        if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            var tag = (e.target.tagName || '').toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+            e.preventDefault();
+            searchInput.focus();
+        }
+    });
+
+    // Pre-fill from URL search param
+    var urlParams = new URLSearchParams(window.location.search);
+    var searchParam = urlParams.get('search');
+    if (searchParam) {
+        // Set the page-specific filter if it exists
+        var pageFilter = document.getElementById('filter-search') || document.getElementById('str-filter-search');
+        if (pageFilter && !pageFilter.value) {
+            pageFilter.value = searchParam;
+            // Trigger reload for the page
+            if (typeof reloadFunctions === 'function') reloadFunctions();
+            if (typeof reloadStrings === 'function') reloadStrings();
+        }
+    }
+})();

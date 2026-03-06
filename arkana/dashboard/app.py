@@ -29,6 +29,11 @@ from arkana.dashboard.state_api import (
     get_notes_data,
     get_decompiled_code,
     trigger_decompile,
+    get_strings_data,
+    global_search,
+    get_function_xrefs_data,
+    get_function_strings_data,
+    get_floss_summary,
 )
 
 logger = logging.getLogger("Arkana.dashboard")
@@ -291,6 +296,64 @@ def _create_routes(dashboard_token: str) -> list:
             )
         return JSONResponse(result)
 
+    async def api_strings(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        search = request.query_params.get("search", "")[:500]
+        string_type = request.query_params.get("type", "all")
+        if string_type not in ("all", "ascii", "static", "stack", "decoded", "tight"):
+            string_type = "all"
+        cat = request.query_params.get("category", "")[:100]
+        try:
+            min_score = float(request.query_params.get("min_score", "0"))
+            min_score = max(0.0, min(min_score, 1000.0))
+        except (ValueError, TypeError):
+            min_score = 0.0
+        sort = request.query_params.get("sort", "score")
+        if sort not in ("score", "length", "type", "address"):
+            sort = "score"
+        asc = request.query_params.get("asc", "0") == "1"
+        try:
+            off = int(request.query_params.get("offset", "0"))
+            off = max(0, min(off, 100000))
+        except (ValueError, TypeError):
+            off = 0
+        try:
+            lim = int(request.query_params.get("limit", "100"))
+            lim = max(1, min(lim, 500))
+        except (ValueError, TypeError):
+            lim = 100
+        return JSONResponse(get_strings_data(
+            search=search, string_type=string_type, category=cat,
+            min_score=min_score, sort_by=sort, sort_asc=asc,
+            offset=off, limit=lim,
+        ))
+
+    async def api_search(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        q = request.query_params.get("q", "").strip()
+        if len(q) < 2:
+            return JSONResponse({"error": "query too short (min 2 chars)"}, status_code=400)
+        q = q[:500]
+        return JSONResponse(global_search(q))
+
+    async def api_function_xrefs(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        address = request.query_params.get("address", "").strip()
+        if not address:
+            return JSONResponse({"error": "missing address"}, status_code=400)
+        return JSONResponse(get_function_xrefs_data(address))
+
+    async def api_function_strings(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        address = request.query_params.get("address", "").strip()
+        if not address:
+            return JSONResponse({"error": "missing address"}, status_code=400)
+        return JSONResponse(get_function_strings_data(address))
+
     async def api_timeline(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -318,15 +381,23 @@ def _create_routes(dashboard_token: str) -> list:
         async def event_generator():
             global _sse_connection_count
             try:
-                last_tool_count = 0
-                last_notes_count = 0
-                last_active_tool = None
-                last_progress = 0
-                last_task_count = 0
-                last_task_running = 0
-                last_file_sha256 = None
-                last_triage_counts = {}
-                last_artifacts_count = 0
+                # Seed with current state so the first tick isn't a false "file-changed"
+                try:
+                    seed = get_overview_data()
+                except Exception:
+                    seed = {}
+                last_tool_count = seed.get("tool_calls", 0)
+                last_notes_count = seed.get("notes_count", 0)
+                last_active_tool = seed.get("active_tool")
+                last_progress = seed.get("active_tool_progress", 0)
+                seed_tasks = seed.get("background_tasks", [])
+                last_task_count = len(seed_tasks)
+                last_task_running = sum(
+                    1 for t in seed_tasks if t.get("status") == "running"
+                )
+                last_file_sha256 = seed.get("sha256")
+                last_triage_counts = seed.get("triage_counts", {})
+                last_artifacts_count = seed.get("artifacts_count", 0)
                 while True:
                     await asyncio.sleep(2)
                     try:
@@ -419,6 +490,18 @@ def _create_routes(dashboard_token: str) -> list:
         html = _render("partials/_timeline_entry.html", {"entries": entries})
         return HTMLResponse(html)
 
+    async def partial_global_status(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return HTMLResponse("", status_code=401)
+        data = get_overview_data()
+        html = _render("partials/_global_status.html", {"data": data})
+        return HTMLResponse(html)
+
+    async def api_floss_summary(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_floss_summary())
+
     return [
         Route("/login", endpoint=login_page, methods=["GET"]),
         Route("/login", endpoint=login_post, methods=["POST"]),
@@ -427,6 +510,7 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/callgraph", endpoint=_auth_page("callgraph.html", "callgraph"), methods=["GET"]),
         Route("/sections", endpoint=_auth_page("sections.html", "sections", get_sections_data), methods=["GET"]),
         Route("/imports", endpoint=_auth_page("imports.html", "imports", get_imports_data), methods=["GET"]),
+        Route("/strings", endpoint=_auth_page("strings.html", "strings", get_strings_data), methods=["GET"]),
         Route("/timeline", endpoint=_auth_page("timeline.html", "timeline", lambda: get_timeline_data(100)), methods=["GET"]),
         Route("/notes", endpoint=page_notes, methods=["GET"]),
         # API
@@ -437,12 +521,18 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/timeline", endpoint=api_timeline, methods=["GET"]),
         Route("/api/decompile", endpoint=api_decompile_get, methods=["GET"]),
         Route("/api/decompile", endpoint=api_decompile_post, methods=["POST"]),
+        Route("/api/strings", endpoint=api_strings, methods=["GET"]),
+        Route("/api/search", endpoint=api_search, methods=["GET"]),
+        Route("/api/function-xrefs", endpoint=api_function_xrefs, methods=["GET"]),
+        Route("/api/function-strings", endpoint=api_function_strings, methods=["GET"]),
         Route("/api/debug", endpoint=api_debug, methods=["GET"]),
         Route("/api/events", endpoint=api_events, methods=["GET"]),
+        Route("/api/floss-summary", endpoint=api_floss_summary, methods=["GET"]),
         # Partials
         Route("/partials/overview-stats", endpoint=partial_overview_stats, methods=["GET"]),
         Route("/partials/task-list", endpoint=partial_task_list, methods=["GET"]),
         Route("/partials/timeline", endpoint=partial_timeline_entry, methods=["GET"]),
+        Route("/partials/global-status", endpoint=partial_global_status, methods=["GET"]),
         # Static files
         Mount("/static", app=StaticFiles(directory=str(_STATIC_DIR)), name="dashboard_static"),
     ]

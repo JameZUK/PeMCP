@@ -1,0 +1,37 @@
+{% if data.active_tool or data.background_tasks %}
+<div class="global-status-inner">
+    {% if data.active_tool %}
+    <div class="gs-item gs-active-tool">
+        <span class="badge badge-active">ACTIVE</span>
+        <span class="gs-tool-name">{{ data.active_tool }}</span>
+        {% set pct = ((data.active_tool_progress / data.active_tool_total * 100) | int) if data.active_tool_total else 0 %}
+        <div class="gs-progress-wrap">
+            <div class="progress-bar" style="margin:0; height:6px; flex:1;">
+                <div class="progress-fill" style="width: {{ pct }}%"></div>
+            </div>
+        </div>
+        <span class="gs-percent">{{ pct }}%</span>
+    </div>
+    {% endif %}
+    {% for task in data.background_tasks %}
+    {% if task.status == 'running' %}
+    <div class="gs-item gs-bg-task">
+        <span class="badge badge-running">BG</span>
+        <span class="gs-tool-name">{{ task.tool }}</span>
+        <div class="gs-progress-wrap">
+            <div class="progress-bar" style="margin:0; height:6px; flex:1;">
+                <div class="progress-fill" style="width: {{ task.progress_percent }}%"></div>
+            </div>
+        </div>
+        <span class="gs-percent">{{ task.progress_percent }}%</span>
+        {% if task.progress_message %}
+        <span class="gs-msg dim">{{ task.progress_message[:80] }}</span>
+        {% endif %}
+        {% if task.stall_s > 0 %}
+        <span class="gs-stall warning">STALL {{ task.stall_s }}s</span>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+{% endif %}

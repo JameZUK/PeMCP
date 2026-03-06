@@ -24,11 +24,22 @@
             <a href="/dashboard/callgraph" class="nav-link {% if nav_active == 'callgraph' %}active{% endif %}">CALL GRAPH</a>
             <a href="/dashboard/sections" class="nav-link {% if nav_active == 'sections' %}active{% endif %}">SECTIONS</a>
             <a href="/dashboard/imports" class="nav-link {% if nav_active == 'imports' %}active{% endif %}">IMPORTS</a>
+            <a href="/dashboard/strings" class="nav-link {% if nav_active == 'strings' %}active{% endif %}">STRINGS</a>
             <a href="/dashboard/timeline" class="nav-link {% if nav_active == 'timeline' %}active{% endif %}">TIMELINE</a>
             <a href="/dashboard/notes" class="nav-link {% if nav_active == 'notes' %}active{% endif %}">NOTES</a>
         </div>
+        <div class="nav-search" id="nav-search">
+            <input type="text" id="global-search-input" placeholder="/ search..." autocomplete="off">
+            <div id="search-dropdown" class="search-dropdown hidden"></div>
+        </div>
         <span id="nav-filename" class="nav-filename dim"></span>
     </nav>
+
+    <div id="global-status" class="global-status-bar"
+         hx-get="/dashboard/partials/global-status"
+         hx-trigger="load, every 3s"
+         hx-swap="innerHTML">
+    </div>
 
     <main class="content">
         {% block content %}{% endblock %}

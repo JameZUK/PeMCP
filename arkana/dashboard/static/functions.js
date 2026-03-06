@@ -110,6 +110,12 @@ document.addEventListener('DOMContentLoaded', function() {
     var tbody = document.getElementById('func-tbody');
     if (tbody) {
         tbody.addEventListener('click', function(e) {
+            // Detail tab clicks
+            var tabBtn = e.target.closest('.detail-tab');
+            if (tabBtn) {
+                switchDetailTab(tabBtn);
+                return;
+            }
             var btn = e.target.closest('.btn-triage');
             if (!btn) return;
             if (btn.classList.contains('btn-decompile')) {
@@ -196,19 +202,118 @@ function insertDecompilePanel(afterRow, addr, data) {
     td.setAttribute('colspan', '6');
     var panel = document.createElement('div');
     panel.className = 'decompile-panel';
+
+    // Tab bar
+    var tabBar = document.createElement('div');
+    tabBar.className = 'detail-tab-bar';
+    var tabs = ['CODE', 'XREFS', 'STRINGS'];
+    for (var i = 0; i < tabs.length; i++) {
+        var tabBtn = document.createElement('button');
+        tabBtn.className = 'detail-tab' + (i === 0 ? ' active' : '');
+        tabBtn.textContent = tabs[i];
+        tabBtn.dataset.tab = tabs[i].toLowerCase();
+        tabBtn.dataset.addr = addr;
+        tabBar.appendChild(tabBtn);
+    }
+
     var header = document.createElement('div');
     header.className = 'decompile-panel-header';
     header.innerHTML = '<span class="decompile-func-name">' + escapeHtml(data.function_name || addr) +
         '</span> <span class="dim">(' + escapeHtml(data.address || addr) + ' &middot; ' +
         (data.line_count || 0) + ' lines)</span>';
+
+    var tabContent = document.createElement('div');
+    tabContent.className = 'detail-tab-content';
+    tabContent.id = 'tab-content-' + addr;
     var pre = document.createElement('pre');
     pre.className = 'decompile-code';
     pre.textContent = (data.lines || []).join('\n');
+    tabContent.appendChild(pre);
+
+    panel.appendChild(tabBar);
     panel.appendChild(header);
-    panel.appendChild(pre);
+    panel.appendChild(tabContent);
     td.appendChild(panel);
     tr.appendChild(td);
     insertAfter.parentNode.insertBefore(tr, insertAfter.nextSibling);
+}
+
+function switchDetailTab(tabBtn) {
+    var tab = tabBtn.dataset.tab;
+    var addr = tabBtn.dataset.addr;
+    var bar = tabBtn.parentNode;
+    var content = document.getElementById('tab-content-' + addr);
+    if (!content) return;
+
+    // Update active tab
+    var siblings = bar.querySelectorAll('.detail-tab');
+    for (var i = 0; i < siblings.length; i++) siblings[i].classList.remove('active');
+    tabBtn.classList.add('active');
+
+    if (tab === 'code') {
+        var data = _openDecompilePanels[addr];
+        if (data) {
+            var pre = document.createElement('pre');
+            pre.className = 'decompile-code';
+            pre.textContent = (data.lines || []).join('\n');
+            content.innerHTML = '';
+            content.appendChild(pre);
+        }
+    } else if (tab === 'xrefs') {
+        content.innerHTML = '<div class="dim" style="padding:10px;">Loading xrefs...</div>';
+        fetch('/dashboard/api/function-xrefs?address=' + encodeURIComponent(addr))
+            .then(function(r) { return r.json(); })
+            .then(function(data) { renderXrefsTab(content, data); })
+            .catch(function() { content.innerHTML = '<div class="dim" style="padding:10px;">Failed to load xrefs.</div>'; });
+    } else if (tab === 'strings') {
+        content.innerHTML = '<div class="dim" style="padding:10px;">Loading strings...</div>';
+        fetch('/dashboard/api/function-strings?address=' + encodeURIComponent(addr))
+            .then(function(r) { return r.json(); })
+            .then(function(data) { renderStringsTab(content, data); })
+            .catch(function() { content.innerHTML = '<div class="dim" style="padding:10px;">Failed to load strings.</div>'; });
+    }
+}
+
+function renderXrefsTab(container, data) {
+    var html = '<div style="padding:10px;">';
+    html += '<div style="font-size:10px;letter-spacing:2px;color:var(--primary-dim);margin-bottom:6px;">CALLERS (' + (data.callers || []).length + ')</div>';
+    if (data.callers && data.callers.length) {
+        for (var i = 0; i < data.callers.length; i++) {
+            html += '<div style="font-size:12px;padding:2px 0;"><span class="mono dim">' + escapeHtml(data.callers[i].address) + '</span> <span>' + escapeHtml(data.callers[i].name) + '</span></div>';
+        }
+    } else {
+        html += '<div class="dim" style="font-size:12px;">No callers found</div>';
+    }
+    html += '<div style="font-size:10px;letter-spacing:2px;color:var(--primary-dim);margin:10px 0 6px;">CALLEES (' + (data.callees || []).length + ')</div>';
+    if (data.callees && data.callees.length) {
+        for (var i = 0; i < data.callees.length; i++) {
+            html += '<div style="font-size:12px;padding:2px 0;"><span class="mono dim">' + escapeHtml(data.callees[i].address) + '</span> <span>' + escapeHtml(data.callees[i].name) + '</span></div>';
+        }
+    } else {
+        html += '<div class="dim" style="font-size:12px;">No callees found</div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function renderStringsTab(container, data) {
+    var strings = data.strings || [];
+    if (!strings.length) {
+        container.innerHTML = '<div class="dim" style="padding:10px;">No strings associated with this function.</div>';
+        return;
+    }
+    var html = '<table class="data-table" style="font-size:12px;"><thead><tr><th>TYPE</th><th>ADDRESS</th><th>STRING</th></tr></thead><tbody>';
+    var typeBadge = {'STATIC':'badge-str-static','STACK':'badge-str-stack','TIGHT':'badge-str-tight'};
+    for (var i = 0; i < strings.length; i++) {
+        var s = strings[i];
+        var bc = typeBadge[s.type] || 'badge-dim';
+        var truncated = s.string.length > 120 ? s.string.substring(0, 120) + '...' : s.string;
+        html += '<tr><td><span class="badge ' + bc + '">' + s.type + '</span></td>';
+        html += '<td class="mono dim">' + escapeHtml(s.address || '') + '</td>';
+        html += '<td class="str-content">' + escapeHtml(truncated) + '</td></tr>';
+    }
+    html += '</tbody></table>';
+    container.innerHTML = html;
 }
 
 function _restoreDecompilePanels() {

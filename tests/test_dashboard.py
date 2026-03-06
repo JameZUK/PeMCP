@@ -434,3 +434,389 @@ class TestFlossDecodedStrings:
         finally:
             _default_state.pe_data = old_pd
             _default_state.filepath = old_fp
+
+
+class TestStringsData:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+
+    def test_strings_no_data(self):
+        from arkana.dashboard.state_api import get_strings_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = None
+        try:
+            data = get_strings_data()
+            assert data["total"] == 0
+            assert data["strings"] == []
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_strings_with_basic_ascii(self):
+        from arkana.dashboard.state_api import get_strings_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "basic_ascii_strings": ["hello", "world", "test"],
+        }
+        try:
+            data = get_strings_data()
+            assert data["total_unfiltered"] == 3
+            assert data["type_counts"]["ASCII"] == 3
+            assert data["strings"][0]["type"] == "ASCII"
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_strings_filter_by_type(self):
+        from arkana.dashboard.state_api import get_strings_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "basic_ascii_strings": ["hello"],
+            "floss_analysis": {
+                "strings": {
+                    "static_strings": [{"string": "static1", "offset": "0x100"}],
+                    "stack_strings": [{"string": "stack1", "function_va": "0x401000"}],
+                    "decoded_strings": [],
+                    "tight_strings": [],
+                },
+            },
+        }
+        try:
+            data = get_strings_data(string_type="stack")
+            assert data["total"] == 1
+            assert data["strings"][0]["type"] == "STACK"
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_strings_search(self):
+        from arkana.dashboard.state_api import get_strings_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "basic_ascii_strings": ["CreateFileW", "ReadFile", "something"],
+        }
+        try:
+            data = get_strings_data(search="File")
+            assert data["total"] == 2
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_strings_pagination(self):
+        from arkana.dashboard.state_api import get_strings_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "basic_ascii_strings": ["s" + str(i) for i in range(10)],
+        }
+        try:
+            data = get_strings_data(offset=3, limit=4)
+            assert len(data["strings"]) == 4
+            assert data["total"] == 10
+            assert data["offset"] == 3
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_strings_skips_error_items(self):
+        from arkana.dashboard.state_api import get_strings_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "floss_analysis": {
+                "strings": {
+                    "static_strings": [{"error": "failed"}],
+                    "stack_strings": [{"string": "ok", "function_va": "0x1000"}],
+                    "decoded_strings": [],
+                    "tight_strings": [],
+                },
+            },
+        }
+        try:
+            data = get_strings_data()
+            assert data["total_unfiltered"] == 1
+            assert data["strings"][0]["string"] == "ok"
+        finally:
+            _default_state.pe_data = old_pd
+
+
+class TestGlobalSearch:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+
+    def test_search_empty_query(self):
+        from arkana.dashboard.state_api import global_search
+        result = global_search("")
+        assert result == {"functions": [], "strings": [], "imports": [], "notes": []}
+
+    def test_search_strings(self):
+        from arkana.dashboard.state_api import global_search
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "basic_ascii_strings": ["CreateFile", "WriteFile", "other"],
+        }
+        try:
+            result = global_search("File")
+            assert len(result["strings"]) == 2
+            assert result["strings"][0]["type"] == "ASCII"
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_search_imports(self):
+        from arkana.dashboard.state_api import global_search
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "imports": [{
+                "dll": "KERNEL32.dll",
+                "symbols": [
+                    {"name": "CreateFileW"},
+                    {"name": "ReadFile"},
+                    {"name": "CloseHandle"},
+                ],
+            }],
+        }
+        try:
+            result = global_search("Create")
+            assert len(result["imports"]) == 1
+            assert result["imports"][0]["function"] == "CreateFileW"
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_search_notes(self):
+        from arkana.dashboard.state_api import global_search
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {}
+        _default_state.add_note("Suspicious CreateFile call", category="ioc")
+        try:
+            result = global_search("Suspicious")
+            assert len(result["notes"]) == 1
+            assert result["notes"][0]["category"] == "ioc"
+        finally:
+            _default_state.pe_data = old_pd
+            _default_state.notes.clear()
+
+    def test_search_limit(self):
+        from arkana.dashboard.state_api import global_search
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "basic_ascii_strings": ["match" + str(i) for i in range(20)],
+        }
+        try:
+            result = global_search("match", limit_per_category=5)
+            assert len(result["strings"]) == 5
+        finally:
+            _default_state.pe_data = old_pd
+
+
+class TestFunctionXrefs:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+
+    def test_xrefs_no_angr(self):
+        from arkana.dashboard.state_api import get_function_xrefs_data
+        data = get_function_xrefs_data("0x401000")
+        assert data["callers"] == []
+        assert data["callees"] == []
+
+    def test_xrefs_invalid_address(self):
+        from arkana.dashboard.state_api import get_function_xrefs_data
+        data = get_function_xrefs_data("not_hex")
+        # Without angr loaded, returns empty lists (error only on parse failure with angr)
+        assert data["callers"] == []
+        assert data["callees"] == []
+
+    def test_function_strings_no_data(self):
+        from arkana.dashboard.state_api import get_function_strings_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = None
+        try:
+            data = get_function_strings_data("0x401000")
+            assert data["strings"] == []
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_function_strings_match(self):
+        from arkana.dashboard.state_api import get_function_strings_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "floss_analysis": {
+                "strings": {
+                    "static_strings": [],
+                    "stack_strings": [
+                        {"string": "found", "function_va": "0x401000", "string_va": "0x500"},
+                        {"string": "other", "function_va": "0x402000", "string_va": "0x600"},
+                    ],
+                    "decoded_strings": [],
+                    "tight_strings": [],
+                },
+            },
+        }
+        try:
+            data = get_function_strings_data("0x401000")
+            assert len(data["strings"]) == 1
+            assert data["strings"][0]["string"] == "found"
+        finally:
+            _default_state.pe_data = old_pd
+
+
+# ---------------------------------------------------------------------------
+#  FLOSS Summary (for strings page detail panel)
+# ---------------------------------------------------------------------------
+
+class TestFlossSummary:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+
+    def test_no_data(self):
+        from arkana.dashboard.state_api import get_floss_summary
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = None
+        try:
+            data = get_floss_summary()
+            assert data["available"] is False
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_no_floss_analysis(self):
+        from arkana.dashboard.state_api import get_floss_summary
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {"basic_ascii_strings": ["hello"]}
+        try:
+            data = get_floss_summary()
+            assert data["available"] is False
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_static_only(self):
+        from arkana.dashboard.state_api import get_floss_summary
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "floss_analysis": {
+                "status": "Complete",
+                "strings": {
+                    "static_strings": [
+                        {"string": "static1", "offset": "0x100"},
+                        {"string": "static2", "offset": "0x200"},
+                    ],
+                    "stack_strings": [],
+                    "decoded_strings": [],
+                    "tight_strings": [],
+                },
+            },
+        }
+        try:
+            data = get_floss_summary()
+            assert data["available"] is True
+            assert data["status"] == "Complete"
+            assert data["type_counts"]["STATIC"] == 2
+            assert data["type_counts"]["STACK"] == 0
+            assert data["total_floss_strings"] == 2
+            assert data["top_decoded"] == []
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_complete_analysis(self):
+        from arkana.dashboard.state_api import get_floss_summary
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "floss_analysis": {
+                "status": "Complete",
+                "metadata": {"version": "2.3.0"},
+                "analysis_config": {"min_length": 4, "timeout": 60},
+                "strings": {
+                    "static_strings": [{"string": "s" + str(i)} for i in range(5)],
+                    "stack_strings": [{"string": "stack_" + str(i), "function_va": "0x1000"} for i in range(3)],
+                    "decoded_strings": [{"string": "decoded_" + str(i)} for i in range(7)],
+                    "tight_strings": [{"string": "tight_" + str(i)} for i in range(2)],
+                },
+            },
+        }
+        try:
+            data = get_floss_summary()
+            assert data["available"] is True
+            assert data["type_counts"]["STATIC"] == 5
+            assert data["type_counts"]["STACK"] == 3
+            assert data["type_counts"]["DECODED"] == 7
+            assert data["type_counts"]["TIGHT"] == 2
+            assert data["total_floss_strings"] == 17
+            assert len(data["top_decoded"]) == 7
+            assert len(data["top_stack"]) == 3
+            assert data["top_decoded"][0] == "decoded_0"
+            assert data["floss_version"] == "2.3.0"
+            assert data["analysis_config"]["min_length"] == 4
+        finally:
+            _default_state.pe_data = old_pd
+
+    def test_error_entries_skipped(self):
+        from arkana.dashboard.state_api import get_floss_summary
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {
+            "floss_analysis": {
+                "status": "Complete",
+                "strings": {
+                    "static_strings": [{"error": "failed"}, {"string": "ok"}],
+                    "stack_strings": [],
+                    "decoded_strings": [],
+                    "tight_strings": [],
+                },
+            },
+        }
+        try:
+            data = get_floss_summary()
+            assert data["type_counts"]["STATIC"] == 1
+            assert data["total_floss_strings"] == 1
+        finally:
+            _default_state.pe_data = old_pd
+
+
+# ---------------------------------------------------------------------------
+#  Global Status Partial
+# ---------------------------------------------------------------------------
+
+class TestGlobalStatusPartial:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+
+    def test_empty_when_idle(self):
+        """Global status partial returns empty content when nothing is running."""
+        from arkana.dashboard.state_api import get_overview_data
+        old_fp = _default_state.filepath
+        old_pd = _default_state.pe_data
+        _default_state.filepath = None
+        _default_state.pe_data = None
+        try:
+            data = get_overview_data()
+            # No active tool and no background tasks = nothing to show
+            assert data["active_tool"] is None
+            assert data["background_tasks"] == []
+        finally:
+            _default_state.filepath = old_fp
+            _default_state.pe_data = old_pd

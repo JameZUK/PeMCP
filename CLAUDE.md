@@ -21,8 +21,9 @@ arkana/                  # Main package
 │   ├── app.py          # ASGI app factory, routes, auth, SSE events
 │   ├── state_api.py    # Data extraction layer (reads AnalyzerState for dashboard views)
 │   ├── __init__.py     # Package init
-│   ├── templates/      # Jinja2 templates (overview, functions, callgraph, sections, timeline, notes)
-│   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js), logo
+│   ├── templates/      # Jinja2 templates (overview, functions, callgraph, sections, strings, timeline, notes)
+│   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
+│   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
 └── mcp/                # MCP tool modules (209 tools across 50 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename)
@@ -71,7 +72,9 @@ ruff check arkana/ tests/ \
 - **Custom types system**: `state.custom_types` stores user-defined structs and enums. Structs reuse `_parse_fields` from `tools_struct.py` for parsing. Persisted via cache. 5 tools in `tools_types.py`.
 - **Batch decompile**: `batch_decompile` in `tools_angr.py` decompiles up to 20 functions per call with per-function timeout (60s). Caches per-function results via `_ToolResultCache`. Applies rename helpers to output.
 - **Hex pattern search**: `search_hex_pattern` in `tools_strings.py` searches binary data for hex byte patterns with `??` wildcards. Runs in `asyncio.to_thread()`. Constants: `MAX_HEX_PATTERN_TOKENS` (200), `MAX_HEX_PATTERN_MATCHES` (5000).
-- **Web dashboard**: `arkana/dashboard/` provides a real-time web UI on port 8082 (auto-started in both stdio and HTTP modes). Built with Starlette + htmx + Jinja2 with a CRT/WarGames terminal theme. Token auth persisted to `~/.arkana/dashboard_token`. Features: overview with full binary summary (risk, packing, mitigations, findings), function explorer with triage flagging (FLAG/SUS/CLN), Cytoscape.js call graph, section permissions, expandable analysis timeline (shows request params + result summary), categorised notes viewer, and SSE real-time updates. Dashboard reads from the active MCP session state via `state_api._get_state()` which checks `_session_registry` for any state with a loaded file. Triage flags set on the dashboard are surfaced to the AI via `get_session_summary()`, `get_analysis_digest()`, and `suggest_next_action()`.
+- **Web dashboard**: `arkana/dashboard/` provides a real-time web UI on port 8082 (auto-started in both stdio and HTTP modes). Built with Starlette + htmx + Jinja2 with a CRT/WarGames terminal theme. Token auth persisted to `~/.arkana/dashboard_token`. Features: overview with full binary summary (risk, packing, mitigations, findings), function explorer with triage flagging (FLAG/SUS/CLN), Cytoscape.js call graph, section permissions, expandable analysis timeline (shows request params + result summary), categorised notes viewer, strings explorer with FLOSS detail panel, and SSE real-time updates. Dashboard reads from the active MCP session state via `state_api._get_state()` which checks `_session_registry` for any state with a loaded file. Triage flags set on the dashboard are surfaced to the AI via `get_session_summary()`, `get_analysis_digest()`, and `suggest_next_action()`.
+- **Global status bar**: `templates/partials/_global_status.html` renders active tool + running background tasks with progress bars, visible from every page via htmx polling (`hx-get="/dashboard/partials/global-status"` every 3s in `base.html`). Collapses to empty when nothing is running. Data sourced from `get_overview_data()` (`active_tool` + `background_tasks` fields).
+- **FLOSS detail panel**: Strings page includes a collapsible FLOSS panel above the stats grid showing analysis status badge, type breakdown (STATIC/STACK/DECODED/TIGHT counts), top decoded and stack strings, and FLOSS metadata. Data from `state_api.get_floss_summary()` via `/api/floss-summary`. Auto-refreshes every 5s while FLOSS analysis is still running.
 
 ## Dashboard
 
@@ -82,7 +85,9 @@ The web dashboard starts automatically on port 8082. Access URL is logged at sta
 http://127.0.0.1:8082/dashboard/?token=<TOKEN>
 ```
 
-Pages: Overview (binary summary, risk, mitigations, recent notes), Functions (sortable, triage buttons, inline notes), Call Graph (Cytoscape.js), Sections (permission flags), Timeline (expandable tool calls), Notes (category filtering).
+Pages: Overview (binary summary, risk, mitigations, recent notes), Functions (sortable, triage buttons, inline notes), Call Graph (Cytoscape.js), Sections (permission flags), Imports (DLL/export tables), Strings (FLOSS detail panel, type/category filtering, sifter scores), Timeline (expandable tool calls), Notes (category filtering).
+
+A global status bar between the nav and content area shows the active tool and running background tasks with progress bars from any page. It auto-refreshes every 3s via htmx and collapses when idle.
 
 Dashboard triage flags are persisted to the analysis cache and restored when the same file is reopened. Flagged/suspicious functions are prioritised in `suggest_next_action()`.
 

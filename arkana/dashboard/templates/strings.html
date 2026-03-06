@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Strings{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">STRINGS</h1>
+    <span id="str-total" class="dim" style="font-size: 12px; letter-spacing: 1px;"></span>
+</div>
+
+<div id="floss-panel" class="panel floss-panel" style="display:none;">
+    <div class="panel-header floss-panel-header" id="floss-panel-toggle" style="cursor:pointer;">
+        FLOSS ANALYSIS
+        <span id="floss-status-badge" class="badge badge-dim" style="margin-left:8px;"></span>
+        <span style="margin-left:auto; font-size:10px;" class="dim" id="floss-collapse-hint">[collapse]</span>
+    </div>
+    <div id="floss-panel-body" class="floss-panel-body">
+        <div class="floss-type-grid">
+            <div id="floss-type-counts" class="floss-type-counts"></div>
+        </div>
+        <div id="floss-top-decoded" class="floss-top-section" style="display:none;">
+            <div class="floss-top-title">TOP DECODED STRINGS</div>
+            <div id="floss-decoded-list" class="floss-string-list"></div>
+        </div>
+        <div id="floss-top-stack" class="floss-top-section" style="display:none;">
+            <div class="floss-top-title">TOP STACK STRINGS</div>
+            <div id="floss-stack-list" class="floss-string-list"></div>
+        </div>
+        <div id="floss-meta" class="floss-meta dim" style="display:none;"></div>
+    </div>
+</div>
+
+<div class="stats-grid">
+    <div class="panel stat-card">
+        <div class="panel-header">TOTAL STRINGS</div>
+        <div class="stat-value" id="stat-total">{{ data.total_unfiltered if data else 0 }}</div>
+    </div>
+    <div class="panel stat-card">
+        <div class="panel-header">BY TYPE</div>
+        <div class="stat-detail" id="stat-types">
+            {% if data and data.type_counts %}
+            {% for t, c in data.type_counts.items() %}
+            <div class="stat-row"><span class="stat-label">{{ t }}</span><span>{{ c }}</span></div>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </div>
+    <div class="panel stat-card">
+        <div class="panel-header">BY CATEGORY</div>
+        <div class="stat-detail" id="stat-cats">
+            {% if data and data.category_counts %}
+            {% for c, n in data.category_counts.items() %}
+            <div class="stat-row"><span class="stat-label">{{ c }}</span><span>{{ n }}</span></div>
+            {% endfor %}
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="filter-bar">
+        <div class="filter-group">
+            <label>TYPE</label>
+            <select id="str-filter-type">
+                <option value="all">ALL</option>
+                <option value="ascii">ASCII</option>
+                <option value="static">STATIC</option>
+                <option value="stack">STACK</option>
+                <option value="decoded">DECODED</option>
+                <option value="tight">TIGHT</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label>CATEGORY</label>
+            <input type="text" id="str-filter-cat" placeholder="e.g. url, path" style="width:120px;">
+        </div>
+        <div class="filter-group">
+            <label>MIN SCORE</label>
+            <input type="text" id="str-filter-score" placeholder="0" style="width:60px;">
+        </div>
+        <div class="filter-group">
+            <label>SEARCH</label>
+            <input type="text" id="str-filter-search" placeholder="Filter strings..." style="width:200px;">
+        </div>
+    </div>
+
+    <div class="table-wrap">
+        <table class="data-table" id="str-table">
+            <thead>
+                <tr>
+                    <th class="sortable" data-sort="address">ADDRESS <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="score">SCORE <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="type">TYPE <span class="sort-arrow"></span></th>
+                    <th>STRING</th>
+                    <th>CATEGORY</th>
+                    <th>ACTIONS</th>
+                </tr>
+            </thead>
+            <tbody id="str-tbody">
+                <tr><td colspan="6" class="empty-msg">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <div id="pagination-bar" class="pagination-bar">
+        <button class="btn" id="str-prev" disabled>PREV</button>
+        <span id="str-page-info" class="dim" style="font-size: 12px; margin: 0 12px;"></span>
+        <button class="btn" id="str-next" disabled>NEXT</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/strings.js"></script>
+{% endblock %}
