@@ -304,7 +304,7 @@ def _check_speakeasy_available():
                 )
                 SPEAKEASY_AVAILABLE = _speakeasy_result.returncode == 0
                 if not SPEAKEASY_AVAILABLE:
-                    SPEAKEASY_IMPORT_ERROR = f"speakeasy import failed in venv: {_speakeasy_result.stderr.decode()[:200]}"
+                    SPEAKEASY_IMPORT_ERROR = f"speakeasy import failed in venv: {_speakeasy_result.stderr.decode('utf-8', errors='replace')[:200]}"
             except Exception as _e:
                 SPEAKEASY_AVAILABLE = False
                 SPEAKEASY_IMPORT_ERROR = f"Speakeasy venv check failed: {_e}"
@@ -336,7 +336,7 @@ def _check_unipacker_available():
                 )
                 UNIPACKER_AVAILABLE = _unipacker_result.returncode == 0
                 if not UNIPACKER_AVAILABLE:
-                    UNIPACKER_IMPORT_ERROR = f"unipacker import failed in venv: {_unipacker_result.stderr.decode()[:200]}"
+                    UNIPACKER_IMPORT_ERROR = f"unipacker import failed in venv: {_unipacker_result.stderr.decode('utf-8', errors='replace')[:200]}"
             except Exception as _e:
                 UNIPACKER_AVAILABLE = False
                 UNIPACKER_IMPORT_ERROR = f"Unipacker venv check failed: {_e}"
@@ -369,7 +369,7 @@ def _check_qiling_available():
                 )
                 QILING_AVAILABLE = _qiling_result.returncode == 0
                 if not QILING_AVAILABLE:
-                    QILING_IMPORT_ERROR = f"qiling import failed in venv: {_qiling_result.stderr.decode()[:200]}"
+                    QILING_IMPORT_ERROR = f"qiling import failed in venv: {_qiling_result.stderr.decode('utf-8', errors='replace')[:200]}"
             except Exception as _e:
                 QILING_AVAILABLE = False
                 QILING_IMPORT_ERROR = f"Qiling venv check failed: {_e}"

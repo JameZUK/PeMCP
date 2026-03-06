@@ -399,6 +399,7 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
             logger.info("Loaded %s binary: %s", format_label, abs_input_file)
 
         else:
+            temp_pe_obj_for_preload = None
             temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
             state.filepath = abs_input_file
             state.pe_object = temp_pe_obj_for_preload
@@ -432,7 +433,7 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
 
     except (OSError, pefile.PEFormatError, ValueError, RuntimeError) as e:
         logger.critical("MCP: Failed to pre-load file: %s: %s", type(e).__name__, e, exc_info=True)
-        if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
+        if temp_pe_obj_for_preload is not None:
             temp_pe_obj_for_preload.close()
         state.filepath = None
         state.pe_data = None
@@ -441,7 +442,7 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
         sys.exit(1)
     except Exception as e:
         logger.critical("MCP: Unexpected error during pre-load: %s: %s", type(e).__name__, e, exc_info=True)
-        if 'temp_pe_obj_for_preload' in locals() and temp_pe_obj_for_preload:
+        if temp_pe_obj_for_preload is not None:
             temp_pe_obj_for_preload.close()
         state.filepath = None
         state.pe_data = None

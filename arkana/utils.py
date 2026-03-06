@@ -152,7 +152,7 @@ def safe_print(text_to_print, verbose_prefix=""):
         print(f"{verbose_prefix}{text_to_print}")
     except UnicodeEncodeError:
         try:
-            output_encoding = sys.stdout.encoding if sys.stdout.encoding else 'utf-8'
+            output_encoding = (sys.stdout.encoding if sys.stdout and sys.stdout.encoding else 'utf-8')
             encoded_text = str(text_to_print).encode(output_encoding, errors='backslashreplace').decode(output_encoding, errors='ignore')
             print(f"{verbose_prefix}{encoded_text} (some characters replaced/escaped)")
         except Exception:

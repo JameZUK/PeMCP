@@ -228,7 +228,7 @@ def tool_decorator(func):
             # Enrich error messages with actionable hints
             enriched = _enrich_error_message(str(exc))
             if enriched != str(exc):
-                raise type(exc)(enriched) from exc.__cause__
+                raise type(exc)(enriched) from exc
             raise
         finally:
             # Always cancel the heartbeat when the tool finishes
@@ -253,7 +253,7 @@ def tool_decorator(func):
                 if _result_len > _SOFT_LIMIT:
                     result = await _check_mcp_response_size(ctx, result, tool_name)
             except (TypeError, ValueError):
-                pass
+                logger.debug("Auto-truncation skipped for %s (serialization error)", tool_name, exc_info=True)
 
         duration_ms = int((time.time() - start_time) * 1000)
 
