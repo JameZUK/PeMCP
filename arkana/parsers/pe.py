@@ -938,6 +938,9 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
     analyses_to_skip = [analysis.lower() for analysis in analyses_to_skip]
 
     _report(0, 100, "Starting PE analysis...")
+    import time as _time
+    _t_start = _time.monotonic()
+    _timing: Dict[str, float] = {}
 
     pe_info_dict: Dict[str, Any] = {"filepath": filepath, "pefile_version": state.pefile_version}
 
@@ -951,7 +954,9 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
 
     # Basic hashes (Works for both)
     _report(5, 100, "Computing file hashes...")
+    _t0 = _time.monotonic()
     pe_info_dict['file_hashes'] = _parse_file_hashes(pe.__data__)
+    _timing["file_hashes"] = round(_time.monotonic() - _t0, 2)
 
     if not is_raw_mode:
         # Run PE-specific parsers only if it's a real PE.
@@ -959,6 +964,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         # (e.g. due to a corrupted structure) does not prevent other
         # parsers from producing results.
         _report(10, 100, "Parsing PE headers...")
+        _t_headers = _time.monotonic()
 
         # NT headers are special: they return magic_type_str needed by later parsers
         magic_type_str = "Unknown"
@@ -996,6 +1002,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         pe_info_dict['exception_data'] = _safe_parse('exception_data', _parse_exception_data, pe)
         pe_info_dict['coff_symbols'] = _safe_parse('coff_symbols', _parse_coff_symbols, pe)
         pe_info_dict['checksum_verification'] = _safe_parse('checksum_verification', _verify_checksum, pe)
+        _timing["pe_header_parsing"] = round(_time.monotonic() - _t_headers, 2)
     else:
         # Set minimal defaults for raw mode to avoid UI errors in subsequent tools
         pe_info_dict['digital_signature'] = {"status": "Not applicable for raw shellcode"}
@@ -1064,16 +1071,25 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
     }
 
     if _parallel_tasks:
+        _t_parallel = _time.monotonic()
+
+        def _timed_safe_parse(key, func, *args, **kwargs):
+            t0 = _time.monotonic()
+            result = _safe_parse(key, func, *args, **kwargs)
+            return result, round(_time.monotonic() - t0, 2)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(_parallel_tasks)) as pool:
             futures = {
-                pool.submit(_safe_parse, key, func, *args): key
+                pool.submit(_timed_safe_parse, key, func, *args): key
                 for key, func, args in _parallel_tasks
             }
             for future in concurrent.futures.as_completed(futures):
                 key = futures[future]
                 timeout = _task_timeouts.get(key)
                 try:
-                    pe_info_dict[key] = future.result(timeout=timeout)
+                    result, elapsed = future.result(timeout=timeout)
+                    pe_info_dict[key] = result
+                    _timing[key] = elapsed
                 except concurrent.futures.TimeoutError:
                     logger.warning("%s timed out after %ds — storing error result.", key, timeout)
                     pe_info_dict[key] = {
@@ -1082,16 +1098,22 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                                  f"Override via ARKANA_{key.upper()}_TIMEOUT env var.",
                         "results": None,
                     }
+                    _timing[key] = float(timeout) if timeout else 0.0
+
+        _timing["parallel_scans_wall"] = round(_time.monotonic() - _t_parallel, 2)
 
     _report(85, 100, "Signature & capability scans complete.")
 
     _report(90, 100, "Extracting basic strings...")
+    _t_strings = _time.monotonic()
     pe_info_dict['basic_ascii_strings'] = [
         {"offset": hex(offset), "string": s, "source_type": "basic_ascii"}
         for offset, s in _extract_strings_from_data(pe.__data__, 5)
     ]
-
+    _timing["basic_strings"] = round(_time.monotonic() - _t_strings, 2)
 
     pe_info_dict['pefile_warnings'] = pe.get_warnings()
+    _timing["total"] = round(_time.monotonic() - _t_start, 2)
+    pe_info_dict['_timing'] = _timing
     _report(100, 100, "Analysis complete.")
     return pe_info_dict

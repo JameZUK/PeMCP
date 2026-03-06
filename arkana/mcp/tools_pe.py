@@ -45,6 +45,8 @@ def _start_floss_background_task(current_state, floss_args: tuple):
 
     The result overwrites ``state.pe_data["floss_analysis"]`` in-place
     so the dashboard and MCP tools automatically pick up the enriched data.
+    Uses ``_update_progress`` to set ``last_progress_epoch`` so that generic
+    stall detection in ``check_task_status()`` works correctly.
     """
     import threading
     import time as _time
@@ -58,16 +60,24 @@ def _start_floss_background_task(current_state, floss_args: tuple):
         "progress_message": "Loading Vivisect workspace...",
         "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "created_at_epoch": _time.time(),
+        "last_progress_epoch": _time.time(),
         "tool": "open_file (FLOSS deep analysis)",
     })
+
+    def _update(percent, message):
+        """Update task progress with last_progress_epoch for stall detection."""
+        current_state.update_task(
+            task_id,
+            progress_percent=percent,
+            progress_message=message,
+            last_progress_epoch=_time.time(),
+        )
 
     def _worker():
         set_current_state(current_state)
         try:
-            current_state.update_task(task_id, {
-                "progress_percent": 10,
-                "progress_message": "Running full FLOSS analysis (Vivisect + stack/tight/decoded strings)...",
-            })
+            _update(5, "Starting full FLOSS analysis...")
+            _update(10, "Loading Vivisect workspace (this is the slow part)...")
             result = _parse_floss_analysis(*floss_args)
 
             # Merge into pe_data in place — preserve static strings if deep failed
@@ -75,19 +85,23 @@ def _start_floss_background_task(current_state, floss_args: tuple):
                 current_state.pe_data["floss_analysis"] = result
 
             status_msg = result.get("status", "Complete")
-            current_state.update_task(task_id, {
-                "status": TASK_COMPLETED,
-                "progress_percent": 100,
-                "progress_message": f"FLOSS deep analysis complete: {status_msg}",
-            })
+            current_state.update_task(
+                task_id,
+                status=TASK_COMPLETED,
+                progress_percent=100,
+                progress_message=f"FLOSS deep analysis complete: {status_msg}",
+                last_progress_epoch=_time.time(),
+            )
             logger.info("FLOSS deep analysis background task completed.")
         except Exception as e:
             logger.error("FLOSS deep analysis failed: %s", e, exc_info=True)
-            current_state.update_task(task_id, {
-                "status": TASK_FAILED,
-                "progress_percent": 0,
-                "progress_message": f"Failed: {e}",
-            })
+            current_state.update_task(
+                task_id,
+                status=TASK_FAILED,
+                progress_percent=0,
+                progress_message=f"Failed: {e}",
+                last_progress_epoch=_time.time(),
+            )
 
     t = threading.Thread(target=_worker, daemon=True, name="arkana-floss-deep")
     t.start()
@@ -497,6 +511,12 @@ async def open_file(
             # Quick indicators for PE files — instant first-look data
             result["quick_indicators"] = _build_quick_indicators(state.pe_data)
             result["suggested_next"] = "Call get_triage_report for comprehensive automated analysis."
+
+        # Include per-task timing breakdown from PE analysis
+        if state.pe_data and not _loaded_from_cache:
+            timing = state.pe_data.pop("_timing", None)
+            if timing:
+                result["timing"] = timing
 
         # Include session context when loading from cache with prior data
         cached_notes = getattr(state, "notes", []) or []
