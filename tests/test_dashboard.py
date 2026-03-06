@@ -347,3 +347,90 @@ class TestSectionPermissions:
     def test_no_characteristics(self):
         from arkana.dashboard.state_api import _section_permissions
         assert _section_permissions({}) == "?"
+
+
+# ---------------------------------------------------------------------------
+#  Decompile endpoint (state_api)
+# ---------------------------------------------------------------------------
+
+class TestDecompileStateApi:
+    def test_get_decompiled_code_no_cache(self):
+        from arkana.dashboard.state_api import get_decompiled_code
+        result = get_decompiled_code("0x401000")
+        assert result["cached"] is False
+
+    def test_get_decompiled_code_invalid_address(self):
+        from arkana.dashboard.state_api import get_decompiled_code
+        result = get_decompiled_code("not_hex")
+        assert result["cached"] is False
+        assert "error" in result
+
+    def test_get_decompiled_code_with_cache(self):
+        from arkana.dashboard.state_api import get_decompiled_code
+        try:
+            from arkana.mcp.tools_angr import _decompile_cache, _decompile_meta
+        except ImportError:
+            pytest.skip("angr tools not importable")
+        # Inject a cached decompilation
+        cache_key = (0x401000,)
+        _decompile_cache.set("decompile_function_with_angr", cache_key, [
+            "void test_func(void) {",
+            "    return;",
+            "}",
+        ])
+        _decompile_meta[cache_key] = {
+            "function_name": "test_func",
+            "address": "0x401000",
+        }
+        try:
+            result = get_decompiled_code("0x401000")
+            assert result["cached"] is True
+            assert result["function_name"] == "test_func"
+            assert result["line_count"] == 3
+            assert "void test_func" in result["lines"][0]
+        finally:
+            bucket = _decompile_cache._store.get("decompile_function_with_angr")
+            if bucket:
+                bucket.pop(cache_key, None)
+            _decompile_meta.pop(cache_key, None)
+
+
+# ---------------------------------------------------------------------------
+#  FLOSS decoded strings in overview
+# ---------------------------------------------------------------------------
+
+class TestFlossDecodedStrings:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+
+    def test_overview_includes_floss_top_decoded(self):
+        from arkana.dashboard.state_api import get_overview_data
+        old_fp = _default_state.filepath
+        old_pd = _default_state.pe_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {
+            "file_hashes": {"sha256": "abc123"},
+            "floss_analysis": {
+                "status": "Complete",
+                "strings": {
+                    "static_strings": [],
+                    "stack_strings": [{"string": "stack_secret"}],
+                    "decoded_strings": [{"string": "decoded_payload"}],
+                },
+            },
+        }
+        try:
+            data = get_overview_data()
+            bs = data["binary_summary"]
+            assert bs["floss_top_decoded"] == ["decoded_payload"]
+            assert bs["floss_top_stack"] == ["stack_secret"]
+        finally:
+            _default_state.pe_data = old_pd
+            _default_state.filepath = old_fp

@@ -5,6 +5,7 @@
     <td>{{ f.complexity }}</td>
     <td><span class="badge badge-{{ f.triage_status }}">{{ f.triage_status|upper }}</span></td>
     <td class="triage-btns">
+        <button class="btn-triage btn-decompile{% if f.is_decompiled %} active{% endif %}" data-addr="{{ f.address }}" title="Decompile">DEC</button>
         <button class="btn-triage btn-flag{% if f.triage_status == 'flagged' %} active{% endif %}" data-addr="{{ f.address }}" data-status="flagged">FLAG</button>
         <button class="btn-triage btn-suspicious{% if f.triage_status == 'suspicious' %} active{% endif %}" data-addr="{{ f.address }}" data-status="suspicious">SUS</button>
         <button class="btn-triage btn-clean{% if f.triage_status == 'clean' %} active{% endif %}" data-addr="{{ f.address }}" data-status="clean">CLN</button>

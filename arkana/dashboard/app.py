@@ -27,6 +27,8 @@ from arkana.dashboard.state_api import (
     get_imports_data,
     get_timeline_data,
     get_notes_data,
+    get_decompiled_code,
+    trigger_decompile,
 )
 
 logger = logging.getLogger("Arkana.dashboard")
@@ -251,6 +253,44 @@ def _create_routes(dashboard_token: str) -> list:
                 pass
         return JSONResponse({"ok": True, "address": address, "status": status})
 
+    async def api_decompile_get(request: Request) -> Response:
+        """Return cached decompilation for an address."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        address = request.query_params.get("address", "").strip()
+        if not address:
+            return JSONResponse({"error": "missing address parameter"}, status_code=400)
+        result = get_decompiled_code(address)
+        return JSONResponse(result)
+
+    async def api_decompile_post(request: Request) -> Response:
+        """Trigger a new decompilation for an address."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        address = body.get("address", "").strip()
+        if not address:
+            return JSONResponse({"error": "missing address"}, status_code=400)
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(trigger_decompile, address),
+                timeout=300,
+            )
+        except asyncio.TimeoutError:
+            return JSONResponse(
+                {"cached": False, "error": "Decompilation timed out (300s)"},
+                status_code=504,
+            )
+        except Exception as e:
+            return JSONResponse(
+                {"cached": False, "error": str(e)},
+                status_code=500,
+            )
+        return JSONResponse(result)
+
     async def api_timeline(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -395,6 +435,8 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/callgraph", endpoint=api_callgraph, methods=["GET"]),
         Route("/api/triage", endpoint=api_triage, methods=["POST"]),
         Route("/api/timeline", endpoint=api_timeline, methods=["GET"]),
+        Route("/api/decompile", endpoint=api_decompile_get, methods=["GET"]),
+        Route("/api/decompile", endpoint=api_decompile_post, methods=["POST"]),
         Route("/api/debug", endpoint=api_debug, methods=["GET"]),
         Route("/api/events", endpoint=api_events, methods=["GET"]),
         # Partials

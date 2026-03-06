@@ -277,6 +277,18 @@
             {% else %}
             <div class="summary-row dim">FLOSS analysis not yet run</div>
             {% endif %}
+            {% if bs.floss_top_decoded %}
+            <div class="summary-section-title" style="margin-top: 4px;">DECODED STRINGS (TOP {{ bs.floss_top_decoded|length }})</div>
+            {% for s in bs.floss_top_decoded %}
+            <div class="ioc-item warning">{{ s }}</div>
+            {% endfor %}
+            {% endif %}
+            {% if bs.floss_top_stack %}
+            <div class="summary-section-title" style="margin-top: 4px;">STACK STRINGS (TOP {{ bs.floss_top_stack|length }})</div>
+            {% for s in bs.floss_top_stack %}
+            <div class="ioc-item">{{ s }}</div>
+            {% endfor %}
+            {% endif %}
         </div>
     </div>
 </div>

@@ -371,6 +371,25 @@ def get_overview_data() -> Dict[str, Any]:
             binary_summary["floss_static_count"] = len(floss_strings.get("static_strings", []))
             binary_summary["floss_stack_count"] = len(floss_strings.get("stack_strings", []))
             binary_summary["floss_decoded_count"] = len(floss_strings.get("decoded_strings", []))
+            # Top decoded/stack strings for overview display
+            decoded = floss_strings.get("decoded_strings", [])
+            stack = floss_strings.get("stack_strings", [])
+            top_decoded = []
+            for s in decoded[:10]:
+                if isinstance(s, dict):
+                    top_decoded.append(s.get("string", str(s))[:120])
+                elif isinstance(s, str):
+                    top_decoded.append(s[:120])
+            top_stack = []
+            for s in stack[:10]:
+                if isinstance(s, dict):
+                    top_stack.append(s.get("string", str(s))[:120])
+                elif isinstance(s, str):
+                    top_stack.append(s[:120])
+            if top_decoded:
+                binary_summary["floss_top_decoded"] = top_decoded
+            if top_stack:
+                binary_summary["floss_top_stack"] = top_stack
         floss_status = floss.get("status", "")
         binary_summary["floss_status"] = floss_status
 
@@ -829,6 +848,149 @@ def get_notes_data(category: Optional[str] = None) -> List[Dict[str, Any]]:
     """All notes with optional category filter."""
     st = _get_state()
     return st.get_notes(category=category)
+
+
+def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
+    """Return cached decompilation for a function, or indicate not cached."""
+    try:
+        from arkana.mcp.tools_angr import _decompile_cache, _decompile_meta
+        from arkana.mcp._rename_helpers import (
+            apply_function_renames_to_lines,
+            apply_variable_renames_to_lines,
+            get_display_name,
+        )
+    except ImportError:
+        return {"cached": False, "error": "angr not available"}
+
+    try:
+        addr_int = int(address_hex, 16)
+    except (ValueError, TypeError):
+        return {"cached": False, "error": "invalid address"}
+
+    cache_key = (addr_int,)
+    cached_lines = _decompile_cache.get("decompile_function_with_angr", cache_key)
+    if cached_lines is None:
+        return {"cached": False}
+
+    meta = _decompile_meta.get(cache_key, {})
+    # Apply renames
+    renamed_lines = apply_function_renames_to_lines(cached_lines)
+    renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(addr_int))
+    display_name = get_display_name(hex(addr_int), meta.get("function_name", "unknown"))
+
+    return {
+        "cached": True,
+        "function_name": display_name,
+        "address": meta.get("address", hex(addr_int)),
+        "lines": renamed_lines,
+        "line_count": len(renamed_lines),
+    }
+
+
+def trigger_decompile(address_hex: str) -> Dict[str, Any]:
+    """Trigger a new decompilation and cache the result. Runs synchronously (call from thread)."""
+    from arkana.imports import ANGR_AVAILABLE
+    if not ANGR_AVAILABLE:
+        return {"cached": False, "error": "angr is not available"}
+
+    st = _get_state()
+    if st.angr_project is None:
+        return {"cached": False, "error": "No angr project loaded. Open a file first."}
+
+    try:
+        addr_int = int(address_hex, 16)
+    except (ValueError, TypeError):
+        return {"cached": False, "error": "invalid address"}
+
+    from arkana.mcp.tools_angr import _decompile_cache, _decompile_meta
+    from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg
+    from arkana.mcp._rename_helpers import (
+        apply_function_renames_to_lines,
+        apply_variable_renames_to_lines,
+        get_display_name,
+    )
+
+    # Check cache first (may have been populated since the GET)
+    cache_key = (addr_int,)
+    cached_lines = _decompile_cache.get("decompile_function_with_angr", cache_key)
+    if cached_lines is not None:
+        meta = _decompile_meta.get(cache_key, {})
+        renamed_lines = apply_function_renames_to_lines(cached_lines)
+        renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(addr_int))
+        display_name = get_display_name(hex(addr_int), meta.get("function_name", "unknown"))
+        return {
+            "cached": True,
+            "function_name": display_name,
+            "address": meta.get("address", hex(addr_int)),
+            "lines": renamed_lines,
+            "line_count": len(renamed_lines),
+        }
+
+    # Resolve function and decompile
+    project, cfg = st.get_angr_snapshot()
+    if project is None:
+        return {"cached": False, "error": "angr project not initialized"}
+
+    if cfg is not None:
+        addr_to_use = addr_int
+        if addr_to_use not in cfg.functions:
+            if (st.pe_object
+                    and hasattr(st.pe_object, 'OPTIONAL_HEADER')
+                    and st.pe_object.OPTIONAL_HEADER):
+                image_base = st.pe_object.OPTIONAL_HEADER.ImageBase
+                potential_va = addr_int + image_base
+                if potential_va in cfg.functions:
+                    addr_to_use = potential_va
+        try:
+            func = cfg.functions[addr_to_use]
+        except KeyError:
+            return {"cached": False, "error": f"No function found at {hex(addr_int)}"}
+        decompiler_cfg = cfg.model
+    else:
+        try:
+            local_cfg = _build_region_cfg(project, addr_int)
+        except Exception as e:
+            return {"cached": False, "error": f"Failed to build local CFG: {e}"}
+        addr_to_use = addr_int
+        if addr_to_use not in local_cfg.functions:
+            if (st.pe_object
+                    and hasattr(st.pe_object, 'OPTIONAL_HEADER')
+                    and st.pe_object.OPTIONAL_HEADER):
+                image_base = st.pe_object.OPTIONAL_HEADER.ImageBase
+                potential_va = addr_int + image_base
+                if potential_va in local_cfg.functions:
+                    addr_to_use = potential_va
+        try:
+            func = local_cfg.functions[addr_to_use]
+        except KeyError:
+            return {"cached": False, "error": f"No function found at {hex(addr_int)} in local CFG"}
+        decompiler_cfg = local_cfg.model
+
+    try:
+        dec = project.analyses.Decompiler(func, cfg=decompiler_cfg)
+        if not dec.codegen:
+            return {"cached": False, "error": "Decompilation produced no code"}
+    except Exception as e:
+        return {"cached": False, "error": f"Decompilation failed: {e}"}
+
+    all_lines = dec.codegen.text.splitlines()
+    _decompile_cache.set("decompile_function_with_angr", cache_key, all_lines)
+    _decompile_meta[cache_key] = {
+        "function_name": func.name,
+        "address": hex(addr_to_use),
+    }
+
+    renamed_lines = apply_function_renames_to_lines(all_lines)
+    renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(addr_int))
+    display_name = get_display_name(hex(addr_int), func.name)
+
+    return {
+        "cached": True,
+        "function_name": display_name,
+        "address": hex(addr_to_use),
+        "lines": renamed_lines,
+        "line_count": len(renamed_lines),
+    }
 
 
 def _detect_phase(st) -> str:
