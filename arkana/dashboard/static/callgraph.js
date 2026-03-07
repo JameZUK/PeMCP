@@ -10,6 +10,7 @@ var _marchingAntsRAF = null;
 var _marchingAntsOffset = 0;
 var _minimapDebounce = null;
 var _searchDebounce = null;
+var _pendingFocusAddr = null;
 
 /* ========== UTILITIES ========== */
 
@@ -770,6 +771,22 @@ function loadGraph() {
         if (statsEl) {
             statsEl.textContent = data.nodes.length + ' NODES / ' + data.edges.length + ' EDGES';
         }
+        /* Deep-link: center and highlight a specific node after load */
+        if (_pendingFocusAddr && cy) {
+            var focusAddr = _pendingFocusAddr;
+            _pendingFocusAddr = null;
+            setTimeout(function() {
+                var node = cy.getElementById(focusAddr);
+                if (node && node.length) {
+                    cy.animate({center: {eles: node}, zoom: 2}, {duration: 400});
+                    setTimeout(function() {
+                        _selectedNode = node;
+                        highlightNeighborhood(node);
+                        showNodeDetails(node);
+                    }, 450);
+                }
+            }, 300);
+        }
     }).catch(function(err) {
         console.error('[callgraph] loadGraph fetch error:', err);
         var cyEl = document.getElementById('cy');
@@ -1520,4 +1537,11 @@ document.addEventListener('DOMContentLoaded', function() {
     /* Decompile overlay close */
     var btnDecompClose = document.getElementById('decompile-overlay-close');
     if (btnDecompClose) btnDecompClose.addEventListener('click', hideDecompilePanel);
+
+    /* Deep-link: ?focus=0xADDR centers and highlights the target node */
+    var focusParam = new URLSearchParams(window.location.search).get('focus');
+    if (focusParam) {
+        window.history.replaceState({}, '', window.location.pathname);
+        _pendingFocusAddr = focusParam;
+    }
 });

@@ -60,6 +60,7 @@ function reloadFunctions() {
             html += '<td><span class="badge badge-' + f.triage_status + '">' + f.triage_status.toUpperCase() + '</span></td>';
             html += '<td class="triage-btns">';
             var safeAddr = escapeHtml(f.address);
+            html += '<a class="btn-triage btn-graph" href="/dashboard/callgraph?focus=' + encodeURIComponent(f.address) + '" title="View in call graph">GRAPH</a>';
             html += '<button class="btn-triage btn-analysis" data-addr="' + safeAddr + '" title="Cross-references &amp; analysis">XREF</button>';
             html += '<button class="btn-triage btn-decompile' + (f.is_decompiled ? ' active' : '') + '" data-addr="' + safeAddr + '" title="Decompile">DEC</button>';
             html += '<button class="btn-triage btn-flag' + (f.triage_status === 'flagged' ? ' active' : '') + '" data-addr="' + safeAddr + '" data-status="flagged">FLAG</button>';
@@ -197,6 +198,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 setTriage(btn.dataset.addr, status);
             }
         });
+    }
+
+    // Deep-link: ?highlight=0xADDR scrolls to and flashes the target row
+    var hlParam = new URLSearchParams(window.location.search).get('highlight');
+    if (hlParam) {
+        window.history.replaceState({}, '', window.location.pathname);
+        setTimeout(function() { navigateToFunction(hlParam); }, 300);
     }
 });
 

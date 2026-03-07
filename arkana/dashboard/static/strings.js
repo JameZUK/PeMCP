@@ -30,7 +30,7 @@ function reloadStrings() {
         renderPagination(data);
     }).catch(function() {
         document.getElementById('str-tbody').innerHTML =
-            '<tr><td colspan="6" class="empty-msg">Failed to load strings.</td></tr>';
+            '<tr><td colspan="7" class="empty-msg">Failed to load strings.</td></tr>';
     });
 }
 
@@ -38,7 +38,7 @@ function renderStringTable(data) {
     var tbody = document.getElementById('str-tbody');
     var strings = data.strings || [];
     if (!strings.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">No matching strings.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No matching strings.</td></tr>';
         return;
     }
     var html = '';
@@ -61,6 +61,11 @@ function renderStringTable(data) {
         html += '<td><span class="badge ' + badgeClass + '">' + s.type + '</span></td>';
         html += '<td class="str-content" title="' + strEscapeHtml(s.string) + '">' + strEscapeHtml(truncated) + '</td>';
         html += '<td>' + catBadge + '</td>';
+        html += '<td>';
+        if (s.func_addr) {
+            html += '<a href="/dashboard/functions?highlight=' + encodeURIComponent(s.func_addr) + '" class="func-link">&rarr; ' + strEscapeHtml(s.func_name || s.func_addr) + '</a>';
+        }
+        html += '</td>';
         html += '<td><button class="btn-copy btn-triage" data-str="' + i + '" title="Copy to clipboard">CPY</button></td>';
         html += '</tr>';
     }

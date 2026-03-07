@@ -1,4 +1,6 @@
 """Functions to extract dashboard-ready data from AnalyzerState."""
+import bisect
+import copy
 import datetime
 import logging
 import os
@@ -46,6 +48,335 @@ def _get_state():
             if getattr(st, "active_tool", None) is not None:
                 return st
     return _default_state
+
+
+_func_lookup_cache: Dict[int, tuple] = {}  # id(st) -> (expire_time, entries, starts)
+_FUNC_LOOKUP_TTL = 5  # seconds
+_MAX_FUNC_LOOKUP_CACHE = 4  # max state objects to cache
+
+# Cache for overview enrichment (capa/YARA/FLOSS function link resolution)
+_overview_enrichment_cache: Dict[int, tuple] = {}  # id(st) -> (expire, enriched_data)
+_OVERVIEW_ENRICHMENT_TTL = 10  # seconds — enrichment data changes slowly
+
+
+def _build_function_lookup(st) -> tuple:
+    """Build a sorted list of (start, end, addr_hex, name) from angr KB + renames.
+
+    Results are cached per-state for ``_FUNC_LOOKUP_TTL`` seconds to avoid
+    rebuilding on every dashboard poll (overview, strings, timeline, etc.).
+
+    Returns ``(entries, starts)`` where *starts* is a pre-computed list of
+    start addresses for use with `bisect`.  Returns ``([], [])`` if angr
+    is unavailable or no CFG loaded.
+    """
+    now = time.time()
+    cache_key = id(st)
+    cached = _func_lookup_cache.get(cache_key)
+    if cached is not None:
+        expire_time, cached_fp, entries, starts = cached
+        if now < expire_time and cached_fp == st.filepath:
+            return entries, starts
+
+    empty = ([], [])
+    if st.angr_project is None or st.angr_cfg is None:
+        _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
+        return empty
+    try:
+        kb = st.angr_project.kb
+        if not hasattr(kb, "functions"):
+            _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
+            return empty
+    except Exception:
+        _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
+        return empty
+
+    renames = st.get_renames().get("functions", {})
+    entries = []
+    for addr, func in kb.functions.items():
+        addr_hex = hex(addr)
+        name = renames.get(addr_hex, func.name or addr_hex)
+        size = func.size or 1
+        entries.append((addr, addr + size, addr_hex, name))
+    entries.sort(key=lambda e: e[0])
+    starts = [e[0] for e in entries]  # pre-compute for bisect
+
+    # Evict oldest entries if cache grows too large
+    if len(_func_lookup_cache) >= _MAX_FUNC_LOOKUP_CACHE:
+        oldest_key = min(_func_lookup_cache, key=lambda k: _func_lookup_cache[k][0])
+        del _func_lookup_cache[oldest_key]
+
+    _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, entries, starts)
+    return entries, starts
+
+
+def _find_containing_function(func_lookup: tuple, va: int):
+    """Binary search for the function containing virtual address *va*.
+
+    *func_lookup* is a ``(entries, starts)`` tuple from
+    ``_build_function_lookup``.  Returns ``(addr_hex, name)`` or ``None``.
+    """
+    entries, starts = func_lookup
+    if not entries:
+        return None
+    idx = bisect.bisect_right(starts, va) - 1
+    if idx < 0:
+        return None
+    entry = entries[idx]
+    if entry[0] <= va < entry[1]:
+        return (entry[2], entry[3])
+    return None
+
+
+def _file_offset_to_va(st, file_offset: int):
+    """Convert a PE file offset to a virtual address using pefile.
+
+    Returns the VA as an ``int``, or ``None`` on failure.
+    """
+    pe = st.pe_object
+    if pe is None:
+        return None
+    try:
+        if not hasattr(pe, "get_rva_from_offset") or not hasattr(pe, "OPTIONAL_HEADER"):
+            return None
+        rva = pe.get_rva_from_offset(file_offset)
+        if rva is None:
+            return None
+        return rva + pe.OPTIONAL_HEADER.ImageBase
+    except Exception:
+        return None
+
+
+def _is_executable_va(st, va: int) -> bool:
+    """Check if a VA falls within a section with execute permission."""
+    pe = st.pe_object
+    if pe is None:
+        return False
+    try:
+        image_base = pe.OPTIONAL_HEADER.ImageBase
+        rva = va - image_base
+        for section in pe.sections:
+            sec_start = section.VirtualAddress
+            sec_end = sec_start + max(section.Misc_VirtualSize, section.SizeOfRawData)
+            if sec_start <= rva < sec_end:
+                return bool(section.Characteristics & 0x20000000)  # IMAGE_SCN_MEM_EXECUTE
+        return False  # not in any section (e.g. PE header)
+    except Exception:
+        return False
+
+
+def _apply_overview_enrichment(st, pe_data: dict, floss: dict, binary_summary: dict):
+    """Resolve function links for capa, YARA, FLOSS, and high-value strings.
+
+    Results are cached per-state for ``_OVERVIEW_ENRICHMENT_TTL`` seconds
+    to avoid rebuilding VA maps on every dashboard poll.
+    """
+    func_lookup = _build_function_lookup(st)
+    has_funcs = bool(func_lookup[0])
+
+    # Check enrichment cache (includes file hash to prevent cross-file pollution)
+    now = time.time()
+    cache_key = id(st)
+    cached = _overview_enrichment_cache.get(cache_key)
+    func_count = len(func_lookup[0]) if has_funcs else 0
+    floss_strs = floss.get("strings", {}) if isinstance(floss, dict) else {}
+    file_hash = pe_data.get("file_hashes", {}).get("sha256", "") if isinstance(pe_data, dict) else ""
+    version = (
+        file_hash,
+        func_count,
+        len(binary_summary.get("capabilities", [])),
+        len(binary_summary.get("yara_matches", [])),
+        len(floss_strs.get("decoded_strings", [])) if isinstance(floss_strs, dict) else 0,
+        len(floss_strs.get("stack_strings", [])) if isinstance(floss_strs, dict) else 0,
+        len(binary_summary.get("high_value_strings", [])),
+        len(binary_summary.get("ioc_urls", [])),
+        len(binary_summary.get("ioc_ips", [])),
+        len(binary_summary.get("ioc_domains", [])),
+    )
+    if cached is not None:
+        expire_time, cached_version, cached_data = cached
+        if now < expire_time and cached_version == version:
+            for key in ("capabilities", "yara_matches", "floss_top_decoded",
+                        "floss_top_stack", "high_value_strings",
+                        "ioc_urls", "ioc_ips", "ioc_domains"):
+                if key in cached_data:
+                    binary_summary[key] = cached_data[key]
+            return
+
+    # --- Compute enrichment ---
+
+    # Helper: resolve VA to function name, with raw-VA fallback
+    def _resolve_va(va_int, va_hex=None):
+        """Returns (func_addr, func_name) or None."""
+        hit = _find_containing_function(func_lookup, va_int) if has_funcs else None
+        if hit:
+            return hit
+        # Raw VA fallback only when angr has no functions (e.g. .NET)
+        if not has_funcs:
+            if va_hex is None:
+                va_hex = hex(va_int)
+            return (va_hex, va_hex)
+        return None
+
+    # Capa capabilities → match addresses → containing function
+    if binary_summary.get("capabilities") and 'capa_analysis' in pe_data:
+        capa_results = pe_data['capa_analysis']
+        if isinstance(capa_results, dict) and isinstance(capa_results.get('results'), dict):
+            capa_rules = capa_results['results'].get('rules', {})
+            for cap in binary_summary["capabilities"]:
+                cap_name = cap.get("capability", "")
+                for _rule_id, rule_details in capa_rules.items():
+                    meta = rule_details.get('meta', {})
+                    if meta.get('name') == cap_name:
+                        matches = rule_details.get('matches')
+                        first_addr = None
+                        if isinstance(matches, dict) and matches:
+                            first_addr = next(iter(matches))
+                        elif isinstance(matches, list) and matches:
+                            item = matches[0]
+                            if isinstance(item, list) and item and isinstance(item[0], dict):
+                                first_addr = item[0].get("value")
+                        if isinstance(first_addr, int):
+                            cap["match_addr"] = hex(first_addr)
+                            resolved = _resolve_va(first_addr)
+                            if resolved:
+                                cap["func_addr"] = resolved[0]
+                                cap["func_name"] = resolved[1]
+                        break
+
+    # YARA matches → first string offset → file offset → VA → function
+    if binary_summary.get("yara_matches"):
+        raw_yara = pe_data.get('yara_matches', [])
+        yara_by_rule = {}
+        if isinstance(raw_yara, list):
+            for ym in raw_yara:
+                if isinstance(ym, dict):
+                    yara_by_rule[ym.get('rule', ym.get('name', ''))] = ym
+        for ym_summary in binary_summary["yara_matches"]:
+            raw = yara_by_rule.get(ym_summary.get("rule"))
+            if not raw:
+                continue
+            strings = raw.get("strings", [])
+            if not isinstance(strings, list) or not strings:
+                continue
+            first_str = strings[0]
+            if not isinstance(first_str, dict):
+                continue
+            offset_hex = first_str.get("offset")
+            if not offset_hex:
+                continue
+            try:
+                file_offset = int(offset_hex, 16)
+            except (ValueError, TypeError):
+                continue
+            va = _file_offset_to_va(st, file_offset)
+            if va is not None and _is_executable_va(st, va):
+                ym_summary["match_addr"] = hex(va)
+                resolved = _resolve_va(va)
+                if resolved:
+                    ym_summary["func_addr"] = resolved[0]
+                    ym_summary["func_name"] = resolved[1]
+
+    # Build combined FLOSS string→VA map (used for FLOSS top, high-value, and IOC enrichment)
+    floss_string_va_map = {}  # string_text → VA hex
+    if isinstance(floss, dict):
+        floss_strings_data = floss.get("strings", {})
+        if isinstance(floss_strings_data, dict):
+            for s in floss_strings_data.get("decoded_strings", []):
+                if isinstance(s, dict) and s.get("decoding_routine_va"):
+                    floss_string_va_map[s.get("string", "")] = s["decoding_routine_va"]
+            for s in floss_strings_data.get("stack_strings", []):
+                if isinstance(s, dict) and s.get("function_va"):
+                    floss_string_va_map.setdefault(s.get("string", ""), s["function_va"])
+            for s in floss_strings_data.get("static_strings", []):
+                if not isinstance(s, dict):
+                    continue
+                text = s.get("string", "")
+                if text in floss_string_va_map:
+                    continue
+                refs = s.get("references")
+                if isinstance(refs, list) and refs:
+                    first_ref = refs[0]
+                    if isinstance(first_ref, str):
+                        floss_string_va_map[text] = first_ref
+                        continue
+                # Fallback: convert file offset → VA for strings without references
+                offset_hex = s.get("offset")
+                if offset_hex:
+                    try:
+                        file_off = int(offset_hex, 16)
+                        va = _file_offset_to_va(st, file_off)
+                        if va is not None:
+                            floss_string_va_map[text] = hex(va)
+                    except (ValueError, TypeError):
+                        pass
+
+    # Helper: enrich a string with function link from the FLOSS VA map
+    def _enrich_from_floss(text, entry_dict):
+        va_hex = floss_string_va_map.get(text)
+        if va_hex:
+            try:
+                va_int = int(va_hex, 16)
+                resolved = _resolve_va(va_int, va_hex)
+                if resolved:
+                    entry_dict["func_addr"] = resolved[0]
+                    entry_dict["func_name"] = resolved[1]
+            except (ValueError, TypeError):
+                pass
+
+    # FLOSS top decoded/stack → enrich with function links
+    if isinstance(floss, dict):
+        if binary_summary.get("floss_top_decoded"):
+            enriched_decoded = []
+            for item in binary_summary["floss_top_decoded"]:
+                full_text = item.get("_full", item.get("string", "")) if isinstance(item, dict) else str(item)
+                display = item.get("string", full_text[:120]) if isinstance(item, dict) else str(item)[:120]
+                entry = {"string": display}
+                _enrich_from_floss(full_text, entry)
+                enriched_decoded.append(entry)
+            binary_summary["floss_top_decoded"] = enriched_decoded
+
+        if binary_summary.get("floss_top_stack"):
+            enriched_stack = []
+            for item in binary_summary["floss_top_stack"]:
+                full_text = item.get("_full", item.get("string", "")) if isinstance(item, dict) else str(item)
+                display = item.get("string", full_text[:120]) if isinstance(item, dict) else str(item)[:120]
+                entry = {"string": display}
+                _enrich_from_floss(full_text, entry)
+                enriched_stack.append(entry)
+            binary_summary["floss_top_stack"] = enriched_stack
+
+    # High-value strings → cross-ref with FLOSS for function VAs
+    if binary_summary.get("high_value_strings"):
+        for hv in binary_summary["high_value_strings"]:
+            _enrich_from_floss(hv.get("_full", hv.get("string", "")), hv)
+
+    # Network IOCs → cross-ref with FLOSS for function VAs
+    if floss_string_va_map or binary_summary.get("ioc_urls") or binary_summary.get("ioc_ips") or binary_summary.get("ioc_domains"):
+        for ioc_key in ("ioc_urls", "ioc_ips", "ioc_domains"):
+            items = binary_summary.get(ioc_key, [])
+            if not items:
+                continue
+            enriched = []
+            for ioc in items:
+                if isinstance(ioc, str):
+                    entry = {"value": ioc}
+                    _enrich_from_floss(ioc, entry)
+                    enriched.append(entry)
+                elif isinstance(ioc, dict):
+                    _enrich_from_floss(ioc.get("value", ""), ioc)
+                    enriched.append(ioc)
+                else:
+                    enriched.append(ioc)
+            binary_summary[ioc_key] = enriched
+
+    # Cache the enriched data (deep-copy the lists we modified)
+    enriched_data = {}
+    for key in ("capabilities", "yara_matches", "floss_top_decoded",
+                "floss_top_stack", "high_value_strings",
+                "ioc_urls", "ioc_ips", "ioc_domains"):
+        if key in binary_summary:
+            enriched_data[key] = copy.deepcopy(binary_summary[key])
+    _overview_enrichment_cache[cache_key] = (now + _OVERVIEW_ENRICHMENT_TTL, version, enriched_data)
 
 
 def get_overview_data() -> Dict[str, Any]:
@@ -216,6 +547,7 @@ def get_overview_data() -> Dict[str, Any]:
             binary_summary["high_value_strings"] = [
                 {
                     "string": s.get("string", "")[:120],
+                    "_full": s.get("string", ""),
                     "category": s.get("category", ""),
                     "sifter_score": s.get("sifter_score", 0),
                 }
@@ -377,21 +709,29 @@ def get_overview_data() -> Dict[str, Any]:
             top_decoded = []
             for s in decoded[:10]:
                 if isinstance(s, dict):
-                    top_decoded.append(s.get("string", str(s))[:120])
+                    full = s.get("string", str(s))
+                    top_decoded.append({"string": full[:120], "_full": full})
                 elif isinstance(s, str):
-                    top_decoded.append(s[:120])
+                    top_decoded.append({"string": s[:120], "_full": s})
             top_stack = []
             for s in stack[:10]:
                 if isinstance(s, dict):
-                    top_stack.append(s.get("string", str(s))[:120])
+                    full = s.get("string", str(s))
+                    top_stack.append({"string": full[:120], "_full": full})
                 elif isinstance(s, str):
-                    top_stack.append(s[:120])
+                    top_stack.append({"string": s[:120], "_full": s})
             if top_decoded:
                 binary_summary["floss_top_decoded"] = top_decoded
             if top_stack:
                 binary_summary["floss_top_stack"] = top_stack
         floss_status = floss.get("status", "")
         binary_summary["floss_status"] = floss_status
+
+    # --- Enrich items with function links (cached) ---
+    try:
+        _apply_overview_enrichment(st, pe_data, floss, binary_summary)
+    except Exception:
+        pass  # enrichment is best-effort; overview must still render
 
     # Triage flags from dashboard
     triage_status = st.get_all_triage_snapshot()
@@ -402,13 +742,26 @@ def get_overview_data() -> Dict[str, Any]:
 
     # Recent notes (last 5)
     recent_notes = []
+    note_func_lookup = _build_function_lookup(st)
     for n in reversed(notes[-5:]):
-        recent_notes.append({
+        note_entry = {
             "category": n.get("category", "general"),
             "content": n.get("content", "")[:200],
             "address": n.get("address"),
             "timestamp": (n.get("created_at", "") or "")[:19],
-        })
+        }
+        # Resolve note address to containing function
+        addr_str = n.get("address")
+        if addr_str and note_func_lookup[0]:
+            try:
+                addr_int = int(addr_str, 16)
+                hit = _find_containing_function(note_func_lookup, addr_int)
+                if hit:
+                    note_entry["func_addr"] = hit[0]
+                    note_entry["func_name"] = hit[1]
+            except (ValueError, TypeError):
+                pass
+        recent_notes.append(note_entry)
 
     # Renames count
     renames = st.get_renames()
@@ -543,7 +896,7 @@ def get_functions_data(sort_by: str = "address",
     if filter_triage and filter_triage != "all":
         functions = [f for f in functions if f["triage_status"] == filter_triage]
     if min_score > 0:
-        functions = [f for f in functions if f.get("risk_score", 0) >= min_score]
+        functions = [f for f in functions if f.get("score", 0) >= min_score]
     if search:
         search_lower = search[:500].lower()
         functions = [f for f in functions if search_lower in f["name"].lower() or search_lower in f["address"].lower()]
@@ -752,6 +1105,21 @@ def get_imports_data(search: str = "") -> Dict[str, Any]:
     else:
         import_categories = {}
 
+    # Enrich export addresses with function links
+    func_lookup = _build_function_lookup(st)
+    if func_lookup[0]:
+        for exp in exports:
+            addr = exp.get("address", "")
+            if addr:
+                try:
+                    va_int = int(addr, 16) if isinstance(addr, str) else int(addr)
+                    hit = _find_containing_function(func_lookup, va_int)
+                    if hit:
+                        exp["func_addr"] = hit[0]
+                        exp["func_name"] = hit[1]
+                except (ValueError, TypeError):
+                    pass
+
     return {
         "imports": import_dlls,
         "total_import_dlls": len(import_dlls),
@@ -836,7 +1204,8 @@ def get_timeline_data(limit: int = 100) -> List[Dict[str, Any]]:
             "parameters": display_params,
         })
 
-    # Notes
+    # Notes — enrich with function links
+    func_lookup = _build_function_lookup(st)
     for n in st.get_notes():
         ts = n.get("created_at", "")
         # Parse ISO timestamp to epoch for sorting
@@ -846,14 +1215,26 @@ def get_timeline_data(limit: int = 100) -> List[Dict[str, Any]]:
             epoch = dt.timestamp()
         except (ValueError, TypeError, AttributeError):
             pass
-        entries.append({
+        note_entry: Dict[str, Any] = {
             "type": "note",
             "timestamp": ts,
             "timestamp_epoch": epoch,
             "name": n.get("category", "note"),
             "summary": n.get("content", "")[:200],
             "duration_ms": 0,
-        })
+            "address": n.get("address", ""),
+        }
+        addr_str = n.get("address")
+        if addr_str and func_lookup[0]:
+            try:
+                addr_int = int(addr_str, 16)
+                hit = _find_containing_function(func_lookup, addr_int)
+                if hit:
+                    note_entry["func_addr"] = hit[0]
+                    note_entry["func_name"] = hit[1]
+            except (ValueError, TypeError):
+                pass
+        entries.append(note_entry)
 
     # Sort by timestamp
     entries.sort(key=lambda e: e["timestamp_epoch"])
@@ -877,9 +1258,23 @@ def get_timeline_data(limit: int = 100) -> List[Dict[str, Any]]:
 
 
 def get_notes_data(category: Optional[str] = None) -> List[Dict[str, Any]]:
-    """All notes with optional category filter."""
+    """All notes with optional category filter, enriched with function links."""
     st = _get_state()
-    return st.get_notes(category=category)
+    notes = st.get_notes(category=category)
+    func_lookup = _build_function_lookup(st)
+    if func_lookup[0]:
+        for n in notes:
+            addr_str = n.get("address")
+            if addr_str:
+                try:
+                    addr_int = int(addr_str, 16)
+                    hit = _find_containing_function(func_lookup, addr_int)
+                    if hit:
+                        n["func_addr"] = hit[0]
+                        n["func_name"] = hit[1]
+                except (ValueError, TypeError):
+                    pass
+    return notes
 
 
 def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
@@ -1149,6 +1544,7 @@ def get_strings_data(
                 address = str(item.get("string_va", ""))
                 dec_va = item.get("decoding_routine_va", item.get("decoder_va", ""))
                 if dec_va:
+                    function_va = str(dec_va)
                     extra = f"decoder: {dec_va}"
             elif type_label == "TIGHT":
                 address = str(item.get("address_or_offset", ""))
@@ -1171,6 +1567,25 @@ def get_strings_data(
         type_counts[type_label] = count
 
     total_unfiltered = len(all_strings)
+
+    # Enrich strings that have function_va with func_addr/func_name
+    func_lookup = _build_function_lookup(st)
+    for item in all_strings:
+        fva = item.get("function_va", "")
+        if not fva:
+            continue
+        try:
+            va_int = int(fva, 16)
+            hit = _find_containing_function(func_lookup, va_int) if func_lookup[0] else None
+            if hit:
+                item["func_addr"] = hit[0]
+                item["func_name"] = hit[1]
+            else:
+                # Fallback: use raw VA as link (e.g. .NET binaries without angr functions)
+                item["func_addr"] = fva if fva.startswith("0x") else hex(va_int)
+                item["func_name"] = fva if fva.startswith("0x") else hex(va_int)
+        except (ValueError, TypeError):
+            pass
 
     # Filters
     search_lower = search[:500].lower().strip() if search else ""

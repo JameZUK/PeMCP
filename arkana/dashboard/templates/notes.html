@@ -28,7 +28,9 @@
         <div class="note-card">
             <div class="note-header">
                 <span class="badge badge-cat-{{ n.category }}">{{ n.category|upper }}</span>
-                {% if n.address %}
+                {% if n.func_addr %}
+                <a href="/dashboard/functions?highlight={{ n.func_addr }}" class="func-link mono note-addr">{{ n.address }}</a>
+                {% elif n.address %}
                 <span class="mono note-addr">{{ n.address }}</span>
                 {% endif %}
                 {% if n.tool_name %}

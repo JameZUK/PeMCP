@@ -1900,6 +1900,74 @@ details[open] > .import-dll-header::before {
     background: rgba(0, 255, 65, 0.08);
 }
 
+/* === FUNCTION LINKS (overview/notes → functions page) === */
+
+.func-link {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 10px;
+    color: var(--primary-dim);
+    text-decoration: none;
+    margin-left: 6px;
+    letter-spacing: 0.5px;
+    transition: color 0.15s, text-shadow 0.15s;
+}
+.func-link:hover {
+    color: var(--primary);
+    text-shadow: 0 0 4px var(--primary), 0 0 8px rgba(0, 255, 65, 0.3);
+}
+
+/* === MINI TABLE (scrollable string+func tables in overview) === */
+
+.mini-table-wrap {
+    max-height: 260px;
+    overflow-y: auto;
+    border: 1px solid var(--primary-ghost);
+    border-radius: 2px;
+    margin-top: 4px;
+}
+.mini-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+.mini-table tr:hover {
+    background: rgba(0, 255, 65, 0.04);
+}
+.mini-table td {
+    padding: 3px 6px;
+    border-bottom: 1px solid rgba(0, 255, 65, 0.06);
+    font-size: 11px;
+    vertical-align: top;
+}
+.mini-table-str {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'Courier New', Courier, monospace;
+}
+.mini-table-func {
+    width: 120px;
+    white-space: nowrap;
+    text-align: right;
+}
+.mini-table-func .func-link {
+    margin-left: 0;
+}
+
+/* === GRAPH BUTTON === */
+
+.btn-graph {
+    border-color: var(--primary-ghost) !important;
+    color: var(--primary-muted) !important;
+    text-decoration: none;
+    display: inline-block;
+    text-align: center;
+}
+.btn-graph:hover {
+    border-color: var(--primary-dim) !important;
+    color: var(--primary) !important;
+}
+
 /* === ANALYSIS BUTTON === */
 
 .btn-analysis {
@@ -1963,6 +2031,8 @@ details[open] > .import-dll-header::before {
 
 .decompile-overlay .decompile-code {
     flex: 1;
+    min-height: 0;
+    max-height: none;
     overflow: auto;
     padding: 10px 12px;
     font-family: 'Courier New', Courier, monospace;

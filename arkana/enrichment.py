@@ -427,6 +427,9 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
         _enrichment_keys = []
 
         # Store cached results in pe_data for cache persistence
+        if state._cached_triage:
+            state.pe_data['_cached_triage'] = state._cached_triage
+            _enrichment_keys.append('_cached_triage')
         if state._cached_classification:
             state.pe_data['_cached_classification'] = state._cached_classification
             _enrichment_keys.append('_cached_classification')

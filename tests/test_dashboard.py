@@ -426,8 +426,8 @@ class TestFlossDecodedStrings:
         try:
             data = get_overview_data()
             bs = data["binary_summary"]
-            assert bs["floss_top_decoded"] == ["decoded_payload"]
-            assert bs["floss_top_stack"] == ["stack_secret"]
+            assert bs["floss_top_decoded"] == [{"string": "decoded_payload"}]
+            assert bs["floss_top_stack"] == [{"string": "stack_secret"}]
         finally:
             _default_state.pe_data = old_pd
             _default_state.filepath = old_fp
