@@ -368,19 +368,19 @@ class TestDecompileStateApi:
     def test_get_decompiled_code_with_cache(self):
         from arkana.dashboard.state_api import get_decompiled_code
         try:
-            from arkana.mcp.tools_angr import _decompile_cache, _decompile_meta
+            from arkana.mcp.tools_angr import _decompile_meta
         except ImportError:
             pytest.skip("angr tools not importable")
         # Inject a cached decompilation
         cache_key = (0x401000,)
-        _decompile_cache.set("decompile_function_with_angr", cache_key, [
-            "void test_func(void) {",
-            "    return;",
-            "}",
-        ])
         _decompile_meta[cache_key] = {
             "function_name": "test_func",
             "address": "0x401000",
+            "lines": [
+                "void test_func(void) {",
+                "    return;",
+                "}",
+            ],
         }
         try:
             result = get_decompiled_code("0x401000")
@@ -389,9 +389,6 @@ class TestDecompileStateApi:
             assert result["line_count"] == 3
             assert "void test_func" in result["lines"][0]
         finally:
-            bucket = _decompile_cache._store.get("decompile_function_with_angr")
-            if bucket:
-                bucket.pop(cache_key, None)
             _decompile_meta.pop(cache_key, None)
 
 

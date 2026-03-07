@@ -10,6 +10,7 @@ import datetime
 import logging
 import time
 import threading
+from collections import deque
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger("Arkana")
@@ -107,6 +108,22 @@ class AnalyzerState:
         self._cached_triage: Optional[Dict[str, Any]] = None
         self._cached_function_scores: Optional[List[Dict[str, Any]]] = None
         self.last_digest_timestamp: float = 0.0
+
+        # Enrichment cached results (populated by background auto-enrichment)
+        self._cached_classification: Optional[Dict[str, Any]] = None
+        self._cached_similarity_hashes: Optional[Dict[str, Any]] = None
+        self._cached_mitre_mapping: Optional[Dict[str, Any]] = None
+        self._cached_iocs: Optional[Dict[str, Any]] = None
+
+        # Decompilation priority control (background vs on-demand)
+        self._decompile_lock = threading.Lock()
+        self._decompile_on_demand_waiting: bool = False
+
+        # Enrichment cancellation
+        self._enrichment_cancel = threading.Event()
+
+        # Newly-decompiled notification queue (SSE push to dashboard)
+        self._newly_decompiled: deque = deque(maxlen=200)
 
         # Active tool tracking (for dashboard live status)
         self._active_tool_lock = threading.Lock()

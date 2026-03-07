@@ -36,6 +36,7 @@
                     <th class="sortable" data-sort="name">NAME <span class="sort-arrow"></span></th>
                     <th class="sortable" data-sort="size">SIZE <span class="sort-arrow"></span></th>
                     <th class="sortable" data-sort="complexity">COMPLEXITY <span class="sort-arrow"></span></th>
+                    <th class="sortable" data-sort="score">SCORE <span class="sort-arrow"></span></th>
                     <th class="sortable" data-sort="triage">TRIAGE <span class="sort-arrow"></span></th>
                     <th>ACTIONS</th>
                 </tr>
@@ -46,7 +47,7 @@
                 {% include "partials/_function_row.html" %}
                 {% endfor %}
                 {% else %}
-                <tr><td colspan="6" class="empty-msg">No functions loaded. Load a binary and wait for angr CFG analysis.</td></tr>
+                <tr><td colspan="7" class="empty-msg">No functions loaded. Load a binary and wait for angr CFG analysis.</td></tr>
                 {% endif %}
             </tbody>
         </table>

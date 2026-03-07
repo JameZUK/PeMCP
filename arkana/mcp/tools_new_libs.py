@@ -453,6 +453,46 @@ async def patch_with_assembly(
 #  SIMILARITY HASHING — ssdeep, TLSH
 # ===================================================================
 
+def _compute_similarity_internal(current_state) -> Dict[str, Any]:
+    """Compute similarity hashes synchronously. No MCP overhead."""
+    from arkana.state import set_current_state
+    set_current_state(current_state)
+
+    target = current_state.filepath
+    if not target or not os.path.isfile(target):
+        return {"error": "No file loaded."}
+
+    with open(target, 'rb') as f:
+        data = f.read()
+
+    result: Dict[str, Any] = {"file": target, "size": len(data)}
+
+    if PPDEEP_AVAILABLE:
+        try:
+            result["ssdeep"] = ppdeep.hash(data)
+        except Exception as e:
+            result["ssdeep_error"] = str(e)
+    else:
+        result["ssdeep"] = "ppdeep not installed (pip install ppdeep)"
+
+    if TLSH_AVAILABLE:
+        try:
+            h = tlsh.hash(data)
+            result["tlsh"] = h if h else "data too small for TLSH"
+        except Exception as e:
+            result["tlsh_error"] = str(e)
+    else:
+        result["tlsh"] = "tlsh not installed (pip install py-tlsh)"
+
+    if current_state.pe_object:
+        try:
+            result["imphash"] = current_state.pe_object.get_imphash()
+        except Exception:
+            pass
+
+    return result
+
+
 @tool_decorator
 async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -463,6 +503,11 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
         file_path: Optional path to a file. If None, uses the loaded file.
     """
     await ctx.info("Computing similarity hashes")
+
+    # Return cached result if enrichment already computed hashes
+    if not file_path and state._cached_similarity_hashes:
+        return state._cached_similarity_hashes
+
     target = file_path or state.filepath
     if not target or not os.path.isfile(target):
         raise RuntimeError("No file specified and no file is loaded.")
@@ -502,6 +547,8 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
         return result
 
     result = await asyncio.to_thread(_compute)
+    if not file_path:
+        state._cached_similarity_hashes = result
     return await _check_mcp_response_size(ctx, result, "compute_similarity_hashes")
 
 

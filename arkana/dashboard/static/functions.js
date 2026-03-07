@@ -39,7 +39,7 @@ function reloadFunctions() {
         var tbody = document.getElementById('func-tbody');
         document.getElementById('func-count').textContent = data.length;
         if (!data.length) {
-            tbody.innerHTML = '<tr><td colspan="6" class="empty-msg">No matching functions.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No matching functions.</td></tr>';
             return;
         }
         var html = '';
@@ -56,6 +56,7 @@ function reloadFunctions() {
             html += '<td>' + statusTags + escapeHtml(f.name) + noteIndicator + '</td>';
             html += '<td>' + f.size + '</td>';
             html += '<td>' + f.complexity + '</td>';
+            html += '<td>' + f.score + '</td>';
             html += '<td><span class="badge badge-' + f.triage_status + '">' + f.triage_status.toUpperCase() + '</span></td>';
             html += '<td class="triage-btns">';
             var safeAddr = escapeHtml(f.address);
@@ -67,7 +68,7 @@ function reloadFunctions() {
             html += '</td></tr>';
             if (f.has_note && f.notes) {
                 html += '<tr class="note-row">';
-                html += '<td colspan="6"><div class="func-notes">';
+                html += '<td colspan="7"><div class="func-notes">';
                 f.notes.forEach(function(n) {
                     html += '<div class="func-note-text">' + escapeHtml(n) + '</div>';
                 });
@@ -90,6 +91,70 @@ function setTriage(addr, status) {
         body: JSON.stringify({address: addr, status: status})
     }).then(function() { reloadFunctions(); });
 }
+
+// --- Live decompile updates ---
+// Layer 1: Per-row SSE updates (decompile-update event from SSE → CustomEvent)
+document.addEventListener('arkana-decompile-update', function(e) {
+    var addrs = (e.detail && e.detail.addresses) || [];
+    for (var i = 0; i < addrs.length; i++) {
+        var addr = addrs[i];
+        var row = document.querySelector('tr[data-addr="' + addr + '"]');
+        if (!row) continue;
+        // Add DEC badge if not present
+        var nameCell = row.children[1];
+        if (nameCell && !nameCell.querySelector('.badge-explored')) {
+            var badge = document.createElement('span');
+            badge.className = 'badge badge-explored';
+            badge.title = 'Decompiled';
+            badge.textContent = 'DEC';
+            nameCell.insertBefore(badge, nameCell.firstChild);
+            nameCell.insertBefore(document.createTextNode(' '), badge.nextSibling);
+        }
+        // Mark row as explored
+        if (!row.classList.contains('explored')) row.classList.add('explored');
+        // Update DEC button
+        var decBtn = row.querySelector('.btn-decompile');
+        if (decBtn) decBtn.classList.add('active');
+        // Flash animation
+        row.classList.add('decompile-flash');
+        row.addEventListener('animationend', function() {
+            this.classList.remove('decompile-flash');
+        }, {once: true});
+    }
+});
+
+// Layer 2: Table reload when explored count changes (via state-update SSE)
+var _exploredReloadTimer;
+document.addEventListener('arkana-explored-changed', function(e) {
+    // Debounce: reload at most every 3 seconds
+    clearTimeout(_exploredReloadTimer);
+    _exploredReloadTimer = setTimeout(function() {
+        if (typeof reloadFunctions === 'function') reloadFunctions();
+    }, 500);
+});
+
+// Layer 3: Polling fallback — checks every 5s if explored count changed
+// Works even if SSE decompile-update events aren't delivered (e.g. server not restarted)
+(function() {
+    var lastPolledExplored = -1;
+    var pollTimer = setInterval(function() {
+        // Only poll if the functions table exists on this page
+        if (!document.getElementById('func-tbody')) {
+            clearInterval(pollTimer);
+            return;
+        }
+        fetch('/dashboard/api/state')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var count = data.explored_functions || 0;
+                if (lastPolledExplored >= 0 && count > lastPolledExplored) {
+                    reloadFunctions();
+                }
+                lastPolledExplored = count;
+            })
+            .catch(function() {});
+    }, 5000);
+})();
 
 // Bind all event listeners on DOMContentLoaded
 document.addEventListener('DOMContentLoaded', function() {
@@ -245,7 +310,7 @@ function insertDetailPanel(afterRow, addr, startTab) {
     tr.className = 'decompile-row';
     tr.dataset.addr = addr;
     var td = document.createElement('td');
-    td.setAttribute('colspan', '6');
+    td.setAttribute('colspan', '7');
     var panel = document.createElement('div');
     panel.className = 'decompile-panel';
 

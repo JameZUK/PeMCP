@@ -3,6 +3,7 @@
     <td>{% if f.is_renamed %}<span class="badge badge-renamed" title="Renamed">REN</span> {% endif %}{% if f.is_decompiled %}<span class="badge badge-explored" title="Decompiled">DEC</span> {% endif %}{{ f.name }}{% if f.has_note %} <span class="note-indicator" title="Has notes">*</span>{% endif %}</td>
     <td>{{ f.size }}</td>
     <td>{{ f.complexity }}</td>
+    <td>{{ f.score }}</td>
     <td><span class="badge badge-{{ f.triage_status }}">{{ f.triage_status|upper }}</span></td>
     <td class="triage-btns">
         <button class="btn-triage btn-decompile{% if f.is_decompiled %} active{% endif %}" data-addr="{{ f.address }}" title="Decompile">DEC</button>
@@ -13,7 +14,7 @@
 </tr>
 {% if f.has_note %}
 <tr class="note-row">
-    <td colspan="6">
+    <td colspan="7">
         <div class="func-notes">
             {% for note in f.notes %}
             <div class="func-note-text">{{ note }}</div>

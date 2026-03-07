@@ -1921,6 +1921,16 @@ details[open] > .import-dll-header::before {
     animation: highlight-flash 2s ease-out;
 }
 
+/* === DECOMPILE FLASH (live SSE decompile updates) === */
+
+@keyframes decompile-flash {
+    0%   { background-color: rgba(102, 255, 170, 0.3); }
+    100% { background-color: transparent; }
+}
+.decompile-flash {
+    animation: decompile-flash 1.5s ease-out;
+}
+
 /* === DECOMPILE OVERLAY (callgraph page) === */
 
 .decompile-overlay {

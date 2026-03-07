@@ -174,6 +174,30 @@ def _build_csv(iocs: Dict[str, List[str]]) -> str:
 
 
 # ===================================================================
+#  Internal IOC collection (callable from enrichment)
+# ===================================================================
+
+def _collect_iocs_internal(current_state) -> Dict[str, Any]:
+    """Collect structured IOCs synchronously. No MCP overhead."""
+    from arkana.state import set_current_state
+    set_current_state(current_state)
+
+    triage_iocs = _collect_iocs_from_triage()
+    notes_iocs = _collect_iocs_from_notes()
+    merged = _merge_iocs(triage_iocs, notes_iocs)
+    total = sum(len(v) for v in merged.values())
+    sample_name = current_state.filepath.split("/")[-1] if current_state.filepath else "unknown"
+
+    return {
+        "format": "json",
+        "total_iocs": total,
+        "sample": sample_name,
+        "iocs": merged,
+        "categories": {k: len(v) for k, v in merged.items()},
+    }
+
+
+# ===================================================================
 #  Tool: get_iocs_structured
 # ===================================================================
 
@@ -199,6 +223,11 @@ async def get_iocs_structured(
     """
     await ctx.info(f"Aggregating IOCs (format={format})")
     _check_pe_loaded("get_iocs_structured")
+
+    # Return cached result if enrichment already collected IOCs (JSON only)
+    fmt = format.lower()
+    if fmt == "json" and include_file_hashes and state._cached_iocs:
+        return state._cached_iocs
 
     fmt = format.lower()
     if fmt not in ("json", "csv", "stix"):

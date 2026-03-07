@@ -70,6 +70,10 @@ BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT = 60  # seconds per function
 MAX_HEX_PATTERN_TOKENS = 200
 MAX_HEX_PATTERN_MATCHES = 5000
 
+# --- Auto-Enrichment ---
+ENRICHMENT_MAX_DECOMPILE = 100       # max functions to decompile in background sweep
+ENRICHMENT_TIMEOUT = 1800            # overall enrichment timeout (seconds)
+
 # --- FLOSS Fallback Constants ---
 MIN_STR_LEN_FALLBACK_FLOSS = 4
 MAX_FLOSS_ENRICHMENT_STRINGS = 500  # cap xref enrichment of static strings

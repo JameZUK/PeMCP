@@ -47,6 +47,7 @@ function showToast(message, type) {
     var evtSource = null;
     var lastActiveTool = null;
     var lastTaskRunning = 0;
+    var lastExploredFuncs = -1;
     var reconnectDelay = 2000;
     var maxReconnectDelay = 30000;
     var disconnected = false;
@@ -106,6 +107,15 @@ function showToast(message, type) {
         }
         lastTaskRunning = running;
 
+        // Track explored (decompiled) function count — trigger reload when it changes
+        var exploredFuncs = data.explored_functions || 0;
+        if (lastExploredFuncs >= 0 && exploredFuncs !== lastExploredFuncs) {
+            document.dispatchEvent(new CustomEvent('arkana-explored-changed', {
+                detail: {count: exploredFuncs, prev: lastExploredFuncs}
+            }));
+        }
+        lastExploredFuncs = exploredFuncs;
+
         refreshPageElements();
     }
 
@@ -132,6 +142,15 @@ function showToast(message, type) {
             setTimeout(function() {
                 window.location.reload();
             }, 500);
+        });
+
+        evtSource.addEventListener('decompile-update', function(e) {
+            reconnectDelay = 2000;
+            setDisconnected(false);
+            try {
+                var data = JSON.parse(e.data);
+                document.dispatchEvent(new CustomEvent('arkana-decompile-update', {detail: data}));
+            } catch (err) {}
         });
 
         evtSource.onopen = function() {

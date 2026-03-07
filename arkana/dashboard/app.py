@@ -308,7 +308,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         sort_by = request.query_params.get("sort", "address")
-        if sort_by not in ("address", "name", "size", "complexity", "triage"):
+        if sort_by not in ("address", "name", "size", "complexity", "score", "triage"):
             sort_by = "address"
         filter_triage = request.query_params.get("triage", "all")
         if filter_triage not in ("all", "unreviewed", "suspicious", "clean", "flagged"):
@@ -498,6 +498,8 @@ def _create_routes(dashboard_token: str) -> list:
                 last_file_sha256 = seed.get("sha256")
                 last_triage_counts = seed.get("triage_counts", {})
                 last_artifacts_count = seed.get("artifacts_count", 0)
+                last_explored_funcs = seed.get("explored_functions", 0)
+                last_decompiled_addrs: set = set()
                 # Send initial state so browsers confirm the connection immediately
                 try:
                     init_data = json.dumps(seed)
@@ -520,6 +522,7 @@ def _create_routes(dashboard_token: str) -> list:
                         current_sha256 = overview.get("sha256")
                         current_triage = overview.get("triage_counts", {})
                         current_artifacts = overview.get("artifacts_count", 0)
+                        current_explored = overview.get("explored_functions", 0)
                         changed = (
                             current_tools != last_tool_count
                             or current_notes != last_notes_count
@@ -530,6 +533,7 @@ def _create_routes(dashboard_token: str) -> list:
                             or current_triage != last_triage_counts
                             or current_artifacts != last_artifacts_count
                             or current_sha256 != last_file_sha256
+                            or current_explored != last_explored_funcs
                         )
                         if changed:
                             file_changed = (
@@ -545,11 +549,24 @@ def _create_routes(dashboard_token: str) -> list:
                             last_file_sha256 = current_sha256
                             last_triage_counts = current_triage
                             last_artifacts_count = current_artifacts
+                            last_explored_funcs = current_explored
                             data = json.dumps(overview)
                             if file_changed:
                                 yield f"event: file-changed\ndata: {data}\n\n"
                             else:
                                 yield f"event: state-update\ndata: {data}\n\n"
+
+                        # Check for newly-decompiled functions (per-connection tracking)
+                        try:
+                            from arkana.dashboard.state_api import _get_decompiled_addresses
+                            current_decompiled = _get_decompiled_addresses()
+                            new_addrs = current_decompiled - last_decompiled_addrs
+                            if new_addrs:
+                                last_decompiled_addrs = current_decompiled
+                                logger.debug("SSE: emitting decompile-update for %d addrs", len(new_addrs))
+                                yield f"event: decompile-update\ndata: {json.dumps({'addresses': sorted(new_addrs)})}\n\n"
+                        except Exception:
+                            logger.debug("SSE: decompile check error", exc_info=True)
                     except asyncio.CancelledError:
                         return
                     except Exception:

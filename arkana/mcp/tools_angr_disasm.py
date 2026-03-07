@@ -300,6 +300,49 @@ async def get_function_variables(
 
 # ---- FLIRT Signature Matching ---------------------------------
 
+def _identify_library_internal(current_state, limit: int = 200) -> Dict[str, Any]:
+    """Run FLIRT signature matching synchronously. No MCP overhead."""
+    from arkana.state import set_current_state
+    set_current_state(current_state)
+
+    if not ANGR_AVAILABLE or current_state.angr_project is None or current_state.angr_cfg is None:
+        return {"error": "angr CFG not available"}
+
+    _ensure_project_and_cfg()
+    names_before = {addr: f.name for addr, f in current_state.angr_cfg.functions.items()}
+
+    try:
+        import angr.flirt
+        if not angr.flirt.FLIRT_SIGNATURES_BY_ARCH:
+            sig_dirs = [
+                "/usr/local/lib/python3.11/site-packages/floss/sigs/",
+                "/usr/local/share/flirt_signatures/",
+            ]
+            for sd in sig_dirs:
+                if os.path.isdir(sd):
+                    try:
+                        angr.flirt.load_signatures(sd)
+                    except Exception:
+                        pass
+        current_state.angr_project.analyses.Flirt()
+    except Exception as e:
+        return {"error": f"FLIRT analysis failed: {e}"}
+
+    identified = []
+    for addr, func in current_state.angr_cfg.functions.items():
+        old_name = names_before.get(addr, "")
+        if func.name != old_name and not func.name.startswith("sub_"):
+            identified.append({
+                "address": hex(addr),
+                "identified_name": func.name,
+                "previous_name": old_name,
+            })
+        if len(identified) >= limit:
+            break
+
+    return {"total_identified": len(identified), "functions": identified}
+
+
 @tool_decorator
 async def identify_library_functions(
     ctx: Context,
@@ -541,6 +584,141 @@ async def get_annotated_disassembly(
 
 
 # ---- Smart Function Map (AI-friendly ranking & grouping) ----
+
+def _build_scored_functions(current_state, include_details: bool = False) -> List[Dict[str, Any]]:
+    """Score and rank all functions synchronously. No MCP overhead.
+
+    Returns a list of scored function dicts sorted by score descending.
+    Used by the enrichment coordinator to determine decompile order.
+    """
+    from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB, RISK_ORDER
+    from arkana.state import set_current_state
+    set_current_state(current_state)
+
+    if not ANGR_AVAILABLE or current_state.angr_project is None or current_state.angr_cfg is None:
+        return []
+
+    _ensure_project_and_cfg()
+
+    string_addrs: Dict[int, str] = {}
+    pe_data = current_state.pe_data or {}
+    for s_obj in (pe_data.get('basic_ascii_strings') or []):
+        if isinstance(s_obj, dict):
+            addr = s_obj.get('offset')
+            val = s_obj.get('string', '')
+            if isinstance(addr, int) and val:
+                string_addrs[addr] = val[:60]
+
+    callgraph = current_state.angr_cfg.functions.callgraph
+    entry_addr = current_state.angr_project.entry
+
+    scored_funcs = []
+    for addr, func in current_state.angr_cfg.functions.items():
+        if func.is_simprocedure or func.is_syscall:
+            continue
+        try:
+            block_count = len(list(func.blocks))
+        except Exception:
+            block_count = 0
+        if block_count == 0:
+            continue
+
+        try:
+            callers = list(callgraph.predecessors(addr))
+        except Exception:
+            callers = []
+
+        suspicious_callees = []
+        callee_names = []
+        categories_hit: set = set()
+        try:
+            for callee_addr in callgraph.successors(addr):
+                if callee_addr in current_state.angr_cfg.functions:
+                    cname = current_state.angr_cfg.functions[callee_addr].name
+                    callee_names.append(cname)
+                    for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
+                        if api_name in cname:
+                            suspicious_callees.append({"name": cname, "risk": risk, "category": cat})
+                            categories_hit.add(cat)
+                            break
+        except Exception:
+            pass
+
+        string_refs = []
+        try:
+            for block in func.blocks:
+                for insn_addr in block.instruction_addrs:
+                    xrefs = current_state.angr_project.kb.xrefs.xrefs_by_ins_addr.get(insn_addr, [])
+                    for xref in xrefs:
+                        if xref.memory_data and xref.memory_data.addr in string_addrs:
+                            string_refs.append(string_addrs[xref.memory_data.addr])
+        except Exception:
+            pass
+
+        is_entry = (addr == entry_addr)
+        score = (
+            min(block_count, 100) + len(suspicious_callees) * 15
+            + min(len(string_refs), 20) * 2 + min(len(callers), 10)
+            + (20 if is_entry else 0)
+        )
+
+        primary_cat = "main_logic"
+        if categories_hit:
+            sorted_cats = sorted(
+                categories_hit,
+                key=lambda c: min(
+                    (RISK_ORDER.get(r, 3) for api, (r, ct) in CATEGORIZED_IMPORTS_DB.items() if ct == c),
+                    default=3,
+                ),
+            )
+            primary_cat = sorted_cats[0]
+        elif block_count < 20:
+            primary_cat = "utility"
+
+        reasons = []
+        if suspicious_callees:
+            reasons.append(f"calls {', '.join(s['name'] for s in suspicious_callees[:3])}")
+        if len(callers) > 3:
+            reasons.append(f"{len(callers)} callers")
+        if string_refs:
+            reasons.append(f"{len(string_refs)} string refs")
+        if is_entry:
+            reasons.append("entry point")
+        reason = '; '.join(reasons) if reasons else f"{block_count} blocks"
+
+        entry = {
+            "addr": hex(addr),"name": func.name,
+            "display_name": get_display_name(hex(addr), func.name),
+            "score": score, "reason": reason,
+            "blocks": block_count, "category": primary_cat,
+        }
+        if include_details:
+            entry["callees"] = callee_names[:15]
+            entry["suspicious_apis"] = suspicious_callees
+            entry["string_refs"] = string_refs[:10]
+            entry["callers"] = [hex(c) for c in callers[:10]]
+        scored_funcs.append(entry)
+
+    scored_funcs.sort(key=lambda x: x['score'], reverse=True)
+
+    # Normalize scores to 0-100
+    if scored_funcs:
+        max_s = scored_funcs[0]['score']
+        min_s = scored_funcs[-1]['score']
+        for f in scored_funcs:
+            f['score_raw'] = f['score']
+        if len(scored_funcs) == 1:
+            scored_funcs[0]['score'] = 100
+        elif max_s == min_s:
+            for f in scored_funcs:
+                f['score'] = 50
+        else:
+            span = max_s - min_s
+            for f in scored_funcs:
+                f['score'] = round((f['score_raw'] - min_s) / span * 100)
+
+    return scored_funcs
+
 
 @tool_decorator
 async def get_function_map(

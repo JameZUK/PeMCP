@@ -496,6 +496,13 @@ def get_functions_data(sort_by: str = "address",
         renames = st.get_renames().get("functions", {})
         decompiled_addrs = _get_decompiled_addresses()
 
+        # Build score lookup from cached enrichment scores
+        score_lookup: Dict[str, int] = {}
+        cached_scores = getattr(st, "_cached_function_scores", None)
+        if cached_scores:
+            for s in cached_scores:
+                score_lookup[s.get("addr", "")] = s.get("score", 0)
+
         # Build address->notes lookup from function notes
         notes_by_addr: Dict[str, List[str]] = {}
         for n in st.get_notes(category="function"):
@@ -522,6 +529,7 @@ def get_functions_data(sort_by: str = "address",
                 "name": name,
                 "size": size,
                 "complexity": complexity,
+                "score": score_lookup.get(addr_hex, 0),
                 "triage_status": triage.get(addr_hex, "unreviewed"),
                 "has_note": len(func_notes) > 0,
                 "notes": func_notes,
@@ -548,6 +556,8 @@ def get_functions_data(sort_by: str = "address",
         functions.sort(key=lambda f: f["size"], reverse=not rev)
     elif sort_by == "complexity":
         functions.sort(key=lambda f: f["complexity"], reverse=not rev)
+    elif sort_by == "score":
+        functions.sort(key=lambda f: f["score"], reverse=not rev)
     elif sort_by == "triage":
         order = {"flagged": 0, "suspicious": 1, "unreviewed": 2, "clean": 3}
         functions.sort(key=lambda f: order.get(f["triage_status"], 99), reverse=rev)
@@ -867,7 +877,7 @@ def get_notes_data(category: Optional[str] = None) -> List[Dict[str, Any]]:
 def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
     """Return cached decompilation for a function, or indicate not cached."""
     try:
-        from arkana.mcp.tools_angr import _decompile_cache, _decompile_meta
+        from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines
         from arkana.mcp._rename_helpers import (
             apply_function_renames_to_lines,
             apply_variable_renames_to_lines,
@@ -882,7 +892,7 @@ def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
         return {"cached": False, "error": "invalid address"}
 
     cache_key = (addr_int,)
-    cached_lines = _decompile_cache.get("decompile_function_with_angr", cache_key)
+    cached_lines = _get_cached_lines(cache_key)
     if cached_lines is None:
         return {"cached": False}
 
@@ -916,7 +926,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {"cached": False, "error": "invalid address"}
 
-    from arkana.mcp.tools_angr import _decompile_cache, _decompile_meta
+    from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines
     from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg
     from arkana.mcp._rename_helpers import (
         apply_function_renames_to_lines,
@@ -926,7 +936,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
 
     # Check cache first (may have been populated since the GET)
     cache_key = (addr_int,)
-    cached_lines = _decompile_cache.get("decompile_function_with_angr", cache_key)
+    cached_lines = _get_cached_lines(cache_key)
     if cached_lines is not None:
         meta = _decompile_meta.get(cache_key, {})
         renamed_lines = apply_function_renames_to_lines(cached_lines)
@@ -988,10 +998,10 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
         return {"cached": False, "error": f"Decompilation failed: {e}"}
 
     all_lines = dec.codegen.text.splitlines()
-    _decompile_cache.set("decompile_function_with_angr", cache_key, all_lines)
     _decompile_meta[cache_key] = {
         "function_name": func.name,
         "address": hex(addr_to_use),
+        "lines": all_lines,
     }
 
     renamed_lines = apply_function_renames_to_lines(all_lines)
@@ -1043,16 +1053,16 @@ def _count_explored_functions(st) -> int:
 
 
 def _get_decompiled_addresses() -> set:
-    """Return set of hex addresses that have been decompiled (in cache)."""
+    """Return set of hex addresses that have been decompiled."""
     addrs = set()
     try:
-        from arkana.mcp.tools_angr import _decompile_cache
-        for key in _decompile_cache.keys("decompile_function_with_angr"):
-            # Cache key is a tuple: (target_addr,) where target_addr is int
+        from arkana.mcp.tools_angr import _decompile_meta
+        for key in list(_decompile_meta.keys()):
+            # Key is a tuple: (target_addr,) where target_addr is int
             if isinstance(key, tuple) and key:
                 addrs.add(hex(key[0]))
     except Exception:
-        logger.debug("Error reading decompile cache keys", exc_info=True)
+        logger.debug("Error reading decompile meta keys", exc_info=True)
     return addrs
 
 

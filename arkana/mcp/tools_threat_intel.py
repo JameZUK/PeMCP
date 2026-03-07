@@ -83,6 +83,121 @@ _IMPORT_ATTACK_MAP = {
 
 
 # ===================================================================
+#  Internal MITRE mapping (callable from enrichment)
+# ===================================================================
+
+def _map_mitre_internal(current_state) -> Dict[str, Any]:
+    """Map findings to MITRE ATT&CK synchronously. No MCP overhead."""
+    from arkana.state import set_current_state
+    set_current_state(current_state)
+
+    pe_data = current_state.pe_data or {}
+    triage = getattr(current_state, '_cached_triage', None) or {}
+
+    techniques: Dict[str, Dict[str, Any]] = {}
+
+    # capa ATT&CK mappings
+    capa_analysis = pe_data.get("capa_analysis", {})
+    if isinstance(capa_analysis, dict):
+        results = capa_analysis.get("results", {})
+        if isinstance(results, dict):
+            rules = results.get("rules", {})
+            for rule_name, rule_details in rules.items():
+                meta = rule_details.get("meta", {})
+                attck_entries = meta.get("att&ck", [])
+                if not isinstance(attck_entries, list):
+                    attck_entries = [attck_entries]
+                for entry in attck_entries:
+                    tech_id = None
+                    tactic = None
+                    tech_name = None
+                    if isinstance(entry, dict):
+                        tech_id = entry.get("id", "")
+                        tactic = entry.get("tactic", "").lower().replace(" ", "-")
+                        tech_name = entry.get("technique", entry.get("name", ""))
+                    elif isinstance(entry, str):
+                        m = re.search(r'\[?(T\d{4}(?:\.\d{3})?)\]?', entry)
+                        if m:
+                            tech_id = m.group(1)
+                        tech_name = re.sub(r'\s*\[T\d{4}(?:\.\d{3})?\]', '', entry).strip()
+                    if tech_id:
+                        if tech_id not in techniques:
+                            techniques[tech_id] = {
+                                "id": tech_id, "name": tech_name or tech_id,
+                                "tactic": tactic or "", "sources": [], "confidence": 0,
+                            }
+                        techniques[tech_id]["sources"].append({
+                            "type": "capa",
+                            "rule": meta.get("name", rule_name),
+                            "namespace": meta.get("namespace", ""),
+                        })
+                        techniques[tech_id]["confidence"] = max(techniques[tech_id]["confidence"], 80)
+
+    # Import-based mapping
+    imports_data = pe_data.get("imports", [])
+    if isinstance(imports_data, list):
+        for dll_entry in imports_data:
+            if not isinstance(dll_entry, dict):
+                continue
+            for sym in dll_entry.get("symbols", []):
+                func_name = sym.get("name", "") if isinstance(sym, dict) else str(sym)
+                mapping = _IMPORT_ATTACK_MAP.get(func_name)
+                if not mapping:
+                    for suffix in ("A", "W", "Ex", "ExA", "ExW"):
+                        if func_name.endswith(suffix):
+                            mapping = _IMPORT_ATTACK_MAP.get(func_name[:-len(suffix)])
+                            if mapping:
+                                break
+                if mapping:
+                    tech_id, tactic, tech_name = mapping
+                    if tech_id not in techniques:
+                        techniques[tech_id] = {
+                            "id": tech_id, "name": tech_name, "tactic": tactic,
+                            "sources": [], "confidence": 0,
+                        }
+                    techniques[tech_id]["sources"].append({
+                        "type": "import", "function": func_name, "dll": dll_entry.get("dll", ""),
+                    })
+                    techniques[tech_id]["confidence"] = max(techniques[tech_id]["confidence"], 50)
+
+    # Triage behavioral indicators
+    sus_caps = triage.get("suspicious_capabilities", [])
+    if isinstance(sus_caps, list):
+        for cap in sus_caps:
+            if not isinstance(cap, dict):
+                continue
+            ns = cap.get("namespace", "").lower()
+            if "anti-analysis" in ns:
+                _add_tactic_technique(techniques, "T1622", "defense-evasion",
+                                      "Debugger Evasion", "triage_capability", cap.get("capability", ""))
+            elif "persistence" in ns:
+                _add_tactic_technique(techniques, "T1547", "persistence",
+                                      "Boot or Logon Autostart Execution", "triage_capability", cap.get("capability", ""))
+            elif "c2" in ns or "communication" in ns:
+                _add_tactic_technique(techniques, "T1071", "command-and-control",
+                                      "Application Layer Protocol", "triage_capability", cap.get("capability", ""))
+
+    tactic_coverage: Dict[str, List[str]] = {t: [] for t in _TACTIC_ORDER}
+    for tech in techniques.values():
+        tactic = tech.get("tactic", "")
+        if tactic in tactic_coverage:
+            tactic_coverage[tactic].append(tech["id"])
+
+    sorted_techniques = sorted(techniques.values(), key=lambda t: (-t["confidence"], t["id"]))
+
+    return {
+        "technique_count": len(sorted_techniques),
+        "techniques": sorted_techniques,
+        "tactic_coverage": {
+            t: {"short_name": _TACTIC_SHORT.get(t, t), "technique_count": len(ids), "techniques": ids}
+            for t, ids in tactic_coverage.items() if ids
+        },
+        "tactics_covered": sum(1 for ids in tactic_coverage.values() if ids),
+        "tactics_total": len(_TACTIC_ORDER),
+    }
+
+
+# ===================================================================
 #  Tool 1: map_mitre_attack
 # ===================================================================
 
@@ -110,6 +225,10 @@ async def map_mitre_attack(
     """
     await ctx.info("Mapping findings to MITRE ATT&CK")
     _check_pe_loaded("map_mitre_attack")
+
+    # Return cached result if enrichment already mapped MITRE
+    if not include_navigator_layer and state._cached_mitre_mapping:
+        return state._cached_mitre_mapping
 
     pe_data = state.pe_data or {}
     triage = getattr(state, '_cached_triage', None) or {}

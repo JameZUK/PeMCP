@@ -14,13 +14,19 @@ from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_resp
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
-from arkana.mcp._input_helpers import _ToolResultCache
 from arkana.mcp._rename_helpers import apply_function_renames_to_lines, apply_variable_renames_to_lines, get_display_name
 
 # Cache for paginated decompilation results — avoids re-decompiling when
 # the client requests subsequent pages of the same function.
-_decompile_cache = _ToolResultCache()
-_decompile_meta: dict = {}  # cache_key -> {function_name, address}
+_decompile_meta: dict = {}  # cache_key -> {function_name, address, lines}
+
+
+def _get_cached_lines(cache_key):
+    """Look up decompiled lines from the authoritative meta store."""
+    meta = _decompile_meta.get(cache_key)
+    if meta:
+        return meta.get("lines")
+    return None
 
 if ANGR_AVAILABLE:
     import angr
@@ -267,7 +273,7 @@ async def decompile_function_with_angr(
 
     # Check cache first — serves subsequent pages without re-decompiling
     cache_key = (target_addr,)
-    cached_lines = _decompile_cache.get("decompile_function_with_angr", cache_key)
+    cached_lines = _get_cached_lines(cache_key)
 
     if cached_lines is not None:
         meta = _decompile_meta.get(cache_key, {})
@@ -298,85 +304,97 @@ async def decompile_function_with_angr(
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
     def _decompile():
-        project, cfg = state.get_angr_snapshot()
-        used_local_cfg = False
-
-        if project is None:
-            _ensure_project_and_cfg()
-            project, cfg = state.get_angr_snapshot()
-
-        bridge.report_progress(5, 100)
-        bridge.info("Resolving function...")
-
-        if cfg is not None:
-            # Fast path: full CFG available
-            addr_to_use = target_addr
-            if addr_to_use not in cfg.functions:
-                if (state.pe_object
-                        and hasattr(state.pe_object, 'OPTIONAL_HEADER')
-                        and state.pe_object.OPTIONAL_HEADER):
-                    image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
-                    potential_va = target_addr + image_base
-                    if potential_va in cfg.functions:
-                        addr_to_use = potential_va
-            try:
-                func = cfg.functions[addr_to_use]
-            except KeyError:
-                return {
-                    "error": f"No function found at {hex(target_addr)} (or adjusted VA).",
-                    "hint": "Verify the address. If using an offset, ensure it matches the ImageBase."
-                }
-            decompiler_cfg = cfg.model
-        else:
-            # Fallback: no full CFG — build a region-scoped CFG
-            bridge.info("No full CFG available — building local CFG around target...")
-            try:
-                local_cfg = _build_region_cfg(project, target_addr)
-            except Exception as e:
-                return {"error": f"Failed to build local CFG around {hex(target_addr)}: {e}"}
-            used_local_cfg = True
-            addr_to_use = target_addr
-            if addr_to_use not in local_cfg.functions:
-                # Try RVA correction
-                if (state.pe_object
-                        and hasattr(state.pe_object, 'OPTIONAL_HEADER')
-                        and state.pe_object.OPTIONAL_HEADER):
-                    image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
-                    potential_va = target_addr + image_base
-                    if potential_va in local_cfg.functions:
-                        addr_to_use = potential_va
-            try:
-                func = local_cfg.functions[addr_to_use]
-            except KeyError:
-                return {
-                    "error": f"No function found at {hex(target_addr)} in local CFG region.",
-                    "hint": "The address may not be a valid function start. "
-                            "Use get_angr_partial_functions() to see discovered functions."
-                }
-            decompiler_cfg = local_cfg.model
-
-        bridge.report_progress(20, 100)
-        bridge.info(f"Decompiling {func.name}...")
+        # Signal to background enrichment that on-demand decompile is waiting,
+        # then acquire the decompile lock to ensure mutual exclusion with
+        # the background decompile sweep.
+        # Signal to background enrichment that on-demand decompile is waiting,
+        # then acquire the decompile lock to ensure mutual exclusion with
+        # the background decompile sweep.
+        state._decompile_on_demand_waiting = True
+        state._decompile_lock.acquire()
+        state._decompile_on_demand_waiting = False
         try:
-            dec = project.analyses.Decompiler(func, cfg=decompiler_cfg)
-            bridge.report_progress(90, 100)
-            bridge.info("Formatting output...")
-            if not dec.codegen:
-                return {"error": "Decompilation produced no code."}
-            result = {
-                "function_name": func.name,
-                "address": hex(addr_to_use),
-                "c_pseudocode": dec.codegen.text,
-            }
-            if used_local_cfg:
-                result["note"] = (
-                    "Decompiled using a local region CFG (full binary CFG was not available). "
-                    "Results may be less complete — cross-references and callee resolution "
-                    "are limited to the local region."
-                )
-            return result
-        except Exception as e:
-            return {"error": f"Decompilation failed: {e}"}
+            project, cfg = state.get_angr_snapshot()
+            used_local_cfg = False
+
+            if project is None:
+                _ensure_project_and_cfg()
+                project, cfg = state.get_angr_snapshot()
+
+            bridge.report_progress(5, 100)
+            bridge.info("Resolving function...")
+
+            if cfg is not None:
+                # Fast path: full CFG available
+                addr_to_use = target_addr
+                if addr_to_use not in cfg.functions:
+                    if (state.pe_object
+                            and hasattr(state.pe_object, 'OPTIONAL_HEADER')
+                            and state.pe_object.OPTIONAL_HEADER):
+                        image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
+                        potential_va = target_addr + image_base
+                        if potential_va in cfg.functions:
+                            addr_to_use = potential_va
+                try:
+                    func = cfg.functions[addr_to_use]
+                except KeyError:
+                    return {
+                        "error": f"No function found at {hex(target_addr)} (or adjusted VA).",
+                        "hint": "Verify the address. If using an offset, ensure it matches the ImageBase."
+                    }
+                decompiler_cfg = cfg.model
+            else:
+                # Fallback: no full CFG — build a region-scoped CFG
+                bridge.info("No full CFG available — building local CFG around target...")
+                try:
+                    local_cfg = _build_region_cfg(project, target_addr)
+                except Exception as e:
+                    return {"error": f"Failed to build local CFG around {hex(target_addr)}: {e}"}
+                used_local_cfg = True
+                addr_to_use = target_addr
+                if addr_to_use not in local_cfg.functions:
+                    # Try RVA correction
+                    if (state.pe_object
+                            and hasattr(state.pe_object, 'OPTIONAL_HEADER')
+                            and state.pe_object.OPTIONAL_HEADER):
+                        image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
+                        potential_va = target_addr + image_base
+                        if potential_va in local_cfg.functions:
+                            addr_to_use = potential_va
+                try:
+                    func = local_cfg.functions[addr_to_use]
+                except KeyError:
+                    return {
+                        "error": f"No function found at {hex(target_addr)} in local CFG region.",
+                        "hint": "The address may not be a valid function start. "
+                                "Use get_angr_partial_functions() to see discovered functions."
+                    }
+                decompiler_cfg = local_cfg.model
+
+            bridge.report_progress(20, 100)
+            bridge.info(f"Decompiling {func.name}...")
+            try:
+                dec = project.analyses.Decompiler(func, cfg=decompiler_cfg)
+                bridge.report_progress(90, 100)
+                bridge.info("Formatting output...")
+                if not dec.codegen:
+                    return {"error": "Decompilation produced no code."}
+                result = {
+                    "function_name": func.name,
+                    "address": hex(addr_to_use),
+                    "c_pseudocode": dec.codegen.text,
+                }
+                if used_local_cfg:
+                    result["note"] = (
+                        "Decompiled using a local region CFG (full binary CFG was not available). "
+                        "Results may be less complete — cross-references and callee resolution "
+                        "are limited to the local region."
+                    )
+                return result
+            except Exception as e:
+                return {"error": f"Decompilation failed: {e}"}
+        finally:
+            state._decompile_lock.release()
 
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_decompile), timeout=ANGR_ANALYSIS_TIMEOUT)
@@ -386,10 +404,10 @@ async def decompile_function_with_angr(
 
     # Cache full result (raw, before renames) and return paginated
     all_lines = result["c_pseudocode"].splitlines()
-    _decompile_cache.set("decompile_function_with_angr", cache_key, all_lines)
     _decompile_meta[cache_key] = {
         "function_name": result["function_name"],
         "address": result["address"],
+        "lines": all_lines,
     }
 
     # Apply user renames to output
@@ -1591,7 +1609,7 @@ async def batch_decompile(
         func_result: Dict[str, Any] = {"address": addr_str}
 
         # Check per-function cache first
-        cached_lines = _decompile_cache.get("decompile_function_with_angr", cache_key)
+        cached_lines = _get_cached_lines(cache_key)
         if cached_lines is not None:
             meta = _decompile_meta.get(cache_key, {})
             renamed_lines = apply_function_renames_to_lines(cached_lines)
@@ -1645,10 +1663,10 @@ async def batch_decompile(
 
         # Cache raw lines and apply renames
         all_lines = result["c_pseudocode"].splitlines()
-        _decompile_cache.set("decompile_function_with_angr", cache_key, all_lines)
         _decompile_meta[cache_key] = {
             "function_name": result["function_name"],
             "address": result["address"],
+            "lines": all_lines,
         }
         renamed_lines = apply_function_renames_to_lines(all_lines)
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))

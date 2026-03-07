@@ -147,6 +147,15 @@ async def get_session_summary(
                 "cfg_available": cfg is not None,
             }
 
+    # Enrichment status
+    enrichment_task = state.get_task("auto-enrichment")
+    if enrichment_task:
+        result["enrichment_status"] = {
+            "status": enrichment_task.get("status"),
+            "progress_percent": enrichment_task.get("progress_percent", 0),
+            "progress_message": enrichment_task.get("progress_message", ""),
+        }
+
     # Dashboard triage flags (user-tagged functions)
     triage_snapshot = state.get_all_triage_snapshot()
     if triage_snapshot:

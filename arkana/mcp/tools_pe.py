@@ -191,6 +191,7 @@ async def open_file(
     analyses_to_skip: Optional[List[str]] = None,
     start_angr_background: bool = True,
     use_cache: bool = True,
+    auto_enrich: bool = True,
 ) -> Dict[str, Any]:
     """
     [Phase: load] Opens and analyses a binary file, making it available for all other tools.
@@ -217,6 +218,9 @@ async def open_file(
         analyses_to_skip: (Optional[List[str]]) List of analyses to skip: 'peid', 'yara', 'capa', 'floss'.
         start_angr_background: (bool) If True (default) and angr is available, start background CFG analysis.
         use_cache: (bool) If True (default), check the disk cache for previous analysis results.
+        auto_enrich: (bool) If True (default), launch background auto-enrichment (triage, classification,
+            similarity hashes, MITRE mapping, IOC collection, decompile sweep). Disable with False or
+            ARKANA_AUTO_ENRICHMENT=0 env var.
 
     Returns:
         A dictionary with status, filepath, detected format, summary of what was
@@ -259,6 +263,8 @@ async def open_file(
 
     # Close any previously loaded file — use atomic reset methods
     if state.pe_object or state.filepath:
+        # Cancel any running enrichment from the previous file
+        state._enrichment_cancel.set()
         state.close_pe()
         state.reset_angr()
         state.pe_data = None
@@ -266,6 +272,10 @@ async def open_file(
         # Clear cached dashboard data from previous file
         state._cached_triage = None
         state._cached_function_scores = None
+        state._cached_classification = None
+        state._cached_similarity_hashes = None
+        state._cached_mitre_mapping = None
+        state._cached_iocs = None
         state.notes = []
         state._notes_counter = 0
         state.tool_history = []
@@ -321,10 +331,38 @@ async def open_file(
                         state.custom_types = session_meta.get("custom_types", {"structs": {}, "enums": {}})
                         state.triage_status = session_meta.get("triage_status", {})
 
-                    # Restore cached triage data if available in pe_data
-                    cached_triage = cached.get('_cached_triage')
-                    if cached_triage:
-                        state._cached_triage = cached_triage
+                    # Restore cached enrichment data from pe_data → state attrs,
+                    # then remove from pe_data to avoid in-memory duplication.
+                    _enrichment_keys = [
+                        ('_cached_triage', '_cached_triage'),
+                        ('_cached_classification', '_cached_classification'),
+                        ('_cached_similarity_hashes', '_cached_similarity_hashes'),
+                        ('_cached_mitre_mapping', '_cached_mitre_mapping'),
+                        ('_cached_iocs', '_cached_iocs'),
+                        ('_cached_function_scores', '_cached_function_scores'),
+                    ]
+                    for pe_key, state_attr in _enrichment_keys:
+                        val = cached.pop(pe_key, None)
+                        if val:
+                            setattr(state, state_attr, val)
+
+                    # Restore decompiled functions (metadata + code lines)
+                    cached_decompiled = cached.pop('_decompiled_functions', None)
+                    if cached_decompiled:
+                        try:
+                            from arkana.mcp.tools_angr import _decompile_meta
+                            for entry in cached_decompiled:
+                                addr_int = entry.get("addr_int")
+                                if addr_int is not None:
+                                    key = (addr_int,)
+                                    if key not in _decompile_meta:
+                                        _decompile_meta[key] = {
+                                            "function_name": entry.get("function_name", ""),
+                                            "address": entry.get("address", ""),
+                                            "lines": entry.get("lines"),
+                                        }
+                        except ImportError:
+                            pass
 
                     await ctx.info(f"Analysis loaded from cache (SHA256: {_file_sha256[:16]}...)")
                     await ctx.report_progress(95, 100)
@@ -492,6 +530,17 @@ async def open_file(
             )
             await ctx.info("Background Angr analysis started. Use check_task_status('startup-angr') to monitor.")
 
+        # Launch background auto-enrichment
+        # Run enrichment if: not cached at all, OR cached but enrichment data
+        # wasn't present (old cache written before enrichment persistence).
+        skip_enrichment = "enrichment" in skip_list
+        _enrichment_cached = _loaded_from_cache and state._cached_function_scores is not None
+        if auto_enrich and state.filepath and not skip_enrichment and not _enrichment_cached:
+            from arkana.enrichment import start_enrichment
+            from arkana.state import get_current_state as _gcs
+            start_enrichment(_gcs())
+            await ctx.info("Background auto-enrichment started. Use check_task_status('auto-enrichment') to monitor.")
+
         await ctx.report_progress(100, 100)
         await ctx.info(f"File loaded successfully: {abs_path}")
 
@@ -505,6 +554,11 @@ async def open_file(
             "loaded_from_cache": _loaded_from_cache,
             "analyses_skipped": skip_list if skip_list else "none",
             "angr_background": "started" if (start_angr_background and ANGR_AVAILABLE) else "not started",
+            "auto_enrichment": (
+                "started" if (auto_enrich and not skip_enrichment and not _enrichment_cached)
+                else "skipped (cached)" if _enrichment_cached
+                else "not started"
+            ),
         }
         if mode in ("elf", "macho"):
             format_label = "ELF" if mode == "elf" else "Mach-O"
