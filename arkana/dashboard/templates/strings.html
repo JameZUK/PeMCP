@@ -4,28 +4,28 @@
 {% block content %}
 <div class="page-header">
     <h1 class="glow">STRINGS</h1>
-    <span id="str-total" class="dim" style="font-size: 12px; letter-spacing: 1px;"></span>
+    <span id="str-total" class="dim fs-12 ls-1"></span>
 </div>
 
-<div id="floss-panel" class="panel floss-panel" style="display:none;">
-    <div class="panel-header floss-panel-header" id="floss-panel-toggle" style="cursor:pointer;">
+<div id="floss-panel" class="panel floss-panel d-none">
+    <div class="panel-header floss-panel-header cursor-pointer" id="floss-panel-toggle">
         FLOSS ANALYSIS
-        <span id="floss-status-badge" class="badge badge-dim" style="margin-left:8px;"></span>
-        <span style="margin-left:auto; font-size:10px;" class="dim" id="floss-collapse-hint">[collapse]</span>
+        <span id="floss-status-badge" class="badge badge-dim ml-8"></span>
+        <span class="dim ml-auto fs-10" id="floss-collapse-hint">[collapse]</span>
     </div>
     <div id="floss-panel-body" class="floss-panel-body">
         <div class="floss-type-grid">
             <div id="floss-type-counts" class="floss-type-counts"></div>
         </div>
-        <div id="floss-top-decoded" class="floss-top-section" style="display:none;">
+        <div id="floss-top-decoded" class="floss-top-section d-none">
             <div class="floss-top-title">TOP DECODED STRINGS</div>
             <div id="floss-decoded-list" class="floss-string-list"></div>
         </div>
-        <div id="floss-top-stack" class="floss-top-section" style="display:none;">
+        <div id="floss-top-stack" class="floss-top-section d-none">
             <div class="floss-top-title">TOP STACK STRINGS</div>
             <div id="floss-stack-list" class="floss-string-list"></div>
         </div>
-        <div id="floss-meta" class="floss-meta dim" style="display:none;"></div>
+        <div id="floss-meta" class="floss-meta dim d-none"></div>
     </div>
 </div>
 
@@ -71,15 +71,15 @@
         </div>
         <div class="filter-group">
             <label>CATEGORY</label>
-            <input type="text" id="str-filter-cat" placeholder="e.g. url, path" style="width:120px;">
+            <input type="text" id="str-filter-cat" placeholder="e.g. url, path" class="w-120">
         </div>
         <div class="filter-group">
             <label>MIN SCORE</label>
-            <input type="text" id="str-filter-score" placeholder="0" style="width:60px;">
+            <input type="text" id="str-filter-score" placeholder="0" class="w-60">
         </div>
         <div class="filter-group">
             <label>SEARCH</label>
-            <input type="text" id="str-filter-search" placeholder="Filter strings..." style="width:200px;">
+            <input type="text" id="str-filter-search" placeholder="Filter strings..." class="w-200">
         </div>
     </div>
 
@@ -103,7 +103,7 @@
 
     <div id="pagination-bar" class="pagination-bar">
         <button class="btn" id="str-prev" disabled>PREV</button>
-        <span id="str-page-info" class="dim" style="font-size: 12px; margin: 0 12px;"></span>
+        <span id="str-page-info" class="dim fs-12 mx-12"></span>
         <button class="btn" id="str-next" disabled>NEXT</button>
     </div>
 </div>

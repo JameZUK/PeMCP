@@ -4,10 +4,10 @@
 <div class="panel active-tool-banner">
     <span class="glow">&#9654; {{ data.active_tool }}</span>
     {% if data.active_tool_total > 0 %}
-    <div class="progress-bar" style="flex: 1; margin-left: 16px;">
-        <div class="progress-fill" style="width: {{ (data.active_tool_progress / data.active_tool_total * 100)|int }}%"></div>
+    <div class="progress-bar progress-bar-flex">
+        <div class="progress-fill" data-width="{{ (data.active_tool_progress / data.active_tool_total * 100)|int }}"></div>
     </div>
-    <span class="dim" style="margin-left: 8px;">{{ data.active_tool_progress }}%</span>
+    <span class="dim ml-8">{{ data.active_tool_progress }}%</span>
     {% endif %}
 </div>
 {% endif %}
@@ -15,14 +15,14 @@
 {% set running_tasks = data.background_tasks|selectattr('status', 'equalto', 'running')|list %}
 {% if running_tasks %}
 {% for task in running_tasks %}
-<div class="panel active-tool-banner" style="border-color: var(--warning);">
+<div class="panel active-tool-banner border-warning">
     <span class="warning">&#9654; {{ task.tool }}</span>
-    <div class="progress-bar" style="flex: 1; margin-left: 16px;">
-        <div class="progress-fill" style="width: {{ task.progress_percent }}%; background: var(--warning); box-shadow: 0 0 6px var(--warning);"></div>
+    <div class="progress-bar progress-bar-flex">
+        <div class="progress-fill progress-fill-warning" data-width="{{ task.progress_percent }}"></div>
     </div>
-    <span class="dim" style="margin-left: 8px;">{{ task.progress_percent }}%</span>
+    <span class="dim ml-8">{{ task.progress_percent }}%</span>
     {% if task.progress_message %}
-    <span class="dim" style="margin-left: 8px; font-size: 11px;">{{ task.progress_message[:60] }}</span>
+    <span class="dim ml-8 fs-11">{{ task.progress_message[:60] }}</span>
     {% endif %}
 </div>
 {% endfor %}
@@ -55,7 +55,7 @@
         <div class="stat-value">{{ data.explored_functions }} / {{ data.total_functions }}</div>
         {% if data.total_functions > 0 %}
         <div class="progress-bar">
-            <div class="progress-fill" style="width: {{ (data.explored_functions / data.total_functions * 100)|int }}%"></div>
+            <div class="progress-fill" data-width="{{ (data.explored_functions / data.total_functions * 100)|int }}"></div>
         </div>
         {% endif %}
     </div>
@@ -191,7 +191,7 @@
     </div>
     {% endif %}
     {% if bs.ioc_count and bs.ioc_count > 0 %}
-    <div class="summary-row" style="padding: 4px 12px;">
+    <div class="summary-row p-4-12">
         <span class="summary-label">NETWORK IOCs:</span>
         <span class="danger">{{ bs.ioc_count }} indicators found</span>
     </div>
@@ -215,7 +215,7 @@
             </div>
             {% endfor %}
             {% else %}
-            <div class="dim" style="padding: 6px 0; font-size: 12px;">No capa matches</div>
+            <div class="dim p-6-0 fs-12">No capa matches</div>
             {% endif %}
         </div>
         <div class="summary-section">
@@ -228,7 +228,7 @@
             </div>
             {% endfor %}
             {% else %}
-            <div class="dim" style="padding: 6px 0; font-size: 12px;">No YARA matches</div>
+            <div class="dim p-6-0 fs-12">No YARA matches</div>
             {% endif %}
         </div>
     </div>
@@ -278,13 +278,13 @@
             <div class="summary-row dim">FLOSS analysis not yet run</div>
             {% endif %}
             {% if bs.floss_top_decoded %}
-            <div class="summary-section-title" style="margin-top: 4px;">DECODED STRINGS (TOP {{ bs.floss_top_decoded|length }})</div>
+            <div class="summary-section-title mt-4">DECODED STRINGS (TOP {{ bs.floss_top_decoded|length }})</div>
             {% for s in bs.floss_top_decoded %}
             <div class="ioc-item warning">{{ s }}</div>
             {% endfor %}
             {% endif %}
             {% if bs.floss_top_stack %}
-            <div class="summary-section-title" style="margin-top: 4px;">STACK STRINGS (TOP {{ bs.floss_top_stack|length }})</div>
+            <div class="summary-section-title mt-4">STACK STRINGS (TOP {{ bs.floss_top_stack|length }})</div>
             {% for s in bs.floss_top_stack %}
             <div class="ioc-item">{{ s }}</div>
             {% endfor %}
@@ -326,7 +326,7 @@
             </div>
             {% endif %}
             {% if not bs.ioc_urls and not bs.ioc_ips and not bs.ioc_domains and not bs.ioc_registry %}
-            <div class="dim" style="padding: 6px 0; font-size: 12px;">No network indicators</div>
+            <div class="dim p-6-0 fs-12">No network indicators</div>
             {% endif %}
         </div>
         <div class="summary-section">
@@ -340,7 +340,7 @@
             </div>
             {% endfor %}
             {% else %}
-            <div class="dim" style="padding: 6px 0; font-size: 12px;">No high-value strings</div>
+            <div class="dim p-6-0 fs-12">No high-value strings</div>
             {% endif %}
         </div>
     </div>
@@ -464,7 +464,7 @@
         <div class="stat-row"><span class="stat-label">CUSTOM TYPES:</span> <span>{{ data.custom_type_count or 0 }}</span></div>
         <div class="stat-row"><span class="stat-label">ARTIFACTS:</span> <span>{{ data.artifacts_count }}</span></div>
         {% if data.triage_counts %}
-        <div class="stat-row" style="margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--primary-ghost);">
+        <div class="stat-row mt-4 pt-4 border-top-ghost">
             <span class="stat-label">FLAGGED:</span>
             <span>{% if data.triage_counts.get('flagged') %}<span class="danger">{{ data.triage_counts.flagged }}</span>{% else %}0{% endif %}</span>
         </div>
@@ -482,20 +482,20 @@
             <div class="recent-note-header">
                 <span class="badge badge-cat-{{ n.category }}">{{ n.category }}</span>
                 {% if n.address %}<span class="mono dim">{{ n.address }}</span>{% endif %}
-                <span class="dim" style="margin-left: auto; font-size: 10px;">{{ n.timestamp }}</span>
+                <span class="dim ml-auto fs-10">{{ n.timestamp }}</span>
             </div>
             <div class="recent-note-content">{{ n.content }}</div>
         </div>
         {% endfor %}
         {% else %}
-        <div class="empty-msg dim" style="padding: 12px;">No notes yet.</div>
+        <div class="empty-msg dim p-12">No notes yet.</div>
         {% endif %}
     </div>
     {% if data.recent_artifacts %}
     <div class="panel stat-card">
         <div class="panel-header">RECENT ARTIFACTS</div>
         {% for a in data.recent_artifacts %}
-        <div class="artifact-item" style="padding: 4px 12px;">
+        <div class="artifact-item p-4-12">
             {% if a.detected_type %}<span class="artifact-type badge badge-dim">{{ a.detected_type }}</span>{% endif %}
             <span class="artifact-desc">{{ a.description }}</span>
             {% if a.source_tool %}<span class="artifact-tool">{{ a.source_tool }}</span>{% endif %}
@@ -514,13 +514,13 @@
 {% elif data and data.active_tool %}
 <div class="panel">
     <div class="panel-header">ACTIVE OPERATION</div>
-    <div style="padding: 16px;">
+    <div class="p-16">
         <div class="stat-value glow">{{ data.active_tool }}</div>
         {% if data.active_tool_total > 0 %}
-        <div class="progress-bar" style="margin-top: 12px;">
-            <div class="progress-fill" style="width: {{ (data.active_tool_progress / data.active_tool_total * 100)|int }}%"></div>
+        <div class="progress-bar mt-12">
+            <div class="progress-fill" data-width="{{ (data.active_tool_progress / data.active_tool_total * 100)|int }}"></div>
         </div>
-        <div class="dim" style="margin-top: 6px; text-align: center;">{{ data.active_tool_progress }}%</div>
+        <div class="dim mt-6 text-center">{{ data.active_tool_progress }}%</div>
         {% endif %}
     </div>
 </div>

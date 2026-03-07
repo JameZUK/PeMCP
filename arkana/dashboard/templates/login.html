@@ -24,6 +24,7 @@
             {% endif %}
 
             <form method="POST" action="/dashboard/login" class="login-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <label class="login-label" for="token">ENTER ACCESS TOKEN:</label>
                 <div class="login-input-row">
                     <span class="login-prompt">&gt;</span>

@@ -16,6 +16,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.middleware import Middleware
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -60,6 +61,49 @@ _COOKIE_MAX_AGE = 30 * 24 * 3600
 _MAX_SSE_CONNECTIONS = 10
 _sse_connection_count = 0
 _sse_lock = threading.Lock()
+
+# --- CSRF token (generated once per app instance) ---
+_csrf_token: str = ""
+
+# --- Login rate limiting ---
+_login_attempts: dict[str, list[float]] = {}
+_MAX_LOGIN_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 60
+
+# --- Content-Security-Policy value (single source of truth) ---
+_CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+
+
+# ---------------------------------------------------------------------------
+#  Security headers middleware
+# ---------------------------------------------------------------------------
+
+class SecurityHeadersMiddleware:
+    """ASGI middleware that injects security HTTP headers on every response."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                security_headers = [
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"x-frame-options", b"DENY"),
+                    (b"referrer-policy", b"strict-origin-when-cross-origin"),
+                    (b"permissions-policy", b"geolocation=(), microphone=(), camera=()"),
+                    (b"content-security-policy", _CSP_VALUE.encode()),
+                ]
+                headers.extend(security_headers)
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
 
 
 # ---------------------------------------------------------------------------
@@ -132,8 +176,34 @@ def _make_auth_response(request: Request, dashboard_token: str, response: Respon
             max_age=_COOKIE_MAX_AGE,
             httponly=True,
             samesite="strict",
+            secure=_is_https(request),
         )
     return response
+
+
+# ---------------------------------------------------------------------------
+#  CSRF validation
+# ---------------------------------------------------------------------------
+
+def _validate_csrf(request: Request, form_token: str = "") -> bool:
+    """Check CSRF token from X-CSRF-Token header or form field."""
+    if not _csrf_token:
+        return True  # CSRF not initialised yet
+    # Check header first (JSON API calls)
+    header_token = request.headers.get("x-csrf-token", "")
+    if header_token and hmac.compare_digest(header_token, _csrf_token):
+        return True
+    # Check form field (login form)
+    if form_token and hmac.compare_digest(form_token, _csrf_token):
+        return True
+    return False
+
+
+def _is_https(request: Request) -> bool:
+    """Detect HTTPS from scheme or X-Forwarded-Proto header."""
+    if request.url.scheme == "https":
+        return True
+    return request.headers.get("x-forwarded-proto", "") == "https"
 
 
 # ---------------------------------------------------------------------------
@@ -158,16 +228,33 @@ def _create_routes(dashboard_token: str) -> list:
 
     async def login_post(request: Request) -> Response:
         form = await request.form()
+        # CSRF check
+        csrf_field = form.get("csrf_token", "")
+        if not _validate_csrf(request, form_token=csrf_field):
+            return HTMLResponse("CSRF validation failed", status_code=403)
+        # Rate limiting
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.time()
+        attempts = _login_attempts.get(client_ip, [])
+        # Prune stale entries
+        attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
+        _login_attempts[client_ip] = attempts
+        if len(attempts) >= _MAX_LOGIN_ATTEMPTS:
+            return HTMLResponse("Too many login attempts. Try again later.", status_code=429)
         token = form.get("token", "").strip()
         if _check_token(token, dashboard_token):
+            _login_attempts.pop(client_ip, None)
             resp = RedirectResponse("/dashboard/", status_code=302)
             resp.set_cookie(
                 _COOKIE_NAME, token,
                 max_age=_COOKIE_MAX_AGE,
                 httponly=True,
                 samesite="strict",
+                secure=_is_https(request),
             )
             return resp
+        attempts.append(now)
+        _login_attempts[client_ip] = attempts
         return RedirectResponse("/dashboard/login?error=invalid", status_code=302)
 
     # --- Auth-required page wrapper ---
@@ -239,6 +326,8 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_triage(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
         try:
             body = await request.json()
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
@@ -273,6 +362,8 @@ def _create_routes(dashboard_token: str) -> list:
         """Trigger a new decompilation for an address."""
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
         try:
             body = await request.json()
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
@@ -407,6 +498,12 @@ def _create_routes(dashboard_token: str) -> list:
                 last_file_sha256 = seed.get("sha256")
                 last_triage_counts = seed.get("triage_counts", {})
                 last_artifacts_count = seed.get("artifacts_count", 0)
+                # Send initial state so browsers confirm the connection immediately
+                try:
+                    init_data = json.dumps(seed)
+                except Exception:
+                    init_data = "{}"
+                yield f"retry: 5000\nevent: state-update\ndata: {init_data}\n\n"
                 while True:
                     await asyncio.sleep(2)
                     try:
@@ -562,17 +659,26 @@ def create_dashboard_app(token: Optional[str] = None, standalone: bool = False) 
     so URLs are consistent regardless of mode.  When False (HTTP mode), the caller
     mounts the app under ``/dashboard`` via Starlette ``Mount``.
     """
+    global _csrf_token
     dashboard_token = token or _ensure_token()
+
+    # Generate CSRF token for this app instance
+    _csrf_token = secrets.token_urlsafe(32)
+    _jinja_env.globals["csrf_token"] = _csrf_token
 
     # Store on default state for get_config() access
     from arkana.state import _default_state
     _default_state.dashboard_token = dashboard_token
 
     routes = _create_routes(dashboard_token)
+    middleware = [Middleware(SecurityHeadersMiddleware)]
     if standalone:
-        app = Starlette(routes=[Mount("/dashboard", routes=routes)])
+        app = Starlette(
+            routes=[Mount("/dashboard", routes=routes)],
+            middleware=middleware,
+        )
     else:
-        app = Starlette(routes=routes)
+        app = Starlette(routes=routes, middleware=middleware)
     return app
 
 

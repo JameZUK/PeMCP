@@ -18,7 +18,7 @@
             <div class="section-label">{{ s.name }}</div>
             <div class="section-bar-track">
                 <div class="section-bar-fill perm-{{ s.permissions|lower|replace('?','u') }}"
-                     style="width: {{ [100, (s.virtual_size / (sections|map(attribute='virtual_size')|max or 1) * 100)|int]|min }}%"
+                     data-width="{{ [100, (s.virtual_size / (sections|map(attribute='virtual_size')|max or 1) * 100)|int]|min }}"
                      title="{{ s.name }} | VA: {{ s.virtual_address }} | VSize: {{ s.virtual_size }} | Raw: {{ s.raw_size }} | Entropy: {{ '%.2f'|format(s.entropy) }} | Perms: {{ s.permissions }}">
                     <span class="section-bar-text">{{ s.permissions }}</span>
                 </div>

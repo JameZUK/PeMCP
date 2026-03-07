@@ -86,7 +86,7 @@ function escapeHtml(s) {
 function setTriage(addr, status) {
     fetch('/dashboard/api/triage', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
         body: JSON.stringify({address: addr, status: status})
     }).then(function() { reloadFunctions(); });
 }
@@ -198,7 +198,7 @@ function toggleDecompile(btn) {
                 btn.textContent = '<<<';
                 fetch('/dashboard/api/decompile', {
                     method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
+                    headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
                     body: JSON.stringify({address: addr})
                 }).then(function(r) { return r.json(); })
                 .then(function(result) {
@@ -299,23 +299,23 @@ function _renderTabContent(container, tab, addr) {
             container.innerHTML = '';
             container.appendChild(pre);
         } else {
-            container.innerHTML = '<div class="dim" style="padding:10px;">Not yet decompiled. Click <b>DEC</b> to decompile this function.</div>';
+            container.innerHTML = '<div class="dim p-10">Not yet decompiled. Click <b>DEC</b> to decompile this function.</div>';
         }
     } else if (tab === 'xrefs') {
-        container.innerHTML = '<div class="dim" style="padding:10px;">Loading analysis...</div>';
+        container.innerHTML = '<div class="dim p-10">Loading analysis...</div>';
         fetchAnalysis(addr, function(data) {
             if (data) {
                 renderXrefsTab(container, data);
             } else {
-                container.innerHTML = '<div class="dim" style="padding:10px;">Failed to load cross-references.</div>';
+                container.innerHTML = '<div class="dim p-10">Failed to load cross-references.</div>';
             }
         });
     } else if (tab === 'strings') {
-        container.innerHTML = '<div class="dim" style="padding:10px;">Loading strings...</div>';
+        container.innerHTML = '<div class="dim p-10">Loading strings...</div>';
         fetch('/dashboard/api/function-strings?address=' + encodeURIComponent(addr))
             .then(function(r) { return r.json(); })
             .then(function(data) { renderStringsTab(container, data); })
-            .catch(function() { container.innerHTML = '<div class="dim" style="padding:10px;">Failed to load strings.</div>'; });
+            .catch(function() { container.innerHTML = '<div class="dim p-10">Failed to load strings.</div>'; });
     }
 }
 
@@ -352,7 +352,7 @@ function fetchAnalysis(addr, callback) {
 
 // --- Tab renderers ---
 function renderXrefsTab(container, data) {
-    var html = '<div style="padding:10px;">';
+    var html = '<div class="p-10">';
 
     // Suspicious APIs section
     var suspicious = data.suspicious_apis || [];
@@ -373,7 +373,7 @@ function renderXrefsTab(container, data) {
 
     // Callers
     var callers = data.callers || [];
-    html += '<div style="font-size:10px;letter-spacing:2px;color:var(--primary-dim);margin-bottom:6px;">CALLERS (' + callers.length + ')</div>';
+    html += '<div class="xref-section-header">CALLERS (' + callers.length + ')</div>';
     if (callers.length) {
         for (var i = 0; i < callers.length; i++) {
             var c = callers[i];
@@ -382,16 +382,16 @@ function renderXrefsTab(container, data) {
             html += '<span class="' + dotClass + '"></span> ';
             html += '<span class="mono dim">' + escapeHtml(c.address) + '</span> ';
             html += '<span>' + escapeHtml(c.name) + '</span>';
-            if (c.complexity) html += ' <span class="dim" style="font-size:10px;">C:' + c.complexity + '</span>';
+            if (c.complexity) html += ' <span class="dim fs-10">C:' + c.complexity + '</span>';
             html += '</div>';
         }
     } else {
-        html += '<div class="dim" style="font-size:12px;">No callers found</div>';
+        html += '<div class="dim fs-12">No callers found</div>';
     }
 
     // Callees
     var callees = data.callees || [];
-    html += '<div style="font-size:10px;letter-spacing:2px;color:var(--primary-dim);margin:10px 0 6px;">CALLEES (' + callees.length + ')</div>';
+    html += '<div class="xref-section-header-mt">CALLEES (' + callees.length + ')</div>';
     if (callees.length) {
         for (var i = 0; i < callees.length; i++) {
             var c = callees[i];
@@ -402,18 +402,18 @@ function renderXrefsTab(container, data) {
             html += '<span>' + escapeHtml(c.name) + '</span>';
             if (c.suspicious) {
                 var riskClass = c.suspicious.risk === 'CRITICAL' ? 'badge-danger' : c.suspicious.risk === 'HIGH' ? 'badge-warning' : 'badge-dim';
-                html += ' <span class="badge ' + riskClass + '" style="font-size:9px;">' + escapeHtml(c.suspicious.risk) + '</span>';
+                html += ' <span class="badge ' + riskClass + ' fs-9">' + escapeHtml(c.suspicious.risk) + '</span>';
             }
-            if (c.complexity) html += ' <span class="dim" style="font-size:10px;">C:' + c.complexity + '</span>';
+            if (c.complexity) html += ' <span class="dim fs-10">C:' + c.complexity + '</span>';
             html += '</div>';
         }
     } else {
-        html += '<div class="dim" style="font-size:12px;">No callees found</div>';
+        html += '<div class="dim fs-12">No callees found</div>';
     }
 
     // Complexity
     if (data.complexity) {
-        html += '<div style="margin-top:10px; font-size:10px; letter-spacing:1px; color:var(--primary-dim);">';
+        html += '<div class="xref-complexity">';
         html += 'BLOCKS: ' + (data.complexity.blocks || 0) + ' / EDGES: ' + (data.complexity.edges || 0);
         html += '</div>';
     }
@@ -425,10 +425,10 @@ function renderXrefsTab(container, data) {
 function renderStringsTab(container, data) {
     var strings = data.strings || [];
     if (!strings.length) {
-        container.innerHTML = '<div class="dim" style="padding:10px;">No strings associated with this function.</div>';
+        container.innerHTML = '<div class="dim p-10">No strings associated with this function.</div>';
         return;
     }
-    var html = '<table class="data-table" style="font-size:12px;"><thead><tr><th>TYPE</th><th>ADDRESS</th><th>STRING</th></tr></thead><tbody>';
+    var html = '<table class="data-table data-table-sm"><thead><tr><th>TYPE</th><th>ADDRESS</th><th>STRING</th></tr></thead><tbody>';
     var typeBadge = {'STATIC':'badge-str-static','STACK':'badge-str-stack','TIGHT':'badge-str-tight'};
     for (var i = 0; i < strings.length; i++) {
         var s = strings[i];

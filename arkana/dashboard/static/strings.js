@@ -90,7 +90,7 @@ function renderStats(data) {
         for (var i = 0; i < cats.length; i++) {
             html += '<div class="stat-row"><span class="stat-label">' + cats[i] + '</span><span>' + data.category_counts[cats[i]] + '</span></div>';
         }
-        statCats.innerHTML = html || '<div class="dim" style="padding:4px 0;font-size:12px;">No categories</div>';
+        statCats.innerHTML = html || '<div class="dim p-6-0 fs-12">No categories</div>';
     }
 
     var strTotal = document.getElementById('str-total');

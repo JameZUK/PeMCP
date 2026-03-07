@@ -1,5 +1,20 @@
 /* Arkana Dashboard — htmx config + SSE handler + toast notifications */
 
+// CSRF token helper — reads from <meta name="csrf-token">
+function getCsrfToken() {
+    var meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+}
+
+// Apply data-width attributes as inline styles (for CSP-compliant dynamic widths)
+function applyDataWidths(root) {
+    (root || document).querySelectorAll('[data-width]').forEach(function(el) {
+        el.style.width = el.dataset.width + '%';
+    });
+}
+document.addEventListener('DOMContentLoaded', function() { applyDataWidths(); });
+document.addEventListener('htmx:afterSwap', function(e) { applyDataWidths(e.detail.target); });
+
 // Strip ?token= from URL after login (if present)
 (function() {
     var params = new URLSearchParams(window.location.search);
@@ -132,7 +147,21 @@ function showToast(message, type) {
             reconnectDelay = Math.min(reconnectDelay * 2, maxReconnectDelay);
         };
     }
-    connectSSE();
+    // Delay SSE connection until page is fully loaded
+    if (document.readyState === 'complete') {
+        connectSSE();
+    } else {
+        window.addEventListener('load', connectSSE);
+    }
+
+    // Cleanly close SSE before page unload to prevent Firefox
+    // "interrupted while the page was loading" warnings
+    window.addEventListener('beforeunload', function() {
+        if (evtSource) {
+            evtSource.close();
+            evtSource = null;
+        }
+    });
 })();
 
 // Global search (keyboard shortcut: "/")
@@ -174,7 +203,7 @@ function showToast(message, type) {
             }},
             {key: 'strings', label: 'STRINGS', render: function(item) {
                 return '<a class="search-result" href="/dashboard/strings?search=' + encodeURIComponent(q) + '">' +
-                    '<span class="badge badge-dim" style="font-size:9px;">' + item.type + '</span> ' + escHtml(item.string) + '</a>';
+                    '<span class="badge badge-dim fs-9">' + item.type + '</span> ' + escHtml(item.string) + '</a>';
             }},
             {key: 'imports', label: 'IMPORTS', render: function(item) {
                 return '<a class="search-result" href="/dashboard/imports">' +
@@ -182,7 +211,7 @@ function showToast(message, type) {
             }},
             {key: 'notes', label: 'NOTES', render: function(item) {
                 return '<a class="search-result" href="/dashboard/notes">' +
-                    '<span class="badge badge-dim" style="font-size:9px;">' + escHtml(item.category) + '</span> ' + escHtml(item.content) + '</a>';
+                    '<span class="badge badge-dim fs-9">' + escHtml(item.category) + '</span> ' + escHtml(item.content) + '</a>';
             }}
         ];
 

@@ -6,8 +6,8 @@
         <span class="gs-tool-name">{{ data.active_tool }}</span>
         {% set pct = ((data.active_tool_progress / data.active_tool_total * 100) | int) if data.active_tool_total else 0 %}
         <div class="gs-progress-wrap">
-            <div class="progress-bar" style="margin:0; height:6px; flex:1;">
-                <div class="progress-fill" style="width: {{ pct }}%"></div>
+            <div class="progress-bar progress-bar-inline">
+                <div class="progress-fill" data-width="{{ pct }}"></div>
             </div>
         </div>
         <span class="gs-percent">{{ pct }}%</span>
@@ -19,8 +19,8 @@
         <span class="badge badge-running">BG</span>
         <span class="gs-tool-name">{{ task.tool }}</span>
         <div class="gs-progress-wrap">
-            <div class="progress-bar" style="margin:0; height:6px; flex:1;">
-                <div class="progress-fill" style="width: {{ task.progress_percent }}%"></div>
+            <div class="progress-bar progress-bar-inline">
+                <div class="progress-fill" data-width="{{ task.progress_percent }}"></div>
             </div>
         </div>
         <span class="gs-percent">{{ task.progress_percent }}%</span>

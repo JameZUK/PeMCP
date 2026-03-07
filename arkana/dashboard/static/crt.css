@@ -1982,3 +1982,98 @@ details[open] > .import-dll-header::before {
     .graph-minimap { display: none; }
     .graph-legend { bottom: 4px; left: 4px; }
 }
+
+/* ========================================================================
+   Utility classes (CSP: replaces inline style= attributes)
+   ======================================================================== */
+
+/* Display */
+.d-none { display: none; }
+.d-inline-block { display: inline-block; }
+
+/* Position */
+.pos-relative { position: relative; }
+
+/* Cursor */
+.cursor-pointer { cursor: pointer; }
+
+/* Font sizes */
+.fs-9 { font-size: 9px; }
+.fs-10 { font-size: 10px; }
+.fs-11 { font-size: 11px; }
+.fs-12 { font-size: 12px; }
+
+/* Letter spacing */
+.ls-1 { letter-spacing: 1px; }
+.ls-2 { letter-spacing: 2px; }
+
+/* Padding */
+.p-1-6 { padding: 1px 6px; }
+.p-2-6 { padding: 2px 6px; }
+.p-2-8 { padding: 2px 8px; }
+.p-4-12 { padding: 4px 12px; }
+.p-6-0 { padding: 6px 0; }
+.p-6-12 { padding: 6px 12px; }
+.p-8-12 { padding: 8px 12px; }
+.p-10 { padding: 10px; }
+.p-12 { padding: 12px; }
+.p-16 { padding: 16px; }
+.pt-4 { padding-top: 4px; }
+
+/* Margin */
+.ml-8 { margin-left: 8px; }
+.ml-12 { margin-left: 12px; }
+.ml-auto { margin-left: auto; }
+.mt-4 { margin-top: 4px; }
+.mt-6 { margin-top: 6px; }
+.mt-10 { margin-top: 10px; }
+.mt-12 { margin-top: 12px; }
+.mr-8 { margin-right: 8px; }
+.mx-12 { margin: 0 12px; }
+
+/* Width */
+.w-60 { width: 60px; }
+.w-120 { width: 120px; }
+.w-150 { width: 150px; }
+.w-200 { width: 200px; }
+.w-full { width: 100%; }
+.min-w-40 { min-width: 40px; }
+
+/* Text */
+.text-center { text-align: center; }
+
+/* Flex */
+.flex-1 { flex: 1; }
+
+/* Borders */
+.border-top-ghost { border-top: 1px solid var(--primary-ghost); }
+.border-warning { border-color: var(--warning); }
+
+/* Progress bar modifiers */
+.progress-bar-inline { margin: 0; height: 6px; flex: 1; }
+.progress-bar-flex { flex: 1; margin-left: 16px; }
+.progress-bar-mt { margin: 4px 0 0 0; }
+.progress-fill-warning { background: var(--warning); box-shadow: 0 0 6px var(--warning); }
+
+/* Import filter input */
+.import-filter-input {
+    background: var(--bg-deep);
+    color: var(--primary);
+    border: 1px solid var(--primary-ghost);
+    padding: 6px 12px;
+    width: 100%;
+    font-family: inherit;
+    font-size: 12px;
+}
+
+/* Minimap image */
+.minimap-img { width: 100%; height: 100%; object-fit: contain; }
+
+/* Data table small */
+.data-table-sm { font-size: 12px; }
+
+/* JS-generated xref section headers */
+.xref-section-header { font-size: 10px; letter-spacing: 2px; color: var(--primary-dim); margin-bottom: 6px; }
+.xref-section-header-mt { font-size: 10px; letter-spacing: 2px; color: var(--primary-dim); margin: 10px 0 6px; }
+.xref-complexity { font-size: 10px; letter-spacing: 1px; color: var(--primary-dim); margin-top: 10px; }
+.mb-6 { margin-bottom: 6px; }

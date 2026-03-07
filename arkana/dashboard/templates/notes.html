@@ -32,7 +32,7 @@
                 <span class="mono note-addr">{{ n.address }}</span>
                 {% endif %}
                 {% if n.tool_name %}
-                <span class="dim" style="font-size: 11px;">via {{ n.tool_name }}</span>
+                <span class="dim fs-11">via {{ n.tool_name }}</span>
                 {% endif %}
                 <span class="note-time">{{ n.created_at[:19] if n.created_at else '' }}</span>
             </div>

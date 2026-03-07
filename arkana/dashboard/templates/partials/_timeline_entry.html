@@ -16,8 +16,8 @@
                 {% if e.type != 'active' %}<span class="timeline-expand dim">&#9654;</span>{% endif %}
             </div>
             {% if e.type == 'active' and e.total > 0 %}
-            <div class="progress-bar" style="margin: 4px 0 0 0;">
-                <div class="progress-fill" style="width: {{ (e.progress / e.total * 100)|int }}%"></div>
+            <div class="progress-bar progress-bar-mt">
+                <div class="progress-fill" data-width="{{ (e.progress / e.total * 100)|int }}"></div>
             </div>
             {% endif %}
             <div class="timeline-summary">{{ e.summary }}</div>

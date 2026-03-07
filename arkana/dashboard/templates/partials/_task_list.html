@@ -6,7 +6,7 @@
             <span class="task-id mono">{{ task.id }}</span>
             <span class="badge badge-{{ task.status }}">{{ task.status|upper }}</span>
             {% if task.elapsed_s > 0 %}
-            <span class="dim" style="margin-left: auto; font-size: 11px;">
+            <span class="dim ml-auto fs-11">
                 {% if task.elapsed_s >= 3600 %}{{ (task.elapsed_s // 3600) }}h {{ ((task.elapsed_s % 3600) // 60) }}m
                 {% elif task.elapsed_s >= 60 %}{{ (task.elapsed_s // 60) }}m {{ (task.elapsed_s % 60) }}s
                 {% else %}{{ task.elapsed_s }}s{% endif %}
@@ -16,7 +16,7 @@
         <div class="task-tool">{{ task.tool }}</div>
         {% if task.status == 'running' %}
         <div class="progress-bar">
-            <div class="progress-fill" style="width: {{ task.progress_percent }}%"></div>
+            <div class="progress-fill" data-width="{{ task.progress_percent }}"></div>
         </div>
         <div class="task-progress-row">
             <span class="task-msg dim">{{ task.progress_message }}</span>

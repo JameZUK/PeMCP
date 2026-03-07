@@ -5,11 +5,11 @@
 <div class="page-header">
     <h1 class="glow">CALL GRAPH</h1>
     <div class="header-controls">
-        <span id="graph-stats" class="dim" style="font-size:11px; letter-spacing:1px; margin-right:8px;"></span>
+        <span id="graph-stats" class="dim fs-11 ls-1 mr-8"></span>
         <!-- F2: Search bar -->
-        <input type="text" id="graph-search" placeholder="SEARCH NODES..." style="width:150px; font-size:11px;">
-        <span id="graph-search-count" class="dim" style="font-size:10px; min-width:40px;"></span>
-        <button class="btn" id="graph-search-clear" style="padding:2px 6px; font-size:10px;">CLR</button>
+        <input type="text" id="graph-search" placeholder="SEARCH NODES..." class="w-150 fs-11">
+        <span id="graph-search-count" class="dim fs-10 min-w-40"></span>
+        <button class="btn fs-10 p-2-6" id="graph-search-clear">CLR</button>
         <label>LAYOUT:</label>
         <select id="layout-select">
             <option value="dagre">DAGRE</option>
@@ -20,13 +20,13 @@
         <button class="btn" id="btn-fit">FIT</button>
         <button class="btn" id="btn-reload">RELOAD</button>
         <!-- F3: Show all (hidden by default) -->
-        <button class="btn" id="btn-show-all" style="display:none; border-color:var(--warning); color:var(--warning);">SHOW ALL</button>
+        <button class="btn d-none border-warning warning" id="btn-show-all">SHOW ALL</button>
         <!-- F8: Export -->
-        <button class="btn" id="btn-export-png" style="padding:2px 8px; font-size:10px;">PNG</button>
-        <button class="btn" id="btn-export-svg" style="padding:2px 8px; font-size:10px;">SVG</button>
+        <button class="btn p-2-8 fs-10" id="btn-export-png">PNG</button>
+        <button class="btn p-2-8 fs-10" id="btn-export-svg">SVG</button>
         <!-- F12: Bookmarks -->
-        <div style="position:relative; display:inline-block;">
-            <button class="btn" id="btn-bookmark" style="padding:2px 8px; font-size:10px;">BOOKMARKS</button>
+        <div class="pos-relative d-inline-block">
+            <button class="btn p-2-8 fs-10" id="btn-bookmark">BOOKMARKS</button>
             <div id="bookmark-dropdown" class="bookmark-dropdown hidden">
                 <div id="bookmark-list"></div>
             </div>
@@ -35,9 +35,9 @@
 </div>
 
 <div class="panel graph-panel graph-panel-full">
-    <div id="cy" class="cytoscape-container" style="position:relative;">
+    <div id="cy" class="cytoscape-container pos-relative">
         <!-- F1: Context menu -->
-        <div id="cy-context-menu" class="graph-context-menu" style="display:none;">
+        <div id="cy-context-menu" class="graph-context-menu d-none">
             <div class="ctx-item" data-action="decompile">DECOMPILE</div>
             <div class="ctx-separator"></div>
             <div class="ctx-item" data-action="flag">FLAG</div>
@@ -52,11 +52,11 @@
             <div class="ctx-item" data-action="bookmark">BOOKMARK</div>
         </div>
         <!-- F11: Tooltip -->
-        <div id="cy-tooltip" class="graph-tooltip" style="display:none;"></div>
+        <div id="cy-tooltip" class="graph-tooltip d-none"></div>
         <!-- F5: Minimap -->
         <div id="graph-minimap" class="graph-minimap">
-            <img id="minimap-img" style="display:none; width:100%; height:100%; object-fit:contain;">
-            <div id="minimap-viewport" class="minimap-viewport" style="display:none;"></div>
+            <img id="minimap-img" class="d-none minimap-img">
+            <div id="minimap-viewport" class="minimap-viewport d-none"></div>
         </div>
         <!-- F6: Legend -->
         <div id="graph-legend" class="graph-legend">
@@ -81,7 +81,7 @@
     <div id="decompile-overlay" class="decompile-overlay hidden">
         <div class="decompile-overlay-header">
             <span class="decompile-func-name"></span>
-            <button id="decompile-overlay-close" class="btn" style="padding:1px 6px; font-size:10px; margin-left:auto;">[X]</button>
+            <button id="decompile-overlay-close" class="btn p-1-6 fs-10 ml-auto">[X]</button>
         </div>
         <pre class="decompile-code"></pre>
     </div>

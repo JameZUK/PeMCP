@@ -650,7 +650,7 @@ function renderCodeTab(addr) {
 
     fetch('/dashboard/api/decompile', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
         body: JSON.stringify({address: addr}),
     })
         .then(function(r) { return r.json(); })
@@ -851,7 +851,7 @@ function contextMenuAction(action) {
 function doDecompile(addr) {
     fetch('/dashboard/api/decompile', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
         body: JSON.stringify({address: addr}),
     })
         .then(function(r) { return r.json(); })
@@ -884,7 +884,7 @@ function doTriage(node, status) {
     var addr = node.id();
     fetch('/dashboard/api/triage', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
         body: JSON.stringify({address: addr, status: status}),
     })
         .then(function(r) {
