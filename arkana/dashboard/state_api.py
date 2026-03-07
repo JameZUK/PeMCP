@@ -585,6 +585,13 @@ def get_callgraph_data() -> Dict[str, Any]:
         renames = st.get_renames().get("functions", {})
         decompiled_addrs = _get_decompiled_addresses()
 
+        # Build score lookup from cached enrichment scores
+        score_lookup: Dict[str, int] = {}
+        cached_scores = getattr(st, "_cached_function_scores", None)
+        if cached_scores:
+            for s in cached_scores:
+                score_lookup[s.get("addr", "")] = s.get("score", 0)
+
         # Build set of addresses with function notes
         noted_addrs = set()
         for n in st.get_notes(category="function"):
@@ -614,6 +621,7 @@ def get_callgraph_data() -> Dict[str, Any]:
                     "label": name,
                     "triage": triage.get(addr_hex, "unreviewed"),
                     "complexity": complexity,
+                    "score": score_lookup.get(addr_hex, 0),
                     "explored": "yes" if explored else "no",
                     "renamed": "yes" if is_renamed else "no",
                 }
@@ -1304,9 +1312,17 @@ def get_function_analysis_data(address_hex: str) -> Dict[str, Any]:
     Used by the callgraph sidebar tabbed panel.
     """
     st = _get_state()
+    # Build score lookup from cached enrichment scores
+    score_lookup: Dict[str, int] = {}
+    cached_scores = getattr(st, "_cached_function_scores", None)
+    if cached_scores:
+        for s in cached_scores:
+            score_lookup[s.get("addr", "")] = s.get("score", 0)
+
     result: Dict[str, Any] = {
         "address": address_hex,
         "name": "",
+        "score": score_lookup.get(address_hex, 0),
         "callers": [],
         "callees": [],
         "suspicious_apis": [],
@@ -1374,6 +1390,7 @@ def get_function_analysis_data(address_hex: str) -> Dict[str, Any]:
                     "name": name,
                     "triage": triage,
                     "complexity": complexity,
+                    "score": score_lookup.get(pred_hex, 0),
                 })
 
             # Callees (successors)
@@ -1395,6 +1412,7 @@ def get_function_analysis_data(address_hex: str) -> Dict[str, Any]:
                     "name": name,
                     "triage": triage,
                     "complexity": complexity,
+                    "score": score_lookup.get(succ_hex, 0),
                 }
                 # Check for suspicious API
                 api_info = CATEGORIZED_IMPORTS_DB.get(name)

@@ -112,6 +112,10 @@ function initCytoscape(elements) {
             {selector: 'node[renamed="yes"]', style: {
                 'border-width': 3, 'border-color': '#44ddff', 'color': '#44ddff',
             }},
+            /* Score-based border thickness — higher score = thicker border */
+            {selector: 'node[score > 0]', style: {
+                'border-width': 'mapData(score, 0, 100, 2, 5)',
+            }},
             /* Orthogonal taxi-routed edges */
             {selector: 'edge', style: {
                 'width': 1.5,
@@ -380,6 +384,7 @@ function renderInfoTab(node) {
     addRow('ADDRESS:', data.id);
     addRow('NAME:', data.label);
     addRow('COMPLEXITY:', data.complexity);
+    addRow('SCORE:', data.score !== undefined ? data.score : 0);
     addRow('CALLERS:', data.in_deg !== undefined ? data.in_deg : '\u2014');
     addRow('CALLEES:', data.out_deg !== undefined ? data.out_deg : '\u2014');
     if (data.size !== undefined && data.size > 0) {
@@ -557,6 +562,14 @@ function _appendXrefRow(container, entry) {
     nameSpan.style.textOverflow = 'ellipsis';
     nameSpan.style.whiteSpace = 'nowrap';
     row.appendChild(nameSpan);
+    /* Score indicator */
+    if (entry.score) {
+        var scoreSpan = document.createElement('span');
+        scoreSpan.className = 'dim';
+        scoreSpan.style.fontSize = '9px';
+        scoreSpan.textContent = 'S:' + entry.score;
+        row.appendChild(scoreSpan);
+    }
     /* Suspicious badge if present */
     if (entry.suspicious) {
         var sBadge = document.createElement('span');
@@ -1422,6 +1435,13 @@ function buildLegend() {
         row.appendChild(label);
         body.appendChild(row);
     });
+    /* Score note */
+    var note = document.createElement('div');
+    note.className = 'legend-item dim';
+    note.style.fontSize = '9px';
+    note.style.marginTop = '4px';
+    note.textContent = 'BORDER THICKNESS = SCORE';
+    body.appendChild(note);
 }
 
 function toggleLegend() {
