@@ -53,7 +53,7 @@ function renderStringTable(data) {
         var truncated = s.string.length > 200 ? s.string.substring(0, 200) + '...' : s.string;
         html += '<tr>';
         html += '<td class="mono">' + escapeHtml(s.address || '') + '</td>';
-        html += '<td><span class="string-score">' + score + '</span></td>';
+        html += '<td><span class="string-score">' + escapeHtml(String(score)) + '</span></td>';
         html += '<td><span class="badge ' + badgeClass + '">' + escapeHtml(s.type) + '</span></td>';
         html += '<td class="str-content" title="' + escapeHtml(s.string) + '">' + escapeHtml(truncated) + '</td>';
         html += '<td>' + catBadge + '</td>';
@@ -79,7 +79,7 @@ function renderStats(data) {
         var html = '';
         var types = Object.keys(data.type_counts);
         for (var i = 0; i < types.length; i++) {
-            html += '<div class="stat-row"><span class="stat-label">' + escapeHtml(types[i]) + '</span><span>' + data.type_counts[types[i]] + '</span></div>';
+            html += '<div class="stat-row"><span class="stat-label">' + escapeHtml(types[i]) + '</span><span>' + escapeHtml(String(data.type_counts[types[i]])) + '</span></div>';
         }
         statTypes.innerHTML = html;
     }
@@ -89,7 +89,7 @@ function renderStats(data) {
         var html = '';
         var cats = Object.keys(data.category_counts);
         for (var i = 0; i < cats.length; i++) {
-            html += '<div class="stat-row"><span class="stat-label">' + escapeHtml(cats[i]) + '</span><span>' + data.category_counts[cats[i]] + '</span></div>';
+            html += '<div class="stat-row"><span class="stat-label">' + escapeHtml(cats[i]) + '</span><span>' + escapeHtml(String(data.category_counts[cats[i]])) + '</span></div>';
         }
         statCats.innerHTML = html || '<div class="dim p-6-0 fs-12">No categories</div>';
     }
@@ -275,13 +275,13 @@ function renderFlossPanel(data) {
         var t = types[i];
         var c = tc[t] || 0;
         html += '<div class="floss-type-row">';
-        html += '<span class="badge ' + (typeColors[t] || 'badge-dim') + '">' + t + '</span>';
-        html += '<span class="floss-type-count">' + c + '</span>';
+        html += '<span class="badge ' + (typeColors[t] || 'badge-dim') + '">' + escapeHtml(t) + '</span>';
+        html += '<span class="floss-type-count">' + escapeHtml(String(c)) + '</span>';
         html += '</div>';
     }
     html += '<div class="floss-type-row floss-type-total">';
     html += '<span class="dim">TOTAL</span>';
-    html += '<span>' + (data.total_floss_strings || 0) + '</span>';
+    html += '<span>' + escapeHtml(String(data.total_floss_strings || 0)) + '</span>';
     html += '</div>';
     countsEl.innerHTML = html;
 

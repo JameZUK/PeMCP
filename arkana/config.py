@@ -49,6 +49,7 @@ try:
     _cache_max_mb_int = int(_cache_max_mb) if _cache_max_mb else 500
 except (ValueError, TypeError):
     _cache_max_mb_int = 500
+_cache_max_mb_int = max(1, min(_cache_max_mb_int, 50000))  # Clamp to 1 MB – 50 GB
 analysis_cache = AnalysisCache(
     max_size_mb=_cache_max_mb_int,
     enabled=(_cache_enabled.lower() not in ("false", "0", "no")) if _cache_enabled else True,

@@ -55,11 +55,11 @@ function reloadFunctions() {
             if (f.is_decompiled) statusTags += '<span class="badge badge-explored" title="Decompiled">DEC</span> ';
             var triageClass = (['unreviewed','suspicious','clean','flagged'].indexOf(f.triage_status) !== -1) ? f.triage_status : 'unreviewed';
             html += '<tr class="triage-' + triageClass + noteClass + exploredClass + renamedClass + '" data-addr="' + escapeHtml(f.address) + '">';
-            html += '<td class="mono">' + f.address + '</td>';
+            html += '<td class="mono">' + escapeHtml(f.address) + '</td>';
             html += '<td>' + statusTags + escapeHtml(f.name) + noteIndicator + '</td>';
-            html += '<td>' + f.size + '</td>';
-            html += '<td>' + f.complexity + '</td>';
-            html += '<td>' + f.score + '</td>';
+            html += '<td>' + escapeHtml(String(f.size)) + '</td>';
+            html += '<td>' + escapeHtml(String(f.complexity)) + '</td>';
+            html += '<td>' + escapeHtml(String(f.score)) + '</td>';
             html += '<td><span class="badge badge-' + triageClass + '">' + triageClass.toUpperCase() + '</span></td>';
             html += '<td class="triage-btns">';
             var safeAddr = escapeHtml(f.address);

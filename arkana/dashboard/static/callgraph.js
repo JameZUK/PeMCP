@@ -457,7 +457,7 @@ function renderInfoTab(node) {
     if (incomers.length > 0) {
         var callersTitle = document.createElement('div');
         callersTitle.className = 'detail-row';
-        callersTitle.innerHTML = '<span class="detail-label">CALLERS (' + incomers.length + '):</span>';
+        callersTitle.innerHTML = '<span class="detail-label">CALLERS (' + escapeHtml(String(incomers.length)) + '):</span>';
         details.appendChild(callersTitle);
         incomers.forEach(function(n) {
             var xrow = document.createElement('div');
@@ -474,7 +474,7 @@ function renderInfoTab(node) {
     if (outgoers.length > 0) {
         var calleesTitle = document.createElement('div');
         calleesTitle.className = 'detail-row';
-        calleesTitle.innerHTML = '<span class="detail-label">CALLEES (' + outgoers.length + '):</span>';
+        calleesTitle.innerHTML = '<span class="detail-label">CALLEES (' + escapeHtml(String(outgoers.length)) + '):</span>';
         details.appendChild(calleesTitle);
         outgoers.forEach(function(n) {
             var xrow = document.createElement('div');
@@ -528,7 +528,7 @@ function renderXrefsTab(data, node) {
     if (data.callers && data.callers.length > 0) {
         var callersTitle = document.createElement('div');
         callersTitle.className = 'detail-row';
-        callersTitle.innerHTML = '<span class="detail-label">CALLERS (' + data.callers.length + '):</span>';
+        callersTitle.innerHTML = '<span class="detail-label">CALLERS (' + escapeHtml(String(data.callers.length)) + '):</span>';
         details.appendChild(callersTitle);
         data.callers.forEach(function(c) {
             _appendXrefRow(details, c);
@@ -539,7 +539,7 @@ function renderXrefsTab(data, node) {
     if (data.callees && data.callees.length > 0) {
         var calleesTitle = document.createElement('div');
         calleesTitle.className = 'detail-row';
-        calleesTitle.innerHTML = '<span class="detail-label">CALLEES (' + data.callees.length + '):</span>';
+        calleesTitle.innerHTML = '<span class="detail-label">CALLEES (' + escapeHtml(String(data.callees.length)) + '):</span>';
         details.appendChild(calleesTitle);
         data.callees.forEach(function(c) {
             _appendXrefRow(details, c);
@@ -550,8 +550,8 @@ function renderXrefsTab(data, node) {
     if (data.complexity) {
         var compRow = document.createElement('div');
         compRow.className = 'detail-row';
-        compRow.innerHTML = '<span class="detail-label">BLOCKS:</span> ' + data.complexity.blocks +
-            ' &nbsp; <span class="detail-label">EDGES:</span> ' + data.complexity.edges;
+        compRow.innerHTML = '<span class="detail-label">BLOCKS:</span> ' + escapeHtml(String(data.complexity.blocks)) +
+            ' &nbsp; <span class="detail-label">EDGES:</span> ' + escapeHtml(String(data.complexity.edges));
         details.appendChild(compRow);
     }
 

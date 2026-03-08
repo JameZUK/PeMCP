@@ -101,14 +101,19 @@ class _ToolResultCache:
 #  Pagination helper
 # ---------------------------------------------------------------------------
 
-def _make_hashable(v):
+_MAKE_HASHABLE_MAX_DEPTH = 20
+
+
+def _make_hashable(v, _depth=0):
     """Recursively convert mutable values to hashable types for cache keys."""
+    if _depth > _MAKE_HASHABLE_MAX_DEPTH:
+        return str(v)[:200]
     if isinstance(v, bytearray):
         return bytes(v)
     if isinstance(v, dict):
-        return tuple(sorted((k, _make_hashable(val)) for k, val in v.items()))
+        return tuple(sorted((k, _make_hashable(val, _depth + 1)) for k, val in v.items()))
     if isinstance(v, (list, set)):
-        return tuple(_make_hashable(item) for item in v)
+        return tuple(_make_hashable(item, _depth + 1) for item in v)
     return v
 
 

@@ -456,6 +456,15 @@ def init_db(db_path: Optional[Path] = None) -> None:
         conn.close()
 
 
+def _safe_json_dumps(obj, fallback="{}"):
+    """Serialize *obj* to JSON, returning *fallback* on encoding errors."""
+    try:
+        return json.dumps(obj)
+    except (TypeError, ValueError):
+        logger.warning("Failed to JSON-encode BSim feature, using fallback")
+        return fallback
+
+
 def _insert_function_row(conn, binary_id: int, feat: Dict[str, Any]) -> None:
     """Insert a single function feature row (no commit)."""
     cfg_s = feat.get("cfg_structural", {})
@@ -476,12 +485,12 @@ def _insert_function_row(conn, binary_id: int, feat: Dict[str, Any]) -> None:
             size_s.get("instruction_count", 0),
             size_s.get("byte_size", 0),
             cfg_s.get("loop_count", 0),
-            json.dumps(feat.get("api_calls", {})),
-            json.dumps(feat.get("string_refs", {}).get("hashes", [])),
-            json.dumps(feat.get("constants", {}).get("values", [])),
-            json.dumps(feat.get("_vex_histogram", {})),
-            json.dumps(cfg_s),
-            json.dumps(size_s),
+            _safe_json_dumps(feat.get("api_calls", {})),
+            _safe_json_dumps(feat.get("string_refs", {}).get("hashes", []), "[]"),
+            _safe_json_dumps(feat.get("constants", {}).get("values", []), "[]"),
+            _safe_json_dumps(feat.get("_vex_histogram", {})),
+            _safe_json_dumps(cfg_s),
+            _safe_json_dumps(size_s),
         ),
     )
 
@@ -635,14 +644,25 @@ def list_indexed_binaries(db_path: Optional[Path] = None) -> List[Dict[str, Any]
         conn.close()
 
 
+def _safe_json_loads(raw, default):
+    """Parse JSON with fallback to *default* on decode errors."""
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Corrupted JSON in BSim DB column, using default")
+        return default
+
+
 def _row_to_features(row: sqlite3.Row) -> Dict[str, Any]:
     """Reconstruct a feature dict from a database row for scoring."""
-    cfg_structural = json.loads(row["cfg_structural_json"]) if row["cfg_structural_json"] else {}
-    size_metrics = json.loads(row["size_metrics_json"]) if row["size_metrics_json"] else {}
-    api_calls = json.loads(row["api_calls_json"]) if row["api_calls_json"] else {}
-    string_hashes = json.loads(row["string_hashes_json"]) if row["string_hashes_json"] else []
-    constants = json.loads(row["constants_json"]) if row["constants_json"] else []
-    vex_histogram = json.loads(row["vex_op_histogram_json"]) if row["vex_op_histogram_json"] else {}
+    cfg_structural = _safe_json_loads(row["cfg_structural_json"], {})
+    size_metrics = _safe_json_loads(row["size_metrics_json"], {})
+    api_calls = _safe_json_loads(row["api_calls_json"], {})
+    string_hashes = _safe_json_loads(row["string_hashes_json"], [])
+    constants = _safe_json_loads(row["constants_json"], [])
+    vex_histogram = _safe_json_loads(row["vex_op_histogram_json"], {})
 
     return {
         "address": row["address"],
