@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Type Editor{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">TYPE EDITOR</h1>
+</div>
+
+<div class="panel">
+    <div class="panel-header">ACTIONS</div>
+    <div class="filter-bar">
+        <div class="filter-group">
+            <button class="btn-triage btn-decompile" id="btn-new-struct">+ STRUCT</button>
+            <button class="btn-triage btn-analysis" id="btn-new-enum">+ ENUM</button>
+        </div>
+        <div class="filter-group">
+            <span id="types-count" class="badge badge-dim">{{ data.total if data else 0 }} types</span>
+        </div>
+    </div>
+</div>
+
+<div class="panel" id="struct-panel">
+    <div class="panel-header">STRUCTS <span id="struct-count" class="badge badge-dim">{{ data.structs|length if data and data.structs else 0 }}</span></div>
+    <div id="struct-list">
+        {% if data and data.structs %}
+        <div class="table-wrap">
+            <table class="data-table" id="struct-table">
+                <thead>
+                    <tr>
+                        <th>NAME</th>
+                        <th>SIZE</th>
+                        <th>FIELDS</th>
+                        <th>ACTIONS</th>
+                    </tr>
+                </thead>
+                <tbody id="struct-tbody">
+                    {% for s in data.structs %}
+                    <tr data-name="{{ s.name }}">
+                        <td class="mono">{{ s.name }}</td>
+                        <td>{{ s.size }}</td>
+                        <td>{{ s.fields|length if s.fields else 0 }}</td>
+                        <td>
+                            <button class="btn-triage btn-analysis type-edit-btn" data-name="{{ s.name }}" data-kind="struct">EDIT</button>
+                            <button class="btn-triage btn-flag type-delete-btn" data-name="{{ s.name }}">DEL</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-msg" id="no-structs">No structs defined.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="panel" id="enum-panel">
+    <div class="panel-header">ENUMS <span id="enum-count" class="badge badge-dim">{{ data.enums|length if data and data.enums else 0 }}</span></div>
+    <div id="enum-list">
+        {% if data and data.enums %}
+        <div class="table-wrap">
+            <table class="data-table" id="enum-table">
+                <thead>
+                    <tr>
+                        <th>NAME</th>
+                        <th>SIZE</th>
+                        <th>VALUES</th>
+                        <th>ACTIONS</th>
+                    </tr>
+                </thead>
+                <tbody id="enum-tbody">
+                    {% for e in data.enums %}
+                    <tr data-name="{{ e.name }}">
+                        <td class="mono">{{ e.name }}</td>
+                        <td>{{ e.size }}</td>
+                        <td>{{ e.values|length if e.values else 0 }}</td>
+                        <td>
+                            <button class="btn-triage btn-analysis type-edit-btn" data-name="{{ e.name }}" data-kind="enum">EDIT</button>
+                            <button class="btn-triage btn-flag type-delete-btn" data-name="{{ e.name }}">DEL</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-msg" id="no-enums">No enums defined.</div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Modal for editing types -->
+<div id="type-modal" class="type-modal hidden">
+    <div class="type-modal-content panel">
+        <div class="panel-header" id="modal-title">NEW STRUCT</div>
+        <div class="type-modal-body">
+            <div class="filter-bar">
+                <div class="filter-group">
+                    <label>NAME:</label>
+                    <input type="text" id="modal-name" placeholder="MyStruct" maxlength="128">
+                </div>
+                <div class="filter-group">
+                    <label>SIZE (bytes):</label>
+                    <input type="number" id="modal-size" value="0" min="0" max="10485760">
+                </div>
+            </div>
+            <div id="modal-fields-container">
+                <div class="panel-header">FIELDS</div>
+                <div id="modal-fields"></div>
+                <button class="btn-triage" id="modal-add-field">+ ADD FIELD</button>
+            </div>
+            <div id="modal-values-container" class="hidden">
+                <div class="panel-header">VALUES</div>
+                <div id="modal-values"></div>
+                <button class="btn-triage" id="modal-add-value">+ ADD VALUE</button>
+            </div>
+            <div class="filter-bar" style="margin-top:10px">
+                <button class="btn-triage btn-decompile" id="modal-save">SAVE</button>
+                <button class="btn-triage" id="modal-cancel">CANCEL</button>
+            </div>
+            <div id="modal-error" class="empty-msg hidden"></div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/types.js"></script>
+{% endblock %}

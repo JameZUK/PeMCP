@@ -112,11 +112,18 @@ The web dashboard starts automatically on port 8082. Access URL is logged at sta
 http://127.0.0.1:8082/dashboard/?token=<TOKEN>
 ```
 
-Pages: Overview (binary summary, risk, mitigations, findings with function pivot links, recent notes), Functions (sortable, triage buttons, enrichment score column, XREF analysis panel with clickable navigation, inline notes, `?highlight=` deep linking), Call Graph (Cytoscape.js with dagre layout, tabbed sidebar: INFO/XREFS/STRINGS/CODE, score-based border thickness, `?focus=` deep linking), Sections (permission flags), Imports (DLL/export tables, clickable export addresses), Strings (FLOSS detail panel, type/category filtering, sifter scores, function column with links), Timeline (expandable tool calls, clickable note addresses), Notes (category filtering, clickable address links).
+Pages: Overview (binary summary, risk, mitigations, findings with function pivot links, recent notes), Functions (sortable, triage buttons, enrichment score column, XREF analysis panel with clickable navigation, inline notes, code search, symbol tree view, `?highlight=` deep linking), Call Graph (Cytoscape.js with dagre layout, tabbed sidebar: INFO/XREFS/STRINGS/CODE, score-based border thickness, `?focus=` deep linking), Sections (permission flags, entropy heatmap), Imports (DLL/export tables, clickable export addresses), Hex View (infinite-scroll hex dump, auto-loads chunks on scroll, jump-to-offset), Strings (FLOSS detail panel, type/category filtering, sifter scores, function column with links), CAPA (capability matches grouped by namespace, function links), MITRE (ATT&CK technique matrix with IOC panel), Types (custom struct/enum editor), Diff (binary diff via angr BinDiff with file browser and manual path input), Timeline (expandable tool calls, clickable note addresses), Notes (category filtering, clickable address links).
 
 A global status bar between the nav and content area shows the active tool and running background tasks with progress bars from any page. It auto-refreshes every 3s via htmx and collapses when idle.
 
 Dashboard triage flags are persisted to the analysis cache and restored when the same file is reopened. Flagged/suspicious functions are prioritised in `suggest_next_action()`.
+
+**CSP compliance**: Dashboard uses `script-src 'self'` CSP. All event handlers use `addEventListener` or event delegation — no inline `onclick` attributes. Dynamic HTML uses `data-*` attributes for actions with delegated listeners.
+
+- **Hex View**: Infinite scroll loads 4096-byte chunks, keeps max 64KB in DOM, trims rows from opposite end. `/api/hex` endpoint with offset/length params.
+- **Binary Diff**: `/api/diff` runs angr BinDiff in `asyncio.to_thread()`. `/api/list-files` lists samples directory for the file browser. Uses `getattr()` with fallback for BinDiff attribute names across angr versions.
+- **Full-Text Code Search**: `/api/search-code` searches `_decompile_meta` cache with line-level context. Functions page SEARCH button and code search results panel with highlighted matches.
+- **Symbol Tree**: Functions page TABLE/TREE toggle. Groups functions into 6 categories (flagged, suspicious, decompiled, renamed, other, library/PLT). Event delegation via `data-tree-action` attributes.
 
 ## Docker
 

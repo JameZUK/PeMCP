@@ -354,6 +354,9 @@ function switchSidebarTab(tabName) {
         case 'code':
             renderCodeTab(addr);
             break;
+        case 'cfg':
+            renderCfgTab(addr);
+            break;
     }
 }
 
@@ -718,6 +721,67 @@ function _renderCodeContent(container, data) {
     pre.className = 'sidebar-code';
     pre.textContent = code;
     container.appendChild(pre);
+}
+
+/* --- CFG TAB --- */
+function renderCfgTab(addr) {
+    var details = document.getElementById('node-details');
+    details.textContent = '';
+    var loading = document.createElement('div');
+    loading.className = 'detail-row dim';
+    loading.textContent = 'Loading CFG...';
+    details.appendChild(loading);
+
+    fetch('/dashboard/api/function-cfg?address=' + encodeURIComponent(addr))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (_sidebarNodeAddr !== addr || _activeTab !== 'cfg') return;
+            details.textContent = '';
+            if (data.error || !data.nodes || data.nodes.length === 0) {
+                var msg = document.createElement('div');
+                msg.className = 'detail-row dim';
+                msg.textContent = data.error || 'No CFG data available.';
+                details.appendChild(msg);
+                return;
+            }
+            // Build mini CFG display
+            var html = '<div class="cfg-mini">';
+            if (data.function_name) {
+                html += '<div class="dim" style="margin-bottom:4px">' + escapeHtml(data.function_name) + '</div>';
+            }
+            html += '<div class="cfg-stats dim">' + data.nodes.length + ' blocks, ' + data.edges.length + ' edges</div>';
+            html += '<div class="cfg-blocks">';
+            data.nodes.forEach(function(node) {
+                html += '<div class="cfg-block">';
+                html += '<span class="mono">' + escapeHtml(node.addr) + '</span>';
+                html += ' <span class="dim">(' + escapeHtml(String(node.size)) + 'B, ' + escapeHtml(String(node.instructions)) + ' insns)</span>';
+                html += '</div>';
+            });
+            html += '</div>';
+            // Show edges
+            html += '<div class="cfg-edges" style="margin-top:6px">';
+            html += '<div class="dim" style="margin-bottom:2px">EDGES:</div>';
+            data.edges.forEach(function(edge) {
+                var edgeClass = edge.type === 'conditional' ? 'cfg-edge-cond' : 'cfg-edge-uncond';
+                html += '<div class="' + edgeClass + '">';
+                html += '<span class="mono dim">' + escapeHtml(edge.src) + '</span>';
+                html += ' &#8594; ';
+                html += '<span class="mono">' + escapeHtml(edge.dst) + '</span>';
+                if (edge.type === 'conditional') html += ' <span class="badge badge-warning fs-9">COND</span>';
+                html += '</div>';
+            });
+            html += '</div></div>';
+            details.innerHTML = html;
+        })
+        .catch(function() {
+            if (_sidebarNodeAddr === addr && _activeTab === 'cfg') {
+                details.textContent = '';
+                var err = document.createElement('div');
+                err.className = 'detail-row dim';
+                err.textContent = 'Failed to load CFG.';
+                details.appendChild(err);
+            }
+        });
 }
 
 /* --- Navigate to node helper --- */

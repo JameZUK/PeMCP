@@ -66,6 +66,9 @@ function reloadFunctions() {
             html += '<a class="btn-triage btn-graph" href="/dashboard/callgraph?focus=' + encodeURIComponent(f.address) + '" title="View in call graph">GRAPH</a>';
             html += '<button class="btn-triage btn-analysis" data-addr="' + safeAddr + '" title="Cross-references &amp; analysis">XREF</button>';
             html += '<button class="btn-triage btn-decompile' + (f.is_decompiled ? ' active' : '') + '" data-addr="' + safeAddr + '" title="Decompile">DEC</button>';
+            html += '<button class="btn-triage btn-asm" data-addr="' + safeAddr + '" title="Disassembly">ASM</button>';
+            html += '<button class="btn-triage btn-vars" data-addr="' + safeAddr + '" title="Variables">VARS</button>';
+            html += '<button class="btn-triage btn-sim" data-addr="' + safeAddr + '" title="Similar functions">SIM</button>';
             html += '<button class="btn-triage btn-flag' + (f.triage_status === 'flagged' ? ' active' : '') + '" data-addr="' + safeAddr + '" data-status="flagged">FLAG</button>';
             html += '<button class="btn-triage btn-suspicious' + (f.triage_status === 'suspicious' ? ' active' : '') + '" data-addr="' + safeAddr + '" data-status="suspicious">SUS</button>';
             html += '<button class="btn-triage btn-clean' + (f.triage_status === 'clean' ? ' active' : '') + '" data-addr="' + safeAddr + '" data-status="clean">CLN</button>';
@@ -151,7 +154,15 @@ document.addEventListener('DOMContentLoaded', function() {
     if (triageSelect) triageSelect.addEventListener('change', reloadFunctions);
 
     var searchInput = document.getElementById('filter-search');
-    if (searchInput) searchInput.addEventListener('keyup', debounceReload);
+    if (searchInput) searchInput.addEventListener('keyup', function() {
+        debounceReload();
+        if (_currentView === 'tree') loadTreeView();
+    });
+
+    var codeSearchInput = document.getElementById('code-search');
+    if (codeSearchInput) codeSearchInput.addEventListener('keyup', function(e) {
+        if (e.key === 'Enter') searchDecompiledCode();
+    });
 
     var tbody = document.getElementById('func-tbody');
     if (tbody) {
@@ -174,6 +185,12 @@ document.addEventListener('DOMContentLoaded', function() {
                 toggleDecompile(btn);
             } else if (btn.classList.contains('btn-analysis')) {
                 toggleAnalysisPanel(btn);
+            } else if (btn.classList.contains('btn-asm')) {
+                toggleDetailTab(btn, 'asm');
+            } else if (btn.classList.contains('btn-vars')) {
+                toggleDetailTab(btn, 'vars');
+            } else if (btn.classList.contains('btn-sim')) {
+                toggleDetailTab(btn, 'sim');
             } else {
                 // Toggle: if already active, reset to unreviewed
                 var status = btn.classList.contains('active') ? 'unreviewed' : btn.dataset.status;
@@ -307,7 +324,7 @@ function insertDetailPanel(afterRow, addr, startTab) {
     // Tab bar
     var tabBar = document.createElement('div');
     tabBar.className = 'detail-tab-bar';
-    var tabs = ['XREFS', 'STRINGS', 'CODE'];
+    var tabs = ['XREFS', 'STRINGS', 'CODE', 'ASM', 'VARS', 'SIM'];
     for (var i = 0; i < tabs.length; i++) {
         var tabBtn = document.createElement('button');
         var tabKey = tabs[i].toLowerCase();
@@ -371,6 +388,12 @@ function _renderTabContent(container, tab, addr) {
             .then(function(r) { return r.json(); })
             .then(function(data) { renderStringsTab(container, data); })
             .catch(function() { container.innerHTML = '<div class="dim p-10">Failed to load strings.</div>'; });
+    } else if (tab === 'asm') {
+        renderAsmTab(container, addr);
+    } else if (tab === 'vars') {
+        renderVarsTab(container, addr);
+    } else if (tab === 'sim') {
+        renderSimTab(container, addr);
     }
 }
 
@@ -505,6 +528,130 @@ function renderStringsTab(container, data) {
     container.innerHTML = html;
 }
 
+// --- Generic detail tab toggle for new tabs (ASM, VARS, SIM) ---
+function toggleDetailTab(btn, tabName) {
+    var addr = btn.dataset.addr;
+    var row = btn.closest('tr');
+    var detailRow = _findDetailRow(row);
+    if (detailRow) {
+        var activeTab = detailRow.querySelector('.detail-tab.active');
+        if (activeTab && activeTab.dataset.tab === tabName) {
+            detailRow.remove();
+            delete _openDetailPanels[addr];
+            return;
+        }
+        var tab = detailRow.querySelector('.detail-tab[data-tab="' + tabName + '"]');
+        if (tab) switchDetailTab(tab);
+        return;
+    }
+    _openDetailPanels[addr] = _openDetailPanels[addr] || {};
+    _openDetailPanels[addr].activeTab = tabName;
+    insertDetailPanel(row, addr, tabName);
+}
+
+// --- ASM tab renderer ---
+function renderAsmTab(container, addr) {
+    container.innerHTML = '<div class="dim p-10">Loading disassembly...</div>';
+    fetch('/dashboard/api/disassembly?address=' + encodeURIComponent(addr) + '&count=200')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var insns = data.instructions || [];
+            if (!insns.length) {
+                container.innerHTML = '<div class="dim p-10">No disassembly available.' +
+                    (data.error ? ' ' + escapeHtml(data.error) : '') + '</div>';
+                return;
+            }
+            var html = '<table class="data-table data-table-sm asm-table"><thead><tr><th>ADDR</th><th>BYTES</th><th>MNEMONIC</th><th>OPERANDS</th></tr></thead><tbody>';
+            insns.forEach(function(insn) {
+                html += '<tr>';
+                html += '<td class="mono asm-addr">' + escapeHtml(insn.address) + '</td>';
+                html += '<td class="mono dim asm-bytes">' + escapeHtml(insn.bytes) + '</td>';
+                html += '<td class="asm-mnemonic">' + escapeHtml(insn.mnemonic) + '</td>';
+                html += '<td class="asm-operands">' + escapeHtml(insn.op_str) + '</td>';
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        })
+        .catch(function() {
+            container.innerHTML = '<div class="dim p-10">Failed to load disassembly.</div>';
+        });
+}
+
+// --- VARS tab renderer ---
+function renderVarsTab(container, addr) {
+    container.innerHTML = '<div class="dim p-10">Loading variables...</div>';
+    fetch('/dashboard/api/function-variables?address=' + encodeURIComponent(addr))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var params = data.parameters || [];
+            var locals = data.locals || [];
+            if (!params.length && !locals.length) {
+                container.innerHTML = '<div class="dim p-10">No variable information available.' +
+                    (data.error ? ' ' + escapeHtml(data.error) : '') + '</div>';
+                return;
+            }
+            var html = '<div class="p-10">';
+            if (data.calling_convention) {
+                html += '<div class="dim">Calling convention: ' + escapeHtml(data.calling_convention) + '</div>';
+            }
+            if (params.length) {
+                html += '<div class="xref-section-header">PARAMETERS (' + params.length + ')</div>';
+                html += '<table class="data-table data-table-sm"><thead><tr><th>NAME</th><th>SIZE</th><th>CATEGORY</th></tr></thead><tbody>';
+                params.forEach(function(v) {
+                    html += '<tr><td class="mono">' + escapeHtml(v.name) + '</td>';
+                    html += '<td>' + escapeHtml(String(v.size || 0)) + '</td>';
+                    html += '<td class="dim">' + escapeHtml(v.category || '') + '</td></tr>';
+                });
+                html += '</tbody></table>';
+            }
+            if (locals.length) {
+                html += '<div class="xref-section-header-mt">LOCAL VARIABLES (' + locals.length + ')</div>';
+                html += '<table class="data-table data-table-sm"><thead><tr><th>NAME</th><th>SIZE</th><th>CATEGORY</th></tr></thead><tbody>';
+                locals.forEach(function(v) {
+                    html += '<tr><td class="mono">' + escapeHtml(v.name) + '</td>';
+                    html += '<td>' + escapeHtml(String(v.size || 0)) + '</td>';
+                    html += '<td class="dim">' + escapeHtml(v.category || '') + '</td></tr>';
+                });
+                html += '</tbody></table>';
+            }
+            html += '</div>';
+            container.innerHTML = html;
+        })
+        .catch(function() {
+            container.innerHTML = '<div class="dim p-10">Failed to load variables.</div>';
+        });
+}
+
+// --- SIM tab renderer ---
+function renderSimTab(container, addr) {
+    container.innerHTML = '<div class="dim p-10">Loading similarity data...</div>';
+    fetch('/dashboard/api/function-similarity?address=' + encodeURIComponent(addr))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var matches = data.matches || [];
+            if (!matches.length) {
+                container.innerHTML = '<div class="dim p-10">No similar functions found.' +
+                    (!data.available ? ' Function scoring data not available.' : '') + '</div>';
+                return;
+            }
+            var html = '<table class="data-table data-table-sm"><thead><tr><th>ADDRESS</th><th>NAME</th><th>SCORE</th><th>SIMILARITY</th></tr></thead><tbody>';
+            matches.forEach(function(m) {
+                html += '<tr class="xref-clickable" data-addr="' + escapeHtml(m.address) + '">';
+                html += '<td class="mono">' + escapeHtml(m.address) + '</td>';
+                html += '<td>' + escapeHtml(m.name) + '</td>';
+                html += '<td>' + escapeHtml(String(m.score)) + '</td>';
+                html += '<td><span class="badge badge-dim">' + escapeHtml(String(m.similarity)) + '%</span></td>';
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        })
+        .catch(function() {
+            container.innerHTML = '<div class="dim p-10">Failed to load similarity data.</div>';
+        });
+}
+
 // --- Navigation ---
 function navigateToFunction(addr) {
     var tbody = document.getElementById('func-tbody');
@@ -550,5 +697,223 @@ function _restoreDetailPanels() {
         }
     });
 }
+
+// === Full-Text Decompiled Search ===
+var _codeSearchDebounce;
+function searchDecompiledCode() {
+    var q = document.getElementById('code-search').value.trim();
+    if (!q) return;
+    var resultsPanel = document.getElementById('code-search-results');
+    var body = document.getElementById('code-search-body');
+    var countBadge = document.getElementById('code-search-count');
+    resultsPanel.classList.remove('d-none');
+    body.innerHTML = '<div class="dim p-10">Searching...</div>';
+    fetch('/dashboard/api/search-code?q=' + encodeURIComponent(q) + '&limit=100')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.error) {
+                body.innerHTML = '<div class="dim p-10">' + escapeHtml(data.error) + '</div>';
+                countBadge.textContent = '0';
+                return;
+            }
+            var matches = data.results || [];
+            countBadge.textContent = String(data.total_matches || 0);
+            if (!matches.length) {
+                body.innerHTML = '<div class="dim p-10">No matches found. ' +
+                    escapeHtml(String(data.searched_functions || 0)) + ' functions searched (' +
+                    escapeHtml(String(data.total_cached || 0)) + ' cached).</div>';
+                return;
+            }
+            var html = '<div class="code-search-stats p-6-12 dim fs-11">Found ' +
+                escapeHtml(String(data.total_matches)) + ' matches across ' +
+                escapeHtml(String(data.searched_functions)) + ' functions (' +
+                escapeHtml(String(data.total_cached)) + ' cached)</div>';
+            var escapedQ = escapeHtml(q);
+            var qRe = new RegExp('(' + escapedQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+            for (var i = 0; i < matches.length; i++) {
+                var m = matches[i];
+                html += '<div class="code-search-result-item">';
+                html += '<div class="code-search-result-header">';
+                html += '<a class="code-search-func-link" href="javascript:void(0)" data-nav-addr="' +
+                    escapeHtml(m.address) + '">' + escapeHtml(m.function_name) + '</a>';
+                html += ' <span class="dim mono fs-10">' + escapeHtml(m.address) + ':' + escapeHtml(String(m.line_number)) + '</span>';
+                html += '</div>';
+                if (m.context_before) {
+                    html += '<div class="code-match-context dim">' + escapeHtml(m.context_before) + '</div>';
+                }
+                var escapedLine = escapeHtml(m.line_text);
+                html += '<div class="code-match-line">' + escapedLine.replace(qRe, '<mark class="code-match-highlight">$1</mark>') + '</div>';
+                if (m.context_after) {
+                    html += '<div class="code-match-context dim">' + escapeHtml(m.context_after) + '</div>';
+                }
+                html += '</div>';
+            }
+            body.innerHTML = html;
+        })
+        .catch(function() {
+            body.innerHTML = '<div class="dim p-10">Search request failed.</div>';
+            countBadge.textContent = '0';
+        });
+}
+function clearCodeSearch() {
+    document.getElementById('code-search-results').classList.add('d-none');
+    document.getElementById('code-search').value = '';
+}
+
+// === Symbol Tree View ===
+var _currentView = 'table';
+var _cachedFunctions = null;
+
+function toggleView(mode) {
+    _currentView = mode;
+    var tableWrap = document.querySelector('.table-wrap');
+    var tree = document.getElementById('symbol-tree');
+    document.querySelectorAll('.view-toggle-btn').forEach(function(btn) {
+        btn.classList.toggle('active', btn.dataset.view === mode);
+    });
+    if (mode === 'tree') {
+        if (tableWrap) tableWrap.classList.add('d-none');
+        tree.classList.remove('d-none');
+        loadTreeView();
+    } else {
+        if (tableWrap) tableWrap.classList.remove('d-none');
+        tree.classList.add('d-none');
+    }
+}
+
+function loadTreeView() {
+    var triage = document.getElementById('filter-triage').value;
+    var search = document.getElementById('filter-search').value;
+    var url = '/dashboard/api/functions?triage=' + encodeURIComponent(triage) +
+              '&search=' + encodeURIComponent(search) +
+              '&sort=' + encodeURIComponent(_currentSort) +
+              '&asc=' + (_sortAsc ? '1' : '0');
+    fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+        _cachedFunctions = data;
+        renderSymbolTree(data);
+    });
+}
+
+function renderSymbolTree(functions) {
+    var tree = document.getElementById('symbol-tree');
+    if (!functions || !functions.length) {
+        tree.innerHTML = '<div class="dim p-10">No functions to display.</div>';
+        return;
+    }
+    // Categorize
+    var groups = {
+        flagged: {label: 'FLAGGED', items: [], cls: 'tree-group-flagged'},
+        suspicious: {label: 'SUSPICIOUS', items: [], cls: 'tree-group-suspicious'},
+        decompiled: {label: 'DECOMPILED', items: [], cls: 'tree-group-decompiled'},
+        renamed: {label: 'RENAMED', items: [], cls: 'tree-group-renamed'},
+        other: {label: 'OTHER', items: [], cls: 'tree-group-other'},
+        library: {label: 'LIBRARY / PLT', items: [], cls: 'tree-group-library'},
+    };
+    var libPrefixes = ['__libc_', '_Jv_', '__cxa_', '__gmon_', '_ITM_', '__stack_chk', 'sub_', '__x86.'];
+    for (var i = 0; i < functions.length; i++) {
+        var f = functions[i];
+        var isLib = f.is_simprocedure || f.is_plt;
+        if (!isLib) {
+            for (var p = 0; p < libPrefixes.length; p++) {
+                if (f.name.indexOf(libPrefixes[p]) === 0) { isLib = true; break; }
+            }
+        }
+        if (isLib) {
+            groups.library.items.push(f);
+        } else if (f.triage_status === 'flagged') {
+            groups.flagged.items.push(f);
+        } else if (f.triage_status === 'suspicious') {
+            groups.suspicious.items.push(f);
+        } else if (f.is_decompiled) {
+            groups.decompiled.items.push(f);
+        } else if (f.is_renamed) {
+            groups.renamed.items.push(f);
+        } else {
+            groups.other.items.push(f);
+        }
+    }
+    var order = ['flagged', 'suspicious', 'decompiled', 'renamed', 'other', 'library'];
+    var html = '<div class="tree-controls p-6-12"><button class="btn btn-triage" data-tree-action="expand-all">EXPAND ALL</button> <button class="btn btn-triage" data-tree-action="collapse-all">COLLAPSE ALL</button></div>';
+    for (var g = 0; g < order.length; g++) {
+        var key = order[g];
+        var group = groups[key];
+        if (!group.items.length) continue;
+        html += '<div class="tree-group ' + group.cls + '">';
+        html += '<div class="tree-group-header" data-tree-action="toggle">';
+        html += '<span class="tree-expand-icon">&#9660;</span> ';
+        html += escapeHtml(group.label) + ' <span class="badge badge-dim">' + group.items.length + '</span>';
+        html += '</div>';
+        html += '<div class="tree-items">';
+        for (var j = 0; j < group.items.length; j++) {
+            var fn = group.items[j];
+            var triageClass = 'dot-' + (fn.triage_status || 'unreviewed');
+            html += '<div class="tree-item xref-clickable" data-addr="' + escapeHtml(fn.address) + '" data-tree-action="nav-func">';
+            html += '<span class="xref-triage-dot ' + triageClass + '"></span> ';
+            html += '<span class="tree-item-addr mono dim">' + escapeHtml(fn.address) + '</span> ';
+            html += '<span class="tree-item-name">' + escapeHtml(fn.name) + '</span>';
+            if (fn.size) html += ' <span class="dim fs-10">S:' + escapeHtml(String(fn.size)) + '</span>';
+            if (fn.complexity) html += ' <span class="dim fs-10">C:' + escapeHtml(String(fn.complexity)) + '</span>';
+            if (fn.score) html += ' <span class="dim fs-10">E:' + escapeHtml(String(fn.score)) + '</span>';
+            html += '</div>';
+        }
+        html += '</div></div>';
+    }
+    tree.innerHTML = html;
+}
+
+function toggleAllTreeGroups(expand) {
+    document.querySelectorAll('.tree-group').forEach(function(g) {
+        if (expand) g.classList.remove('collapsed');
+        else g.classList.add('collapsed');
+    });
+}
+
+// --- CSP-safe event listeners for Batch 4 buttons ---
+(function() {
+    // Code search button
+    var searchBtn = document.getElementById('code-search-btn');
+    if (searchBtn) searchBtn.addEventListener('click', searchDecompiledCode);
+
+    // Code search clear
+    var clearBtn = document.getElementById('code-search-clear-btn');
+    if (clearBtn) clearBtn.addEventListener('click', clearCodeSearch);
+
+    // Code search enter key
+    var codeInput = document.getElementById('code-search');
+    if (codeInput) codeInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') searchDecompiledCode();
+    });
+
+    // View toggle buttons
+    var tableBtn = document.getElementById('view-table-btn');
+    var treeBtn = document.getElementById('view-tree-btn');
+    if (tableBtn) tableBtn.addEventListener('click', function() { toggleView('table'); });
+    if (treeBtn) treeBtn.addEventListener('click', function() { toggleView('tree'); });
+
+    // Delegated click handler for code search result links
+    var searchBody = document.getElementById('code-search-body');
+    if (searchBody) searchBody.addEventListener('click', function(e) {
+        var link = e.target.closest('[data-nav-addr]');
+        if (link) {
+            e.preventDefault();
+            navigateToFunction(link.getAttribute('data-nav-addr'));
+        }
+    });
+
+    // Delegated click handler for symbol tree actions
+    var treeEl = document.getElementById('symbol-tree');
+    if (treeEl) treeEl.addEventListener('click', function(e) {
+        var el = e.target.closest('[data-tree-action]');
+        if (!el) return;
+        var action = el.getAttribute('data-tree-action');
+        if (action === 'expand-all') toggleAllTreeGroups(true);
+        else if (action === 'collapse-all') toggleAllTreeGroups(false);
+        else if (action === 'toggle') el.parentNode.classList.toggle('collapsed');
+        else if (action === 'nav-func') {
+            var addr = el.getAttribute('data-addr');
+            if (addr) { toggleView('table'); setTimeout(function() { navigateToFunction(addr); }, 100); }
+        }
+    });
+})();
 
 // showToast is defined in dashboard.js (loaded on all pages via base.html)

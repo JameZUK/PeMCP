@@ -23,7 +23,23 @@
             <label>SEARCH:</label>
             <input type="text" id="filter-search" placeholder="function name or address">
         </div>
+        <div class="filter-group">
+            <label>CODE:</label>
+            <input type="text" id="code-search" placeholder="search decompiled code...">
+            <button class="btn btn-triage" id="code-search-btn">SEARCH</button>
+        </div>
+        <div class="filter-group view-toggle">
+            <button class="btn btn-triage view-toggle-btn active" data-view="table" id="view-table-btn">TABLE</button>
+            <button class="btn btn-triage view-toggle-btn" data-view="tree" id="view-tree-btn">TREE</button>
+        </div>
     </div>
+</div>
+
+<div id="code-search-results" class="panel code-search-results d-none">
+    <div class="panel-header">CODE SEARCH RESULTS <span id="code-search-count" class="badge badge-dim">0</span>
+        <button class="btn btn-triage ml-auto" id="code-search-clear-btn">CLEAR</button>
+    </div>
+    <div id="code-search-body" class="code-search-body"></div>
 </div>
 
 <div class="panel">
@@ -52,6 +68,7 @@
             </tbody>
         </table>
     </div>
+    <div id="symbol-tree" class="symbol-tree d-none"></div>
 </div>
 
 {% endblock %}

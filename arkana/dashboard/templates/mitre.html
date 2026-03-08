@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Arkana — MITRE ATT&amp;CK{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">MITRE ATT&amp;CK / THREAT INTEL</h1>
+</div>
+
+<div class="panel">
+    <div class="panel-header">SUMMARY
+        <span id="mitre-tech-count" class="badge badge-dim">{{ data.technique_count if data else 0 }} techniques</span>
+        <span id="mitre-ioc-count" class="badge badge-dim">{{ data.ioc_count if data else 0 }} IOCs</span>
+    </div>
+    <div id="mitre-summary" class="mitre-summary">
+        {% if not data or not data.tactics %}
+        <div class="empty-msg">No MITRE ATT&amp;CK data available. Run enrichment analysis first.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="panel" id="mitre-matrix-panel">
+    <div class="panel-header">ATT&amp;CK MATRIX</div>
+    <div id="mitre-matrix" class="mitre-matrix">
+        {% if data and data.tactics %}
+        {% for tactic, techniques in data.tactics.items() %}
+        <div class="mitre-tactic-col">
+            <div class="mitre-tactic-header">{{ tactic|upper }}</div>
+            {% for t in techniques %}
+            <div class="mitre-technique-card" data-technique-id="{{ t.id }}">
+                <span class="mitre-tid">{{ t.id }}</span>
+                <span class="mitre-tname">{{ t.name }}</span>
+                {% if t.confidence %}
+                <span class="badge badge-dim">{{ t.confidence }}</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-msg">No techniques mapped.</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="panel" id="ioc-panel">
+    <div class="panel-header">INDICATORS OF COMPROMISE</div>
+    <div id="ioc-table-container">
+        {% if data and data.iocs %}
+        {% for ioc_type, items in data.iocs.items() %}
+        <div class="ioc-section">
+            <div class="ioc-type-header">{{ ioc_type|upper|replace('_', ' ') }} <span class="badge badge-dim">{{ items|length }}</span></div>
+            <div class="table-wrap">
+                <table class="data-table data-table-sm">
+                    <tbody>
+                        {% for item in items %}
+                        <tr><td class="mono">{{ item if item is string else item }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <div class="empty-msg">No IOCs extracted. Run IOC collection via enrichment.</div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/mitre.js"></script>
+{% endblock %}

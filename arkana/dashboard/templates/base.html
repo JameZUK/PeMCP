@@ -25,7 +25,12 @@
             <a href="/dashboard/callgraph" class="nav-link {% if nav_active == 'callgraph' %}active{% endif %}">CALL GRAPH</a>
             <a href="/dashboard/sections" class="nav-link {% if nav_active == 'sections' %}active{% endif %}">SECTIONS</a>
             <a href="/dashboard/imports" class="nav-link {% if nav_active == 'imports' %}active{% endif %}">IMPORTS</a>
+            <a href="/dashboard/hexview" class="nav-link {% if nav_active == 'hexview' %}active{% endif %}">HEX</a>
             <a href="/dashboard/strings" class="nav-link {% if nav_active == 'strings' %}active{% endif %}">STRINGS</a>
+            <a href="/dashboard/capabilities" class="nav-link {% if nav_active == 'capabilities' %}active{% endif %}">CAPA</a>
+            <a href="/dashboard/mitre" class="nav-link {% if nav_active == 'mitre' %}active{% endif %}">MITRE</a>
+            <a href="/dashboard/types" class="nav-link {% if nav_active == 'types' %}active{% endif %}">TYPES</a>
+            <a href="/dashboard/diff" class="nav-link {% if nav_active == 'diff' %}active{% endif %}">DIFF</a>
             <a href="/dashboard/timeline" class="nav-link {% if nav_active == 'timeline' %}active{% endif %}">TIMELINE</a>
             <a href="/dashboard/notes" class="nav-link {% if nav_active == 'notes' %}active{% endif %}">NOTES</a>
         </div>
@@ -49,7 +54,7 @@
     <div id="toast-container" class="toast-container"></div>
 
     <script src="/dashboard/static/htmx.min.js"></script>
-    {% block scripts %}{% endblock %}
     <script src="/dashboard/static/dashboard.js"></script>
+    {% block scripts %}{% endblock %}
 </body>
 </html>

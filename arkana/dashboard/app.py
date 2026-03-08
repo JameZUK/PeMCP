@@ -37,6 +37,23 @@ from arkana.dashboard.state_api import (
     get_function_strings_data,
     get_function_analysis_data,
     get_floss_summary,
+    get_hex_dump_data,
+    get_mitre_data,
+    get_capa_data,
+    get_function_cfg_data,
+    get_disassembly_data,
+    get_function_variables_data,
+    get_entropy_data,
+    get_resources_data,
+    get_triage_report_data,
+    get_packing_data,
+    get_similarity_data,
+    get_custom_types_data,
+    get_function_similarity_data,
+    get_export_report_data,
+    search_decompiled_code,
+    get_diff_data,
+    get_list_files_data,
 )
 
 logger = logging.getLogger("Arkana.dashboard")
@@ -740,6 +757,308 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return JSONResponse(get_floss_summary())
 
+    # --- New API endpoints (Batch 1-3) ---
+
+    async def api_hex(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            offset = int(request.query_params.get("offset", "0"))
+            offset = max(0, min(offset, 0x7FFFFFFF))
+        except (ValueError, TypeError):
+            offset = 0
+        try:
+            length = int(request.query_params.get("length", "256"))
+            length = max(1, min(length, 4096))
+        except (ValueError, TypeError):
+            length = 256
+        return JSONResponse(get_hex_dump_data(offset, length))
+
+    async def api_mitre(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_mitre_data())
+
+    async def api_capabilities(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_capa_data())
+
+    async def api_function_cfg(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        address = request.query_params.get("address", "").strip()
+        if not address or len(address) > 40:
+            return JSONResponse({"error": "invalid address"}, status_code=400)
+        try:
+            return JSONResponse(get_function_cfg_data(address))
+        except Exception:
+            logger.debug("api_function_cfg error for %s", address, exc_info=True)
+            return JSONResponse({"nodes": [], "edges": [], "error": "analysis error"})
+
+    async def api_disassembly(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        address = request.query_params.get("address", "").strip()
+        if not address or len(address) > 40:
+            return JSONResponse({"error": "invalid address"}, status_code=400)
+        try:
+            count = int(request.query_params.get("count", "200"))
+            count = max(1, min(count, 2000))
+        except (ValueError, TypeError):
+            count = 200
+        try:
+            return JSONResponse(get_disassembly_data(address, count))
+        except Exception:
+            logger.debug("api_disassembly error for %s", address, exc_info=True)
+            return JSONResponse({"instructions": [], "error": "disassembly error"})
+
+    async def api_function_variables(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        address = request.query_params.get("address", "").strip()
+        if not address or len(address) > 40:
+            return JSONResponse({"error": "invalid address"}, status_code=400)
+        try:
+            return JSONResponse(get_function_variables_data(address))
+        except Exception:
+            logger.debug("api_function_variables error for %s", address, exc_info=True)
+            return JSONResponse({"parameters": [], "locals": [], "error": "analysis error"})
+
+    async def api_entropy(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_entropy_data())
+
+    async def api_resources(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_resources_data())
+
+    async def api_triage_report(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_triage_report_data())
+
+    async def api_packing(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_packing_data())
+
+    async def api_similarity(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_similarity_data())
+
+    async def api_types(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(get_custom_types_data())
+
+    async def api_types_struct_post(request: Request) -> Response:
+        """Create or update a struct type."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        content_length = request.headers.get("content-length")
+        try:
+            cl_int = int(content_length) if content_length else 0
+        except (ValueError, TypeError):
+            cl_int = 0
+        if cl_int > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            raw_body = await request.body()
+        except Exception:
+            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
+        if len(raw_body) > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        name = body.get("name", "").strip()
+        if not name or not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', name):
+            return JSONResponse({"error": "invalid name"}, status_code=400)
+        if len(name) > 128:
+            return JSONResponse({"error": "name too long"}, status_code=400)
+        fields = body.get("fields", [])
+        if not isinstance(fields, list):
+            return JSONResponse({"error": "fields must be a list"}, status_code=400)
+        st = _get_active_state()
+        custom_types = getattr(st, "custom_types", {})
+        if not isinstance(custom_types, dict):
+            custom_types = {}
+        custom_types[name] = {"kind": "struct", "fields": fields, "size": body.get("size", 0)}
+        st.custom_types = custom_types
+        return JSONResponse({"ok": True, "name": name})
+
+    async def api_types_enum_post(request: Request) -> Response:
+        """Create or update an enum type."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        content_length = request.headers.get("content-length")
+        try:
+            cl_int = int(content_length) if content_length else 0
+        except (ValueError, TypeError):
+            cl_int = 0
+        if cl_int > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            raw_body = await request.body()
+        except Exception:
+            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
+        if len(raw_body) > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        name = body.get("name", "").strip()
+        if not name or not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', name):
+            return JSONResponse({"error": "invalid name"}, status_code=400)
+        if len(name) > 128:
+            return JSONResponse({"error": "name too long"}, status_code=400)
+        values = body.get("values", {})
+        if not isinstance(values, dict):
+            return JSONResponse({"error": "values must be a dict"}, status_code=400)
+        st = _get_active_state()
+        custom_types = getattr(st, "custom_types", {})
+        if not isinstance(custom_types, dict):
+            custom_types = {}
+        custom_types[name] = {"kind": "enum", "values": values, "size": body.get("size", 4)}
+        st.custom_types = custom_types
+        return JSONResponse({"ok": True, "name": name})
+
+    async def api_types_delete(request: Request) -> Response:
+        """Delete a custom type."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        name = request.query_params.get("name", "").strip()
+        if not name or len(name) > 128:
+            return JSONResponse({"error": "invalid name"}, status_code=400)
+        st = _get_active_state()
+        custom_types = getattr(st, "custom_types", {})
+        if isinstance(custom_types, dict) and name in custom_types:
+            del custom_types[name]
+            st.custom_types = custom_types
+            return JSONResponse({"ok": True})
+        return JSONResponse({"error": "type not found"}, status_code=404)
+
+    async def api_function_similarity(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        address = request.query_params.get("address", "").strip()
+        if not address or len(address) > 40:
+            return JSONResponse({"error": "invalid address"}, status_code=400)
+        try:
+            return JSONResponse(get_function_similarity_data(address))
+        except Exception:
+            logger.debug("api_function_similarity error for %s", address, exc_info=True)
+            return JSONResponse({"matches": [], "available": False})
+
+    async def api_export_report(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        try:
+            report = get_export_report_data()
+            report_json = json.dumps(report, indent=2, default=str)
+            filename = "arkana_report.json"
+            file_info = report.get("file_info", {})
+            if file_info.get("filename"):
+                base = os.path.splitext(file_info["filename"])[0]
+                filename = f"arkana_report_{base}.json"
+            return Response(
+                content=report_json,
+                media_type="application/json",
+                headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+            )
+        except Exception:
+            logger.debug("api_export_report error", exc_info=True)
+            return JSONResponse({"error": "report generation failed"}, status_code=500)
+
+    # --- Batch 4: Full-text decompiled search ---
+    async def api_search_code(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        q = request.query_params.get("q", "").strip()
+        if not q:
+            return JSONResponse({"error": "query is required"}, status_code=400)
+        if len(q) > 200:
+            return JSONResponse({"error": "query too long (max 200)"}, status_code=400)
+        limit_str = request.query_params.get("limit", "100")
+        try:
+            limit = max(1, min(int(limit_str), 200))
+        except (ValueError, TypeError):
+            limit = 100
+        try:
+            return JSONResponse(search_decompiled_code(q, max_results=limit))
+        except Exception:
+            logger.debug("api_search_code error", exc_info=True)
+            return JSONResponse({"error": "search failed"}, status_code=500)
+
+    # --- Batch 4: Binary diff ---
+    async def api_diff(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        content_type = request.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
+        content_length = request.headers.get("content-length")
+        try:
+            cl_int = int(content_length) if content_length else 0
+        except (ValueError, TypeError):
+            cl_int = 0
+        if cl_int > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            raw_body = await request.body()
+        except Exception:
+            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
+        if len(raw_body) > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        file_path_b = body.get("file_path_b", "")
+        if not isinstance(file_path_b, str) or not file_path_b.strip():
+            return JSONResponse({"error": "file_path_b is required"}, status_code=400)
+        file_path_b = file_path_b.strip()
+        if len(file_path_b) > 512:
+            return JSONResponse({"error": "file_path_b too long"}, status_code=400)
+        if "\x00" in file_path_b:
+            return JSONResponse({"error": "invalid path"}, status_code=400)
+        if not os.path.isfile(file_path_b):
+            return JSONResponse({"error": "file not found or not accessible"}, status_code=400)
+        try:
+            data = await asyncio.to_thread(get_diff_data, file_path_b)
+            return JSONResponse(data)
+        except Exception:
+            logger.debug("api_diff error", exc_info=True)
+            return JSONResponse({"error": "diff failed"}, status_code=500)
+
+    # --- File listing for diff browser ---
+    async def api_list_files(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        search = request.query_params.get("search", "").strip()
+        if len(search) > 200:
+            search = search[:200]
+        sort_by = request.query_params.get("sort", "name")
+        if sort_by not in ("name", "size", "format"):
+            sort_by = "name"
+        return JSONResponse(get_list_files_data(search=search, sort_by=sort_by))
+
     return [
         Route("/login", endpoint=login_page, methods=["GET"]),
         Route("/login", endpoint=login_post, methods=["POST"]),
@@ -751,6 +1070,13 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/strings", endpoint=_auth_page("strings.html", "strings", get_strings_data), methods=["GET"]),
         Route("/timeline", endpoint=_auth_page("timeline.html", "timeline", lambda: get_timeline_data(100)), methods=["GET"]),
         Route("/notes", endpoint=page_notes, methods=["GET"]),
+        # New pages (Batch 2)
+        Route("/hexview", endpoint=_auth_page("hexview.html", "hexview"), methods=["GET"]),
+        Route("/mitre", endpoint=_auth_page("mitre.html", "mitre", get_mitre_data), methods=["GET"]),
+        Route("/capabilities", endpoint=_auth_page("capabilities.html", "capabilities", get_capa_data), methods=["GET"]),
+        Route("/types", endpoint=_auth_page("types.html", "types", get_custom_types_data), methods=["GET"]),
+        # New pages (Batch 4)
+        Route("/diff", endpoint=_auth_page("diff.html", "diff"), methods=["GET"]),
         # API
         Route("/api/state", endpoint=api_state, methods=["GET"]),
         Route("/api/functions", endpoint=api_functions, methods=["GET"]),
@@ -767,6 +1093,28 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/debug", endpoint=api_debug, methods=["GET"]),
         Route("/api/events", endpoint=api_events, methods=["GET"]),
         Route("/api/floss-summary", endpoint=api_floss_summary, methods=["GET"]),
+        # New API endpoints (Batch 1-3)
+        Route("/api/hex", endpoint=api_hex, methods=["GET"]),
+        Route("/api/mitre", endpoint=api_mitre, methods=["GET"]),
+        Route("/api/capabilities", endpoint=api_capabilities, methods=["GET"]),
+        Route("/api/function-cfg", endpoint=api_function_cfg, methods=["GET"]),
+        Route("/api/disassembly", endpoint=api_disassembly, methods=["GET"]),
+        Route("/api/function-variables", endpoint=api_function_variables, methods=["GET"]),
+        Route("/api/entropy", endpoint=api_entropy, methods=["GET"]),
+        Route("/api/resources", endpoint=api_resources, methods=["GET"]),
+        Route("/api/triage-report", endpoint=api_triage_report, methods=["GET"]),
+        Route("/api/packing", endpoint=api_packing, methods=["GET"]),
+        Route("/api/similarity", endpoint=api_similarity, methods=["GET"]),
+        Route("/api/types", endpoint=api_types, methods=["GET"]),
+        Route("/api/types/struct", endpoint=api_types_struct_post, methods=["POST"]),
+        Route("/api/types/enum", endpoint=api_types_enum_post, methods=["POST"]),
+        Route("/api/types/delete", endpoint=api_types_delete, methods=["POST"]),
+        Route("/api/function-similarity", endpoint=api_function_similarity, methods=["GET"]),
+        Route("/api/export-report", endpoint=api_export_report, methods=["POST"]),
+        # New API endpoints (Batch 4)
+        Route("/api/search-code", endpoint=api_search_code, methods=["GET"]),
+        Route("/api/diff", endpoint=api_diff, methods=["POST"]),
+        Route("/api/list-files", endpoint=api_list_files, methods=["GET"]),
         # Partials
         Route("/partials/overview-stats", endpoint=partial_overview_stats, methods=["GET"]),
         Route("/partials/task-list", endpoint=partial_task_list, methods=["GET"]),

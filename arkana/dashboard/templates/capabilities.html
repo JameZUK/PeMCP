@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Capabilities{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">CAPABILITIES (CAPA)</h1>
+</div>
+
+<div class="panel">
+    <div class="panel-header">SUMMARY
+        <span id="capa-rule-count" class="badge badge-dim">{{ data.stats.total_rules if data and data.stats else 0 }} rules</span>
+        <span id="capa-attack-count" class="badge badge-dim">{{ data.stats.total_attack_tactics if data and data.stats else 0 }} ATT&amp;CK tactics</span>
+    </div>
+    <div class="filter-bar">
+        <div class="filter-group">
+            <label>SEARCH:</label>
+            <input type="text" id="capa-search" placeholder="rule name or namespace">
+        </div>
+        <div class="filter-group">
+            <label>GROUP BY:</label>
+            <select id="capa-group">
+                <option value="none">FLAT LIST</option>
+                <option value="namespace">NAMESPACE</option>
+                <option value="attack">ATT&amp;CK TACTIC</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<div class="panel" id="capa-rules-panel">
+    <div class="panel-header">MATCHED RULES</div>
+    <div id="capa-rules-container">
+        {% if data and data.rules %}
+        <div class="table-wrap">
+            <table class="data-table" id="capa-table">
+                <thead>
+                    <tr>
+                        <th>RULE</th>
+                        <th>NAMESPACE</th>
+                        <th>SCOPE</th>
+                        <th>MATCHES</th>
+                        <th>DETAILS</th>
+                    </tr>
+                </thead>
+                <tbody id="capa-tbody">
+                    {% for rule in data.rules %}
+                    <tr>
+                        <td>{{ rule.name }}</td>
+                        <td class="dim">{{ rule.namespace }}</td>
+                        <td><span class="badge badge-dim">{{ rule.scope or 'file' }}</span></td>
+                        <td>{{ rule.addresses|length }}</td>
+                        <td>
+                            {% for addr in rule.addresses %}
+                            {% if addr.func_name %}
+                            <a href="/dashboard/functions?highlight={{ addr.func_addr }}" class="capa-func-link">&#8594; {{ addr.func_name }}</a>
+                            {% else %}
+                            <span class="mono dim">{{ addr.address }}</span>
+                            {% endif %}
+                            {% endfor %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="empty-msg">No capa results. Load a binary and ensure capa analysis has run.</div>
+        {% endif %}
+    </div>
+</div>
+
+{% if data and data.attack_mapping %}
+<div class="panel">
+    <div class="panel-header">ATT&amp;CK MAPPING</div>
+    <div class="mitre-matrix">
+        {% for tactic, items in data.attack_mapping.items() %}
+        <div class="mitre-tactic-col">
+            <div class="mitre-tactic-header">{{ tactic|upper }}</div>
+            {% for item in items %}
+            <div class="mitre-technique-card">
+                <span class="mitre-tid">{{ item.id }}</span>
+                <span class="dim">{{ item.rule }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+{% if data and data.mbc_mapping %}
+<div class="panel">
+    <div class="panel-header">MBC MAPPING</div>
+    <div class="mitre-matrix">
+        {% for objective, items in data.mbc_mapping.items() %}
+        <div class="mitre-tactic-col">
+            <div class="mitre-tactic-header">{{ objective|upper }}</div>
+            {% for item in items %}
+            <div class="mitre-technique-card">
+                <span class="mitre-tid">{{ item.id }}</span>
+                <span class="dim">{{ item.behavior }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/capabilities.js"></script>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Hex View{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">HEX VIEW</h1>
+</div>
+
+<div class="panel">
+    <div class="panel-header">NAVIGATE</div>
+    <div class="filter-bar">
+        <div class="filter-group">
+            <label>JUMP TO:</label>
+            <input type="text" id="hex-offset" placeholder="0x00000000" value="0x00000000">
+            <button class="btn-triage btn-decompile" id="hex-go">GO</button>
+        </div>
+        <div class="filter-group">
+            <span id="hex-file-info" class="dim"></span>
+        </div>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">HEX DUMP <span id="hex-range" class="badge badge-dim"></span></div>
+    <div class="hex-scroll-container" id="hex-scroll-container">
+        <table class="data-table data-table-sm hex-table" id="hex-table">
+            <thead>
+                <tr>
+                    <th>OFFSET</th>
+                    <th>HEXADECIMAL</th>
+                    <th>ASCII</th>
+                </tr>
+            </thead>
+            <tbody id="hex-tbody"></tbody>
+        </table>
+        <div id="hex-loading" class="hex-loading d-none">Loading...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/hexview.js"></script>
+{% endblock %}

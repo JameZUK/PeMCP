@@ -4,10 +4,32 @@
 {% block content %}
 <div class="page-header">
     <h1 class="glow">SYSTEM OVERVIEW</h1>
+    <button class="btn-triage btn-decompile" id="btn-export-report" style="float:right">EXPORT REPORT</button>
 </div>
 
 <div id="overview-stats" hx-get="/dashboard/partials/overview-stats" hx-trigger="every 5s" hx-swap="innerHTML">
     {% include "partials/_overview_stats.html" %}
+</div>
+
+<div class="overview-cards-row">
+    <div class="panel overview-card">
+        <div class="panel-header">TRIAGE SUMMARY</div>
+        <div id="triage-panel-content" class="p-6-0">
+            <div class="dim">Loading triage data...</div>
+        </div>
+    </div>
+    <div class="panel overview-card">
+        <div class="panel-header">PACKING</div>
+        <div id="packing-card-content" class="p-6-0">
+            <div class="dim">Loading...</div>
+        </div>
+    </div>
+    <div class="panel overview-card">
+        <div class="panel-header">SIMILARITY HASHES</div>
+        <div id="similarity-card-content" class="p-6-0">
+            <div class="dim">Loading...</div>
+        </div>
+    </div>
 </div>
 
 <div class="panel" id="tasks-panel">
@@ -16,4 +38,8 @@
         {% include "partials/_task_list.html" %}
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/overview.js"></script>
 {% endblock %}

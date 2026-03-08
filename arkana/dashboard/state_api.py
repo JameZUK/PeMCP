@@ -3,6 +3,7 @@ import bisect
 import copy
 import datetime
 import logging
+import math
 import os
 import threading
 import time
@@ -937,6 +938,8 @@ def get_functions_data(sort_by: str = "address",
                 "notes": func_notes,
                 "is_decompiled": is_decompiled,
                 "is_renamed": is_renamed,
+                "is_simprocedure": getattr(func, "is_simprocedure", False),
+                "is_plt": getattr(func, "is_plt", False),
             })
     except (AttributeError, KeyError, TypeError, RuntimeError):
         logger.debug("Error reading function data from angr KB", exc_info=True)
@@ -2092,3 +2095,1010 @@ def get_floss_summary() -> Dict[str, Any]:
             if k in ("min_length", "language", "timeout")
         } if config else {},
     }
+
+
+# ---------------------------------------------------------------------------
+#  Hex dump data (Batch 1a)
+# ---------------------------------------------------------------------------
+
+def get_hex_dump_data(offset: int = 0, length: int = 256) -> Dict[str, Any]:
+    """Read raw bytes from the loaded binary and return hex dump lines."""
+    st = _get_state()
+    if not st.filepath:
+        return {"lines": [], "offset": 0, "total_size": 0, "error": "no file loaded"}
+    try:
+        file_size = os.path.getsize(st.filepath)
+    except OSError:
+        return {"lines": [], "offset": 0, "total_size": 0, "error": "file not accessible"}
+
+    offset = max(0, min(offset, file_size))
+    length = max(1, min(length, 4096))
+    end = min(offset + length, file_size)
+
+    lines = []
+    try:
+        with open(st.filepath, "rb") as f:
+            f.seek(offset)
+            data = f.read(end - offset)
+        for i in range(0, len(data), 16):
+            row = data[i:i + 16]
+            addr = offset + i
+            hex_bytes = " ".join(f"{b:02x}" for b in row)
+            ascii_repr = "".join(chr(b) if 32 <= b < 127 else "." for b in row)
+            lines.append({
+                "offset": f"0x{addr:08x}",
+                "hex": hex_bytes,
+                "ascii": ascii_repr,
+            })
+    except (OSError, IOError):
+        return {"lines": [], "offset": offset, "total_size": file_size, "error": "read error"}
+
+    return {"lines": lines, "offset": offset, "length": len(data), "total_size": file_size}
+
+
+# ---------------------------------------------------------------------------
+#  MITRE / Threat Intel data (Batch 1b)
+# ---------------------------------------------------------------------------
+
+def get_mitre_data() -> Dict[str, Any]:
+    """Return MITRE ATT&CK mappings and IOC data from enrichment cache."""
+    st = _get_state()
+    techniques = {}
+    tactics = {}
+    iocs = {}
+
+    # MITRE from enrichment cache
+    cached_mitre = getattr(st, "_cached_mitre", None)
+    if cached_mitre and isinstance(cached_mitre, dict):
+        raw_techniques = cached_mitre.get("techniques", [])
+        if isinstance(raw_techniques, list):
+            for t in raw_techniques:
+                if isinstance(t, dict):
+                    tid = t.get("technique_id", t.get("id", ""))
+                    if tid:
+                        tactic = t.get("tactic", "unknown")
+                        if tactic not in tactics:
+                            tactics[tactic] = []
+                        entry = {
+                            "id": tid,
+                            "name": t.get("name", tid),
+                            "confidence": t.get("confidence", ""),
+                            "source": t.get("source", ""),
+                            "description": t.get("description", "")[:300],
+                        }
+                        tactics[tactic].append(entry)
+                        techniques[tid] = entry
+        elif isinstance(raw_techniques, dict):
+            for tid, detail in raw_techniques.items():
+                if isinstance(detail, dict):
+                    tactic = detail.get("tactic", "unknown")
+                    if tactic not in tactics:
+                        tactics[tactic] = []
+                    entry = {
+                        "id": tid,
+                        "name": detail.get("name", tid),
+                        "confidence": detail.get("confidence", ""),
+                        "source": detail.get("source", ""),
+                        "description": detail.get("description", "")[:300],
+                    }
+                    tactics[tactic].append(entry)
+                    techniques[tid] = entry
+
+    # IOCs from enrichment cache
+    cached_iocs = getattr(st, "_cached_iocs", None)
+    if cached_iocs and isinstance(cached_iocs, dict):
+        for ioc_type in ("urls", "ips", "domains", "emails", "crypto_wallets",
+                         "registry_keys", "file_paths", "mutexes"):
+            items = cached_iocs.get(ioc_type, [])
+            if isinstance(items, list) and items:
+                iocs[ioc_type] = items[:100]
+
+    # Also pull from pe_data network IOCs
+    pe_data = st.pe_data or {}
+    binary_summary = pe_data.get("binary_summary", {})
+    if isinstance(binary_summary, dict):
+        net_iocs = binary_summary.get("network_iocs", {})
+        if isinstance(net_iocs, dict):
+            for k, v in net_iocs.items():
+                if isinstance(v, list) and v and k not in iocs:
+                    iocs[k] = v[:100]
+
+    return {
+        "techniques": techniques,
+        "tactics": tactics,
+        "iocs": iocs,
+        "technique_count": len(techniques),
+        "tactic_count": len(tactics),
+        "ioc_count": sum(len(v) for v in iocs.values()),
+    }
+
+
+# ---------------------------------------------------------------------------
+#  CAPA capabilities data (Batch 1c)
+# ---------------------------------------------------------------------------
+
+def get_capa_data() -> Dict[str, Any]:
+    """Return capa rule matches grouped by ATT&CK tactic or MBC objective."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+    capa = pe_data.get("capa_analysis", {})
+    if not isinstance(capa, dict):
+        return {"rules": [], "attack_mapping": {}, "mbc_mapping": {}, "stats": {}, "available": False}
+
+    rules_raw = capa.get("rules", capa.get("capabilities", []))
+    rules = []
+    attack_mapping = {}
+    mbc_mapping = {}
+
+    func_lookup = _build_function_lookup(st)
+
+    if isinstance(rules_raw, dict):
+        for name, detail in rules_raw.items():
+            if not isinstance(detail, dict):
+                continue
+            meta = detail.get("meta", detail)
+            addresses = []
+            raw_addrs = detail.get("addresses", detail.get("matches", []))
+            if isinstance(raw_addrs, dict):
+                raw_addrs = list(raw_addrs.keys())
+            elif not isinstance(raw_addrs, list):
+                raw_addrs = []
+            for a in raw_addrs[:20]:
+                addr_str = str(a)
+                entry = {"address": addr_str}
+                try:
+                    va_int = int(addr_str, 16) if isinstance(addr_str, str) else int(addr_str)
+                    hit = _find_containing_function(func_lookup, va_int)
+                    if hit:
+                        entry["func_addr"] = hit[0]
+                        entry["func_name"] = hit[1]
+                except (ValueError, TypeError):
+                    pass
+                addresses.append(entry)
+            rule_entry = {
+                "name": name,
+                "namespace": meta.get("namespace", ""),
+                "scope": meta.get("scope", ""),
+                "description": meta.get("description", "")[:300],
+                "addresses": addresses,
+            }
+            rules.append(rule_entry)
+            # ATT&CK mapping
+            attack = meta.get("attack", meta.get("att&ck", []))
+            if isinstance(attack, list):
+                for att in attack:
+                    if isinstance(att, dict):
+                        tid = att.get("id", att.get("technique", ""))
+                        tactic = att.get("tactic", "unknown")
+                    elif isinstance(att, str):
+                        tid = att
+                        tactic = "unknown"
+                    else:
+                        continue
+                    if tid:
+                        if tactic not in attack_mapping:
+                            attack_mapping[tactic] = []
+                        attack_mapping[tactic].append({"id": tid, "rule": name})
+            # MBC mapping
+            mbc = meta.get("mbc", [])
+            if isinstance(mbc, list):
+                for m in mbc:
+                    if isinstance(m, dict):
+                        obj = m.get("objective", "unknown")
+                        if obj not in mbc_mapping:
+                            mbc_mapping[obj] = []
+                        mbc_mapping[obj].append({"id": m.get("id", ""), "behavior": m.get("behavior", ""), "rule": name})
+    elif isinstance(rules_raw, list):
+        for item in rules_raw:
+            if isinstance(item, dict):
+                rules.append({
+                    "name": item.get("name", item.get("rule", "?")),
+                    "namespace": item.get("namespace", ""),
+                    "scope": item.get("scope", ""),
+                    "description": item.get("description", "")[:300],
+                    "addresses": [],
+                })
+
+    return {
+        "rules": rules,
+        "attack_mapping": attack_mapping,
+        "mbc_mapping": mbc_mapping,
+        "stats": {
+            "total_rules": len(rules),
+            "total_attack_tactics": len(attack_mapping),
+            "total_mbc_objectives": len(mbc_mapping),
+        },
+        "available": bool(rules),
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Per-function CFG data (Batch 1d)
+# ---------------------------------------------------------------------------
+
+def get_function_cfg_data(address_hex: str) -> Dict[str, Any]:
+    """Return basic-block CFG nodes and edges for a single function."""
+    st = _get_state()
+    nodes = []
+    edges = []
+
+    if st.angr_project is None or st.angr_cfg is None:
+        return {"nodes": nodes, "edges": edges, "error": "no CFG available"}
+
+    try:
+        addr_int = int(address_hex, 16)
+    except (ValueError, TypeError):
+        return {"nodes": nodes, "edges": edges, "error": "invalid address"}
+
+    try:
+        kb = st.angr_project.kb
+        if not hasattr(kb, "functions") or addr_int not in kb.functions:
+            return {"nodes": nodes, "edges": edges, "error": "function not found"}
+
+        func = kb.functions[addr_int]
+        renames = st.get_renames().get("functions", {})
+        func_name = renames.get(address_hex, func.name or address_hex)
+
+        # Iterate basic blocks
+        if hasattr(func, "graph"):
+            graph = func.graph
+            for node in graph.nodes():
+                block_addr = node.addr if hasattr(node, "addr") else 0
+                block_size = node.size if hasattr(node, "size") else 0
+                insn_count = 0
+                if hasattr(node, "instructions") and node.instructions is not None:
+                    insn_count = node.instructions
+                nodes.append({
+                    "addr": hex(block_addr),
+                    "size": block_size,
+                    "instructions": insn_count,
+                })
+            for src, dst in graph.edges():
+                src_addr = src.addr if hasattr(src, "addr") else 0
+                dst_addr = dst.addr if hasattr(dst, "addr") else 0
+                edge_type = "unconditional"
+                # Detect conditional edges (basic heuristic)
+                if hasattr(graph, "out_degree") and graph.out_degree(src) > 1:
+                    edge_type = "conditional"
+                edges.append({
+                    "src": hex(src_addr),
+                    "dst": hex(dst_addr),
+                    "type": edge_type,
+                })
+
+        return {"nodes": nodes, "edges": edges, "function_name": func_name}
+
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        logger.debug("Error getting CFG for %s", address_hex, exc_info=True)
+        return {"nodes": nodes, "edges": edges, "error": "analysis error"}
+
+
+# ---------------------------------------------------------------------------
+#  Disassembly data (Batch 1e)
+# ---------------------------------------------------------------------------
+
+def get_disassembly_data(address_hex: str, count: int = 200) -> Dict[str, Any]:
+    """Return disassembly instructions for a function."""
+    st = _get_state()
+    instructions = []
+
+    if st.angr_project is None:
+        return {"instructions": instructions, "error": "no angr project"}
+
+    try:
+        addr_int = int(address_hex, 16)
+    except (ValueError, TypeError):
+        return {"instructions": instructions, "error": "invalid address"}
+
+    count = max(1, min(count, 2000))
+
+    try:
+        kb = st.angr_project.kb
+        if hasattr(kb, "functions") and addr_int in kb.functions:
+            func = kb.functions[addr_int]
+            # Get all blocks in the function
+            block_addrs = sorted(func.block_addrs_set) if hasattr(func, "block_addrs_set") else [addr_int]
+            for baddr in block_addrs:
+                if len(instructions) >= count:
+                    break
+                try:
+                    block = st.angr_project.factory.block(baddr)
+                    if hasattr(block, "capstone") and block.capstone:
+                        for insn in block.capstone.insns:
+                            if len(instructions) >= count:
+                                break
+                            instructions.append({
+                                "address": hex(insn.address),
+                                "bytes": " ".join(f"{b:02x}" for b in insn.bytes),
+                                "mnemonic": insn.mnemonic,
+                                "op_str": insn.op_str,
+                            })
+                except Exception:
+                    continue
+        else:
+            # Fallback: disassemble from address
+            try:
+                block = st.angr_project.factory.block(addr_int)
+                if hasattr(block, "capstone") and block.capstone:
+                    for insn in block.capstone.insns:
+                        if len(instructions) >= count:
+                            break
+                        instructions.append({
+                            "address": hex(insn.address),
+                            "bytes": " ".join(f"{b:02x}" for b in insn.bytes),
+                            "mnemonic": insn.mnemonic,
+                            "op_str": insn.op_str,
+                        })
+            except Exception:
+                pass
+
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        logger.debug("Error getting disassembly for %s", address_hex, exc_info=True)
+
+    return {"instructions": instructions, "function_address": address_hex}
+
+
+# ---------------------------------------------------------------------------
+#  Function variables data (Batch 1f)
+# ---------------------------------------------------------------------------
+
+def get_function_variables_data(address_hex: str) -> Dict[str, Any]:
+    """Return parameters and local variables for a function."""
+    st = _get_state()
+    params = []
+    locals_list = []
+
+    if st.angr_project is None:
+        return {"parameters": params, "locals": locals_list, "error": "no angr project"}
+
+    try:
+        addr_int = int(address_hex, 16)
+    except (ValueError, TypeError):
+        return {"parameters": params, "locals": locals_list, "error": "invalid address"}
+
+    try:
+        kb = st.angr_project.kb
+        if not hasattr(kb, "functions") or addr_int not in kb.functions:
+            return {"parameters": params, "locals": locals_list, "error": "function not found"}
+
+        func = kb.functions[addr_int]
+        # Variable recovery manager
+        if hasattr(kb, "variables") and hasattr(kb.variables, "get_function_manager"):
+            try:
+                var_mgr = kb.variables.get_function_manager(addr_int)
+                if var_mgr:
+                    for var in var_mgr.get_variables():
+                        var_entry = {
+                            "name": getattr(var, "name", "?"),
+                            "size": getattr(var, "size", 0),
+                            "category": getattr(var, "category", ""),
+                        }
+                        if hasattr(var, "region") and var.region:
+                            var_entry["region"] = str(var.region)
+                        if hasattr(var, "ident"):
+                            var_entry["ident"] = str(var.ident)
+                        if getattr(var, "is_parameter", False):
+                            params.append(var_entry)
+                        else:
+                            locals_list.append(var_entry)
+            except (AttributeError, TypeError):
+                pass
+
+        # Calling convention info
+        cc_info = ""
+        if hasattr(func, "calling_convention") and func.calling_convention:
+            cc_info = str(func.calling_convention)
+
+    except (AttributeError, KeyError, TypeError, RuntimeError):
+        logger.debug("Error getting variables for %s", address_hex, exc_info=True)
+
+    return {
+        "parameters": params,
+        "locals": locals_list,
+        "calling_convention": cc_info if 'cc_info' in dir() else "",
+        "function_address": address_hex,
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Entropy data (Batch 1g)
+# ---------------------------------------------------------------------------
+
+def _compute_entropy(data: bytes) -> float:
+    """Shannon entropy of a byte sequence (0.0 – 8.0)."""
+    if not data:
+        return 0.0
+    counts = [0] * 256
+    for b in data:
+        counts[b] += 1
+    length = len(data)
+    entropy = 0.0
+    for c in counts:
+        if c > 0:
+            p = c / length
+            entropy -= p * math.log2(p)
+    return round(entropy, 4)
+
+
+def get_entropy_data() -> Dict[str, Any]:
+    """Return per-section entropy plus optional byte-level entropy for heatmap."""
+    st = _get_state()
+    sections = []
+    overall = 0.0
+
+    pe_data = st.pe_data or {}
+    raw_sections = pe_data.get("sections", [])
+    filepath = st.filepath
+
+    # Per-section entropy (from parsed data)
+    if isinstance(raw_sections, list):
+        for s in raw_sections:
+            if isinstance(s, dict):
+                sections.append({
+                    "name": s.get("name", "?"),
+                    "entropy": s.get("entropy", 0),
+                    "virtual_address": s.get("virtual_address", s.get("va", "?")),
+                    "virtual_size": s.get("virtual_size", s.get("vsize", 0)),
+                    "raw_size": s.get("raw_size", s.get("size_of_raw_data", 0)),
+                    "permissions": _section_permissions(s),
+                })
+
+    # Overall file entropy (compute from file if small enough)
+    if filepath:
+        try:
+            file_size = os.path.getsize(filepath)
+            if file_size <= 50 * 1024 * 1024:  # 50MB limit
+                with open(filepath, "rb") as f:
+                    overall = _compute_entropy(f.read())
+        except OSError:
+            pass
+
+    # Byte-level entropy for heatmap (sample 256 blocks)
+    heatmap = []
+    if filepath:
+        try:
+            file_size = os.path.getsize(filepath)
+            if file_size > 0:
+                block_count = min(256, file_size)
+                block_size = max(1, file_size // block_count)
+                with open(filepath, "rb") as f:
+                    for i in range(block_count):
+                        f.seek(i * block_size)
+                        chunk = f.read(min(block_size, 4096))
+                        if chunk:
+                            heatmap.append(round(_compute_entropy(chunk), 2))
+        except OSError:
+            pass
+
+    return {
+        "sections": sections,
+        "overall": overall,
+        "heatmap": heatmap,
+        "file_size": os.path.getsize(filepath) if filepath and os.path.exists(filepath) else 0,
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Resources data (Batch 1h)
+# ---------------------------------------------------------------------------
+
+def get_resources_data() -> Dict[str, Any]:
+    """Return PE resource directory entries with entropy flagging."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+    resources = pe_data.get("resources", pe_data.get("resources_summary", []))
+    if not isinstance(resources, list):
+        resources = []
+
+    enriched = []
+    for r in resources:
+        if not isinstance(r, dict):
+            continue
+        entry = {
+            "type": r.get("type", r.get("resource_type", "?")),
+            "name": r.get("name", r.get("resource_name", "?")),
+            "size": r.get("size", 0),
+            "language": r.get("language", r.get("lang", "?")),
+            "rva": r.get("rva", r.get("offset", "")),
+            "entropy": r.get("entropy", 0),
+        }
+        # Flag high-entropy resources
+        try:
+            if float(entry["entropy"]) > 7.0:
+                entry["high_entropy"] = True
+        except (ValueError, TypeError):
+            pass
+        enriched.append(entry)
+
+    return {"resources": enriched, "total": len(enriched)}
+
+
+# ---------------------------------------------------------------------------
+#  Triage report data (Batch 1i)
+# ---------------------------------------------------------------------------
+
+def get_triage_report_data() -> Dict[str, Any]:
+    """Return triage report data from enrichment cache."""
+    st = _get_state()
+    cached = getattr(st, "_cached_triage", None)
+    if cached and isinstance(cached, dict):
+        return {
+            "available": True,
+            "risk_level": cached.get("risk_level", cached.get("overall_risk", "unknown")),
+            "risk_score": cached.get("risk_score", 0),
+            "findings": cached.get("findings", cached.get("key_findings", []))[:50],
+            "suspicious_count": cached.get("suspicious_count", 0),
+            "capabilities_count": cached.get("capabilities_count", 0),
+            "mitigations": cached.get("mitigations", {}),
+        }
+    return {"available": False}
+
+
+# ---------------------------------------------------------------------------
+#  Packing data (Batch 1j)
+# ---------------------------------------------------------------------------
+
+def get_packing_data() -> Dict[str, Any]:
+    """Return packing/classification data from enrichment cache."""
+    st = _get_state()
+    cached = getattr(st, "_cached_classification", None)
+    if cached and isinstance(cached, dict):
+        packing = cached.get("packing", cached.get("packing_analysis", {}))
+        if not isinstance(packing, dict):
+            packing = {}
+        return {
+            "available": True,
+            "packed_likelihood": packing.get("packed_likelihood", packing.get("is_packed", "unknown")),
+            "packing_score": packing.get("score", packing.get("packing_score", 0)),
+            "indicators": packing.get("indicators", packing.get("evidence", []))[:20],
+            "packer_name": packing.get("packer", packing.get("packer_name", "")),
+            "classification": cached.get("classification", cached.get("binary_type", "")),
+        }
+    return {"available": False}
+
+
+# ---------------------------------------------------------------------------
+#  Similarity hashes data (Batch 1k)
+# ---------------------------------------------------------------------------
+
+def get_similarity_data() -> Dict[str, Any]:
+    """Return similarity hashes from enrichment cache."""
+    st = _get_state()
+    cached = getattr(st, "_cached_similarity", None)
+    if cached and isinstance(cached, dict):
+        return {
+            "available": True,
+            "ssdeep": cached.get("ssdeep", ""),
+            "tlsh": cached.get("tlsh", ""),
+            "imphash": cached.get("imphash", ""),
+        }
+
+    # Fallback: try pe_data file hashes
+    pe_data = st.pe_data or {}
+    hashes = pe_data.get("file_hashes", {})
+    if isinstance(hashes, dict) and hashes.get("imphash"):
+        return {
+            "available": True,
+            "ssdeep": hashes.get("ssdeep", ""),
+            "tlsh": hashes.get("tlsh", ""),
+            "imphash": hashes.get("imphash", ""),
+        }
+    return {"available": False}
+
+
+# ---------------------------------------------------------------------------
+#  Custom types data (for Types page)
+# ---------------------------------------------------------------------------
+
+def get_custom_types_data() -> Dict[str, Any]:
+    """Return user-defined structs and enums from state."""
+    st = _get_state()
+    custom_types = getattr(st, "custom_types", {})
+    if not isinstance(custom_types, dict):
+        custom_types = {}
+
+    structs = []
+    enums = []
+    for name, typedef in custom_types.items():
+        if not isinstance(typedef, dict):
+            continue
+        kind = typedef.get("kind", "struct")
+        if kind == "enum":
+            enums.append({
+                "name": name,
+                "size": typedef.get("size", 0),
+                "values": typedef.get("values", {}),
+            })
+        else:
+            structs.append({
+                "name": name,
+                "size": typedef.get("size", 0),
+                "fields": typedef.get("fields", []),
+            })
+
+    return {"structs": structs, "enums": enums, "total": len(structs) + len(enums)}
+
+
+# ---------------------------------------------------------------------------
+#  Function similarity data (for SIM button)
+# ---------------------------------------------------------------------------
+
+def get_function_similarity_data(address_hex: str) -> Dict[str, Any]:
+    """Return BSim similarity matches for a function."""
+    st = _get_state()
+    matches = []
+
+    cached_scores = getattr(st, "_cached_function_scores", None)
+    if not cached_scores:
+        return {"matches": matches, "available": False}
+
+    # Find the target function score entry
+    target = None
+    for entry in cached_scores:
+        if isinstance(entry, dict) and entry.get("addr", "").lower() == address_hex.lower():
+            target = entry
+            break
+
+    if not target:
+        return {"matches": matches, "available": False}
+
+    # Return other functions sorted by similarity to target score
+    target_score = target.get("score", 0)
+    renames = st.get_renames().get("functions", {})
+    for entry in cached_scores:
+        if isinstance(entry, dict):
+            addr = entry.get("addr", "")
+            if addr.lower() == address_hex.lower():
+                continue
+            score = entry.get("score", 0)
+            name = renames.get(addr, entry.get("name", addr))
+            matches.append({
+                "address": addr,
+                "name": name,
+                "score": score,
+                "similarity": max(0, 100 - abs(target_score - score)),
+            })
+
+    matches.sort(key=lambda m: m["similarity"], reverse=True)
+    return {"matches": matches[:20], "available": True}
+
+
+# ---------------------------------------------------------------------------
+#  Export report data
+# ---------------------------------------------------------------------------
+
+def get_export_report_data() -> Dict[str, Any]:
+    """Generate a comprehensive analysis report for export."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+
+    report = {
+        "file_info": {},
+        "risk": {},
+        "sections": [],
+        "imports_summary": {},
+        "capabilities": [],
+        "findings": [],
+        "iocs": {},
+        "notes": [],
+        "tool_history_count": 0,
+    }
+
+    # File info
+    hashes = pe_data.get("file_hashes", {})
+    if isinstance(hashes, dict):
+        report["file_info"] = {
+            "filename": os.path.basename(st.filepath) if st.filepath else "",
+            "sha256": hashes.get("sha256", ""),
+            "md5": hashes.get("md5", ""),
+            "sha1": hashes.get("sha1", ""),
+            "size": hashes.get("file_size", 0),
+        }
+
+    # Risk from triage
+    cached_triage = getattr(st, "_cached_triage", None)
+    if cached_triage and isinstance(cached_triage, dict):
+        report["risk"] = {
+            "level": cached_triage.get("risk_level", cached_triage.get("overall_risk", "unknown")),
+            "score": cached_triage.get("risk_score", 0),
+        }
+        report["findings"] = cached_triage.get("findings", cached_triage.get("key_findings", []))[:100]
+
+    # Sections
+    raw_sections = pe_data.get("sections", [])
+    if isinstance(raw_sections, list):
+        for s in raw_sections:
+            if isinstance(s, dict):
+                report["sections"].append({
+                    "name": s.get("name", "?"),
+                    "entropy": s.get("entropy", 0),
+                    "permissions": _section_permissions(s),
+                })
+
+    # Capabilities
+    capa = pe_data.get("capa_analysis", {})
+    if isinstance(capa, dict):
+        rules = capa.get("rules", capa.get("capabilities", []))
+        if isinstance(rules, dict):
+            report["capabilities"] = list(rules.keys())[:100]
+        elif isinstance(rules, list):
+            report["capabilities"] = [r.get("name", "?") if isinstance(r, dict) else str(r) for r in rules[:100]]
+
+    # IOCs
+    cached_iocs = getattr(st, "_cached_iocs", None)
+    if cached_iocs and isinstance(cached_iocs, dict):
+        report["iocs"] = {k: v[:50] for k, v in cached_iocs.items() if isinstance(v, list) and v}
+
+    # Notes
+    report["notes"] = [
+        {"category": n.get("category", ""), "content": n.get("content", "")[:500], "address": n.get("address", "")}
+        for n in st.get_notes()[:100]
+    ]
+
+    report["tool_history_count"] = len(st.get_tool_history())
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+#  Full-text decompiled code search (Batch 4)
+# ---------------------------------------------------------------------------
+
+def search_decompiled_code(query: str, max_results: int = 100) -> Dict[str, Any]:
+    """Search across all cached decompiled function code for a substring.
+
+    Returns matching lines with function context.
+    """
+    result: Dict[str, Any] = {
+        "query": query,
+        "total_matches": 0,
+        "results": [],
+        "searched_functions": 0,
+        "total_cached": 0,
+    }
+    if not query or not query.strip():
+        return result
+
+    query_lower = query.strip().lower()
+
+    try:
+        from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+        from arkana.mcp._rename_helpers import (
+            apply_function_renames_to_lines,
+            apply_variable_renames_to_lines,
+            get_display_name,
+        )
+    except ImportError:
+        return result
+
+    st = _get_state()
+    renames = st.get_renames().get("functions", {})
+
+    with _decompile_meta_lock:
+        meta_snapshot = dict(_decompile_meta)
+
+    result["total_cached"] = len(meta_snapshot)
+    matches = []
+
+    for cache_key, meta in meta_snapshot.items():
+        if not isinstance(cache_key, tuple) or not cache_key:
+            continue
+        addr_int = cache_key[0]
+        addr_hex = hex(addr_int)
+        raw_lines = meta.get("lines", [])
+        if not raw_lines:
+            continue
+
+        result["searched_functions"] += 1
+
+        # Apply renames for display
+        lines = apply_function_renames_to_lines(raw_lines)
+        lines = apply_variable_renames_to_lines(lines, addr_hex)
+        func_name = get_display_name(addr_hex, meta.get("function_name", addr_hex))
+        if addr_hex in renames:
+            func_name = renames[addr_hex]
+
+        for line_num, line in enumerate(lines, 1):
+            if query_lower in line.lower():
+                # Context: 1 line before and after
+                ctx_before = lines[line_num - 2] if line_num >= 2 else ""
+                ctx_after = lines[line_num] if line_num < len(lines) else ""
+                matches.append({
+                    "function_name": func_name,
+                    "address": addr_hex,
+                    "line_number": line_num,
+                    "line_text": line,
+                    "context_before": ctx_before,
+                    "context_after": ctx_after,
+                })
+                if len(matches) >= max_results:
+                    break
+        if len(matches) >= max_results:
+            break
+
+    result["total_matches"] = len(matches)
+    result["results"] = matches
+    return result
+
+
+# ---------------------------------------------------------------------------
+#  Binary diff data (Batch 4)
+# ---------------------------------------------------------------------------
+
+def get_diff_data(file_path_b: str, limit: int = 50) -> Dict[str, Any]:
+    """Run angr BinDiff between the loaded binary and a second binary.
+
+    Returns categorised function lists: identical, differing, unmatched-A, unmatched-B.
+    """
+    st = _get_state()
+    if st.angr_project is None or st.angr_cfg is None:
+        return {"error": "No angr project/CFG loaded. Open a file first."}
+
+    try:
+        from arkana.imports import ANGR_AVAILABLE
+        if not ANGR_AVAILABLE:
+            return {"error": "angr is not available"}
+        import angr
+    except ImportError:
+        return {"error": "angr is not available"}
+
+    limit = max(1, min(limit, 500))
+    proj_a = st.angr_project
+    cfg_a = st.angr_cfg
+    renames_a = st.get_renames().get("functions", {})
+    file_a = os.path.basename(st.filepath) if st.filepath else "file_a"
+
+    proj_b = None
+    cfg_b = None
+    try:
+        proj_b = angr.Project(file_path_b, auto_load_libs=False)
+        cfg_b = proj_b.analyses.CFGFast()
+
+        bd = proj_a.analyses.BinDiff(proj_b, cfg_a=cfg_a.model, cfg_b=cfg_b.model)
+
+        identical = []
+        differing = []
+        unmatched_a = []
+        unmatched_b = []
+
+        def _func_addr(f):
+            """Extract hex address from a function object or raw integer."""
+            if isinstance(f, int):
+                return hex(f)
+            if hasattr(f, "addr"):
+                return hex(f.addr)
+            return hex(int(f)) if str(f).isdigit() else str(f)
+
+        def _func_name(f, fallback=""):
+            """Extract name from a function object, or return fallback."""
+            if hasattr(f, "name"):
+                return str(f.name)
+            return fallback
+
+        # Identical functions
+        try:
+            for fa, fb in list(getattr(bd, "identical_functions", []))[:limit]:
+                addr_a = _func_addr(fa)
+                addr_b = _func_addr(fb)
+                name_a = renames_a.get(addr_a, _func_name(fa, addr_a))
+                identical.append({"addr_a": addr_a, "addr_b": addr_b, "name": name_a})
+        except Exception:
+            logger.debug("Skipped identical_functions during diff", exc_info=True)
+
+        # Differing functions
+        try:
+            for fa, fb in list(getattr(bd, "differing_functions", []))[:limit]:
+                addr_a = _func_addr(fa)
+                addr_b = _func_addr(fb)
+                name_a = renames_a.get(addr_a, _func_name(fa, addr_a))
+                name_b = _func_name(fb, addr_b)
+                differing.append({"addr_a": addr_a, "name_a": name_a, "addr_b": addr_b, "name_b": name_b})
+        except Exception:
+            logger.debug("Skipped differing_functions during diff", exc_info=True)
+
+        # Unmatched in A
+        try:
+            for f in list(getattr(bd, "unmatched_from_a", getattr(bd, "unmatched_a", [])))[:limit]:
+                addr = _func_addr(f)
+                name = renames_a.get(addr, _func_name(f, addr))
+                unmatched_a.append({"addr": addr, "name": name})
+        except Exception:
+            logger.debug("Skipped unmatched_from_a during diff", exc_info=True)
+
+        # Unmatched in B
+        try:
+            for f in list(getattr(bd, "unmatched_from_b", getattr(bd, "unmatched_b", [])))[:limit]:
+                addr = _func_addr(f)
+                name = _func_name(f, addr)
+                unmatched_b.append({"addr": addr, "name": name})
+        except Exception:
+            logger.debug("Skipped unmatched_from_b during diff", exc_info=True)
+
+        return {
+            "file_a": file_a,
+            "file_b": os.path.basename(file_path_b),
+            "identical_count": len(identical),
+            "differing_count": len(differing),
+            "unmatched_a_count": len(unmatched_a),
+            "unmatched_b_count": len(unmatched_b),
+            "identical_functions": identical,
+            "differing_functions": differing,
+            "unmatched_in_a": unmatched_a,
+            "unmatched_in_b": unmatched_b,
+        }
+
+    except Exception as e:
+        logger.debug("BinDiff error", exc_info=True)
+        return {"error": f"BinDiff failed: {str(e)[:200]}"}
+    finally:
+        # Cleanup angr objects for the second binary
+        try:
+            del cfg_b
+            del proj_b
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+#  File listing for dashboard file browser
+# ---------------------------------------------------------------------------
+
+def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, Any]:
+    """List files in the configured samples directory for the dashboard file browser.
+
+    Returns a list of files with name, path, size, and format hint.
+    """
+    st = _get_state()
+    samples_path = getattr(st, "samples_path", None) or getattr(_default_state, "samples_path", None)
+    if not samples_path or not os.path.isdir(samples_path):
+        return {"files": [], "samples_path": None, "error": "No samples directory configured"}
+
+    from arkana.mcp._format_helpers import get_magic_hint
+
+    files = []
+    try:
+        for root, dirs, filenames in os.walk(samples_path):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for fname in filenames:
+                if fname.startswith("."):
+                    continue
+                full_path = os.path.join(root, fname)
+                try:
+                    stat_info = os.stat(full_path)
+                    size = stat_info.st_size
+                    if size >= 1_048_576:
+                        size_human = f"{size / 1_048_576:.1f} MB"
+                    elif size >= 1024:
+                        size_human = f"{size / 1024:.1f} KB"
+                    else:
+                        size_human = f"{size} B"
+                    fmt = get_magic_hint(full_path)
+                    rel_path = os.path.relpath(full_path, samples_path)
+                    files.append({
+                        "name": fname,
+                        "path": full_path,
+                        "relative_path": rel_path,
+                        "size_bytes": size,
+                        "size_human": size_human,
+                        "format_hint": fmt,
+                    })
+                except (OSError, ValueError):
+                    continue
+    except OSError:
+        return {"files": [], "samples_path": samples_path, "error": "Failed to read samples directory"}
+
+    # Search filter
+    if search:
+        search_lower = search.lower()
+        files = [f for f in files if search_lower in f["name"].lower()]
+
+    # Sort
+    sort_lower = sort_by.lower()
+    if sort_lower == "size":
+        files.sort(key=lambda f: f.get("size_bytes", 0), reverse=True)
+    elif sort_lower == "format":
+        files.sort(key=lambda f: f.get("format_hint", ""))
+    else:
+        files.sort(key=lambda f: f["name"].lower())
+
+    return {"files": files, "samples_path": samples_path, "total": len(files)}

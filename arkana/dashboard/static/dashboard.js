@@ -299,3 +299,79 @@ function showToast(message, type) {
         }
     }
 })();
+
+// --- Navigation History (client-side) ---
+(function() {
+    var _NAV_HISTORY_KEY = 'arkana_nav_history';
+    var _NAV_MAX = 50;
+    var _navPos = -1;
+
+    function getNavHistory() {
+        try {
+            return JSON.parse(sessionStorage.getItem(_NAV_HISTORY_KEY) || '[]');
+        } catch (e) {
+            return [];
+        }
+    }
+
+    function saveNavHistory(hist) {
+        try {
+            sessionStorage.setItem(_NAV_HISTORY_KEY, JSON.stringify(hist));
+        } catch (e) { /* storage full */ }
+    }
+
+    function pushNavHistory(url, label) {
+        var hist = getNavHistory();
+        // Get current position
+        var posKey = 'arkana_nav_pos';
+        _navPos = parseInt(sessionStorage.getItem(posKey) || '-1', 10);
+        // Truncate forward history
+        if (_navPos >= 0 && _navPos < hist.length - 1) {
+            hist = hist.slice(0, _navPos + 1);
+        }
+        // Avoid duplicate consecutive entries
+        if (hist.length > 0 && hist[hist.length - 1].url === url) return;
+        hist.push({url: url, label: label, timestamp: Date.now()});
+        if (hist.length > _NAV_MAX) hist = hist.slice(hist.length - _NAV_MAX);
+        _navPos = hist.length - 1;
+        saveNavHistory(hist);
+        sessionStorage.setItem(posKey, String(_navPos));
+    }
+
+    function goBack() {
+        var hist = getNavHistory();
+        var posKey = 'arkana_nav_pos';
+        _navPos = parseInt(sessionStorage.getItem(posKey) || '-1', 10);
+        if (_navPos > 0) {
+            _navPos--;
+            sessionStorage.setItem(posKey, String(_navPos));
+            window.location.href = hist[_navPos].url;
+        }
+    }
+
+    function goForward() {
+        var hist = getNavHistory();
+        var posKey = 'arkana_nav_pos';
+        _navPos = parseInt(sessionStorage.getItem(posKey) || '-1', 10);
+        if (_navPos < hist.length - 1) {
+            _navPos++;
+            sessionStorage.setItem(posKey, String(_navPos));
+            window.location.href = hist[_navPos].url;
+        }
+    }
+
+    // Track page navigation
+    var pagePath = window.location.pathname;
+    var pageLabel = document.title.replace('Arkana — ', '').replace('Arkana Dashboard', 'OVERVIEW');
+    pushNavHistory(pagePath + window.location.search, pageLabel);
+
+    // Keyboard shortcuts: Alt+Left/Right for history
+    document.addEventListener('keydown', function(e) {
+        if (e.altKey && e.key === 'ArrowLeft') { e.preventDefault(); goBack(); }
+        if (e.altKey && e.key === 'ArrowRight') { e.preventDefault(); goForward(); }
+    });
+
+    // Expose globally for nav buttons
+    window.navGoBack = goBack;
+    window.navGoForward = goForward;
+})();

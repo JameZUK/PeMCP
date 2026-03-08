@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Binary Diff{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">BINARY DIFF</h1>
+</div>
+
+<div class="panel">
+    <div class="panel-header">COMPARE BINARIES</div>
+    <div class="diff-mode-tabs" id="diff-mode-tabs">
+        <button class="diff-tab active" data-mode="browse">BROWSE</button>
+        <button class="diff-tab" data-mode="manual">MANUAL PATH</button>
+    </div>
+
+    <!-- Browse mode -->
+    <div id="diff-browse-panel" class="diff-browse-panel">
+        <div class="filter-bar">
+            <div class="filter-group">
+                <label>FILTER:</label>
+                <input type="text" id="file-browser-search" placeholder="search files...">
+            </div>
+            <div class="filter-group">
+                <label>SORT:</label>
+                <select id="file-browser-sort">
+                    <option value="name">Name</option>
+                    <option value="size">Size</option>
+                    <option value="format">Format</option>
+                </select>
+            </div>
+        </div>
+        <div class="file-browser-table-wrap">
+            <table class="data-table data-table-sm" id="file-browser-table">
+                <thead>
+                    <tr>
+                        <th>NAME</th>
+                        <th>SIZE</th>
+                        <th>FORMAT</th>
+                    </tr>
+                </thead>
+                <tbody id="file-browser-tbody">
+                    <tr><td colspan="3" class="empty-msg">Loading files...</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="diff-browser-footer">
+            <span id="file-browser-selected" class="dim">No file selected</span>
+            <button class="btn" id="diff-run-browse-btn" disabled>RUN DIFF</button>
+            <span id="diff-spinner-browse" class="dim d-none">Analyzing...</span>
+        </div>
+    </div>
+
+    <!-- Manual mode -->
+    <div id="diff-manual-panel" class="diff-input-panel d-none">
+        <div class="filter-group">
+            <label>SECOND BINARY PATH:</label>
+            <input type="text" id="diff-path-input" placeholder="/path/to/second/binary" class="diff-path-input">
+        </div>
+        <button class="btn" id="diff-run-btn">RUN DIFF</button>
+        <span id="diff-spinner" class="dim d-none">Analyzing...</span>
+    </div>
+</div>
+
+<div id="diff-error" class="panel d-none">
+    <div class="panel-header badge-danger">ERROR</div>
+    <div id="diff-error-msg" class="p-10"></div>
+</div>
+
+<div id="diff-results" class="d-none">
+    <div id="diff-summary-bar" class="diff-summary-bar"></div>
+    <div id="diff-panels"></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/diff.js"></script>
+{% endblock %}

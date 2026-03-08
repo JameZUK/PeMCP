@@ -2192,3 +2192,399 @@ details[open] > .import-dll-header::before {
 .xref-section-header-mt { font-size: 10px; letter-spacing: 2px; color: var(--primary-dim); margin: 10px 0 6px; }
 .xref-complexity { font-size: 10px; letter-spacing: 1px; color: var(--primary-dim); margin-top: 10px; }
 .mb-6 { margin-bottom: 6px; }
+
+/* ========================================================================
+   NEW FEATURES (Batch 2-3)
+   ======================================================================== */
+
+/* --- Hex View --- */
+.hex-scroll-container {
+    height: 70vh;
+    overflow-y: auto;
+    overflow-x: auto;
+    position: relative;
+}
+.hex-table { font-size: 13px; }
+.hex-table td { padding: 2px 8px; white-space: nowrap; }
+.hex-offset-col { color: var(--primary-dim); }
+.hex-bytes-col { letter-spacing: 1px; }
+.hex-ascii-col { color: var(--primary-muted); border-left: 1px solid var(--primary-ghost); padding-left: 12px; }
+.hex-loading {
+    text-align: center;
+    padding: 8px;
+    color: var(--primary-dim);
+    font-size: 11px;
+    letter-spacing: 2px;
+}
+
+/* --- MITRE ATT&CK --- */
+.mitre-matrix {
+    display: flex;
+    gap: 12px;
+    overflow-x: auto;
+    padding: 10px 0;
+}
+.mitre-tactic-col {
+    min-width: 180px;
+    flex-shrink: 0;
+}
+.mitre-tactic-header {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--primary-dim);
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--primary-ghost);
+    margin-bottom: 6px;
+}
+.mitre-technique-card {
+    padding: 6px 8px;
+    border: 1px solid var(--primary-ghost);
+    margin-bottom: 4px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+.mitre-technique-card:hover { border-color: var(--primary-dim); }
+.mitre-technique-card.expanded { border-color: var(--primary); }
+.mitre-tid { color: var(--warning); font-size: 11px; }
+.mitre-tname { font-size: 12px; }
+.mitre-stats { padding: 8px 0; display: flex; gap: 8px; }
+
+/* IOC sections */
+.ioc-section { margin-bottom: 12px; }
+.ioc-type-header {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--primary-dim);
+    padding: 6px 0;
+}
+
+/* --- Capabilities (CAPA) --- */
+.capa-func-link { color: var(--primary-dim); text-decoration: none; margin-right: 6px; }
+.capa-func-link:hover { color: var(--primary); }
+.capa-desc-row td { padding-top: 0; padding-bottom: 8px; }
+.capa-group { margin-bottom: 16px; }
+.capa-group-header {
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: var(--primary-dim);
+    padding: 8px 0 4px;
+    border-bottom: 1px solid var(--primary-ghost);
+}
+
+/* --- Type Editor --- */
+.type-modal {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 13, 0, 0.85);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.type-modal.hidden { display: none; }
+.type-modal-content {
+    width: 90%;
+    max-width: 600px;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.type-modal-body { padding: 10px; }
+.type-field-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 4px;
+    align-items: center;
+}
+.type-field-row input {
+    background: var(--bg-deep);
+    color: var(--primary);
+    border: 1px solid var(--primary-ghost);
+    padding: 4px 6px;
+    font-family: inherit;
+    font-size: 12px;
+    flex: 1;
+}
+.type-field-row input[type="number"] { max-width: 80px; }
+.field-remove { flex: 0 0 auto; }
+
+/* --- Entropy Heatmap --- */
+.entropy-overall { padding: 8px 0; }
+.entropy-gauge {
+    height: 8px;
+    background: var(--bg-deep);
+    border: 1px solid var(--primary-ghost);
+    border-radius: 4px;
+    margin-top: 4px;
+    overflow: hidden;
+}
+.entropy-gauge-fill {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 0.3s;
+}
+.entropy-heatmap-container { padding: 8px 0; }
+.heatmap-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1px;
+    padding: 4px;
+}
+.heatmap-cell {
+    width: 12px;
+    height: 12px;
+    cursor: pointer;
+    border-radius: 1px;
+    transition: opacity 0.2s;
+}
+.heatmap-cell:hover { opacity: 0.7; outline: 1px solid var(--primary); }
+.heatmap-legend {
+    display: flex;
+    gap: 12px;
+    padding: 8px 0;
+    font-size: 10px;
+}
+
+/* --- Overview Cards --- */
+.overview-cards-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+    margin-bottom: 12px;
+}
+.overview-card { min-height: 120px; }
+.triage-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 8px;
+}
+.triage-card {
+    padding: 8px;
+    border: 1px solid var(--primary-ghost);
+    text-align: center;
+}
+.triage-card-label {
+    font-size: 9px;
+    letter-spacing: 2px;
+    color: var(--primary-dim);
+}
+.triage-card-value {
+    font-size: 20px;
+    color: var(--primary);
+}
+.triage-risk-badge { font-size: 16px; padding: 4px 12px; }
+.triage-findings { margin-top: 8px; }
+.triage-findings ul { padding-left: 16px; font-size: 12px; }
+.triage-findings li { margin-bottom: 4px; color: var(--primary-dim); }
+
+/* Similarity hashes */
+.similarity-hashes { font-size: 12px; }
+.hash-row { margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
+.btn-copy {
+    background: transparent;
+    border: 1px solid var(--primary-ghost);
+    color: var(--primary-dim);
+    font-family: inherit;
+    font-size: 9px;
+    padding: 1px 6px;
+    cursor: pointer;
+}
+.btn-copy:hover { border-color: var(--primary); color: var(--primary); }
+
+/* Packing info */
+.packing-info { font-size: 12px; }
+
+/* --- ASM Table --- */
+.asm-table { font-size: 12px; }
+.asm-table td { padding: 2px 6px; white-space: nowrap; }
+.asm-addr { color: var(--primary-dim); }
+.asm-bytes { font-size: 11px; }
+.asm-mnemonic { color: var(--warning); font-weight: bold; }
+.asm-operands { color: var(--primary); }
+
+/* --- CFG mini view in sidebar --- */
+.cfg-mini { font-size: 12px; }
+.cfg-stats { margin-bottom: 6px; }
+.cfg-blocks { max-height: 200px; overflow-y: auto; }
+.cfg-block {
+    padding: 2px 4px;
+    border-left: 2px solid var(--primary-ghost);
+    margin-bottom: 2px;
+}
+.cfg-edges { max-height: 200px; overflow-y: auto; }
+.cfg-edge-cond { color: var(--warning); font-size: 11px; margin-bottom: 2px; }
+.cfg-edge-uncond { color: var(--primary-dim); font-size: 11px; margin-bottom: 2px; }
+
+/* --- Button variants for new actions --- */
+.btn-asm, .btn-vars, .btn-sim {
+    background: transparent;
+    border-color: var(--primary-ghost);
+    color: var(--primary-dim);
+}
+.btn-asm:hover, .btn-vars:hover, .btn-sim:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+/* ========================================================================
+   Batch 4: Binary Diff, Symbol Tree, Full-Text Search
+   ======================================================================== */
+
+/* --- Binary Diff --- */
+.diff-input-panel {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    flex-wrap: wrap;
+}
+.diff-path-input {
+    flex: 1;
+    min-width: 200px;
+}
+.diff-summary-bar { margin-bottom: 12px; }
+.diff-identical .panel-header { color: var(--safe); }
+.diff-differing .panel-header { color: var(--warning); }
+.diff-unmatched .panel-header { color: var(--danger); }
+.diff-panel-body { max-height: 400px; overflow-y: auto; }
+.panel.collapsed .diff-panel-body { display: none; }
+.panel.collapsed .tree-expand-icon { display: inline-block; transform: rotate(-90deg); }
+
+/* Diff mode tabs */
+.diff-mode-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--primary-ghost);
+}
+.diff-tab {
+    padding: 8px 16px;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 2px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--primary-dim);
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+.diff-tab:hover { color: var(--primary); }
+.diff-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
+/* File browser */
+.diff-browse-panel { padding: 0; }
+.diff-browse-panel .filter-bar { padding: 8px 12px; border-bottom: 1px solid var(--primary-ghost); }
+.file-browser-table-wrap {
+    max-height: 45vh;
+    overflow-y: auto;
+}
+.file-browser-row { cursor: pointer; transition: background 0.1s; }
+.file-browser-row:hover { background: var(--bg-raised); }
+.file-browser-row.selected {
+    background: rgba(0, 255, 65, 0.08);
+    border-left: 3px solid var(--primary);
+}
+.diff-browser-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--primary-ghost);
+}
+
+/* --- Symbol Tree --- */
+.symbol-tree { padding: 0; }
+.tree-controls { border-bottom: 1px solid var(--primary-ghost); }
+.tree-group { border-bottom: 1px solid var(--primary-ghost); }
+.tree-group-header {
+    padding: 8px 12px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: background 0.1s;
+}
+.tree-group-header:hover { background: var(--bg-raised); }
+.tree-expand-icon {
+    font-size: 10px;
+    transition: transform 0.2s;
+    display: inline-block;
+}
+.tree-group.collapsed .tree-expand-icon { transform: rotate(-90deg); }
+.tree-group.collapsed .tree-items { display: none; }
+.tree-items { padding: 0 0 4px 0; }
+.tree-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 12px 3px 24px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+.tree-item:hover { background: var(--bg-raised); }
+.tree-item-addr { font-size: 11px; min-width: 90px; }
+.tree-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-group-flagged .tree-group-header { color: var(--danger); }
+.tree-group-suspicious .tree-group-header { color: var(--warning); }
+.tree-group-decompiled .tree-group-header { color: #66ffaa; }
+.tree-group-renamed .tree-group-header { color: #44ddff; }
+.tree-group-library .tree-group-header { color: var(--primary-muted); }
+.tree-group-other .tree-group-header { color: var(--primary-dim); }
+
+/* --- View Toggle --- */
+.view-toggle { margin-left: auto; }
+.view-toggle-btn.active {
+    border-color: var(--primary) !important;
+    color: var(--primary) !important;
+    background: rgba(0, 255, 65, 0.08);
+}
+
+/* --- Full-Text Code Search --- */
+.code-search-results { max-height: 500px; overflow-y: auto; }
+.code-search-body { max-height: 440px; overflow-y: auto; }
+.code-search-stats { border-bottom: 1px solid var(--primary-ghost); }
+.code-search-result-item {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--primary-ghost);
+}
+.code-search-result-item:last-child { border-bottom: none; }
+.code-search-result-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 2px;
+}
+.code-search-func-link {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: bold;
+    font-size: 12px;
+}
+.code-search-func-link:hover {
+    color: var(--highlight);
+    text-shadow: 0 0 4px var(--primary);
+}
+.code-match-line {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 12px;
+    padding: 2px 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.code-match-context {
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    padding: 1px 0;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--primary-ghost);
+}
+.code-match-highlight {
+    background: rgba(255, 170, 0, 0.3);
+    color: var(--warning);
+    padding: 0 1px;
+}
