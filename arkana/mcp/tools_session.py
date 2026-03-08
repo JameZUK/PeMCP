@@ -847,8 +847,12 @@ async def get_analysis_timeline(
     """
     events: List[Dict[str, Any]] = []
 
+    # Fetch once, reuse for both iteration and count
+    tool_history = state.get_tool_history()
+    all_notes = state.get_notes()
+
     # Add tool history entries
-    for h in state.get_tool_history():
+    for h in tool_history:
         events.append({
             "timestamp": h.get("timestamp", ""),
             "type": "tool",
@@ -858,7 +862,7 @@ async def get_analysis_timeline(
         })
 
     # Add notes as events
-    for n in state.get_notes():
+    for n in all_notes:
         events.append({
             "timestamp": n.get("created_at", ""),
             "type": "note",
@@ -875,7 +879,7 @@ async def get_analysis_timeline(
 
     return {
         "timeline": events,
-        "total_events": len(state.get_tool_history()) + len(state.get_notes()),
+        "total_events": len(tool_history) + len(all_notes),
         "returned": len(events),
         "phase": _detect_analysis_phase(),
     }

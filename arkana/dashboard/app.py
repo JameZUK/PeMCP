@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -275,21 +276,20 @@ def _create_routes(dashboard_token: str) -> list:
             _login_attempts[client_ip] = attempts
             if len(attempts) >= _MAX_LOGIN_ATTEMPTS:
                 return HTMLResponse("Too many login attempts. Try again later.", status_code=429)
-        token = form.get("token", "").strip()
-        if _check_token(token, dashboard_token):
-            async with _login_lock:
+            # Validate token inside the lock to prevent TOCTOU race
+            token = form.get("token", "").strip()
+            if _check_token(token, dashboard_token):
                 _login_attempts.pop(client_ip, None)
-            resp = RedirectResponse("/dashboard/", status_code=302)
-            resp.set_cookie(
-                _COOKIE_NAME, dashboard_token,
-                max_age=_COOKIE_MAX_AGE,
-                httponly=True,
-                samesite="strict",
-                secure=_is_https(request),
-            )
-            return resp
-        async with _login_lock:
-            attempts = _login_attempts.get(client_ip, [])
+                resp = RedirectResponse("/dashboard/", status_code=302)
+                resp.set_cookie(
+                    _COOKIE_NAME, dashboard_token,
+                    max_age=_COOKIE_MAX_AGE,
+                    httponly=True,
+                    samesite="strict",
+                    secure=_is_https(request),
+                )
+                return resp
+            # Record failed attempt while still holding the lock
             attempts.append(now)
             _login_attempts[client_ip] = attempts
         return RedirectResponse("/dashboard/login?error=invalid", status_code=302)
@@ -372,13 +372,21 @@ def _create_routes(dashboard_token: str) -> list:
         if content_length and int(content_length) > _MAX_POST_BODY_SIZE:
             return JSONResponse({"error": "Request body too large"}, status_code=413)
         try:
-            body = await request.json()
+            raw_body = await request.body()
+        except Exception:
+            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
+        if len(raw_body) > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            body = json.loads(raw_body)
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
         address = body.get("address", "").strip().lower()
         status = body.get("status", "").strip()
-        if not address or status not in ("unreviewed", "suspicious", "clean", "flagged"):
-            return JSONResponse({"error": "invalid address or status"}, status_code=400)
+        if not address or not re.fullmatch(r'0x[0-9a-f]+', address):
+            return JSONResponse({"error": "invalid address (expected 0x hex)"}, status_code=400)
+        if status not in ("unreviewed", "suspicious", "clean", "flagged"):
+            return JSONResponse({"error": "invalid status"}, status_code=400)
         st = _get_active_state()
         st.set_triage_status(address, status)
         # Persist to cache
@@ -415,12 +423,18 @@ def _create_routes(dashboard_token: str) -> list:
         if content_length and int(content_length) > _MAX_POST_BODY_SIZE:
             return JSONResponse({"error": "Request body too large"}, status_code=413)
         try:
-            body = await request.json()
+            raw_body = await request.body()
+        except Exception:
+            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
+        if len(raw_body) > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            body = json.loads(raw_body)
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
-        address = body.get("address", "").strip()
-        if not address:
-            return JSONResponse({"error": "missing address"}, status_code=400)
+        address = body.get("address", "").strip().lower()
+        if not address or not re.fullmatch(r'0x[0-9a-f]+', address):
+            return JSONResponse({"error": "invalid address (expected 0x hex)"}, status_code=400)
         try:
             result = await asyncio.wait_for(
                 asyncio.to_thread(trigger_decompile, address),
@@ -542,7 +556,14 @@ def _create_routes(dashboard_token: str) -> list:
             _sse_connection_count += 1
 
         # C3: Capture auth token at connection time for re-validation
+        # Check cookie, then Bearer header, then query param as fallback sources
         connection_token = request.cookies.get(_COOKIE_NAME, "")
+        if not connection_token:
+            auth_header = request.headers.get("authorization", "")
+            if auth_header.startswith("Bearer "):
+                connection_token = auth_header[7:]
+        if not connection_token:
+            connection_token = request.query_params.get("token", "")
 
         async def event_generator():
             global _sse_connection_count

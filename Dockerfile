@@ -116,6 +116,7 @@ RUN python <<'PYEOF'
 import urllib.request, zipfile, os, sys, shutil, pathlib
 rootfs_dir = pathlib.Path("/app/qiling-rootfs")
 rootfs_dir.mkdir(exist_ok=True)
+# TODO: Pin to specific commit SHA for supply chain security
 url = "https://github.com/qilingframework/rootfs/archive/refs/heads/master.zip"
 zip_path = "/tmp/qiling-rootfs.zip"
 urllib.request.urlretrieve(url, zip_path)
@@ -252,6 +253,7 @@ store = pathlib.Path("/app/yara_rules_store")
 store.mkdir(exist_ok=True)
 
 # --- ReversingLabs ---
+# TODO: Pin to specific commit SHA for supply chain security
 rl_url = "https://github.com/reversinglabs/reversinglabs-yara-rules/archive/refs/heads/develop.zip"
 rl_zip = "/tmp/rl-yara.zip"
 urllib.request.urlretrieve(rl_url, rl_zip)
@@ -267,6 +269,7 @@ rl_count = sum(1 for _ in target_rl.rglob("*.yar"))
 print(f"  ReversingLabs YARA rules installed: {rl_count} files")
 
 # --- Yara-Rules Community ---
+# TODO: Pin to specific commit SHA for supply chain security
 community_url = "https://github.com/Yara-Rules/rules/archive/refs/heads/master.zip"
 community_zip = "/tmp/community-yara.zip"
 urllib.request.urlretrieve(community_url, community_zip)

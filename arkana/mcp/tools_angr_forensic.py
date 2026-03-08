@@ -45,7 +45,7 @@ async def diff_binaries(
         run_in_background: Run as background task (default True).
     """
     _check_angr_ready("diff_binaries")
-    abs_path_b = os.path.abspath(file_path_b)
+    abs_path_b = os.path.realpath(file_path_b)
     state.check_path_allowed(abs_path_b)
     if not os.path.isfile(abs_path_b):
         return {"error": f"File not found: {file_path_b}"}
@@ -555,7 +555,7 @@ async def save_patched_binary(
     _check_angr_ready("save_patched_binary", require_cfg=False)
 
     # Validate output path against sandbox
-    state.check_path_allowed(os.path.abspath(output_path))
+    state.check_path_allowed(os.path.realpath(output_path))
 
     def _save():
         if state.angr_project is None:

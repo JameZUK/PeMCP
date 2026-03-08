@@ -5,11 +5,7 @@ var _strOffset = 0;
 var _strLimit = 100;
 var _strDebounce;
 
-function strEscapeHtml(s) {
-    var d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-}
+// strEscapeHtml removed — use global escapeHtml from dashboard.js
 
 function reloadStrings() {
     var type = document.getElementById('str-filter-type').value;
@@ -52,18 +48,18 @@ function renderStringTable(data) {
     for (var i = 0; i < strings.length; i++) {
         var s = strings[i];
         var badgeClass = typeBadge[s.type] || 'badge-dim';
-        var catBadge = s.category ? '<span class="badge badge-dim">' + strEscapeHtml(s.category) + '</span>' : '';
+        var catBadge = s.category ? '<span class="badge badge-dim">' + escapeHtml(s.category) + '</span>' : '';
         var score = (typeof s.sifter_score === 'number') ? s.sifter_score : 0;
         var truncated = s.string.length > 200 ? s.string.substring(0, 200) + '...' : s.string;
         html += '<tr>';
-        html += '<td class="mono">' + strEscapeHtml(s.address || '') + '</td>';
+        html += '<td class="mono">' + escapeHtml(s.address || '') + '</td>';
         html += '<td><span class="string-score">' + score + '</span></td>';
-        html += '<td><span class="badge ' + badgeClass + '">' + strEscapeHtml(s.type) + '</span></td>';
-        html += '<td class="str-content" title="' + strEscapeHtml(s.string) + '">' + strEscapeHtml(truncated) + '</td>';
+        html += '<td><span class="badge ' + badgeClass + '">' + escapeHtml(s.type) + '</span></td>';
+        html += '<td class="str-content" title="' + escapeHtml(s.string) + '">' + escapeHtml(truncated) + '</td>';
         html += '<td>' + catBadge + '</td>';
         html += '<td>';
         if (s.func_addr) {
-            html += '<a href="/dashboard/functions?highlight=' + encodeURIComponent(s.func_addr) + '" class="func-link">&rarr; ' + strEscapeHtml(s.func_name || s.func_addr) + '</a>';
+            html += '<a href="/dashboard/functions?highlight=' + encodeURIComponent(s.func_addr) + '" class="func-link">&rarr; ' + escapeHtml(s.func_name || s.func_addr) + '</a>';
         }
         html += '</td>';
         html += '<td><button class="btn-copy btn-triage" data-str="' + i + '" title="Copy to clipboard">CPY</button></td>';
@@ -83,7 +79,7 @@ function renderStats(data) {
         var html = '';
         var types = Object.keys(data.type_counts);
         for (var i = 0; i < types.length; i++) {
-            html += '<div class="stat-row"><span class="stat-label">' + strEscapeHtml(types[i]) + '</span><span>' + data.type_counts[types[i]] + '</span></div>';
+            html += '<div class="stat-row"><span class="stat-label">' + escapeHtml(types[i]) + '</span><span>' + data.type_counts[types[i]] + '</span></div>';
         }
         statTypes.innerHTML = html;
     }
@@ -93,7 +89,7 @@ function renderStats(data) {
         var html = '';
         var cats = Object.keys(data.category_counts);
         for (var i = 0; i < cats.length; i++) {
-            html += '<div class="stat-row"><span class="stat-label">' + strEscapeHtml(cats[i]) + '</span><span>' + data.category_counts[cats[i]] + '</span></div>';
+            html += '<div class="stat-row"><span class="stat-label">' + escapeHtml(cats[i]) + '</span><span>' + data.category_counts[cats[i]] + '</span></div>';
         }
         statCats.innerHTML = html || '<div class="dim p-6-0 fs-12">No categories</div>';
     }
@@ -295,7 +291,7 @@ function renderFlossPanel(data) {
     if (data.top_decoded && data.top_decoded.length > 0) {
         decodedSection.style.display = '';
         decodedList.innerHTML = data.top_decoded.map(function(s) {
-            return '<div class="floss-string-item">' + strEscapeHtml(s) + '</div>';
+            return '<div class="floss-string-item">' + escapeHtml(s) + '</div>';
         }).join('');
     } else {
         decodedSection.style.display = 'none';
@@ -307,7 +303,7 @@ function renderFlossPanel(data) {
     if (data.top_stack && data.top_stack.length > 0) {
         stackSection.style.display = '';
         stackList.innerHTML = data.top_stack.map(function(s) {
-            return '<div class="floss-string-item">' + strEscapeHtml(s) + '</div>';
+            return '<div class="floss-string-item">' + escapeHtml(s) + '</div>';
         }).join('');
     } else {
         stackSection.style.display = 'none';
@@ -316,7 +312,7 @@ function renderFlossPanel(data) {
     // Metadata
     var metaEl = document.getElementById('floss-meta');
     var metaParts = [];
-    if (data.floss_version) metaParts.push('FLOSS ' + strEscapeHtml(data.floss_version));
+    if (data.floss_version) metaParts.push('FLOSS ' + escapeHtml(data.floss_version));
     var cfg = data.analysis_config || {};
     if (cfg.min_length) metaParts.push('min_length=' + cfg.min_length);
     if (cfg.timeout) metaParts.push('timeout=' + cfg.timeout);

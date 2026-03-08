@@ -58,9 +58,10 @@ def start_enrichment(current_state: AnalyzerState) -> None:
     # Reset cancellation flag for new run
     current_state._enrichment_cancel.clear()
 
-    # H5: Increment generation counter to detect stale workers
-    current_state._enrichment_generation += 1
-    generation = current_state._enrichment_generation
+    # H5: Increment generation counter atomically to detect stale workers
+    with current_state._enrichment_gen_lock:
+        current_state._enrichment_generation += 1
+        generation = current_state._enrichment_generation
 
     current_state.set_task(TASK_ID, {
         "status": TASK_RUNNING,
@@ -314,7 +315,7 @@ def _decompile_sweep(
     state._cached_function_scores = scored
 
     # Import the decompile cache to store results
-    from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines
+    from arkana.mcp.tools_angr import _set_decompile_meta, _get_cached_lines
 
     max_funcs = min(len(scored), _MAX_DECOMPILE)
     decompiled = 0
@@ -371,11 +372,11 @@ def _decompile_sweep(
                 dec = proj.analyses.Decompiler(func, cfg=cfg.model)
                 if dec.codegen:
                     lines = dec.codegen.text.splitlines()
-                    _decompile_meta[cache_key] = {
+                    _set_decompile_meta(cache_key, {
                         "function_name": func.name,
                         "address": hex(addr_int),
                         "lines": lines,
-                    }
+                    })
                     state._newly_decompiled.append(hex(addr_int))
                     decompiled += 1
                 else:
@@ -450,68 +451,55 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
         if state.pe_data is None:
             return
 
-        # Keys we'll temporarily add to pe_data for serialization
-        _enrichment_keys = []
+        # Build a separate dict for serialization instead of mutating pe_data
+        serializable = dict(state.pe_data)
 
+        if state._cached_triage:
+            serializable['_cached_triage'] = state._cached_triage
+        if state._cached_classification:
+            serializable['_cached_classification'] = state._cached_classification
+        if state._cached_similarity_hashes:
+            serializable['_cached_similarity_hashes'] = state._cached_similarity_hashes
+        if state._cached_mitre_mapping:
+            serializable['_cached_mitre_mapping'] = state._cached_mitre_mapping
+        if state._cached_iocs:
+            serializable['_cached_iocs'] = state._cached_iocs
+        if state._cached_function_scores:
+            serializable['_cached_function_scores'] = state._cached_function_scores
+
+        # Save decompiled functions (metadata + code lines) for cache restore
         try:
-            # Store cached results in pe_data for cache persistence
-            if state._cached_triage:
-                state.pe_data['_cached_triage'] = state._cached_triage
-                _enrichment_keys.append('_cached_triage')
-            if state._cached_classification:
-                state.pe_data['_cached_classification'] = state._cached_classification
-                _enrichment_keys.append('_cached_classification')
-            if state._cached_similarity_hashes:
-                state.pe_data['_cached_similarity_hashes'] = state._cached_similarity_hashes
-                _enrichment_keys.append('_cached_similarity_hashes')
-            if state._cached_mitre_mapping:
-                state.pe_data['_cached_mitre_mapping'] = state._cached_mitre_mapping
-                _enrichment_keys.append('_cached_mitre_mapping')
-            if state._cached_iocs:
-                state.pe_data['_cached_iocs'] = state._cached_iocs
-                _enrichment_keys.append('_cached_iocs')
-            if state._cached_function_scores:
-                state.pe_data['_cached_function_scores'] = state._cached_function_scores
-                _enrichment_keys.append('_cached_function_scores')
+            from arkana.mcp.tools_angr import _decompile_meta
+            if _decompile_meta:
+                decompiled_funcs = []
+                # Snapshot to avoid RuntimeError: dict changed size during iteration
+                for key, meta in dict(_decompile_meta).items():
+                    if isinstance(key, tuple) and key:
+                        decompiled_funcs.append({
+                            "addr_int": key[0],
+                            "function_name": meta.get("function_name", ""),
+                            "address": meta.get("address", ""),
+                            "lines": meta.get("lines"),
+                        })
+                if decompiled_funcs:
+                    serializable['_decompiled_functions'] = decompiled_funcs
+        except ImportError:
+            pass
 
-            # Save decompiled functions (metadata + code lines) for cache restore
-            try:
-                from arkana.mcp.tools_angr import _decompile_meta
-                if _decompile_meta:
-                    decompiled_funcs = []
-                    # Snapshot to avoid RuntimeError: dict changed size during iteration
-                    for key, meta in dict(_decompile_meta).items():
-                        if isinstance(key, tuple) and key:
-                            decompiled_funcs.append({
-                                "addr_int": key[0],
-                                "function_name": meta.get("function_name", ""),
-                                "address": meta.get("address", ""),
-                                "lines": meta.get("lines"),
-                            })
-                    if decompiled_funcs:
-                        state.pe_data['_decompiled_functions'] = decompiled_funcs
-                        _enrichment_keys.append('_decompiled_functions')
-            except ImportError:
-                pass
+        sha = serializable.get("file_hashes", {}).get("sha256")
+        if sha and state.filepath:
+            analysis_cache.put(sha, serializable, state.filepath)
 
-            sha = state.pe_data.get("file_hashes", {}).get("sha256")
-            if sha and state.filepath:
-                analysis_cache.put(sha, state.pe_data, state.filepath)
-
-                # Also save session metadata
-                analysis_cache.update_session_data(
-                    sha,
-                    notes=state.get_all_notes_snapshot(),
-                    tool_history=state.get_tool_history_snapshot(),
-                    artifacts=state.get_all_artifacts_snapshot(),
-                    renames=state.get_all_renames_snapshot(),
-                    custom_types=state.get_all_types_snapshot(),
-                    triage_status=state.get_all_triage_snapshot(),
-                )
-        finally:
-            # Always clean up injected keys — even if cache.put() throws
-            for key in _enrichment_keys:
-                state.pe_data.pop(key, None)
+            # Also save session metadata
+            analysis_cache.update_session_data(
+                sha,
+                notes=state.get_all_notes_snapshot(),
+                tool_history=state.get_tool_history_snapshot(),
+                artifacts=state.get_all_artifacts_snapshot(),
+                renames=state.get_all_renames_snapshot(),
+                custom_types=state.get_all_types_snapshot(),
+                triage_status=state.get_all_triage_snapshot(),
+            )
 
     except Exception as e:
         logger.warning("Enrichment: cache save failed: %s", e)

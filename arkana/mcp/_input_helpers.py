@@ -41,6 +41,7 @@ def _parse_int_param(value: Union[int, str], name: str = "offset") -> int:
 # ---------------------------------------------------------------------------
 
 _LRU_SLOTS_PER_TOOL = 5
+_CACHE_TTL_SECONDS = 3600  # 1 hour
 
 
 class _ToolResultCache:
@@ -49,7 +50,8 @@ class _ToolResultCache:
     Keyed by ``(tool_name, params_key)`` where *params_key* is a hashable
     representation of the non-pagination parameters.  Each tool gets up to
     ``_LRU_SLOTS_PER_TOOL`` cached results; the least-recently-used entry
-    is evicted when the limit is exceeded.
+    is evicted when the limit is exceeded.  Entries older than
+    ``_CACHE_TTL_SECONDS`` are treated as cache misses.
     """
 
     def __init__(self) -> None:
@@ -58,13 +60,18 @@ class _ToolResultCache:
         self._store: Dict[str, collections.OrderedDict] = {}
 
     def get(self, tool_name: str, params_key) -> Optional[List]:
-        """Return cached items list or ``None`` on miss."""
+        """Return cached items list or ``None`` on miss (including TTL expiry)."""
         with self._lock:
             bucket = self._store.get(tool_name)
             if bucket is None or params_key not in bucket:
                 return None
+            entry = bucket[params_key]
+            # TTL check — evict stale entries
+            if time.time() - entry["ts"] > _CACHE_TTL_SECONDS:
+                del bucket[params_key]
+                return None
             bucket.move_to_end(params_key)
-            return bucket[params_key]["items"]
+            return entry["items"]
 
     def set(self, tool_name: str, params_key, items: List) -> None:
         """Store *items* in the cache, evicting LRU if needed."""
@@ -96,6 +103,8 @@ class _ToolResultCache:
 
 def _make_hashable(v):
     """Recursively convert mutable values to hashable types for cache keys."""
+    if isinstance(v, bytearray):
+        return bytes(v)
     if isinstance(v, dict):
         return tuple(sorted((k, _make_hashable(val)) for k, val in v.items()))
     if isinstance(v, (list, set)):

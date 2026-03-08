@@ -276,20 +276,17 @@ async def get_learner_profile(
         A dictionary with the learner profile including tier, mastery stats,
         module completion, and recent session history.
     """
-    profile = _load_profile()
-    profile["session_count"] += 1
-    profile["current_tier"] = _compute_tier(profile)
+    def _start_session(profile):
+        profile["session_count"] += 1
+        profile["current_tier"] = _compute_tier(profile)
+        profile["session_log"].append({
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "type": "session_start",
+        })
+        if len(profile["session_log"]) > 50:
+            profile["session_log"] = profile["session_log"][-50:]
 
-    # Add a session log entry
-    profile["session_log"].append({
-        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "type": "session_start",
-    })
-    # Keep last 50 session log entries
-    if len(profile["session_log"]) > 50:
-        profile["session_log"] = profile["session_log"][-50:]
-
-    _save_profile(profile)
+    profile = _update_profile(_start_session)
 
     # Build module completion summary
     modules_seen: set = set()
@@ -368,53 +365,58 @@ async def update_concept_mastery(
             "message": f"Invalid mastery level '{level}'. Must be one of: {', '.join(MASTERY_LEVELS)}",
         }
 
-    profile = _load_profile()
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-    existing = profile["concepts"].get(concept, {})
-    old_level = existing.get("level")
+    # Perform entire load→check→modify→save atomically under the lock
+    regression_error = None
+    old_level = None
 
-    # Don't allow regression unless explicitly forced
-    if old_level and MASTERY_LEVELS.index(old_level) > MASTERY_LEVELS.index(level):
-        return {
-            "status": "warning",
-            "message": f"Concept '{concept}' is already at '{old_level}' — cannot regress to '{level}'.",
-            "current_level": old_level,
-            "hint": "Use reset_learner_profile() to start fresh if needed.",
+    def _do_update(profile):
+        nonlocal regression_error, old_level
+        existing = profile["concepts"].get(concept, {})
+        old_level = existing.get("level")
+
+        # Don't allow regression unless explicitly forced
+        if old_level and MASTERY_LEVELS.index(old_level) > MASTERY_LEVELS.index(level):
+            regression_error = {
+                "status": "warning",
+                "message": f"Concept '{concept}' is already at '{old_level}' — cannot regress to '{level}'.",
+                "current_level": old_level,
+                "hint": "Use reset_learner_profile() to start fresh if needed.",
+            }
+            return  # modifier returns without saving changes
+
+        entry = {
+            "level": level,
+            "first_seen": existing.get("first_seen", now),
+            "last_updated": now,
+            "update_count": existing.get("update_count", 0) + 1,
         }
+        if notes:
+            entry["last_note"] = notes
+        profile["concepts"][concept] = entry
 
-    entry = {
-        "level": level,
-        "first_seen": existing.get("first_seen", now),
-        "last_updated": now,
-        "update_count": existing.get("update_count", 0) + 1,
-    }
-    if notes:
-        entry["last_note"] = notes
+        profile["total_concepts_introduced"] = sum(
+            1 for c in profile["concepts"].values() if c.get("level") == "introduced"
+        )
+        profile["total_concepts_mastered"] = sum(
+            1 for c in profile["concepts"].values() if c.get("level") == "mastered"
+        )
+        profile["current_tier"] = _compute_tier(profile)
+        profile["session_log"].append({
+            "timestamp": now,
+            "type": "mastery_update",
+            "concept": concept,
+            "old_level": old_level,
+            "new_level": level,
+        })
+        if len(profile["session_log"]) > 50:
+            profile["session_log"] = profile["session_log"][-50:]
 
-    profile["concepts"][concept] = entry
+    profile = _update_profile(_do_update)
 
-    # Recompute stats
-    profile["total_concepts_introduced"] = sum(
-        1 for c in profile["concepts"].values() if c.get("level") == "introduced"
-    )
-    profile["total_concepts_mastered"] = sum(
-        1 for c in profile["concepts"].values() if c.get("level") == "mastered"
-    )
-    profile["current_tier"] = _compute_tier(profile)
-
-    # Log the update
-    profile["session_log"].append({
-        "timestamp": now,
-        "type": "mastery_update",
-        "concept": concept,
-        "old_level": old_level,
-        "new_level": level,
-    })
-    if len(profile["session_log"]) > 50:
-        profile["session_log"] = profile["session_log"][-50:]
-
-    _save_profile(profile)
+    if regression_error:
+        return regression_error
 
     concept_info = _CONCEPT_CATALOG[concept]
     module_status = _module_completion(profile, concept_info["module"])

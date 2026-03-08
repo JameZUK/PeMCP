@@ -132,7 +132,7 @@ async def parse_binary_with_lief(ctx: Context, file_path: Optional[str] = None) 
     if not target or not os.path.isfile(target):
         raise RuntimeError("No file specified and no file is loaded.")
     if file_path:
-        state.check_path_allowed(os.path.abspath(target))
+        state.check_path_allowed(os.path.realpath(target))
 
     def _parse():
         binary = lief.parse(target)
@@ -228,7 +228,7 @@ async def modify_pe_section(
 
     # Validate output path against sandbox if provided
     if output_path:
-        state.check_path_allowed(os.path.abspath(output_path))
+        state.check_path_allowed(os.path.realpath(output_path))
 
     def _modify():
         binary = lief.parse(state.filepath)
@@ -512,7 +512,7 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
     if not target or not os.path.isfile(target):
         raise RuntimeError("No file specified and no file is loaded.")
     if file_path:
-        state.check_path_allowed(os.path.abspath(target))
+        state.check_path_allowed(os.path.realpath(target))
 
     def _compute():
         with open(target, 'rb') as f:
@@ -569,7 +569,7 @@ async def compare_file_similarity(
         raise RuntimeError("No file is loaded.")
     if not os.path.isfile(file_path_b):
         raise RuntimeError(f"File not found: {file_path_b}")
-    state.check_path_allowed(os.path.abspath(file_path_b))
+    state.check_path_allowed(os.path.realpath(file_path_b))
 
     def _compare():
         with open(state.filepath, 'rb') as f:
@@ -812,7 +812,7 @@ async def auto_unpack_pe(
         output_path = f"{base}_unpacked{ext}"
 
     # Validate output path against sandbox
-    state.check_path_allowed(os.path.abspath(output_path))
+    state.check_path_allowed(os.path.realpath(output_path))
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "auto_unpack_pe", timeout_seconds))

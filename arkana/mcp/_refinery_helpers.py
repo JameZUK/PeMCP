@@ -29,7 +29,12 @@ def _require_refinery(tool_name: str):
 
 def _hex_to_bytes(hex_string: str) -> bytes:
     """Convert a hex string (with optional spaces/0x/\\x prefixes) to bytes."""
-    cleaned = hex_string.replace(" ", "").replace("0x", "").replace("\\x", "")
+    cleaned = hex_string.replace(" ", "")
+    # Strip leading 0x/0X prefix only (not all occurrences)
+    if cleaned.startswith(("0x", "0X")):
+        cleaned = cleaned[2:]
+    # Strip \x escape sequences throughout
+    cleaned = cleaned.replace("\\x", "").replace("\\X", "")
     return bytes.fromhex(cleaned)
 
 

@@ -1,5 +1,12 @@
 /* Arkana Dashboard — htmx config + SSE handler + toast notifications */
 
+// Global HTML escape helper — used by functions.js, strings.js, and this file
+function escapeHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+}
+
 // CSRF token helper — reads from <meta name="csrf-token">
 function getCsrfToken() {
     var meta = document.querySelector('meta[name="csrf-token"]');
@@ -190,12 +197,6 @@ function showToast(message, type) {
     if (!searchInput || !dropdown) return;
     var debounceTimer;
 
-    function escHtml(s) {
-        var d = document.createElement('div');
-        d.textContent = s;
-        return d.innerHTML;
-    }
-
     function doSearch() {
         var q = searchInput.value.trim();
         if (q.length < 2) {
@@ -218,19 +219,19 @@ function showToast(message, type) {
         var groups = [
             {key: 'functions', label: 'FUNCTIONS', render: function(item) {
                 return '<a class="search-result" href="/dashboard/functions?search=' + encodeURIComponent(item.name) + '">' +
-                    '<span class="mono dim">' + escHtml(item.address) + '</span> ' + escHtml(item.name) + '</a>';
+                    '<span class="mono dim">' + escapeHtml(item.address) + '</span> ' + escapeHtml(item.name) + '</a>';
             }},
             {key: 'strings', label: 'STRINGS', render: function(item) {
                 return '<a class="search-result" href="/dashboard/strings?search=' + encodeURIComponent(q) + '">' +
-                    '<span class="badge badge-dim fs-9">' + escHtml(item.type) + '</span> ' + escHtml(item.string) + '</a>';
+                    '<span class="badge badge-dim fs-9">' + escapeHtml(item.type) + '</span> ' + escapeHtml(item.string) + '</a>';
             }},
             {key: 'imports', label: 'IMPORTS', render: function(item) {
                 return '<a class="search-result" href="/dashboard/imports">' +
-                    '<span class="dim">' + escHtml(item.dll) + '</span> ' + escHtml(item.function) + '</a>';
+                    '<span class="dim">' + escapeHtml(item.dll) + '</span> ' + escapeHtml(item.function) + '</a>';
             }},
             {key: 'notes', label: 'NOTES', render: function(item) {
                 return '<a class="search-result" href="/dashboard/notes">' +
-                    '<span class="badge badge-dim fs-9">' + escHtml(item.category) + '</span> ' + escHtml(item.content) + '</a>';
+                    '<span class="badge badge-dim fs-9">' + escapeHtml(item.category) + '</span> ' + escapeHtml(item.content) + '</a>';
             }}
         ];
 
@@ -247,7 +248,7 @@ function showToast(message, type) {
         }
 
         if (!hasResults) {
-            html = '<div class="search-empty">No results for "' + escHtml(q) + '"</div>';
+            html = '<div class="search-empty">No results for "' + escapeHtml(q) + '"</div>';
         }
         dropdown.innerHTML = html;
         dropdown.classList.remove('hidden');

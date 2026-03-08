@@ -4,6 +4,7 @@ import json
 import copy
 import os
 import asyncio
+import threading
 
 from typing import Dict, Any, Optional, List, Union
 
@@ -34,12 +35,18 @@ if STRINGSIFTER_AVAILABLE:
 # Lazy-loaded StringSifter model cache (avoids re-reading from disk on every call)
 _sifter_featurizer = None
 _sifter_ranker = None
+_sifter_lock = threading.Lock()
 
 
 def _get_sifter_models():
     """Return cached (featurizer, ranker) tuple, loading from disk on first call."""
     global _sifter_featurizer, _sifter_ranker
-    if _sifter_featurizer is None or _sifter_ranker is None:
+    if _sifter_featurizer is not None and _sifter_ranker is not None:
+        return _sifter_featurizer, _sifter_ranker
+    with _sifter_lock:
+        # Double-check after acquiring lock
+        if _sifter_featurizer is not None and _sifter_ranker is not None:
+            return _sifter_featurizer, _sifter_ranker
         modeldir = os.path.join(sifter_util.package_base(), "model")
         _sifter_featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
         _sifter_ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))

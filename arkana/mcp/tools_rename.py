@@ -230,6 +230,10 @@ async def batch_rename(
                 if not name:
                     errors.append(f"[{i}] Missing name for label.")
                     continue
+                valid_categories = ("general", "ioc", "crypto", "c2", "function")
+                if cat not in valid_categories:
+                    errors.append(f"[{i}] Invalid category '{cat}'. Must be one of: {', '.join(valid_categories)}.")
+                    continue
                 state.add_label(addr, name, cat)
                 applied += 1
             else:

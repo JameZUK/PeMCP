@@ -125,6 +125,7 @@ class AnalyzerState:
         # Enrichment cancellation and generation tracking
         self._enrichment_cancel = threading.Event()
         self._enrichment_generation: int = 0
+        self._enrichment_gen_lock = threading.Lock()
 
         # Newly-decompiled notification queue (SSE push to dashboard)
         self._newly_decompiled: deque = deque(maxlen=200)
@@ -386,11 +387,19 @@ class AnalyzerState:
             return {"address": addr, "name": name, "category": category, "type": "label"}
 
     def get_renames(self, rename_type: Optional[str] = None) -> Dict[str, Any]:
-        """Thread-safe read of renames, optionally filtered by type."""
+        """Thread-safe deep read of renames, optionally filtered by type."""
         with self._renames_lock:
             if rename_type and rename_type in self.renames:
-                return {rename_type: dict(self.renames[rename_type])}
-            return {k: dict(v) if isinstance(v, dict) else v for k, v in self.renames.items()}
+                v = self.renames[rename_type]
+                # Deep-copy dict-of-dicts (variables, labels)
+                if v and isinstance(next(iter(v.values()), None), dict):
+                    return {rename_type: {k2: dict(v2) for k2, v2 in v.items()}}
+                return {rename_type: dict(v)}
+            return {
+                "functions": dict(self.renames["functions"]),
+                "variables": {k: dict(v) for k, v in self.renames["variables"].items()},
+                "labels": {k: dict(v) for k, v in self.renames["labels"].items()},
+            }
 
     def delete_rename(self, address: str, rename_type: str) -> bool:
         """Thread-safe removal of a rename/label. Returns True if found."""
@@ -698,15 +707,29 @@ def get_session_key_from_context(ctx) -> str:
 
     Falls back to ``"default"`` when no session can be identified (e.g.
     stdio mode), which transparently collapses to the singleton model.
+
+    Uses a UUID stamped onto the session object (``_arkana_session_id``)
+    rather than ``id(session)``, because Python can reuse ``id()`` values
+    after an object is garbage-collected, which could cause a new session
+    to inherit another session's state.
     """
     try:
         # FastMCP Context wraps a RequestContext
+        session = None
         if hasattr(ctx, '_request_context'):
             session = getattr(ctx._request_context, 'session', None)
-            if session is not None:
-                return str(id(session))
-        if hasattr(ctx, 'session'):
-            return str(id(ctx.session))
+        if session is None and hasattr(ctx, 'session'):
+            session = ctx.session
+        if session is not None:
+            sid = getattr(session, '_arkana_session_id', None)
+            if sid is None:
+                sid = str(uuid.uuid4())
+                try:
+                    session._arkana_session_id = sid
+                except AttributeError:
+                    # Frozen/slotted objects — fall back to id()
+                    sid = f"id-{id(session)}"
+            return sid
     except Exception:
         logger.debug("Could not extract session key from context, using default", exc_info=True)
     return "default"

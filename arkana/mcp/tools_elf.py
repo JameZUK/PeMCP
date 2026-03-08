@@ -53,19 +53,60 @@ async def elf_analyze(
                     "section_header_count": elf['e_shnum'],
                 }
 
-                # Sections
+                # Single-pass section iteration: collect section info,
+                # symbols, dynamic deps, and notes all at once.
                 sections = []
+                symbols = []
+                dynamic_deps = []
+                notes = []
+
                 for sec in elf.iter_sections():
-                    sections.append({
-                        "name": sec.name,
-                        "type": sec['sh_type'],
-                        "address": hex(sec['sh_addr']),
-                        "offset": hex(sec['sh_offset']),
-                        "size": sec['sh_size'],
-                        "flags": sec['sh_flags'],
-                    })
-                    if len(sections) >= limit:
-                        break
+                    # Section metadata (capped by limit)
+                    if len(sections) < limit:
+                        sections.append({
+                            "name": sec.name,
+                            "type": sec['sh_type'],
+                            "address": hex(sec['sh_addr']),
+                            "offset": hex(sec['sh_offset']),
+                            "size": sec['sh_size'],
+                            "flags": sec['sh_flags'],
+                        })
+
+                    # Symbol tables
+                    if isinstance(sec, SymbolTableSection) and len(symbols) < limit:
+                        for sym in sec.iter_symbols():
+                            if sym.name:
+                                symbols.append({
+                                    "name": sym.name,
+                                    "value": hex(sym['st_value']),
+                                    "size": sym['st_size'],
+                                    "type": sym['st_info']['type'],
+                                    "bind": sym['st_info']['bind'],
+                                    "section_index": sym['st_shndx'],
+                                })
+                                if len(symbols) >= limit:
+                                    break
+
+                    # Dynamic dependencies
+                    if sec['sh_type'] == 'SHT_DYNAMIC':
+                        for tag in sec.iter_tags():
+                            if tag['d_tag'] == 'DT_NEEDED':
+                                dynamic_deps.append(tag.needed)
+
+                    # Notes
+                    if sec['sh_type'] == 'SHT_NOTE' and len(notes) < limit:
+                        try:
+                            for note in sec.iter_notes():
+                                notes.append({
+                                    "name": note['n_name'],
+                                    "type": note['n_type'],
+                                    "desc_size": len(note['n_desc']) if isinstance(note['n_desc'], (bytes, str)) else None,
+                                })
+                                if len(notes) >= limit:
+                                    break
+                        except Exception:
+                            pass
+
                 result["sections"] = sections
 
                 # Program headers (segments)
@@ -81,51 +122,8 @@ async def elf_analyze(
                         "flags": seg['p_flags'],
                     })
                 result["segments"] = segments
-
-                # Symbols
-                symbols = []
-                for sec in elf.iter_sections():
-                    if isinstance(sec, SymbolTableSection):
-                        for sym in sec.iter_symbols():
-                            if sym.name:
-                                symbols.append({
-                                    "name": sym.name,
-                                    "value": hex(sym['st_value']),
-                                    "size": sym['st_size'],
-                                    "type": sym['st_info']['type'],
-                                    "bind": sym['st_info']['bind'],
-                                    "section_index": sym['st_shndx'],
-                                })
-                                if len(symbols) >= limit:
-                                    break
-                    if len(symbols) >= limit:
-                        break
                 result["symbols"] = symbols
-
-                # Dynamic section (shared library dependencies)
-                dynamic_deps = []
-                for sec in elf.iter_sections():
-                    if sec['sh_type'] == 'SHT_DYNAMIC':
-                        for tag in sec.iter_tags():
-                            if tag['d_tag'] == 'DT_NEEDED':
-                                dynamic_deps.append(tag.needed)
                 result["dynamic_dependencies"] = dynamic_deps
-
-                # Notes
-                notes = []
-                for sec in elf.iter_sections():
-                    if sec['sh_type'] == 'SHT_NOTE':
-                        try:
-                            for note in sec.iter_notes():
-                                notes.append({
-                                    "name": note['n_name'],
-                                    "type": note['n_type'],
-                                    "desc_size": len(note['n_desc']) if isinstance(note['n_desc'], (bytes, str)) else None,
-                                })
-                                if len(notes) >= limit:
-                                    break
-                        except Exception:
-                            pass
                 result["notes"] = notes
 
                 result["summary"] = {

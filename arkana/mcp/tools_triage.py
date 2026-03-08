@@ -41,52 +41,13 @@ _TRIAGE_WORKFLOW_HINTS = [
 
 
 # ===================================================================
-#  Suspicious Import Database (risk-categorized)
+#  Suspicious Import Database — derived from canonical source
 # ===================================================================
+from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB
 
+# Extract risk-level-only mapping from the canonical (risk, category) DB.
 SUSPICIOUS_IMPORTS_DB = {
-    # CRITICAL — Process injection / code execution
-    "CreateRemoteThread": "CRITICAL", "NtCreateThreadEx": "CRITICAL",
-    "RtlCreateUserThread": "CRITICAL", "WriteProcessMemory": "CRITICAL",
-    "NtWriteVirtualMemory": "CRITICAL", "VirtualAllocEx": "CRITICAL",
-    "NtAllocateVirtualMemory": "CRITICAL", "QueueUserAPC": "CRITICAL",
-    "NtQueueApcThread": "CRITICAL", "SetWindowsHookEx": "CRITICAL",
-    "NtMapViewOfSection": "CRITICAL", "NtUnmapViewOfSection": "CRITICAL",
-    "ZwMapViewOfSection": "CRITICAL",
-    # CRITICAL — Credential theft / privilege escalation
-    "MiniDumpWriteDump": "CRITICAL", "LsaEnumerateLogonSessions": "CRITICAL",
-    "AdjustTokenPrivileges": "CRITICAL", "ImpersonateLoggedOnUser": "CRITICAL",
-    "OpenProcessToken": "CRITICAL", "DuplicateToken": "CRITICAL",
-    "LdrLoadDll": "CRITICAL",
-    # HIGH — Anti-analysis / evasion
-    "IsDebuggerPresent": "HIGH", "CheckRemoteDebuggerPresent": "HIGH",
-    "NtQueryInformationProcess": "HIGH", "OutputDebugString": "HIGH",
-    "GetTickCount": "HIGH", "QueryPerformanceCounter": "HIGH",
-    "NtSetInformationThread": "HIGH",
-    # HIGH — Networking (C2 potential)
-    "InternetOpen": "HIGH", "InternetConnect": "HIGH",
-    "HttpOpenRequest": "HIGH", "HttpSendRequest": "HIGH",
-    "URLDownloadToFile": "HIGH", "URLDownloadToCacheFile": "HIGH",
-    "WinHttpOpen": "HIGH", "WinHttpConnect": "HIGH",
-    # HIGH — Process/service manipulation
-    "OpenProcess": "HIGH", "TerminateProcess": "HIGH",
-    "CreateService": "HIGH", "StartService": "HIGH",
-    "ShellExecute": "HIGH", "WinExec": "HIGH",
-    "CreateProcess": "HIGH",
-    # MEDIUM — Registry / persistence
-    "RegSetValueEx": "MEDIUM", "RegCreateKeyEx": "MEDIUM",
-    "RegDeleteKey": "MEDIUM", "RegDeleteValue": "MEDIUM",
-    # MEDIUM — Crypto (ransomware indicators)
-    "CryptEncrypt": "MEDIUM", "CryptDecrypt": "MEDIUM",
-    "CryptAcquireContext": "MEDIUM", "BCryptEncrypt": "MEDIUM",
-    "CryptDeriveKey": "MEDIUM", "CryptGenKey": "MEDIUM",
-    # MEDIUM — File operations (dropper indicators)
-    "CreateFileMapping": "MEDIUM", "MapViewOfFile": "MEDIUM",
-    "VirtualProtect": "MEDIUM", "SetFileAttributes": "MEDIUM",
-    # MEDIUM — Socket-level networking
-    "WSAStartup": "MEDIUM", "connect": "MEDIUM",
-    "send": "MEDIUM", "recv": "MEDIUM", "socket": "MEDIUM",
-    "bind": "MEDIUM", "listen": "MEDIUM", "accept": "MEDIUM",
+    name: risk for name, (risk, _) in CATEGORIZED_IMPORTS_DB.items()
 }
 
 # Pre-sorted by severity so that CRITICAL matches are found first during

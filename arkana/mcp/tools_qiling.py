@@ -452,7 +452,7 @@ async def qiling_dump_unpacked_binary(
         output_path = f"{base}_qiling_unpacked{ext}"
 
     # Validate output path against sandbox
-    state.check_path_allowed(os.path.abspath(output_path))
+    state.check_path_allowed(os.path.realpath(output_path))
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "qiling_dump_unpacked_binary", timeout_seconds))

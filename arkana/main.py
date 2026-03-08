@@ -570,7 +570,7 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
                         token = _ensure_token()
                         logger.info(
                             "Dashboard: http://%s:%d/dashboard/?token=%s",
-                            args.mcp_host, args.mcp_port, token,
+                            args.mcp_host, args.mcp_port, token[:8] + "...",
                         )
                         app = combined
                     except Exception as e:

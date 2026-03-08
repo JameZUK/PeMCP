@@ -16,6 +16,7 @@ if YARA_AVAILABLE:
 # --- Module-level YARA rule compilation cache ---
 # Compiled rules are cached per rules-path so that repeated open_file /
 # perform_yara_scan calls don't recompile 100+ .yar files from disk.
+_MAX_RULES_CACHE = 8
 _compiled_rules_cache: Dict[str, List] = {}
 _compiled_rules_lock = threading.Lock()
 
@@ -164,6 +165,10 @@ def _get_compiled_rules(yara_rules_path: str, verbose: bool = False) -> Optional
             return cached
         compiled = _compile_yara_rules(resolved, verbose)
         if compiled is not None:
+            # Evict oldest entry if cache is at capacity
+            while len(_compiled_rules_cache) >= _MAX_RULES_CACHE:
+                oldest_key = next(iter(_compiled_rules_cache))
+                del _compiled_rules_cache[oldest_key]
             _compiled_rules_cache[resolved] = compiled
         return compiled
 

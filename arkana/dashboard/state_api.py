@@ -27,26 +27,31 @@ def _get_state():
     (latest tool_history timestamp) to avoid nondeterministic dict iteration.
     """
     with _registry_lock:
-        # Collect candidates with a loaded file
-        file_candidates = [
+        candidates = [*_session_registry.values(), _default_state]
+        # Snapshot sessions with an active tool (fallback)
+        active_candidates = [
             st for st in _session_registry.values()
-            if st.filepath is not None
+            if getattr(st, "active_tool", None) is not None
         ]
-        if file_candidates:
-            if len(file_candidates) == 1:
-                return file_candidates[0]
-            # Pick the session with the most recent tool call
-            def _last_activity(st):
-                hist = st.get_tool_history()
-                if hist:
-                    return hist[-1].get("timestamp_epoch", 0)
-                return 0
-            return max(file_candidates, key=_last_activity)
 
-        # Fall back to a session with an active tool (e.g. open_file loading)
-        for st in _session_registry.values():
-            if getattr(st, "active_tool", None) is not None:
-                return st
+    # Now iterate candidates outside the lock to avoid holding it
+    # during get_tool_history() calls
+    file_candidates = [st for st in candidates if st.filepath is not None]
+    if file_candidates:
+        if len(file_candidates) == 1:
+            return file_candidates[0]
+        # Pick the session with the most recent tool call
+        def _last_activity(st):
+            hist = st.get_tool_history()
+            if hist:
+                return hist[-1].get("timestamp_epoch", 0)
+            return 0
+        return max(file_candidates, key=_last_activity)
+
+    # Fall back to a session with an active tool (e.g. open_file loading)
+    if active_candidates:
+        return active_candidates[0]
+
     return _default_state
 
 
@@ -62,6 +67,17 @@ _OVERVIEW_ENRICHMENT_TTL = 10  # seconds — enrichment data changes slowly
 # M19: Cache for get_overview_data (2s TTL)
 _overview_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, data)
 _OVERVIEW_TTL = 2  # seconds
+_MAX_OVERVIEW_CACHE = 4  # max cached overview snapshots
+
+
+def _build_score_lookup(st) -> Dict[str, int]:
+    """Build addr→score mapping from cached enrichment scores."""
+    lookup: Dict[str, int] = {}
+    cached_scores = getattr(st, "_cached_function_scores", None)
+    if cached_scores:
+        for s in cached_scores:
+            lookup[s.get("addr", "")] = s.get("score", 0)
+    return lookup
 
 
 def _build_function_lookup(st) -> tuple:
@@ -395,7 +411,7 @@ def get_overview_data() -> Dict[str, Any]:
     if cached is not None:
         expire_time, cached_data = cached
         if now < expire_time:
-            return cached_data
+            return copy.deepcopy(cached_data)
 
     pe_data = st.pe_data or {}
 
@@ -845,7 +861,7 @@ def get_overview_data() -> Dict[str, Any]:
     # M19: Cache the result
     _overview_cache[cache_key] = (time.time() + _OVERVIEW_TTL, result)
     # Evict stale entries
-    if len(_overview_cache) > _MAX_FUNC_LOOKUP_CACHE:
+    if len(_overview_cache) > _MAX_OVERVIEW_CACHE:
         stale = [k for k, (exp, _) in _overview_cache.items() if time.time() > exp]
         for k in stale:
             _overview_cache.pop(k, None)
@@ -874,12 +890,7 @@ def get_functions_data(sort_by: str = "address",
         renames = st.get_renames().get("functions", {})
         decompiled_addrs = _get_decompiled_addresses()
 
-        # Build score lookup from cached enrichment scores
-        score_lookup: Dict[str, int] = {}
-        cached_scores = getattr(st, "_cached_function_scores", None)
-        if cached_scores:
-            for s in cached_scores:
-                score_lookup[s.get("addr", "")] = s.get("score", 0)
+        score_lookup = _build_score_lookup(st)
 
         # Build address->notes lookup from function notes
         notes_by_addr: Dict[str, List[str]] = {}
@@ -964,12 +975,7 @@ def get_callgraph_data() -> Dict[str, Any]:
         renames = st.get_renames().get("functions", {})
         decompiled_addrs = _get_decompiled_addresses()
 
-        # Build score lookup from cached enrichment scores
-        score_lookup: Dict[str, int] = {}
-        cached_scores = getattr(st, "_cached_function_scores", None)
-        if cached_scores:
-            for s in cached_scores:
-                score_lookup[s.get("addr", "")] = s.get("score", 0)
+        score_lookup = _build_score_lookup(st)
 
         # Build set of addresses with function notes
         noted_addrs = set()
@@ -1769,12 +1775,7 @@ def get_function_analysis_data(address_hex: str) -> Dict[str, Any]:
     Used by the callgraph sidebar tabbed panel.
     """
     st = _get_state()
-    # Build score lookup from cached enrichment scores
-    score_lookup: Dict[str, int] = {}
-    cached_scores = getattr(st, "_cached_function_scores", None)
-    if cached_scores:
-        for s in cached_scores:
-            score_lookup[s.get("addr", "")] = s.get("score", 0)
+    score_lookup = _build_score_lookup(st)
 
     result: Dict[str, Any] = {
         "address": address_hex,

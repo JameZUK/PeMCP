@@ -83,11 +83,7 @@ function reloadFunctions() {
         _restoreDetailPanels();
     });
 }
-function escapeHtml(s) {
-    var d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
-}
+// escapeHtml is defined globally in dashboard.js
 function setTriage(addr, status) {
     fetch('/dashboard/api/triage', {
         method: 'POST',
@@ -137,28 +133,9 @@ document.addEventListener('arkana-explored-changed', function(e) {
     }, 500);
 });
 
-// Layer 3: Polling fallback — checks every 5s if explored count changed
-// Works even if SSE decompile-update events aren't delivered (e.g. server not restarted)
-(function() {
-    var lastPolledExplored = -1;
-    var pollTimer = setInterval(function() {
-        // Only poll if the functions table exists on this page
-        if (!document.getElementById('func-tbody')) {
-            clearInterval(pollTimer);
-            return;
-        }
-        fetch('/dashboard/api/state')
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                var count = data.explored_functions || 0;
-                if (lastPolledExplored >= 0 && count > lastPolledExplored) {
-                    reloadFunctions();
-                }
-                lastPolledExplored = count;
-            })
-            .catch(function() {});
-    }, 5000);
-})();
+// Layer 3: Polling fallback removed — SSE + htmx partial polling already cover
+// change detection.  The previous 5s setInterval was redundant and wasted
+// bandwidth (triple-polling alongside SSE every 2s and htmx every 3s).
 
 // Bind all event listeners on DOMContentLoaded
 document.addEventListener('DOMContentLoaded', function() {

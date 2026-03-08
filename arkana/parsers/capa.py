@@ -33,6 +33,7 @@ if CAPA_AVAILABLE:
 # Module-level capa rules cache — mirrors the YARA caching pattern in
 # signatures.py.  Keyed by resolved rules directory path so re-opening
 # a different sample with the same rules skips the expensive YAML parse.
+_MAX_CAPA_CACHE = 8
 _capa_rules_cache: Dict[str, Any] = {}
 _capa_rules_lock = threading.Lock()
 
@@ -59,6 +60,10 @@ def _get_cached_capa_rules(mock_args):
         logger.info("Capa rules loaded from disk in %.1fs. Rule count: %s",
                      elapsed,
                      len(rules.rules) if hasattr(rules, 'rules') and hasattr(rules.rules, '__len__') else 'N/A')
+        # Evict oldest entry if cache is at capacity
+        while len(_capa_rules_cache) >= _MAX_CAPA_CACHE:
+            oldest_key = next(iter(_capa_rules_cache))
+            del _capa_rules_cache[oldest_key]
         _capa_rules_cache[rules_key] = rules
         return rules
 

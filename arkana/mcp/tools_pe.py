@@ -350,17 +350,17 @@ async def open_file(
                     cached_decompiled = cached.pop('_decompiled_functions', None)
                     if cached_decompiled:
                         try:
-                            from arkana.mcp.tools_angr import _decompile_meta
+                            from arkana.mcp.tools_angr import _set_decompile_meta, _get_cached_lines
                             for entry in cached_decompiled:
                                 addr_int = entry.get("addr_int")
                                 if addr_int is not None:
                                     key = (addr_int,)
-                                    if key not in _decompile_meta:
-                                        _decompile_meta[key] = {
+                                    if _get_cached_lines(key) is None:
+                                        _set_decompile_meta(key, {
                                             "function_name": entry.get("function_name", ""),
                                             "address": entry.get("address", ""),
                                             "lines": entry.get("lines"),
-                                        }
+                                        })
                         except ImportError:
                             pass
 

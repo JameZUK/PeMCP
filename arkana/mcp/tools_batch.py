@@ -321,12 +321,12 @@ async def analyze_batch(
     paths = []
     if file_paths:
         for p in file_paths[:limit]:
-            abs_p = os.path.abspath(p)
+            abs_p = os.path.realpath(p)
             state.check_path_allowed(abs_p)
             if os.path.isfile(abs_p):
                 paths.append(abs_p)
     elif directory:
-        abs_dir = os.path.abspath(directory)
+        abs_dir = os.path.realpath(directory)
         state.check_path_allowed(abs_dir)
         if not os.path.isdir(abs_dir):
             raise ValueError(f"Directory not found: {directory}")

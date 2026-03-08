@@ -67,6 +67,8 @@ class AnalysisCache:
 
     def _ensure_cache_dir(self) -> None:
         CACHE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Enforce permissions even if the directory already existed
+        os.chmod(str(CACHE_DIR), 0o700)
 
     def _entry_dir(self, sha256: str) -> Path:
         return CACHE_DIR / sha256[:2]

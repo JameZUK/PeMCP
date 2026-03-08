@@ -5,7 +5,6 @@ analysis: full S-box validation, key schedule detection, entropy-based key
 extraction, and multi-algorithm brute-force decryption.
 """
 import asyncio
-import math
 import struct
 
 from typing import Dict, Any, List, Optional, Union
@@ -14,6 +13,7 @@ from arkana.config import state, logger, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._input_helpers import _parse_int_param
 from arkana.mcp._progress_bridge import ProgressBridge
+from arkana.utils import shannon_entropy
 
 
 # ===================================================================
@@ -76,21 +76,6 @@ _CRYPTO_IMPORTS = frozenset({
 })
 
 
-def _shannon_entropy(data: bytes) -> float:
-    """Compute Shannon entropy of a byte sequence."""
-    if not data:
-        return 0.0
-    freq = [0] * 256
-    for b in data:
-        freq[b] += 1
-    length = len(data)
-    ent = 0.0
-    for f in freq:
-        if f > 0:
-            p = f / length
-            ent -= p * math.log2(p)
-    return ent
-
 
 def _is_ascending_sequence(data: bytes, min_length: int = 16) -> bool:
     """Check if data contains an ascending byte sequence (RC4 key schedule indicator)."""
@@ -99,7 +84,7 @@ def _is_ascending_sequence(data: bytes, min_length: int = 16) -> bool:
     ascending_count = 0
     max_ascending = 0
     for i in range(1, len(data)):
-        if data[i] == (data[i - 1] + 1) & 0xFF:
+        if data[i] == ((data[i - 1] + 1) & 0xFF):
             ascending_count += 1
             max_ascending = max(max_ascending, ascending_count)
         else:
@@ -233,7 +218,7 @@ async def identify_crypto_algorithm(
         if isinstance(imports, list):
             for imp in imports:
                 if isinstance(imp, dict):
-                    for func in imp.get("functions", []):
+                    for func in imp.get("symbols", imp.get("functions", [])):
                         fname = func if isinstance(func, str) else func.get("name", "")
                         for crypto_name in _CRYPTO_IMPORTS:
                             if crypto_name.lower() in fname.lower():
@@ -331,7 +316,7 @@ async def auto_extract_crypto_keys(
                 for key_size in [16, 24, 32, 8]:
                     for i in range(0, len(region) - key_size, 4):  # 4-byte aligned
                         chunk = region[i:i + key_size]
-                        ent = _shannon_entropy(chunk)
+                        ent = shannon_entropy(chunk)
 
                         # Keys typically have entropy between 3.5 and 8.0
                         # Pure random: ~7.5-8.0, ASCII passwords: ~3.5-5.5
@@ -524,7 +509,7 @@ async def brute_force_simple_crypto(
             elif ratio > 0.5:
                 score += 1.5
             # Low entropy might indicate decompressed text
-            ent = _shannon_entropy(decrypted)
+            ent = shannon_entropy(decrypted)
             if ent < 5.0:
                 score += 1.0
             # Known string patterns

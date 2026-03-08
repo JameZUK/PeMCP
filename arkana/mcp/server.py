@@ -187,8 +187,9 @@ def tool_decorator(func):
                 current_state.active_tool_progress = 0
                 current_state.active_tool_total = 100
 
-            # Wrap ctx.report_progress to also update state for dashboard
-            if ctx is not None:
+            # Wrap ctx.report_progress to also update state for dashboard.
+            # Guard against double-wrapping if the same ctx is reused.
+            if ctx is not None and not getattr(ctx, '_arkana_progress_wrapped', False):
                 _orig_report_progress = ctx.report_progress
                 async def _wrapped_report_progress(progress, total=100):
                     with current_state._active_tool_lock:
@@ -196,6 +197,7 @@ def tool_decorator(func):
                         current_state.active_tool_total = total
                     return await _orig_report_progress(progress, total)
                 object.__setattr__(ctx, "report_progress", _wrapped_report_progress)
+                object.__setattr__(ctx, "_arkana_progress_wrapped", True)
 
         # Set up automatic heartbeat for tools that don't self-report progress.
         # Lightweight meta-tools and self-reporting tools are excluded.
@@ -466,8 +468,14 @@ async def _check_mcp_response_size(
             f"Auto-truncating."
         )
 
-        # Deep copy to avoid mutating shared state (e.g. state.pe_data dicts)
-        modified_data = copy.deepcopy(data_to_return)
+        # Shallow copy outer container to avoid mutating shared state.
+        # Individual keys are deepcopied only when they are actually truncated.
+        if isinstance(data_to_return, dict):
+            modified_data = dict(data_to_return)
+        elif isinstance(data_to_return, list):
+            modified_data = list(data_to_return)
+        else:
+            modified_data = copy.deepcopy(data_to_return)
 
         # Track current char count from the initial measurement to avoid
         # re-serialising on every loop iteration (expensive for large dicts).
