@@ -43,6 +43,7 @@ body {
     );
     pointer-events: none;
     z-index: 9999;
+    will-change: transform;
 }
 
 /* Vignette */
@@ -56,6 +57,7 @@ body {
     );
     pointer-events: none;
     z-index: 9998;
+    will-change: transform;
 }
 
 /* Glow effect */
@@ -112,7 +114,7 @@ body {
     font-size: 12px;
     letter-spacing: 1px;
     border-bottom: 2px solid transparent;
-    transition: all 0.2s;
+    transition: color 0.2s, border-bottom-color 0.2s;
 }
 
 .nav-link:hover {
@@ -522,7 +524,7 @@ tr.explored.renamed > td { color: #44ddff; }
     font-size: 12px;
     cursor: pointer;
     letter-spacing: 1px;
-    transition: all 0.2s;
+    transition: border-color 0.2s, color 0.2s, text-shadow 0.2s, box-shadow 0.2s;
 }
 
 .btn:hover, .btn:focus-visible {
@@ -541,7 +543,7 @@ tr.explored.renamed > td { color: #44ddff; }
     font-size: 10px;
     cursor: pointer;
     margin-right: 2px;
-    transition: all 0.2s;
+    transition: border-color 0.2s, color 0.2s, background 0.2s;
 }
 
 .btn-flag:hover, .btn-flag.active { border-color: var(--danger); color: var(--danger); }
@@ -591,9 +593,10 @@ select, input[type="text"] {
     font-size: 12px;
 }
 
-select:focus, input[type="text"]:focus {
+select:focus-visible, input[type="text"]:focus-visible {
     outline: none;
     border-color: var(--primary-muted);
+    box-shadow: 0 0 4px var(--primary-ghost);
 }
 
 option { background: var(--bg-deep); color: var(--primary); }
@@ -652,7 +655,9 @@ option { background: var(--bg-deep); color: var(--primary); }
 
 .hash-row {
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
     padding: 2px 0;
     font-size: 12px;
 }
@@ -677,6 +682,7 @@ option { background: var(--bg-deep); color: var(--primary); }
     margin-bottom: 12px;
     padding-left: 16px;
     position: relative;
+    cursor: pointer;
 }
 
 .timeline-entry::before {
@@ -729,7 +735,7 @@ option { background: var(--bg-deep); color: var(--primary); }
 }
 
 /* Timeline expand/collapse */
-.timeline-entry { cursor: pointer; }
+
 .timeline-entry:hover { background: var(--bg-raised); }
 
 .timeline-expand {
@@ -1070,7 +1076,7 @@ tr.note-row > td {
     font-size: 14px;
 }
 
-.login-input:focus {
+.login-input:focus-visible {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 8px rgba(0, 255, 65, 0.2);
@@ -1086,7 +1092,7 @@ tr.note-row > td {
     font-size: 12px;
     letter-spacing: 2px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: border-color 0.2s, text-shadow 0.2s, box-shadow 0.2s;
 }
 
 .login-btn:hover {
@@ -1249,7 +1255,7 @@ details[open] > .import-dll-header::before {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.filter-input:focus {
+.filter-input:focus-visible {
     outline: none;
     border-color: var(--primary-muted);
     box-shadow: 0 0 4px var(--primary-ghost);
@@ -1316,14 +1322,7 @@ details[open] > .import-dll-header::before {
     font-size: 12px;
 }
 
-.btn-copy {
-    border-color: var(--primary-ghost);
-    color: var(--primary-muted);
-}
-.btn-copy:hover {
-    border-color: var(--primary-dim);
-    color: var(--primary-dim);
-}
+
 
 .pagination-bar {
     display: flex;
@@ -1352,9 +1351,10 @@ details[open] > .import-dll-header::before {
     transition: border-color 0.2s, width 0.2s;
 }
 
-.nav-search input:focus {
+.nav-search input:focus-visible {
     outline: none;
     border-color: var(--primary-muted);
+    box-shadow: 0 0 4px var(--primary-ghost);
     width: 240px;
 }
 
@@ -2378,7 +2378,6 @@ details[open] > .import-dll-header::before {
 
 /* Similarity hashes */
 .similarity-hashes { font-size: 12px; }
-.hash-row { margin-bottom: 4px; display: flex; align-items: center; gap: 6px; }
 .btn-copy {
     background: transparent;
     border: 1px solid var(--primary-ghost);

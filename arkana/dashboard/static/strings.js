@@ -325,8 +325,9 @@ function renderFlossPanel(data) {
     }
 
     // Auto-refresh while not complete
-    if (_flossRefreshTimer) clearInterval(_flossRefreshTimer);
+    if (_flossRefreshTimer) clearTimeout(_flossRefreshTimer);
+    _flossRefreshTimer = null;
     if (status !== 'COMPLETE' && status !== 'COMPLETED' && status !== 'FAILED' && status !== 'ERROR') {
-        _flossRefreshTimer = setInterval(loadFlossPanel, 5000);
+        _flossRefreshTimer = setTimeout(loadFlossPanel, 5000);
     }
 }

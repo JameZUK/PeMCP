@@ -16,7 +16,8 @@ function getCsrfToken() {
 // Apply data-width attributes as inline styles (for CSP-compliant dynamic widths)
 function applyDataWidths(root) {
     (root || document).querySelectorAll('[data-width]').forEach(function(el) {
-        el.style.width = el.dataset.width + '%';
+        var w = parseFloat(el.dataset.width);
+        if (!isNaN(w)) el.style.width = w + '%';
     });
 }
 document.addEventListener('DOMContentLoaded', function() { applyDataWidths(); });

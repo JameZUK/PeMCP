@@ -129,13 +129,7 @@
         panelsHtml += _diffPanel("UNMATCHED IN B", data.unmatched_in_b || [], "unmatched", "diff-unmatched");
         document.getElementById("diff-panels").innerHTML = panelsHtml;
 
-        // Attach collapse toggle listeners on result panel headers
-        var headers = document.querySelectorAll("#diff-panels .panel-header");
-        for (var i = 0; i < headers.length; i++) {
-            headers[i].addEventListener("click", function () {
-                this.parentNode.classList.toggle("collapsed");
-            });
-        }
+        // Collapse toggle handled via delegated listener below
     }
 
     function _summaryCard(label, count, badgeClass) {
@@ -192,6 +186,12 @@
     }
 
     // --- Wire up all event listeners ---
+    // Delegated collapse toggle for diff result panels
+    document.getElementById("diff-panels").addEventListener("click", function (e) {
+        var header = e.target.closest(".panel-header");
+        if (header) header.parentNode.classList.toggle("collapsed");
+    });
+
     // Mode tabs
     document.getElementById("diff-mode-tabs").addEventListener("click", function (e) {
         var tab = e.target.closest(".diff-tab");

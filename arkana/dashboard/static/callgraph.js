@@ -236,7 +236,15 @@ function initCytoscape(elements) {
     cy.on('mouseout', 'edge', function() { hideTooltip(); });
 
     /* F5: Minimap updates */
-    cy.on('viewport', function() { updateMinimapViewport(); });
+    var _viewportRAF = null;
+    cy.on('viewport', function() {
+        if (!_viewportRAF) {
+            _viewportRAF = requestAnimationFrame(function() {
+                _viewportRAF = null;
+                updateMinimapViewport();
+            });
+        }
+    });
     cy.on('layoutstop add remove', function() { scheduleMinimapRender(); });
 
     /* Dismiss context menu on zoom/pan */
@@ -288,6 +296,15 @@ function stopMarchingAnts() {
         _marchingAntsRAF = null;
     }
 }
+
+// Pause animation when tab is hidden to save CPU
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+        stopMarchingAnts();
+    } else if (_selectedNode && cy) {
+        startMarchingAnts();
+    }
+});
 
 /* ========== NODE DETAILS SIDEBAR (F4: tabbed analysis panel) ========== */
 
