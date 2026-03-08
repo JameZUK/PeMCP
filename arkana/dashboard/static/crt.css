@@ -1922,6 +1922,17 @@ details[open] > .import-dll-header::before {
     color: var(--primary);
     text-shadow: 0 0 4px var(--primary), 0 0 8px rgba(0, 255, 65, 0.3);
 }
+.graph-link {
+    font-size: 10px;
+    color: var(--primary-ghost);
+    text-decoration: none;
+    margin-left: 2px;
+    transition: color 0.15s, text-shadow 0.15s;
+}
+.graph-link:hover {
+    color: var(--primary);
+    text-shadow: 0 0 4px var(--primary), 0 0 8px rgba(0, 255, 65, 0.3);
+}
 
 /* Timeline address links */
 .timeline-addr {

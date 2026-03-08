@@ -60,6 +60,7 @@ function renderStringTable(data) {
         html += '<td>';
         if (s.func_addr) {
             html += '<a href="/dashboard/functions?highlight=' + encodeURIComponent(s.func_addr) + '" class="func-link">&rarr; ' + escapeHtml(s.func_name || s.func_addr) + '</a>';
+            html += ' <a href="/dashboard/callgraph?focus=' + encodeURIComponent(s.func_addr) + '" class="graph-link" title="View in call graph">&#x25C9;</a>';
         }
         html += '</td>';
         html += '<td><button class="btn-copy btn-triage" data-str="' + i + '" title="Copy to clipboard">CPY</button></td>';

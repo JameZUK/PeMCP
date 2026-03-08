@@ -1593,6 +1593,11 @@ def get_strings_data(
                 refs = item.get("references", [])
                 if isinstance(refs, list) and refs:
                     extra = f"{len(refs)} refs"
+                    # Use first reference's function_va for function linking
+                    for ref in refs:
+                        if isinstance(ref, dict) and ref.get("function_va"):
+                            function_va = str(ref["function_va"])
+                            break
             elif type_label == "STACK":
                 address = str(item.get("string_va", ""))
                 function_va = str(item.get("function_va", ""))

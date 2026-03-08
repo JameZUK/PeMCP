@@ -807,6 +807,29 @@ function loadGraph() {
                     }, 450);
                 }
             }, 300);
+        } else if (cy) {
+            /* Auto-focus on main entry point — only once per file */
+            var graphFP = data.nodes.length + ':' + (data.nodes.length > 0 ? data.nodes[0].data.id : '');
+            var prevFP = sessionStorage.getItem('arkana_cg_autofocused');
+            if (prevFP !== graphFP) {
+                sessionStorage.setItem('arkana_cg_autofocused', graphFP);
+                var mainNode = null;
+                var entryNames = ['main', '_main', 'wmain', 'WinMain', 'wWinMain', 'DllEntryPoint'];
+                for (var i = 0; i < entryNames.length; i++) {
+                    var candidates = cy.nodes('[label="' + entryNames[i] + '"]');
+                    if (candidates.length) { mainNode = candidates[0]; break; }
+                }
+                if (mainNode) {
+                    setTimeout(function() {
+                        cy.animate({center: {eles: mainNode}, zoom: 1.5}, {duration: 400});
+                        setTimeout(function() {
+                            _selectedNode = mainNode;
+                            highlightNeighborhood(mainNode);
+                            showNodeDetails(mainNode);
+                        }, 450);
+                    }, 300);
+                }
+            }
         }
     }).catch(function(err) {
         console.error('[callgraph] loadGraph fetch error:', err);
