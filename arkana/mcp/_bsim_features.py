@@ -601,7 +601,8 @@ def query_similar_functions(
         cursor = conn.execute(
             "SELECT f.*, b.sha256, b.filename, b.architecture "
             "FROM functions f JOIN binaries b ON f.binary_id = b.id "
-            "WHERE f.block_count BETWEEN ? AND ?",
+            "WHERE f.block_count BETWEEN ? AND ? "
+            "LIMIT 10000",
             (min_blocks, max_blocks),
         )
 

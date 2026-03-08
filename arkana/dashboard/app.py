@@ -194,6 +194,7 @@ def _make_auth_response(request: Request, dashboard_token: str, response: Respon
             httponly=True,
             samesite="strict",
             secure=_is_https(request),
+            path="/dashboard",
         )
     return response
 
@@ -287,6 +288,7 @@ def _create_routes(dashboard_token: str) -> list:
                     httponly=True,
                     samesite="strict",
                     secure=_is_https(request),
+                    path="/dashboard",
                 )
                 return resp
             # Record failed attempt while still holding the lock
@@ -840,6 +842,6 @@ def start_dashboard_thread(host: str = "127.0.0.1", port: int = 8082) -> threadi
     t.start()
     logger.info(
         "Dashboard: http://%s:%d/dashboard/ (token: %s...)",
-        host, port, dashboard_token[:8],
+        host, port, dashboard_token[:4],
     )
     return t

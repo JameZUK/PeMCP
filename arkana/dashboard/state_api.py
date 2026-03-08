@@ -4,6 +4,7 @@ import copy
 import datetime
 import logging
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -69,6 +70,9 @@ _overview_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, data)
 _OVERVIEW_TTL = 2  # seconds
 _MAX_OVERVIEW_CACHE = 4  # max cached overview snapshots
 
+# Shared lock protecting all three module-level caches above
+_cache_lock = threading.Lock()
+
 
 def _build_score_lookup(st) -> Dict[str, int]:
     """Build addr→score mapping from cached enrichment scores."""
@@ -92,23 +96,27 @@ def _build_function_lookup(st) -> tuple:
     """
     now = time.time()
     cache_key = st._state_uuid
-    cached = _func_lookup_cache.get(cache_key)
-    if cached is not None:
-        expire_time, cached_fp, entries, starts = cached
-        if now < expire_time and cached_fp == st.filepath:
-            return entries, starts
+    with _cache_lock:
+        cached = _func_lookup_cache.get(cache_key)
+        if cached is not None:
+            expire_time, cached_fp, entries, starts = cached
+            if now < expire_time and cached_fp == st.filepath:
+                return entries, starts
 
     empty = ([], [])
     if st.angr_project is None or st.angr_cfg is None:
-        _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
+        with _cache_lock:
+            _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
         return empty
     try:
         kb = st.angr_project.kb
         if not hasattr(kb, "functions"):
-            _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
+            with _cache_lock:
+                _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
             return empty
     except Exception:
-        _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
+        with _cache_lock:
+            _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, [], [])
         return empty
 
     renames = st.get_renames().get("functions", {})
@@ -121,12 +129,13 @@ def _build_function_lookup(st) -> tuple:
     entries.sort(key=lambda e: e[0])
     starts = [e[0] for e in entries]  # pre-compute for bisect
 
-    # Evict oldest entries if cache grows too large
-    if len(_func_lookup_cache) >= _MAX_FUNC_LOOKUP_CACHE:
-        oldest_key = min(_func_lookup_cache, key=lambda k: _func_lookup_cache[k][0])
-        del _func_lookup_cache[oldest_key]
+    with _cache_lock:
+        # Evict oldest entries if cache grows too large
+        if len(_func_lookup_cache) >= _MAX_FUNC_LOOKUP_CACHE:
+            oldest_key = min(_func_lookup_cache, key=lambda k: _func_lookup_cache[k][0])
+            del _func_lookup_cache[oldest_key]
 
-    _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, entries, starts)
+        _func_lookup_cache[cache_key] = (now + _FUNC_LOOKUP_TTL, st.filepath, entries, starts)
     return entries, starts
 
 
@@ -197,7 +206,6 @@ def _apply_overview_enrichment(st, pe_data: dict, floss: dict, binary_summary: d
     # Check enrichment cache (includes file hash to prevent cross-file pollution)
     now = time.time()
     cache_key = st._state_uuid
-    cached = _overview_enrichment_cache.get(cache_key)
     func_count = len(func_lookup[0]) if has_funcs else 0
     floss_strs = floss.get("strings", {}) if isinstance(floss, dict) else {}
     file_hash = pe_data.get("file_hashes", {}).get("sha256", "") if isinstance(pe_data, dict) else ""
@@ -213,6 +221,8 @@ def _apply_overview_enrichment(st, pe_data: dict, floss: dict, binary_summary: d
         len(binary_summary.get("ioc_ips", [])),
         len(binary_summary.get("ioc_domains", [])),
     )
+    with _cache_lock:
+        cached = _overview_enrichment_cache.get(cache_key)
     if cached is not None:
         expire_time, cached_version, cached_data = cached
         if now < expire_time and cached_version == version:
@@ -397,7 +407,8 @@ def _apply_overview_enrichment(st, pe_data: dict, floss: dict, binary_summary: d
                 "ioc_urls", "ioc_ips", "ioc_domains"):
         if key in binary_summary:
             enriched_data[key] = copy.deepcopy(binary_summary[key])
-    _overview_enrichment_cache[cache_key] = (now + _OVERVIEW_ENRICHMENT_TTL, version, enriched_data)
+    with _cache_lock:
+        _overview_enrichment_cache[cache_key] = (now + _OVERVIEW_ENRICHMENT_TTL, version, enriched_data)
 
 
 def get_overview_data() -> Dict[str, Any]:
@@ -407,7 +418,8 @@ def get_overview_data() -> Dict[str, Any]:
     # M19: Short-TTL cache to avoid redundant work on rapid polling
     now = time.time()
     cache_key = st._state_uuid
-    cached = _overview_cache.get(cache_key)
+    with _cache_lock:
+        cached = _overview_cache.get(cache_key)
     if cached is not None:
         expire_time, cached_data = cached
         if now < expire_time:
@@ -858,13 +870,14 @@ def get_overview_data() -> Dict[str, Any]:
         "active_tool_total": active_tool_total,
     }
 
-    # M19: Cache the result
-    _overview_cache[cache_key] = (time.time() + _OVERVIEW_TTL, result)
-    # Evict stale entries
-    if len(_overview_cache) > _MAX_OVERVIEW_CACHE:
-        stale = [k for k, (exp, _) in _overview_cache.items() if time.time() > exp]
-        for k in stale:
-            _overview_cache.pop(k, None)
+    # M19: Cache the result (deep copy to prevent mutation of cached data)
+    with _cache_lock:
+        _overview_cache[cache_key] = (time.time() + _OVERVIEW_TTL, copy.deepcopy(result))
+        # Evict stale entries
+        if len(_overview_cache) > _MAX_OVERVIEW_CACHE:
+            stale = [k for k, (exp, _) in _overview_cache.items() if time.time() > exp]
+            for k in stale:
+                _overview_cache.pop(k, None)
 
     return result
 
@@ -1435,7 +1448,8 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
         decompiler_cfg = local_cfg.model
 
     # Acquire decompile lock for mutual exclusion with background enrichment sweep
-    st._decompile_lock.acquire()
+    if not st._decompile_lock.acquire(timeout=30):
+        return {"cached": False, "error": "Decompilation lock timeout — background enrichment may be running. Try again shortly."}
     try:
         dec = project.analyses.Decompiler(func, cfg=decompiler_cfg)
         if not dec.codegen:

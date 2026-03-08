@@ -3,6 +3,7 @@ import atexit
 import collections
 import concurrent.futures
 import datetime
+import itertools
 import math
 import os
 import re
@@ -52,10 +53,9 @@ def _safe_slice(value, n):
         return value[:n]
     if isinstance(value, (set, frozenset)):
         return type(value)(list(value)[:n])
-    # For other iterables (generators, etc.), materialise and slice
+    # For other iterables (generators, etc.), use islice to avoid OOM
     try:
-        items = list(value)
-        return items[:n]
+        return list(itertools.islice(value, n))
     except TypeError:
         return value
 

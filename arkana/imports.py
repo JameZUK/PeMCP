@@ -11,6 +11,44 @@ import logging
 import shutil
 import threading
 
+__all__ = [
+    # Availability flags
+    "PEFILE_AVAILABLE",
+    "CRYPTOGRAPHY_AVAILABLE", "REQUESTS_AVAILABLE",
+    "SIGNIFY_AVAILABLE", "SIGNIFY_IMPORT_ERROR",
+    "YARA_AVAILABLE", "YARA_IMPORT_ERROR",
+    "RAPIDFUZZ_AVAILABLE", "RAPIDFUZZ_IMPORT_ERROR",
+    "CAPA_AVAILABLE", "CAPA_IMPORT_ERROR",
+    "FLOSS_AVAILABLE", "FLOSS_SETUP_OK", "FLOSS_ANALYSIS_OK",
+    "FLOSS_IMPORT_ERROR_SETUP", "FLOSS_IMPORT_ERROR_ANALYSIS",
+    "STRINGSIFTER_AVAILABLE", "STRINGSIFTER_IMPORT_ERROR",
+    "MCP_SDK_AVAILABLE",
+    "ANGR_AVAILABLE",
+    "LIEF_AVAILABLE", "CAPSTONE_AVAILABLE", "KEYSTONE_AVAILABLE",
+    "SPEAKEASY_AVAILABLE", "SPEAKEASY_IMPORT_ERROR",
+    "UNIPACKER_AVAILABLE", "UNIPACKER_IMPORT_ERROR",
+    "QILING_AVAILABLE", "QILING_IMPORT_ERROR",
+    "DOTNETFILE_AVAILABLE", "PPDEEP_AVAILABLE", "TLSH_AVAILABLE",
+    "BINWALK_AVAILABLE", "BINWALK_CLI_ONLY",
+    "PYGORE_AVAILABLE", "PYELFTOOLS_AVAILABLE",
+    "DNFILE_AVAILABLE", "DNCIL_AVAILABLE",
+    "RUSTBININFO_AVAILABLE", "RUST_DEMANGLER_AVAILABLE",
+    "REFINERY_AVAILABLE",
+    # Key imports re-exported via config.py
+    "pefile", "nx",
+    "FastMCP", "Context",
+    "DATA_DIR", "DEFAULT_PEID_DB_PATH", "VT_API_KEY",
+    # FLOSS types
+    "FLOSS_MIN_LENGTH_DEFAULT",
+    "Actual_DebugLevel_Floss", "Actual_StringType_Floss",
+    "Floss_ColorFormatter_Class", "FLOSS_TRACE_LEVEL_CONST",
+    "FLOSS_LOGGERS_LIST",
+    # Capa exception classes
+    "CapaError", "InvalidRule", "RulesAccessError", "FreezingError",
+    # Functions
+    "log_library_availability",
+]
+
 from pathlib import Path
 from enum import IntEnum, Enum
 from typing import Type
@@ -33,14 +71,18 @@ DEFAULT_PEID_DB_PATH = DATA_DIR / "userdb.txt"
 # --- VirusTotal API key (from user config) ---
 VT_API_KEY = get_config_value("vt_api_key")
 
-# --- Ensure pefile is available (Critical Dependency) ---
+# --- pefile (Critical Dependency — checked at startup in main()) ---
+PEFILE_AVAILABLE = False
+pefile = None  # type: ignore[assignment]
 try:
-    import pefile
+    import pefile as _pefile_mod
+    pefile = _pefile_mod
+    PEFILE_AVAILABLE = True
 except ImportError:
-    print("[!] CRITICAL ERROR: The 'pefile' library is not found.", file=sys.stderr)
-    print("[!] This library is essential for the script to function.", file=sys.stderr)
-    print("[!] Install it with: pip install pefile", file=sys.stderr)
-    sys.exit(1)
+    logger.critical(
+        "The 'pefile' library is not installed. "
+        "PE analysis will be unavailable. Install with: pip install pefile"
+    )
 
 # --- Optional Library Imports & Availability Flags ---
 CRYPTOGRAPHY_AVAILABLE = False
@@ -298,6 +340,7 @@ def _check_speakeasy_available():
         if _SPEAKEASY_VENV_PYTHON.is_file() and _SPEAKEASY_RUNNER.is_file():
             try:
                 import subprocess as _sp
+                logger.debug("Checking Speakeasy availability...")
                 _speakeasy_result = _sp.run(
                     [str(_SPEAKEASY_VENV_PYTHON), "-c", "import speakeasy"],
                     capture_output=True, timeout=10,
@@ -330,6 +373,7 @@ def _check_unipacker_available():
         if _UNIPACKER_VENV_PYTHON.is_file() and _UNIPACKER_RUNNER.is_file():
             try:
                 import subprocess as _sp
+                logger.debug("Checking Unipacker availability...")
                 _unipacker_result = _sp.run(
                     [str(_UNIPACKER_VENV_PYTHON), "-c", "from unipacker.core import UnpackerClient"],
                     capture_output=True, timeout=10,
@@ -363,6 +407,7 @@ def _check_qiling_available():
         if _QILING_VENV_PYTHON.is_file() and _QILING_RUNNER.is_file():
             try:
                 import subprocess as _sp
+                logger.debug("Checking Qiling availability...")
                 _qiling_result = _sp.run(
                     [str(_QILING_VENV_PYTHON), "-c", "from qiling import Qiling"],
                     capture_output=True, timeout=15,

@@ -48,7 +48,7 @@ def _safe_parse(key: str, func: Callable, *args, **kwargs) -> Any:
         return func(*args, **kwargs)
     except Exception as e:
         logger.warning("Parser '%s' failed: %s: %s", key, type(e).__name__, e)
-        return {"error": f"{key} parsing failed: {type(e).__name__}: {e}"}
+        return {"error": f"{key} parsing failed: {type(e).__name__}: {str(e)[:200]}"}
 
 
 # --- Refactored PE Parsing Helper Functions ---

@@ -13,6 +13,7 @@ Cache entries are invalidated automatically when:
 import gzip
 import json
 import os
+import re
 import time
 import logging
 import threading
@@ -39,6 +40,17 @@ CACHE_DIR = Path.home() / ".arkana" / "cache"
 META_FILE = CACHE_DIR / "meta.json"
 DEFAULT_MAX_CACHE_SIZE_MB = 500
 CACHE_FORMAT_VERSION = 1
+
+
+_SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
+
+
+def _validate_sha256(sha256: str) -> str:
+    """Validate and normalize a SHA256 hash string. Prevents path traversal."""
+    sha256 = sha256.lower().strip()
+    if not _SHA256_RE.match(sha256):
+        raise ValueError(f"Invalid SHA256 hash: {sha256[:20]}...")
+    return sha256
 
 
 class AnalysisCache:
@@ -122,7 +134,7 @@ class AnalysisCache:
         if not self.enabled:
             return None
 
-        sha256 = sha256.lower()
+        sha256 = _validate_sha256(sha256)
         entry_path = self._entry_path(sha256)
 
         if not entry_path.exists():
@@ -226,7 +238,7 @@ class AnalysisCache:
         if not self.enabled:
             return False
 
-        sha256 = sha256.lower()
+        sha256 = _validate_sha256(sha256)
 
         wrapper = {
             "_cache_meta": {
@@ -323,7 +335,7 @@ class AnalysisCache:
             key=lambda item: item[1].get("last_accessed", 0),
         )
 
-        evicted = 0
+        to_evict = []
         for sha, _ in sorted_entries:
             if total_size <= self.max_size_bytes:
                 break
@@ -331,17 +343,17 @@ class AnalysisCache:
             try:
                 self._remove_entry(sha)
             except Exception as e:
-                # If filesystem removal fails, skip this entry to keep
-                # metadata consistent with what's actually on disk.
                 logger.warning("Cache eviction skipped %s: %s", sha[:12], e)
                 continue
             total_size -= size
-            del meta[sha]
-            evicted += 1
+            to_evict.append(sha)
 
-        if evicted:
+        for sha in to_evict:
+            del meta[sha]
+
+        if to_evict:
             self._save_meta(meta)
-            logger.info("Cache eviction: removed %d entries.", evicted)
+            logger.info("Cache eviction: removed %d entries.", len(to_evict))
 
     def _remove_entry(self, sha256: str) -> None:
         entry_path = self._entry_path(sha256)
@@ -373,7 +385,7 @@ class AnalysisCache:
         if not self.enabled:
             return None
 
-        sha256 = sha256.lower()
+        sha256 = _validate_sha256(sha256)
         entry_path = self._entry_path(sha256)
 
         if not entry_path.exists():
@@ -410,34 +422,49 @@ class AnalysisCache:
         if not self.enabled:
             return False
 
-        sha256 = sha256.lower()
+        sha256 = _validate_sha256(sha256)
+        entry_path = self._entry_path(sha256)
 
+        if not entry_path.exists():
+            return False
+
+        # Read and decompress OUTSIDE the lock to avoid blocking concurrent ops
+        try:
+            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                wrapper = json.load(f)
+        except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
+            logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
+            return False
+
+        if notes is not None:
+            wrapper["notes"] = notes
+        if tool_history is not None:
+            wrapper["tool_history"] = tool_history
+        if artifacts is not None:
+            wrapper["artifacts"] = artifacts
+        if renames is not None:
+            wrapper["renames"] = renames
+        if custom_types is not None:
+            wrapper["custom_types"] = custom_types
+        if triage_status is not None:
+            wrapper["triage_status"] = triage_status
+
+        # Compress OUTSIDE the lock
+        try:
+            compressed = gzip.compress(json.dumps(wrapper).encode("utf-8"))
+        except (TypeError, ValueError) as e:
+            logger.error("Failed to serialize session data for %s...: %s", sha256[:12], e)
+            return False
+
+        # Atomic write under lock
         with self._lock:
-            entry_path = self._entry_path(sha256)
-            if not entry_path.exists():
-                return False
             try:
-                with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                    wrapper = json.load(f)
-                if notes is not None:
-                    wrapper["notes"] = notes
-                if tool_history is not None:
-                    wrapper["tool_history"] = tool_history
-                if artifacts is not None:
-                    wrapper["artifacts"] = artifacts
-                if renames is not None:
-                    wrapper["renames"] = renames
-                if custom_types is not None:
-                    wrapper["custom_types"] = custom_types
-                if triage_status is not None:
-                    wrapper["triage_status"] = triage_status
                 tmp = entry_path.with_suffix(".tmp")
-                with gzip.open(tmp, "wt", encoding="utf-8") as f:
-                    json.dump(wrapper, f)
+                tmp.write_bytes(compressed)
                 tmp.replace(entry_path)
                 return True
-            except Exception as e:
-                logger.error("Failed to update session data for %s...: %s", sha256[:12], e)
+            except OSError as e:
+                logger.error("Failed to write session data for %s...: %s", sha256[:12], e)
                 return False
 
     # ------------------------------------------------------------------
@@ -506,7 +533,7 @@ class AnalysisCache:
         file has already been written to the cache directory.  Acquires
         ``_lock``, loads meta, updates the entry, and saves.
         """
-        sha256 = sha256.lower()
+        sha256 = _validate_sha256(sha256)
         with self._lock:
             meta = self._load_meta()
             meta[sha256] = meta_entry
@@ -514,7 +541,7 @@ class AnalysisCache:
 
     def remove_entry_by_hash(self, sha256: str) -> bool:
         """Remove a single entry by hash.  Returns True if it existed."""
-        sha256 = sha256.lower()
+        sha256 = _validate_sha256(sha256)
         with self._lock:
             meta = self._load_meta()
             if sha256 not in meta:

@@ -1,6 +1,5 @@
 """MCP tool for comprehensive automated binary triage."""
 import asyncio
-import math
 import mmap
 import os
 import re
@@ -68,8 +67,12 @@ _SUSPICIOUS_IMPORTS_PATTERN = re.compile(
 _MAX_TRIAGE_STRINGS = 100_000  # H8: Cap to prevent unbounded memory usage
 
 
-def _collect_all_string_values() -> set:
-    """Gather all string values from floss analysis and basic ASCII strings."""
+def _collect_all_string_values() -> Tuple[set, bool]:
+    """Gather all string values from floss analysis and basic ASCII strings.
+
+    Returns ``(string_set, was_truncated)`` where *was_truncated* is ``True``
+    when the ``_MAX_TRIAGE_STRINGS`` cap was reached.
+    """
     all_string_values: set = set()
 
     if 'floss_analysis' in state.pe_data and isinstance(state.pe_data['floss_analysis'], dict):
@@ -83,7 +86,7 @@ def _collect_all_string_values() -> set:
                         elif isinstance(s, str):
                             all_string_values.add(s)
                         if len(all_string_values) >= _MAX_TRIAGE_STRINGS:
-                            return all_string_values
+                            return all_string_values, True
 
     basic_strings = state.pe_data.get('basic_ascii_strings')
     if isinstance(basic_strings, list):
@@ -93,9 +96,9 @@ def _collect_all_string_values() -> set:
             elif isinstance(s, str):
                 all_string_values.add(s)
             if len(all_string_values) >= _MAX_TRIAGE_STRINGS:
-                break
+                return all_string_values, True
 
-    return all_string_values
+    return all_string_values, False
 
 
 # ===================================================================
@@ -1702,7 +1705,7 @@ def _run_triage_internal(
         triage_report["capa_status"] = capa_status_info
 
     _report(35, "Extracting network IOCs...")
-    all_string_values = _collect_all_string_values()
+    all_string_values, strings_truncated = _collect_all_string_values()
     data, delta = _triage_network_iocs(indicator_limit, all_string_values)
     triage_report["network_iocs"] = data
     risk_score += delta
@@ -1775,6 +1778,10 @@ def _run_triage_internal(
     lang_data, delta = _triage_compiler_language(all_string_values)
     triage_report["compiler_language"] = lang_data
     risk_score += delta
+
+    if strings_truncated:
+        triage_report["strings_truncated"] = True
+        triage_report["strings_truncated_at"] = _MAX_TRIAGE_STRINGS
 
     _report(92, "Computing risk score & recommendations...")
     risk_data = _triage_risk_and_suggestions(risk_score, analysis_mode, triage_report)

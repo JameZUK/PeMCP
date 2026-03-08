@@ -324,7 +324,7 @@ function insertDetailPanel(afterRow, addr, startTab) {
     var panelData = _openDetailPanels[addr] || {};
     var decData = panelData.decompile;
     var funcName = (decData && decData.function_name) || addr;
-    var lineInfo = decData ? ' &middot; ' + (decData.line_count || 0) + ' lines' : '';
+    var lineInfo = decData ? ' &middot; ' + escapeHtml(String(decData.line_count || 0)) + ' lines' : '';
     header.innerHTML = '<span class="decompile-func-name">' + escapeHtml(funcName) +
         '</span> <span class="dim">(' + escapeHtml(addr) + lineInfo + ')</span>';
 
@@ -445,7 +445,7 @@ function renderXrefsTab(container, data) {
             html += '<span class="' + dotClass + '"></span> ';
             html += '<span class="mono dim">' + escapeHtml(c.address) + '</span> ';
             html += '<span>' + escapeHtml(c.name) + '</span>';
-            if (c.complexity) html += ' <span class="dim fs-10">C:' + c.complexity + '</span>';
+            if (c.complexity) html += ' <span class="dim fs-10">C:' + escapeHtml(String(c.complexity)) + '</span>';
             html += '</div>';
         }
     } else {
@@ -467,7 +467,7 @@ function renderXrefsTab(container, data) {
                 var riskClass = c.suspicious.risk === 'CRITICAL' ? 'badge-danger' : c.suspicious.risk === 'HIGH' ? 'badge-warning' : 'badge-dim';
                 html += ' <span class="badge ' + riskClass + ' fs-9">' + escapeHtml(c.suspicious.risk) + '</span>';
             }
-            if (c.complexity) html += ' <span class="dim fs-10">C:' + c.complexity + '</span>';
+            if (c.complexity) html += ' <span class="dim fs-10">C:' + escapeHtml(String(c.complexity)) + '</span>';
             html += '</div>';
         }
     } else {
@@ -477,7 +477,7 @@ function renderXrefsTab(container, data) {
     // Complexity
     if (data.complexity) {
         html += '<div class="xref-complexity">';
-        html += 'BLOCKS: ' + (data.complexity.blocks || 0) + ' / EDGES: ' + (data.complexity.edges || 0);
+        html += 'BLOCKS: ' + escapeHtml(String(data.complexity.blocks || 0)) + ' / EDGES: ' + escapeHtml(String(data.complexity.edges || 0));
         html += '</div>';
     }
 

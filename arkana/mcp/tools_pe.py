@@ -4,6 +4,7 @@ import json
 import asyncio
 import datetime
 import hashlib
+from collections import deque
 from dataclasses import dataclass, field
 
 from typing import Dict, Any, Optional, List
@@ -23,6 +24,7 @@ from arkana.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from arkana.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
 
 from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT
+from arkana.state import MAX_TOOL_HISTORY
 from arkana.parsers.floss import _parse_floss_analysis
 from arkana.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
 from arkana.mcp._progress_bridge import ProgressBridge
@@ -277,7 +279,7 @@ async def open_file(
         state._cached_iocs = None
         state.notes = []
         state._notes_counter = 0
-        state.tool_history = []
+        state.tool_history = deque(maxlen=MAX_TOOL_HISTORY)
         state.artifacts = []
         state._artifacts_counter = 0
         state.renames = {"functions": {}, "variables": {}, "labels": {}}

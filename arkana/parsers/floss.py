@@ -236,9 +236,9 @@ def _parse_floss_static_only(
         logger.info("FLOSS static-only: %d strings in %.1fs", len(static_list), time.monotonic() - t0)
     except Exception as e:
         logger.error("FLOSS static-only extraction failed: %s", e, exc_info=True)
-        result["strings"]["static_strings"] = [{"error": str(e)}]
-        result["status"] = f"Static extraction failed: {e}"
-        result["error"] = str(e)
+        result["strings"]["static_strings"] = [{"error": str(e)[:300]}]
+        result["status"] = f"Static extraction failed: {str(e)[:300]}"
+        result["error"] = str(e)[:300]
 
     return result
 
@@ -318,7 +318,7 @@ def _parse_floss_analysis(
             logger.info("FLOSS: Found %d static strings.", len(static_list))
         except Exception as e:
             logger.error("FLOSS: Error extracting static strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-            floss_results_dict["strings"]["static_strings"] = [{"error": str(e)}]
+            floss_results_dict["strings"]["static_strings"] = [{"error": str(e)[:300]}]
 
     vw: Optional[VivWorkspace] = None
     selected_functions_fvas_set: Set[int] = set()
@@ -383,8 +383,8 @@ def _parse_floss_analysis(
                 for raw_ptr, raw_size, virt_addr in _offset_to_va_sections:
                     if raw_ptr <= file_offset < raw_ptr + raw_size:
                         return image_base_from_meta + virt_addr + (file_offset - raw_ptr)
-                # Fallback: treat offset as RVA (matches old behavior)
-                return image_base_from_meta + file_offset
+                # No matching section found — cannot safely convert
+                return None
 
             static_strings_list = floss_results_dict["strings"]["static_strings"]
             total_enriched_strings = 0
@@ -400,6 +400,8 @@ def _parse_floss_analysis(
                 try:
                     string_offset = int(string_item["offset"], 16)
                     string_va = _file_offset_to_va(string_offset)
+                    if string_va is None:
+                        continue
                     xrefs = vw.getXrefsTo(string_va)
 
                     if i > 0 and i % 50 == 0:
@@ -452,7 +454,7 @@ def _parse_floss_analysis(
                 if log_progress: logger.info("FLOSS: Found decoding features for %d functions.", len(decoding_features_map))
             except Exception as e:
                 logger.error("FLOSS: Error finding decoding features: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-                err_msg_feat = {"error": f"Feature identification error: {e!s}"}
+                err_msg_feat = {"error": f"Feature identification error: {str(e)[:300]}"}
                 if analysis_conf.enable_decoded_strings: floss_results_dict["strings"]["decoded_strings"] = [err_msg_feat]
                 if analysis_conf.enable_tight_strings: floss_results_dict["strings"]["tight_strings"] = [err_msg_feat]
 
@@ -477,7 +479,7 @@ def _parse_floss_analysis(
                 logger.info("FLOSS: Found %d stack strings.", len(stack_list))
             except Exception as e:
                 logger.error("FLOSS: Error extracting stack strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-                floss_results_dict["strings"]["stack_strings"] = [{"error": str(e)}]
+                floss_results_dict["strings"]["stack_strings"] = [{"error": str(e)[:300]}]
 
         if analysis_conf.enable_tight_strings:
             if log_progress: logger.info("FLOSS: Extracting tight strings...")
@@ -513,7 +515,7 @@ def _parse_floss_analysis(
                         floss_results_dict["strings"]["tight_strings"] = []
             except Exception as e:
                 logger.error("FLOSS: Error extracting tight strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-                floss_results_dict["strings"]["tight_strings"] = [{"error": str(e)}]
+                floss_results_dict["strings"]["tight_strings"] = [{"error": str(e)[:300]}]
 
         if analysis_conf.enable_decoded_strings:
             if log_progress: logger.info("FLOSS: Extracting decoded strings...")
@@ -547,7 +549,7 @@ def _parse_floss_analysis(
                         floss_results_dict["strings"]["decoded_strings"] = []
             except Exception as e:
                 logger.error("FLOSS: Error extracting decoded strings: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-                floss_results_dict["strings"]["decoded_strings"] = [{"error": str(e)}]
+                floss_results_dict["strings"]["decoded_strings"] = [{"error": str(e)[:300]}]
 
         if progress_callback:
             progress_callback(90, "Finalizing \u2014 merging FLOSS results with string database...")
@@ -574,7 +576,7 @@ def _parse_floss_analysis(
             pattern = re.compile(regex_search_pattern, re.IGNORECASE)
         except (re.error, ValueError) as e:
             logger.error("Invalid regex pattern provided: %s", e, exc_info=(floss_script_debug_level > Actual_DebugLevel_Floss.NONE))
-            floss_results_dict["regex_matches"] = [{"error": f"Invalid regex pattern: {e}"}]
+            floss_results_dict["regex_matches"] = [{"error": f"Invalid regex pattern: {str(e)[:300]}"}]
             return floss_results_dict
 
         all_found_strings = []

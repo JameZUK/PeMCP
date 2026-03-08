@@ -179,7 +179,8 @@ def _auto_note_single(function_address: str, custom_summary=None):
     category_tags: List[str] = []
     func_name = f"sub_{function_address.replace('0x', '')}"
 
-    if ANGR_AVAILABLE and state.angr_project is not None and state.angr_cfg is not None:
+    angr_proj, angr_cfg = state.get_angr_snapshot()
+    if ANGR_AVAILABLE and angr_proj is not None and angr_cfg is not None:
         from arkana.mcp._angr_helpers import _parse_addr, _resolve_function_address, _ensure_project_and_cfg
 
         target_addr = _parse_addr(function_address)
@@ -189,14 +190,14 @@ def _auto_note_single(function_address: str, custom_summary=None):
             func, addr_used = _resolve_function_address(target_addr)
             func_name = func.name
 
-            callgraph = state.angr_cfg.functions.callgraph
+            callgraph = angr_cfg.functions.callgraph
             cats_seen: set = set()
             # M13: Use precompiled regex as fast pre-filter
             from arkana.mcp.tools_triage import _SUSPICIOUS_IMPORTS_PATTERN
             try:
                 for callee_addr in callgraph.successors(addr_used):
-                    if callee_addr in state.angr_cfg.functions:
-                        cname = state.angr_cfg.functions[callee_addr].name
+                    if callee_addr in angr_cfg.functions:
+                        cname = angr_cfg.functions[callee_addr].name
                         if not _SUSPICIOUS_IMPORTS_PATTERN.search(cname):
                             continue
                         for api_name, (_risk, cat) in CATEGORIZED_IMPORTS_DB.items():

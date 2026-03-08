@@ -123,7 +123,7 @@ def _make_cache_key(**params) -> tuple:
     Excludes ``offset``, ``limit``, ``compact``, and ``ctx`` so that
     different pages of the same query hit the same cache entry.
     """
-    _SKIP = frozenset({"offset", "limit", "compact", "ctx"})
+    _SKIP = frozenset({"offset", "limit", "compact", "ctx", "line_offset", "line_limit"})
     parts = []
     for k in sorted(params):
         if k in _SKIP:
@@ -152,6 +152,7 @@ def _paginated_response(
         ``{"results": [...], "count": N, "_pagination": {...}, ...extra}``
     """
     total = len(items) if isinstance(items, list) else 0
+    offset = max(0, min(offset, total))
     page = items[offset:offset + limit] if isinstance(items, list) else []
     result: Dict[str, Any] = {
         "results": page,

@@ -53,6 +53,9 @@ def _safe_decode(data: bytes) -> str:
         return data.decode("latin-1", errors="replace")
 
 
+_MAX_FILE_READ_SIZE = 500 * 1024 * 1024  # 500 MB safety limit
+
+
 def _get_file_data() -> bytes:
     """Get the raw bytes of the currently loaded file."""
     if not state.pe_object:
@@ -61,6 +64,12 @@ def _get_file_data() -> bytes:
     if raw is None:
         raw = getattr(state.pe_object, "get_data", lambda: None)()
     if raw is None and state.filepath and os.path.isfile(state.filepath):
+        file_size = os.path.getsize(state.filepath)
+        if file_size > _MAX_FILE_READ_SIZE:
+            raise RuntimeError(
+                f"File too large to read into memory ({file_size / (1024*1024):.0f} MB, "
+                f"limit is {_MAX_FILE_READ_SIZE // (1024*1024)} MB)."
+            )
         with open(state.filepath, "rb") as f:
             raw = f.read()
     if raw is None:
@@ -174,16 +183,23 @@ def _write_output_and_register_artifact(
     Path(abs_path).write_bytes(data)
     logger.info("Artifact written: %s (%d bytes, type=%s)", abs_path, len(data), detected_type)
 
-    # Register in state
-    artifact = state.register_artifact(
-        path=abs_path,
-        sha256=sha256,
-        md5=md5,
-        size=len(data),
-        source_tool=source_tool,
-        description=description,
-        detected_type=detected_type,
-    )
+    # Register in state — clean up the file if registration fails
+    try:
+        artifact = state.register_artifact(
+            path=abs_path,
+            sha256=sha256,
+            md5=md5,
+            size=len(data),
+            source_tool=source_tool,
+            description=description,
+            detected_type=detected_type,
+        )
+    except Exception:
+        try:
+            Path(abs_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
     return {
         "path": abs_path,

@@ -122,6 +122,8 @@ async def identify_crypto_algorithm(
     _check_pe_loaded("identify_crypto_algorithm")
 
     pe = state.pe_object
+    if pe is None or not hasattr(pe, '__data__') or pe.__data__ is None:
+        raise RuntimeError("No binary data available — open a PE file first.")
     file_data = pe.__data__
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
@@ -290,6 +292,8 @@ async def auto_extract_crypto_keys(
     search_radius = min(search_radius, 65536)
 
     pe = state.pe_object
+    if pe is None or not hasattr(pe, '__data__') or pe.__data__ is None:
+        raise RuntimeError("No binary data available — open a PE file first.")
     file_data = pe.__data__
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
@@ -512,10 +516,9 @@ async def brute_force_simple_crypto(
             ent = shannon_entropy(decrypted)
             if ent < 5.0:
                 score += 1.0
-            # Known string patterns
-            for pattern in [b"http", b"https", b".com", b".exe", b".dll", b"windows", b"KERNEL32"]:
-                # M11: Fix operator precedence — search case-insensitive for alpha patterns
-                haystack = decrypted.lower() if pattern.isalpha() else decrypted
+            # Known string patterns (case-insensitive — lowercase both sides)
+            haystack = decrypted.lower()
+            for pattern in [b"http", b"https", b".com", b".exe", b".dll", b"windows", b"kernel32"]:
                 if pattern in haystack:
                     score += 0.5
             return score
@@ -603,9 +606,12 @@ async def brute_force_simple_crypto(
 
             for key in keys_to_try:
                 klen = len(key)
-                dec = bytes(data[i] ^ key[i % klen] for i in range(len(data)))
-                score = _score_result(dec)
-                _add_result("xor_multi", key.hex(), dec, score)
+                # Preview optimization: decrypt only first _PREVIEW bytes for scoring
+                preview = bytes(data[i] ^ key[i % klen] for i in range(min(len(data), _PREVIEW)))
+                score = _score_result(preview)
+                if score >= 1.0:
+                    dec = bytes(data[i] ^ key[i % klen] for i in range(len(data)))
+                    _add_result("xor_multi", key.hex(), dec, score)
                 if len(results) >= limit:
                     break
 

@@ -73,15 +73,14 @@ async def detect_binary_format(
 
     def _detect():
         with open(target, 'rb') as f:
-            header = f.read(4096)
             file_size = f.seek(0, 2)
             f.seek(0)
             # Read a larger chunk for language-specific marker scanning.
             # Rust and Go markers are often deep in the binary (string tables,
             # section data) rather than in the first few KB.
             scan_size = min(file_size, 2 * 1024 * 1024)  # up to 2MB
-            f.seek(0)
             scan_data = f.read(scan_size)
+            header = scan_data[:4096]
 
         result: Dict[str, Any] = {"file": target, "size": file_size}
         formats = []

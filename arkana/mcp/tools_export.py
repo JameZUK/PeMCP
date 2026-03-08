@@ -3,6 +3,7 @@ import gzip
 import io
 import json
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -23,7 +24,6 @@ except ImportError:
 
 # Extension for project archives (import accepts both old and new extensions)
 PROJECT_EXTENSION = ".arkana_project.tar.gz"
-_LEGACY_PROJECT_EXTENSION = ".arkana_project.tar.gz"
 
 # Directory for imported binaries when no explicit path is given
 IMPORT_DIR = Path.home() / ".arkana" / "imported"
@@ -33,6 +33,12 @@ _MAX_IMPORT_BINARY_SIZE = _safe_env_int("ARKANA_MAX_FILE_SIZE_MB", _safe_env_int
 
 # Maximum total size of all imported binaries (default 1 GB)
 _MAX_IMPORT_DIR_SIZE = _safe_env_int("ARKANA_MAX_IMPORT_DIR_SIZE_MB", _safe_env_int("PEMCP_MAX_IMPORT_DIR_SIZE_MB", 1024)) * 1024 * 1024
+
+# Maximum decompressed analysis.json.gz size (256 MB)
+_MAX_ANALYSIS_DECOMPRESSED_SIZE = 256 * 1024 * 1024
+
+# Regex for sanitizing binary filenames
+_SAFE_FILENAME_RE = re.compile(r'[^a-zA-Z0-9._\-]')
 
 
 @tool_decorator
@@ -130,6 +136,11 @@ async def export_project(
 
         # Add analysis.json.gz (gzip-compressed wrapper)
         wrapper_json = json.dumps(wrapper).encode("utf-8")
+        if len(wrapper_json) > 256 * 1024 * 1024:
+            raise RuntimeError(
+                f"Serialised analysis data is too large ({len(wrapper_json) // (1024 * 1024)} MB). "
+                "Maximum supported size is 256 MB. Try exporting without the binary or reducing analysis scope."
+            )
         wrapper_gz = gzip.compress(wrapper_json)
         analysis_info = tarfile.TarInfo(name="analysis.json.gz")
         analysis_info.size = len(wrapper_gz)
@@ -252,12 +263,21 @@ async def import_project(
                 f"This version of Arkana supports export version 1."
             )
 
-        # Read analysis data
+        # Read analysis data (with decompression bomb guard)
         try:
             analysis_file = tar.extractfile("analysis.json.gz")
             if analysis_file:
                 analysis_gz = analysis_file.read()
-                wrapper = json.loads(gzip.decompress(analysis_gz).decode("utf-8"))
+                decompressed = gzip.decompress(analysis_gz)
+                if len(decompressed) > _MAX_ANALYSIS_DECOMPRESSED_SIZE:
+                    raise RuntimeError(
+                        f"[import_project] analysis.json.gz decompresses to "
+                        f"{len(decompressed) / (1024*1024):.1f} MB — exceeds "
+                        f"{_MAX_ANALYSIS_DECOMPRESSED_SIZE // (1024*1024)} MB limit. "
+                        "Archive may contain a decompression bomb."
+                    )
+                wrapper = json.loads(decompressed.decode("utf-8"))
+                del decompressed  # free memory
         except (KeyError, gzip.BadGzipFile, json.JSONDecodeError) as e:
             raise RuntimeError(f"[import_project] Invalid archive: cannot read analysis.json.gz: {e}")
 
@@ -276,9 +296,20 @@ async def import_project(
                             f"[import_project] Binary member has subdirectories: '{member.name}'. "
                             "Archive may have been tampered with."
                         )
-                    binary_name = os.path.basename(relative)
-                    if not binary_name:
+                    raw_name = os.path.basename(relative)
+                    if not raw_name:
                         continue
+                    # Enforce size limit BEFORE reading into memory
+                    if member.size > _MAX_IMPORT_BINARY_SIZE:
+                        raise RuntimeError(
+                            f"[import_project] Embedded binary too large "
+                            f"({member.size / (1024*1024):.1f} MB). "
+                            f"Maximum allowed is {_MAX_IMPORT_BINARY_SIZE // (1024*1024)} MB."
+                        )
+                    # Sanitize filename to prevent path traversal via special chars
+                    binary_name = _SAFE_FILENAME_RE.sub('_', raw_name)
+                    if not binary_name or binary_name.startswith('.'):
+                        binary_name = f"imported_{binary_name}"
                     bf = tar.extractfile(member)
                     if bf:
                         binary_data = bf.read()
@@ -287,6 +318,7 @@ async def import_project(
         # Read artifact files (C6: deduplicate colliding basenames)
         artifact_prefix = "artifacts/"
         seen_basenames: set = set()
+        artifact_name_map: dict = {}  # original_basename -> deduped_basename
         for member in tar.getmembers():
             if member.name.startswith(artifact_prefix) and member.isfile():
                 relative = member.name[len(artifact_prefix):]
@@ -304,6 +336,7 @@ async def import_project(
                     art_basename = f"{name}_{counter}{ext}"
                     counter += 1
                 seen_basenames.add(art_basename)
+                artifact_name_map[original_basename] = art_basename
                 af = tar.extractfile(member)
                 if af:
                     artifact_files[art_basename] = af.read()
@@ -385,12 +418,13 @@ async def import_project(
             art_dest.write_bytes(art_data)
             extracted_artifacts += 1
 
-        # Update artifact metadata paths in the wrapper to point to extracted locations
+        # Update artifact metadata paths using dedup name map
         wrapper_artifacts = wrapper.get("artifacts", [])
         for art_meta in wrapper_artifacts:
             old_basename = os.path.basename(art_meta.get("path", ""))
-            if old_basename and old_basename in artifact_files:
-                art_meta["path"] = str(artifacts_dir / old_basename)
+            deduped = artifact_name_map.get(old_basename, old_basename)
+            if deduped and deduped in artifact_files:
+                art_meta["path"] = str(artifacts_dir / deduped)
         wrapper["artifacts"] = wrapper_artifacts
 
         # Re-write the updated wrapper to cache

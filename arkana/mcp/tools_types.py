@@ -62,8 +62,13 @@ def _compute_struct_size(fields: list) -> int:
     return size
 
 
-def _check_struct_cycles(struct_name: str, fields: list, visited: Optional[set] = None) -> None:
+def _check_struct_cycles(struct_name: str, fields: list, visited: Optional[set] = None, depth: int = 0) -> None:
     """Detect recursive struct cycles. Raises ValueError if a cycle is found."""
+    if depth > 20:
+        raise ValueError(
+            f"Struct nesting depth exceeds maximum (20) — possible cycle or excessive nesting "
+            f"(path: {' -> '.join(visited or set())} -> {struct_name})"
+        )
     if visited is None:
         visited = set()
     if struct_name in visited:
@@ -77,7 +82,7 @@ def _check_struct_cycles(struct_name: str, fields: list, visited: Optional[set] 
         # Check if this field type references another custom struct
         ref_type = state.get_custom_type(ftype) if ftype else None
         if ref_type and ref_type.get("type") == "struct":
-            _check_struct_cycles(ftype, ref_type["fields"], visited.copy())
+            _check_struct_cycles(ftype, ref_type["fields"], visited.copy(), depth + 1)
 
 
 @tool_decorator
@@ -120,6 +125,9 @@ async def create_struct(
     # Validate field names
     for i, f in enumerate(fields):
         fname = f.get("name", "")
+        ftype = f.get("type", "")
+        if not fname and not ftype.startswith("padding:"):
+            raise ValueError(f"Field {i}: name must not be empty (only padding fields may omit a name).")
         if fname and not _VALID_FIELD_NAME_RE.match(fname):
             raise ValueError(f"Field {i}: invalid name '{fname}'. Must match [a-zA-Z_][a-zA-Z0-9_]*")
 

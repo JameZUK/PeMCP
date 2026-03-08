@@ -189,62 +189,66 @@ async def find_similar_functions(
         if task_id_for_progress:
             _update_progress(task_id_for_progress, 10, "Loading second binary...", bridge=_progress_bridge)
 
-        proj_b = angr.Project(abs_path_b, auto_load_libs=False)
-        cfg_b = proj_b.analyses.CFGFast(normalize=True)
+        proj_b = None
+        cfg_b = None
+        try:
+            proj_b = angr.Project(abs_path_b, auto_load_libs=False)
+            cfg_b = proj_b.analyses.CFGFast(normalize=True)
 
-        if task_id_for_progress:
-            _update_progress(task_id_for_progress, 40, "Extracting features from second binary...", bridge=_progress_bridge)
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 40, "Extracting features from second binary...", bridge=_progress_bridge)
 
-        # Extract features from all non-trivial functions in binary B
-        funcs_b = [
-            f for f in cfg_b.functions.values()
-            if not is_trivial_function(f)
-        ]
+            # Extract features from all non-trivial functions in binary B
+            funcs_b = [
+                f for f in cfg_b.functions.values()
+                if not is_trivial_function(f)
+            ]
 
-        matches = []
-        total = len(funcs_b)
-        _partial_compare['total'] = total
-        for i, func_b in enumerate(funcs_b):
-            try:
-                features_b = extract_function_features(proj_b, cfg_b, func_b, include_vex=False)
-                scores = compute_similarity(features_a, features_b, metrics)
-                score_key = metrics if metrics in scores else "combined"
-                if scores.get(score_key, 0) >= threshold:
-                    matches.append({
-                        "address": hex(func_b.addr),
-                        "name": func_b.name or f"sub_{func_b.addr:x}",
-                        "scores": {k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
-                    })
-            except Exception as e:
-                logger.debug("Comparison failed for %#x: %s", func_b.addr, e)
+            matches = []
+            total = len(funcs_b)
+            _partial_compare['total'] = total
+            for i, func_b in enumerate(funcs_b):
+                try:
+                    features_b = extract_function_features(proj_b, cfg_b, func_b, include_vex=False)
+                    scores = compute_similarity(features_a, features_b, metrics)
+                    score_key = metrics if metrics in scores else "combined"
+                    if scores.get(score_key, 0) >= threshold:
+                        matches.append({
+                            "address": hex(func_b.addr),
+                            "name": func_b.name or f"sub_{func_b.addr:x}",
+                            "scores": {k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
+                        })
+                except Exception as e:
+                    logger.debug("Comparison failed for %#x: %s", func_b.addr, e)
 
-            _partial_compare['compared'] = i + 1
-            _partial_compare['matches'] = len(matches)
-            if task_id_for_progress and i % 50 == 0:
-                pct = 40 + int(50 * i / max(total, 1))
-                _update_progress(task_id_for_progress, pct, f"Compared {i}/{total} functions...", bridge=_progress_bridge)
+                _partial_compare['compared'] = i + 1
+                _partial_compare['matches'] = len(matches)
+                if task_id_for_progress and i % 50 == 0:
+                    pct = 40 + int(50 * i / max(total, 1))
+                    _update_progress(task_id_for_progress, pct, f"Compared {i}/{total} functions...", bridge=_progress_bridge)
 
-        if task_id_for_progress:
-            _update_progress(task_id_for_progress, 95, "Sorting results...", bridge=_progress_bridge)
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 95, "Sorting results...", bridge=_progress_bridge)
 
-        matches.sort(key=lambda m: m["scores"].get("combined", 0), reverse=True)
-        matches = matches[:limit]
+            matches.sort(key=lambda m: m["scores"].get("combined", 0), reverse=True)
+            matches = matches[:limit]
 
-        result = {
-            "status": "success",
-            "source_function": hex(func_a.addr),
-            "source_name": func_a.name or f"sub_{func_a.addr:x}",
-            "target_binary": os.path.basename(abs_path_b),
-            "functions_compared": total,
-            "matches_found": len(matches),
-            "threshold": threshold,
-            "metrics": metrics,
-            "matches": matches,
-        }
+            result = {
+                "status": "success",
+                "source_function": hex(func_a.addr),
+                "source_name": func_a.name or f"sub_{func_a.addr:x}",
+                "target_binary": os.path.basename(abs_path_b),
+                "functions_compared": total,
+                "matches_found": len(matches),
+                "threshold": threshold,
+                "metrics": metrics,
+                "matches": matches,
+            }
 
-        # CFFI cleanup before crossing thread boundary
-        del cfg_b, proj_b
-        return result
+            return result
+        finally:
+            # CFFI cleanup — ensure angr Project is freed even on timeout/exception
+            del cfg_b, proj_b
 
     def _on_timeout_compare():
         return {

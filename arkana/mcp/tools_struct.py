@@ -70,6 +70,8 @@ def _parse_fields(data: bytes, schema: list) -> tuple:
                 byte_count = int(ftype.split(":")[1])
             except (IndexError, ValueError):
                 raise ValueError(f"Invalid bytes format '{ftype}'. Use 'bytes:N'.")
+            if byte_count < 0 or byte_count > 10 * 1024 * 1024:
+                raise ValueError(f"bytes:{byte_count} — byte count must be between 0 and 10MB")
             if offset + byte_count > len(data):
                 raise ValueError(
                     f"Insufficient data for field '{name}' ({ftype}) at offset {offset}. "

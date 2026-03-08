@@ -42,15 +42,11 @@ _capa_rules_lock = threading.Lock()
 def _get_cached_capa_rules(mock_args):
     """Return cached capa rules, loading on first call.
 
-    Uses double-checked locking so the fast path (cache hit) is lock-free.
+    All access to the OrderedDict is serialized under ``_capa_rules_lock``
+    to prevent races on ``.get()`` / ``.move_to_end()``.
     Failed loads are *not* cached so they can be retried.
     """
     rules_key = os.path.realpath(str(mock_args.rules[0])) if mock_args.rules else ""
-    cached = _capa_rules_cache.get(rules_key)
-    if cached is not None:
-        logger.info("Using cached capa rules for: %s", rules_key)
-        _capa_rules_cache.move_to_end(rules_key)
-        return cached
     with _capa_rules_lock:
         cached = _capa_rules_cache.get(rules_key)
         if cached is not None:

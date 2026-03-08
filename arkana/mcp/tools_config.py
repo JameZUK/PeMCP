@@ -155,7 +155,7 @@ def _detect_container() -> Dict[str, Any]:
         # Fallback: check cgroup for docker/containerd
         try:
             with open("/proc/1/cgroup", "r") as f:
-                cgroup = f.read()
+                cgroup = f.read(8192)
                 if "docker" in cgroup or "containerd" in cgroup:
                     containerized = True
                     container_type = "docker"
@@ -518,9 +518,10 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
         dashboard_token = getattr(_default_state, "dashboard_token", None)
     if dashboard_token:
         dashboard_port = os.environ.get("ARKANA_DASHBOARD_PORT", "8082")
+        masked_token = dashboard_token[:4] + "..." if len(dashboard_token) > 4 else "***"
         config["_dashboard"] = {
             "dashboard_url": f"http://127.0.0.1:{dashboard_port}/dashboard/",
-            "dashboard_token": dashboard_token,
+            "dashboard_token": masked_token,
             "dashboard_login_url": f"http://127.0.0.1:{dashboard_port}/dashboard/?token={dashboard_token}",
         }
 

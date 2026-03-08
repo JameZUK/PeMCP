@@ -28,12 +28,38 @@ class BearerAuthMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] in ("http", "websocket"):
-            headers = {k.lower(): v for k, v in scope.get("headers", [])}
-            auth_header = headers.get(b"authorization", b"").decode("utf-8", "ignore")
+            # Collect all Authorization headers — reject if ambiguous (header smuggling)
+            auth_values = [v for k, v in scope.get("headers", []) if k.lower() == b"authorization"]
+            if len(auth_values) > 1:
+                path = scope.get("path", "unknown")
+                client = scope.get("client", ("unknown", 0))
+                logger.warning(
+                    "Rejected %s request with %d Authorization headers from %s:%s to %s",
+                    scope["type"], len(auth_values), client[0], client[1], path,
+                )
+                if scope["type"] == "websocket":
+                    await send({"type": "websocket.close", "code": 4003})
+                    return
+                await send({
+                    "type": "http.response.start",
+                    "status": 400,
+                    "headers": [[b"content-type", b"application/json"]],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": b'{"error": "Ambiguous Authorization: multiple headers provided."}',
+                })
+                return
+            auth_header = auth_values[0].decode("utf-8", "ignore") if auth_values else ""
             expected = f"Bearer {self.api_key}"
             # Constant-time comparison to prevent timing side-channel attacks
             if not hmac.compare_digest(auth_header, expected):
-                logger.warning("Rejected unauthenticated %s request", scope["type"])
+                path = scope.get("path", "unknown")
+                client = scope.get("client", ("unknown", 0))
+                logger.warning(
+                    "Rejected unauthenticated %s request from %s:%s to %s",
+                    scope["type"], client[0], client[1], path,
+                )
                 if scope["type"] == "websocket":
                     # Reject WebSocket upgrade with a close code
                     await send({"type": "websocket.close", "code": 4003})

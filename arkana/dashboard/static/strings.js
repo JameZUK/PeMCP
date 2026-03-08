@@ -314,8 +314,8 @@ function renderFlossPanel(data) {
     var metaParts = [];
     if (data.floss_version) metaParts.push('FLOSS ' + escapeHtml(data.floss_version));
     var cfg = data.analysis_config || {};
-    if (cfg.min_length) metaParts.push('min_length=' + cfg.min_length);
-    if (cfg.timeout) metaParts.push('timeout=' + cfg.timeout);
+    if (cfg.min_length) metaParts.push('min_length=' + escapeHtml(String(cfg.min_length)));
+    if (cfg.timeout) metaParts.push('timeout=' + escapeHtml(String(cfg.timeout)));
     if (metaParts.length) {
         metaEl.style.display = '';
         metaEl.innerHTML = metaParts.join(' &middot; ');

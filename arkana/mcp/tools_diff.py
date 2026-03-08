@@ -53,14 +53,20 @@ async def diff_payloads(
     """
     await ctx.info("Comparing two binary payloads")
 
+    # Check hex string length BEFORE decoding to avoid allocating huge intermediates.
+    # 2 hex chars = 1 byte, so 2MB hex string = 1MB decoded.
+    _MAX_HEX_LEN = 2 * 1024 * 1024  # 1 MB decoded
+    clean_a = data_a_hex.replace(" ", "").replace("0x", "")
+    clean_b = data_b_hex.replace(" ", "").replace("0x", "")
+    if len(clean_a) > _MAX_HEX_LEN * 2 or len(clean_b) > _MAX_HEX_LEN * 2:
+        raise ValueError(f"Payloads too large (max {_MAX_HEX_LEN // 1024}KB decoded each).")
+
     try:
-        data_a = bytes.fromhex(data_a_hex.replace(" ", "").replace("0x", ""))
-        data_b = bytes.fromhex(data_b_hex.replace(" ", "").replace("0x", ""))
+        data_a = bytes.fromhex(clean_a)
+        data_b = bytes.fromhex(clean_b)
+        del clean_a, clean_b
     except ValueError as e:
         raise ValueError(f"Invalid hex data: {e}")
-
-    if len(data_a) > 10 * 1024 * 1024 or len(data_b) > 10 * 1024 * 1024:
-        raise ValueError("Payloads too large (max 10MB each).")
 
     def _diff():
         min_len = min(len(data_a), len(data_b))
@@ -132,11 +138,16 @@ async def diff_payloads(
         xor_key_global = None
         if min_len > 0:
             first_xor = data_a[0] ^ data_b[0]
-            if first_xor != 0 and all(
-                (data_a[i] ^ data_b[i]) == first_xor
-                for i in range(min(min_len, 1024))
-            ):
-                xor_key_global = f"0x{first_xor:02x}"
+            if first_xor != 0:
+                # Sample start, middle, and end to increase confidence
+                sample_offsets = [0, min(min_len // 2, 512), min(min_len - 1, 1023)]
+                all_match = all(
+                    (data_a[i] ^ data_b[i]) == first_xor
+                    for off in sample_offsets
+                    for i in range(off, min(off + 256, min_len))
+                )
+                if all_match:
+                    xor_key_global = f"0x{first_xor:02x}"
 
         return {
             "size_a": len(data_a),

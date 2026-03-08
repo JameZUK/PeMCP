@@ -152,18 +152,12 @@ def _compile_yara_rules(yara_rules_path: str, verbose: bool = False) -> Optional
 def _get_compiled_rules(yara_rules_path: str, verbose: bool = False) -> Optional[List]:
     """Return cached compiled YARA rules, compiling on first call.
 
-    Uses double-checked locking so the fast path (cache hit) is lock-free.
+    All access to the OrderedDict is serialized under ``_compiled_rules_lock``
+    to prevent races on ``.get()`` / ``.move_to_end()``.
     Failed compilations are *not* cached so they can be retried.
     """
     resolved = os.path.realpath(yara_rules_path)
-    cached = _compiled_rules_cache.get(resolved)
-    if cached is not None:
-        if verbose:
-            logger.info("   [VERBOSE-YARA] Using cached compiled rules for: %s", resolved)
-        _compiled_rules_cache.move_to_end(resolved)
-        return cached
     with _compiled_rules_lock:
-        # Re-check after acquiring the lock.
         cached = _compiled_rules_cache.get(resolved)
         if cached is not None:
             _compiled_rules_cache.move_to_end(resolved)
@@ -175,6 +169,23 @@ def _get_compiled_rules(yara_rules_path: str, verbose: bool = False) -> Optional
                 _compiled_rules_cache.popitem(last=False)  # LRU: evict least-recently-used
             _compiled_rules_cache[resolved] = compiled
         return compiled
+
+
+def _decode_yara_string(data_bytes: bytes, max_len: int = 80) -> str:
+    """Decode YARA match bytes to a display string (UTF-8 > Latin-1 > hex)."""
+    try:
+        try:
+            result = data_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                result = data_bytes.decode('latin-1')
+            except UnicodeDecodeError:
+                result = data_bytes.hex()
+    except Exception:
+        result = data_bytes.hex()
+    if len(result) > max_len:
+        result = result[:max_len - 3] + "..."
+    return result
 
 
 def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional[str], yara_available_flag: bool, verbose: bool = False) -> List[Dict[str, Any]]:
@@ -222,19 +233,7 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                         # Support both yara-python 3.x (tuples) and 4.x (objects)
                         if isinstance(string_match, tuple):
                             s_match_offset, s_match_id, s_match_data_bytes = string_match
-                            try:
-                                try:
-                                    str_data_repr = s_match_data_bytes.decode('utf-8')
-                                except UnicodeDecodeError:
-                                    try:
-                                        str_data_repr = s_match_data_bytes.decode('latin-1')
-                                    except UnicodeDecodeError:
-                                        str_data_repr = s_match_data_bytes.hex()
-                            except Exception:
-                                str_data_repr = s_match_data_bytes.hex()
-
-                            if len(str_data_repr) > 80:
-                                str_data_repr = str_data_repr[:77] + "..."
+                            str_data_repr = _decode_yara_string(s_match_data_bytes)
                             match_detail["strings"].append({"offset": hex(s_match_offset), "identifier": s_match_id, "data": str_data_repr})
                         else:
                             # yara-python 4.x: StringMatch object
@@ -242,19 +241,7 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                             for instance in string_match.instances:
                                 s_match_offset = instance.offset
                                 s_match_data_bytes = instance.matched_data
-                                try:
-                                    try:
-                                        str_data_repr = s_match_data_bytes.decode('utf-8')
-                                    except UnicodeDecodeError:
-                                        try:
-                                            str_data_repr = s_match_data_bytes.decode('latin-1')
-                                        except UnicodeDecodeError:
-                                            str_data_repr = s_match_data_bytes.hex()
-                                except Exception:
-                                    str_data_repr = s_match_data_bytes.hex()
-
-                                if len(str_data_repr) > 80:
-                                    str_data_repr = str_data_repr[:77] + "..."
+                                str_data_repr = _decode_yara_string(s_match_data_bytes)
                                 match_detail["strings"].append({"offset": hex(s_match_offset), "identifier": s_match_id, "data": str_data_repr})
                 # Cap string instances to keep response sizes manageable
                 total_strings = len(match_detail["strings"])
@@ -263,6 +250,6 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
                     match_detail["strings_truncated_from"] = total_strings
                 scan_results.append(match_detail)
         else: logger.info("   No YARA matches found.")
-    except yara.Error as e: logger.error("   YARA Error: %s", e); scan_results.append({"error":f"YARA Error: {e!s}"})
-    except Exception as e: logger.error("   Unexpected YARA scan error: %s", e, exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {e!s}"})
+    except yara.Error as e: logger.error("   YARA Error: %s", e); scan_results.append({"error":f"YARA Error: {str(e)[:200]}"})
+    except Exception as e: logger.error("   Unexpected YARA scan error: %s", e, exc_info=verbose); scan_results.append({"error":f"Unexpected YARA scan error: {str(e)[:200]}"})
     return scan_results

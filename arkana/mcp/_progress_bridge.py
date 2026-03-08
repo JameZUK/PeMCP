@@ -76,6 +76,8 @@ class ProgressBridge:
         now = time.monotonic()
         if not force and (now - self._last_progress_time) < self._throttle:
             return
+        if self._loop is None or self._loop.is_closed():
+            return
         self._last_progress_time = now
         self._dispatch(self._ctx.report_progress(current, total))
 
@@ -83,6 +85,8 @@ class ProgressBridge:
         """Send a log-level info message to the MCP client."""
         now = time.monotonic()
         if not force and (now - self._last_info_time) < self._throttle:
+            return
+        if self._loop is None or self._loop.is_closed():
             return
         self._last_info_time = now
         self._dispatch(self._ctx.info(message))

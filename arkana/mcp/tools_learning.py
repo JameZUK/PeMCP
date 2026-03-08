@@ -279,10 +279,12 @@ async def get_learner_profile(
     def _start_session(profile):
         profile["session_count"] += 1
         profile["current_tier"] = _compute_tier(profile)
-        profile["session_log"].append({
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "type": "session_start",
-        })
+        # Deduplicate: skip if the last log entry is already a session_start
+        if not (profile["session_log"] and profile["session_log"][-1].get("type") == "session_start"):
+            profile["session_log"].append({
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "type": "session_start",
+            })
         if len(profile["session_log"]) > 50:
             profile["session_log"] = profile["session_log"][-50:]
 

@@ -67,8 +67,15 @@ def start_enrichment(current_state: AnalyzerState) -> None:
                 break
             time.sleep(0.1)
 
-    # Reset cancellation flag for new run
-    current_state._enrichment_cancel.clear()
+    # Reset cancellation flag for new run INSIDE the lock to prevent a
+    # 3rd concurrent start_enrichment() from having its cancel signal wiped.
+    with current_state._enrichment_gen_lock:
+        # Only clear if we are still the latest generation
+        if current_state._enrichment_generation == generation:
+            current_state._enrichment_cancel.clear()
+        else:
+            # A newer start_enrichment() call already superseded us
+            return
 
     current_state.set_task(TASK_ID, {
         "status": TASK_RUNNING,
@@ -119,6 +126,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
     try:
         # ── Phase 1a: Classify binary purpose ────────────────────────
         if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
             return
         _update(state, 0, "Classifying binary purpose...")
         try:
@@ -132,6 +140,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 1b: Triage report ──────────────────────────────────
         if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
             return
         _update(state, 2, "Running triage report...")
         try:
@@ -150,6 +159,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 1c: Similarity hashes ──────────────────────────────
         if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
             return
         _update(state, 25, "Computing similarity hashes...")
         try:
@@ -166,6 +176,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 2a: MITRE ATT&CK mapping ──────────────────────────
         if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
             return
         _update(state, 28, "Mapping MITRE ATT&CK techniques...")
         try:
@@ -179,6 +190,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 2b: Structured IOCs ────────────────────────────────
         if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
             return
         _update(state, 30, "Collecting structured IOCs...")
         try:
@@ -192,6 +204,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 3: Wait for angr CFG ───────────────────────────────
         if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
             return
         _update(state, 32, "Waiting for angr CFG...")
         cfg_ready = _wait_for_cfg(state, generation=generation)
@@ -202,6 +215,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
         else:
             # ── Phase 3a: Library function identification ────────────
             if _cancelled(state, generation):
+                state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
                 return
             _update(state, 35, "Identifying library functions...")
             try:
@@ -214,6 +228,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
             # ── Phase 3b: Decompile sweep ────────────────────────────
             if _cancelled(state, generation):
+                state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
                 return
             _update(state, 40, "Starting decompile sweep...")
             try:
@@ -224,6 +239,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
             # ── Phase 3c: Auto-note functions ────────────────────────
             if _cancelled(state, generation):
+                state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
                 return
             _update(state, 90, "Auto-noting functions...")
             try:
@@ -235,6 +251,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 4: Cache save ──────────────────────────────────────
         if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
             return
         _update(state, 98, "Saving to cache...")
         try:

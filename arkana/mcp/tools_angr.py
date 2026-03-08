@@ -34,6 +34,15 @@ def _get_cached_lines(cache_key):
     return None
 
 
+def _get_cached_entry(cache_key):
+    """Thread-safe lookup returning the full meta dict (lines + metadata)."""
+    with _decompile_meta_lock:
+        meta = _decompile_meta.get(cache_key)
+        if meta:
+            return dict(meta)  # shallow copy to avoid mutation
+    return None
+
+
 def _set_decompile_meta(cache_key, value):
     """Thread-safe store with FIFO eviction when exceeding max size."""
     with _decompile_meta_lock:
@@ -295,19 +304,19 @@ async def decompile_function_with_angr(
 
     # Check cache first — serves subsequent pages without re-decompiling
     cache_key = (target_addr,)
-    cached_lines = _get_cached_lines(cache_key)
+    cached_entry = _get_cached_entry(cache_key)
 
-    if cached_lines is not None:
-        meta = _decompile_meta.get(cache_key, {})
+    if cached_entry is not None:
+        cached_lines = cached_entry.get("lines", [])
         # Apply user renames to output
         renamed_lines = apply_function_renames_to_lines(cached_lines)
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
         page = renamed_lines[line_offset:line_offset + line_limit]
         has_more = (line_offset + line_limit) < len(renamed_lines)
-        display_name = get_display_name(hex(target_addr), meta.get("function_name", "unknown"))
+        display_name = get_display_name(hex(target_addr), cached_entry.get("function_name", "unknown"))
         return {
             "function_name": display_name,
-            "address": meta.get("address", hex(target_addr)),
+            "address": cached_entry.get("address", hex(target_addr)),
             "lines": page,
             "count": len(page),
             "_pagination": {

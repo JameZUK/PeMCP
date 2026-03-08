@@ -12,10 +12,14 @@ import logging
 import time
 import threading
 import uuid
+import weakref
 from collections import deque
 from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger("Arkana")
+
+# Stable session ID map — avoids id() reuse after GC.
+_session_id_map: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 
 # Maximum number of completed/failed background tasks to retain per session.
 MAX_COMPLETED_TASKS = 50
@@ -78,7 +82,7 @@ class AnalyzerState:
 
         # Tool History (per-session, saved to cache on close)
         self._history_lock = threading.Lock()
-        self.tool_history: List[Dict[str, Any]] = []
+        self.tool_history: deque = deque(maxlen=MAX_TOOL_HISTORY)
 
         # Artifacts (extracted files, persisted per-binary via cache)
         self._artifacts_lock = threading.Lock()
@@ -218,7 +222,7 @@ class AnalyzerState:
         with self._notes_lock:
             self._notes_counter += 1
             note: Dict[str, Any] = {
-                "id": f"n_{int(now.timestamp())}_{self._notes_counter}",
+                "id": f"n_{int(now.timestamp() * 1000000)}_{self._notes_counter}",
                 "category": category,
                 "address": address,
                 "tool_name": tool_name,
@@ -292,8 +296,6 @@ class AnalyzerState:
         }
         with self._history_lock:
             self.tool_history.append(entry)
-            if len(self.tool_history) > MAX_TOOL_HISTORY:
-                self.tool_history = self.tool_history[-MAX_TOOL_HISTORY:]
 
     def get_tool_history(self, tool_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """Thread-safe filtered read of tool history."""
@@ -307,7 +309,7 @@ class AnalyzerState:
         """Thread-safe clear. Returns count of entries removed."""
         with self._history_lock:
             count = len(self.tool_history)
-            self.tool_history = []
+            self.tool_history.clear()
             return count
 
     def get_tool_history_snapshot(self) -> List[Dict[str, Any]]:
@@ -327,7 +329,7 @@ class AnalyzerState:
         with self._artifacts_lock:
             self._artifacts_counter += 1
             artifact: Dict[str, Any] = {
-                "id": f"art_{int(now.timestamp())}_{self._artifacts_counter}",
+                "id": f"art_{int(now.timestamp() * 1000000)}_{self._artifacts_counter}",
                 "path": path,
                 "sha256": sha256,
                 "md5": md5,
@@ -736,8 +738,10 @@ def get_session_key_from_context(ctx) -> str:
                 try:
                     session._arkana_session_id = sid
                 except AttributeError:
-                    # Frozen/slotted objects — fall back to id()
-                    sid = f"id-{id(session)}"
+                    # Frozen/slotted objects — use stable UUID via WeakKeyDictionary
+                    if session not in _session_id_map:
+                        _session_id_map[session] = f"id-{uuid.uuid4().hex[:16]}"
+                    sid = _session_id_map[session]
             return sid
     except Exception:
         logger.debug("Could not extract session key from context, using default", exc_info=True)

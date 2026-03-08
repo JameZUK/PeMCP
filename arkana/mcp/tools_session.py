@@ -872,7 +872,7 @@ async def get_analysis_timeline(
         })
 
     # Sort by timestamp
-    events.sort(key=lambda e: e.get("timestamp", ""))
+    events.sort(key=lambda e: e.get("timestamp") or "")
 
     # Take the most recent entries
     events = events[-limit:]

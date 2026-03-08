@@ -13,6 +13,7 @@ from typing import List, Optional
 
 from arkana.config import (
     state, logger, pefile,
+    PEFILE_AVAILABLE,
     ANGR_AVAILABLE, MCP_SDK_AVAILABLE, FLOSS_AVAILABLE, REFINERY_AVAILABLE,
     FLOSS_MIN_LENGTH_DEFAULT,
     Actual_DebugLevel_Floss, Actual_StringType_Floss,
@@ -21,7 +22,7 @@ from arkana.config import (
     log_library_availability,
 )
 from arkana.mock import MockPE
-from arkana.utils import validate_regex_pattern
+from arkana.utils import validate_regex_pattern, _safe_env_int
 from arkana.background import _console_heartbeat_loop, _update_progress, start_angr_background
 from arkana.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from arkana.parsers.strings import _extract_strings_from_data, _format_hex_dump_lines, _perform_unified_string_sifting
@@ -242,6 +243,14 @@ def _resolve_paths(args: argparse.Namespace) -> _ResolvedConfig:
     cfg.abs_peid_db_path = str(Path(args.peid_db).resolve()) if args.peid_db else str(DEFAULT_PEID_DB_PATH)
     cfg.abs_yara_rules_path = str(Path(args.yara_rules).resolve()) if args.yara_rules else None
 
+    # Skip list — must be populated BEFORE YARA auto-resolution which checks it
+    if args.skip_capa: cfg.analyses_to_skip.append("capa")
+    if args.skip_floss: cfg.analyses_to_skip.append("floss")
+    if args.skip_peid: cfg.analyses_to_skip.append("peid")
+    if args.skip_yara: cfg.analyses_to_skip.append("yara")
+    if cfg.analyses_to_skip:
+        logger.info("Skipping analyses: %s", ", ".join(cfg.analyses_to_skip))
+
     # Auto-resolve to default YARA rules store when not explicitly specified
     if cfg.abs_yara_rules_path is None and YARA_AVAILABLE and "yara" not in cfg.analyses_to_skip:
         from arkana.resources import get_default_yara_rules_path, ensure_yara_rules_exist
@@ -259,14 +268,6 @@ def _resolve_paths(args: argparse.Namespace) -> _ResolvedConfig:
 
     cfg.abs_capa_rules_dir = str(Path(args.capa_rules_dir).resolve()) if args.capa_rules_dir else None
     cfg.abs_capa_sigs_dir = str(Path(args.capa_sigs_dir).resolve()) if args.capa_sigs_dir else None
-
-    # Skip list
-    if args.skip_capa: cfg.analyses_to_skip.append("capa")
-    if args.skip_floss: cfg.analyses_to_skip.append("floss")
-    if args.skip_peid: cfg.analyses_to_skip.append("peid")
-    if args.skip_yara: cfg.analyses_to_skip.append("yara")
-    if cfg.analyses_to_skip:
-        logger.info("Skipping analyses: %s", ", ".join(cfg.analyses_to_skip))
 
     # Validate user-supplied regex pattern early
     if args.regex_pattern:
@@ -358,6 +359,13 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
                     magic.hex(),
                 )
             logger.info("Auto-detected format: %s", effective_mode)
+
+        # Guard against excessively large files for modes that read into memory
+        if effective_mode in ('shellcode', 'elf', 'macho'):
+            file_size = os.path.getsize(abs_input_file)
+            if file_size > 500 * 1024 * 1024:  # 500 MB
+                logger.critical("File too large for preload: %d bytes", file_size)
+                sys.exit(1)
 
         # Loading logic with mode support
         if effective_mode == 'shellcode':
@@ -507,7 +515,7 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
 
     # --- Dashboard configuration ---
     dashboard_disabled = args.no_dashboard or os.environ.get("ARKANA_NO_DASHBOARD", "") == "1"
-    dashboard_port = int(os.environ.get("ARKANA_DASHBOARD_PORT", "8082"))
+    dashboard_port = _safe_env_int("ARKANA_DASHBOARD_PORT", 8082)
 
     if args.mcp_transport in ("sse", "streamable-http"):
         mcp_server.settings.host = args.mcp_host
@@ -666,6 +674,12 @@ def _run_cli_analysis(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
 # ---------------------------------------------------------------------------
 
 def main():
+    if not PEFILE_AVAILABLE:
+        print("[!] CRITICAL ERROR: The 'pefile' library is not found.", file=sys.stderr)
+        print("[!] This library is essential for the script to function.", file=sys.stderr)
+        print("[!] Install it with: pip install pefile", file=sys.stderr)
+        sys.exit(1)
+
     args = _parse_arguments()
     log_level = _configure_logging(args)
     cfg = _resolve_paths(args)

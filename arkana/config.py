@@ -27,7 +27,10 @@ from arkana.state import AnalyzerState, StateProxy
 
 # --- Auto-migrate ~/.pemcp/ → ~/.arkana/ before any config/cache access ---
 from arkana.migration import migrate_data_dir  # noqa: E402
-migrate_data_dir()
+try:
+    migrate_data_dir()
+except Exception:
+    logging.getLogger("Arkana").debug("migrate_data_dir() failed at import time", exc_info=True)
 
 from arkana.user_config import get_config_value
 
@@ -52,5 +55,5 @@ except (ValueError, TypeError):
 _cache_max_mb_int = max(1, min(_cache_max_mb_int, 50000))  # Clamp to 1 MB – 50 GB
 analysis_cache = AnalysisCache(
     max_size_mb=_cache_max_mb_int,
-    enabled=(_cache_enabled.lower() not in ("false", "0", "no")) if _cache_enabled else True,
+    enabled=(str(_cache_enabled).lower() not in ("false", "0", "no")) if _cache_enabled else True,
 )
