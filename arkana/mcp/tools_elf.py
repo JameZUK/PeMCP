@@ -75,17 +75,20 @@ async def elf_analyze(
                     # Symbol tables
                     if isinstance(sec, SymbolTableSection) and len(symbols) < limit:
                         for sym in sec.iter_symbols():
-                            if sym.name:
-                                symbols.append({
-                                    "name": sym.name,
-                                    "value": hex(sym['st_value']),
-                                    "size": sym['st_size'],
-                                    "type": sym['st_info']['type'],
-                                    "bind": sym['st_info']['bind'],
-                                    "section_index": sym['st_shndx'],
-                                })
-                                if len(symbols) >= limit:
-                                    break
+                            try:
+                                if sym.name:
+                                    symbols.append({
+                                        "name": sym.name,
+                                        "value": hex(sym['st_value']),
+                                        "size": sym['st_size'],
+                                        "type": sym['st_info']['type'],
+                                        "bind": sym['st_info']['bind'],
+                                        "section_index": sym['st_shndx'],
+                                    })
+                                    if len(symbols) >= limit:
+                                        break
+                            except Exception:
+                                continue
 
                     # Dynamic dependencies
                     if sec['sh_type'] == 'SHT_DYNAMIC':

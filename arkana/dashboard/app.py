@@ -76,7 +76,7 @@ _LOGIN_WINDOW_SECONDS = 60
 _MAX_LOGIN_IPS = 1000  # Hard cap to prevent unbounded memory growth
 
 # --- Content-Security-Policy value (single source of truth) ---
-_CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+_CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self';"
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +369,11 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
         # M17: Reject oversized POST bodies
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > _MAX_POST_BODY_SIZE:
+        try:
+            cl_int = int(content_length) if content_length else 0
+        except (ValueError, TypeError):
+            cl_int = 0
+        if cl_int > _MAX_POST_BODY_SIZE:
             return JSONResponse({"error": "Request body too large"}, status_code=413)
         try:
             raw_body = await request.body()
@@ -383,6 +387,8 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
         address = body.get("address", "").strip().lower()
         status = body.get("status", "").strip()
+        if len(address) > 40:
+            return JSONResponse({"error": "address too long"}, status_code=400)
         if not address or not re.fullmatch(r'0x[0-9a-f]+', address):
             return JSONResponse({"error": "invalid address (expected 0x hex)"}, status_code=400)
         if status not in ("unreviewed", "suspicious", "clean", "flagged"):
@@ -406,6 +412,8 @@ def _create_routes(dashboard_token: str) -> list:
         address = request.query_params.get("address", "").strip()
         if not address:
             return JSONResponse({"error": "missing address parameter"}, status_code=400)
+        if len(address) > 40:
+            return JSONResponse({"error": "address too long"}, status_code=400)
         result = get_decompiled_code(address)
         return JSONResponse(result)
 
@@ -420,7 +428,11 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
         # M17: Reject oversized POST bodies
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > _MAX_POST_BODY_SIZE:
+        try:
+            cl_int = int(content_length) if content_length else 0
+        except (ValueError, TypeError):
+            cl_int = 0
+        if cl_int > _MAX_POST_BODY_SIZE:
             return JSONResponse({"error": "Request body too large"}, status_code=413)
         try:
             raw_body = await request.body()
@@ -433,6 +445,8 @@ def _create_routes(dashboard_token: str) -> list:
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
             return JSONResponse({"error": "invalid JSON"}, status_code=400)
         address = body.get("address", "").strip().lower()
+        if len(address) > 40:
+            return JSONResponse({"error": "address too long"}, status_code=400)
         if not address or not re.fullmatch(r'0x[0-9a-f]+', address):
             return JSONResponse({"error": "invalid address (expected 0x hex)"}, status_code=400)
         try:
@@ -501,11 +515,13 @@ def _create_routes(dashboard_token: str) -> list:
         address = request.query_params.get("address", "").strip()
         if not address:
             return JSONResponse({"error": "missing address"}, status_code=400)
+        if len(address) > 40:
+            return JSONResponse({"error": "address too long"}, status_code=400)
         try:
             return JSONResponse(get_function_xrefs_data(address))
         except Exception:
             logger.debug("api_function_xrefs error for %s", address, exc_info=True)
-            return JSONResponse({"callers": [], "callees": []})
+            return JSONResponse({"callers": [], "callees": [], "_error": True})
 
     async def api_function_analysis(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -513,11 +529,13 @@ def _create_routes(dashboard_token: str) -> list:
         address = request.query_params.get("address", "").strip()
         if not address:
             return JSONResponse({"error": "missing address"}, status_code=400)
+        if len(address) > 40:
+            return JSONResponse({"error": "address too long"}, status_code=400)
         try:
             return JSONResponse(get_function_analysis_data(address))
         except Exception:
             logger.debug("api_function_analysis error for %s", address, exc_info=True)
-            return JSONResponse({"address": address, "callers": [], "callees": [], "suspicious_apis": [], "strings": []})
+            return JSONResponse({"address": address, "callers": [], "callees": [], "suspicious_apis": [], "strings": [], "_error": True})
 
     async def api_function_strings(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -525,11 +543,13 @@ def _create_routes(dashboard_token: str) -> list:
         address = request.query_params.get("address", "").strip()
         if not address:
             return JSONResponse({"error": "missing address"}, status_code=400)
+        if len(address) > 40:
+            return JSONResponse({"error": "address too long"}, status_code=400)
         try:
             return JSONResponse(get_function_strings_data(address))
         except Exception:
             logger.debug("api_function_strings error for %s", address, exc_info=True)
-            return JSONResponse({"strings": []})
+            return JSONResponse({"strings": [], "_error": True})
 
     async def api_timeline(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -553,6 +573,8 @@ def _create_routes(dashboard_token: str) -> list:
                     {"error": "too many SSE connections"},
                     status_code=429,
                 )
+            # Reserve the slot here; generator's finally block handles release.
+            # This is safe because StreamingResponse always invokes the generator.
             _sse_connection_count += 1
 
         # C3: Capture auth token at connection time for re-validation

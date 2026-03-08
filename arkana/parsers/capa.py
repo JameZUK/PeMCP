@@ -4,6 +4,7 @@ import json
 import logging
 import time
 import threading
+from collections import OrderedDict
 
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -34,7 +35,7 @@ if CAPA_AVAILABLE:
 # signatures.py.  Keyed by resolved rules directory path so re-opening
 # a different sample with the same rules skips the expensive YAML parse.
 _MAX_CAPA_CACHE = 8
-_capa_rules_cache: Dict[str, Any] = {}
+_capa_rules_cache: OrderedDict[str, Any] = OrderedDict()
 _capa_rules_lock = threading.Lock()
 
 
@@ -48,11 +49,13 @@ def _get_cached_capa_rules(mock_args):
     cached = _capa_rules_cache.get(rules_key)
     if cached is not None:
         logger.info("Using cached capa rules for: %s", rules_key)
+        _capa_rules_cache.move_to_end(rules_key)
         return cached
     with _capa_rules_lock:
         cached = _capa_rules_cache.get(rules_key)
         if cached is not None:
             logger.info("Using cached capa rules for: %s (after lock)", rules_key)
+            _capa_rules_cache.move_to_end(rules_key)
             return cached
         t0 = time.monotonic()
         rules = capa.main.get_rules_from_cli(mock_args)
@@ -60,10 +63,9 @@ def _get_cached_capa_rules(mock_args):
         logger.info("Capa rules loaded from disk in %.1fs. Rule count: %s",
                      elapsed,
                      len(rules.rules) if hasattr(rules, 'rules') and hasattr(rules.rules, '__len__') else 'N/A')
-        # Evict oldest entry if cache is at capacity
+        # LRU eviction: remove least-recently-used entries
         while len(_capa_rules_cache) >= _MAX_CAPA_CACHE:
-            oldest_key = next(iter(_capa_rules_cache))
-            del _capa_rules_cache[oldest_key]
+            _capa_rules_cache.popitem(last=False)  # LRU: evict least-recently-used
         _capa_rules_cache[rules_key] = rules
         return rules
 

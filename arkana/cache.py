@@ -192,7 +192,8 @@ class AnalysisCache:
                         meta.pop(sha256, None)
                         self._save_meta(meta)
                         return None
-                # Touch LRU timestamp (throttled to once per 60s)
+                # Touch LRU timestamp (throttled to once per 60s).
+                # Safe: runs inside self._lock so no concurrent modification.
                 if sha256 in meta:
                     last = meta[sha256].get("last_accessed", 0)
                     now = time.time()

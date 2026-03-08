@@ -20,7 +20,7 @@
             <div class="login-subtitle">AUTHORIZATION REQUIRED</div>
 
             {% if error %}
-            <div class="login-error">ACCESS DENIED — INVALID TOKEN</div>
+            <div class="login-error">ACCESS DENIED — INVALID TOKEN {{ error|e }}</div>
             {% endif %}
 
             <form method="POST" action="/dashboard/login" class="login-form">

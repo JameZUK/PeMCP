@@ -329,13 +329,10 @@ async def decompile_function_with_angr(
         # Signal to background enrichment that on-demand decompile is waiting,
         # then acquire the decompile lock to ensure mutual exclusion with
         # the background decompile sweep.
-        # Signal to background enrichment that on-demand decompile is waiting,
-        # then acquire the decompile lock to ensure mutual exclusion with
-        # the background decompile sweep.
         state._decompile_on_demand_waiting = True
         state._decompile_lock.acquire()
-        state._decompile_on_demand_waiting = False
         try:
+            state._decompile_on_demand_waiting = False
             project, cfg = state.get_angr_snapshot()
             used_local_cfg = False
 

@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, analysis_cache
 from arkana.constants import MAX_BATCH_RENAMES
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp._rename_helpers import normalize_address
 
 
 def _persist_renames_to_cache() -> None:
@@ -39,8 +40,7 @@ async def rename_function(
     _check_pe_loaded("rename_function")
     if not new_name or not new_name.strip():
         raise ValueError("new_name must be a non-empty string.")
-    if not address.startswith("0x") and not address.startswith("0X"):
-        address = "0x" + address
+    address = normalize_address(address)
     entry = state.rename_function(address, new_name.strip())
     _persist_renames_to_cache()
     return {"status": "success", "rename": entry}
@@ -74,8 +74,7 @@ async def rename_variable(
         raise ValueError("old_name must be a non-empty string.")
     if not new_name or not new_name.strip():
         raise ValueError("new_name must be a non-empty string.")
-    if not function_address.startswith("0x") and not function_address.startswith("0X"):
-        function_address = "0x" + function_address
+    function_address = normalize_address(function_address)
     entry = state.rename_variable(function_address, old_name.strip(), new_name.strip())
     _persist_renames_to_cache()
     return {"status": "success", "rename": entry}
@@ -110,8 +109,7 @@ async def add_label(
         raise ValueError(f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}.")
     if not label_name or not label_name.strip():
         raise ValueError("label_name must be a non-empty string.")
-    if not address.startswith("0x") and not address.startswith("0X"):
-        address = "0x" + address
+    address = normalize_address(address)
     entry = state.add_label(address, label_name.strip(), category)
     _persist_renames_to_cache()
     return {"status": "success", "label": entry}
@@ -164,8 +162,7 @@ async def delete_rename(
     _check_pe_loaded("delete_rename")
     if rename_type not in ("function", "variable", "label"):
         raise ValueError("rename_type must be 'function', 'variable', or 'label'.")
-    if not address.startswith("0x") and not address.startswith("0X"):
-        address = "0x" + address
+    address = normalize_address(address)
     deleted = state.delete_rename(address, rename_type)
     if not deleted:
         return {"status": "not_found", "message": f"No {rename_type} rename found at {address}."}
@@ -201,48 +198,64 @@ async def batch_rename(
     if len(renames) > MAX_BATCH_RENAMES:
         raise ValueError(f"Maximum {MAX_BATCH_RENAMES} renames per batch call.")
 
-    applied = 0
-    errors = []
+    # First pass: validate all entries without applying any changes
+    valid_categories = ("general", "ioc", "crypto", "c2", "function")
+    validation_errors = []
+    validated_entries = []
     for i, entry in enumerate(renames):
         rtype = entry.get("type")
-        addr = entry.get("address", "")
-        if not addr.startswith("0x") and not addr.startswith("0X"):
-            addr = "0x" + addr
+        addr = normalize_address(entry.get("address", ""))
+        if rtype == "function":
+            name = entry.get("new_name", "").strip()
+            if not name:
+                validation_errors.append(f"[{i}] Missing new_name for function rename.")
+            else:
+                validated_entries.append(("function", addr, {"name": name}))
+        elif rtype == "variable":
+            old = entry.get("old_name", "").strip()
+            new = entry.get("new_name", "").strip()
+            if not old or not new:
+                validation_errors.append(f"[{i}] Missing old_name or new_name for variable rename.")
+            else:
+                validated_entries.append(("variable", addr, {"old": old, "new": new}))
+        elif rtype == "label":
+            name = entry.get("name", "").strip()
+            cat = entry.get("category", "general")
+            if not name:
+                validation_errors.append(f"[{i}] Missing name for label.")
+            elif cat not in valid_categories:
+                validation_errors.append(f"[{i}] Invalid category '{cat}'. Must be one of: {', '.join(valid_categories)}.")
+            else:
+                validated_entries.append(("label", addr, {"name": name, "category": cat}))
+        else:
+            validation_errors.append(f"[{i}] Unknown type '{rtype}'. Must be 'function', 'variable', or 'label'.")
+
+    # If any validation errors, return without applying any changes
+    if validation_errors:
+        return {
+            "status": "validation_failed",
+            "applied": 0,
+            "total_requested": len(renames),
+            "errors": validation_errors,
+        }
+
+    # Second pass: apply all validated renames
+    applied = 0
+    apply_errors = []
+    for rtype, addr, params in validated_entries:
         try:
             if rtype == "function":
-                name = entry.get("new_name", "").strip()
-                if not name:
-                    errors.append(f"[{i}] Missing new_name for function rename.")
-                    continue
-                state.rename_function(addr, name)
-                applied += 1
+                state.rename_function(addr, params["name"])
             elif rtype == "variable":
-                old = entry.get("old_name", "").strip()
-                new = entry.get("new_name", "").strip()
-                if not old or not new:
-                    errors.append(f"[{i}] Missing old_name or new_name for variable rename.")
-                    continue
-                state.rename_variable(addr, old, new)
-                applied += 1
+                state.rename_variable(addr, params["old"], params["new"])
             elif rtype == "label":
-                name = entry.get("name", "").strip()
-                cat = entry.get("category", "general")
-                if not name:
-                    errors.append(f"[{i}] Missing name for label.")
-                    continue
-                valid_categories = ("general", "ioc", "crypto", "c2", "function")
-                if cat not in valid_categories:
-                    errors.append(f"[{i}] Invalid category '{cat}'. Must be one of: {', '.join(valid_categories)}.")
-                    continue
-                state.add_label(addr, name, cat)
-                applied += 1
-            else:
-                errors.append(f"[{i}] Unknown type '{rtype}'. Must be 'function', 'variable', or 'label'.")
+                state.add_label(addr, params["name"], params["category"])
+            applied += 1
         except Exception as e:
-            errors.append(f"[{i}] Error: {e}")
+            apply_errors.append(f"Error applying {rtype} at {addr}: {e}")
 
     _persist_renames_to_cache()
     result = {"status": "success", "applied": applied, "total_requested": len(renames)}
-    if errors:
-        result["errors"] = errors
+    if apply_errors:
+        result["errors"] = apply_errors
     return result

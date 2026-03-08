@@ -54,6 +54,8 @@ def _parse_fields(data: bytes, schema: list) -> tuple:
                 pad_size = int(ftype.split(":")[1])
             except (IndexError, ValueError):
                 raise ValueError(f"Invalid padding format '{ftype}'. Use 'padding:N'.")
+            if pad_size < 0 or pad_size > 10 * 1024 * 1024:
+                raise ValueError(f"Padding size {pad_size} out of range (0 to 10MB)")
             if offset + pad_size > len(data):
                 raise ValueError(
                     f"Insufficient data for padding:{pad_size} at offset {offset}. "
@@ -77,15 +79,19 @@ def _parse_fields(data: bytes, schema: list) -> tuple:
             offset += byte_count
             continue
 
-        # Handle cstring — null-terminated ASCII
+        # Handle cstring — null-terminated string (UTF-8 with Latin-1 fallback)
         if ftype == "cstring":
             null_pos = data.find(b"\x00", offset)
             if null_pos == -1:
-                fields[name] = data[offset:].decode("ascii", errors="replace")
+                raw = data[offset:]
                 offset = len(data)
             else:
-                fields[name] = data[offset:null_pos].decode("ascii", errors="replace")
+                raw = data[offset:null_pos]
                 offset = null_pos + 1
+            try:
+                fields[name] = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                fields[name] = raw.decode("latin-1", errors="replace")
             continue
 
         # Handle wstring — null-terminated UTF-16LE

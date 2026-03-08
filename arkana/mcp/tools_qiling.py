@@ -19,6 +19,17 @@ from arkana.config import (
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
 
+_MAX_INSTRUCTIONS_LIMIT = 10_000_000
+
+def _validate_max_instructions(max_instructions: int) -> int:
+    """Validate and clamp max_instructions parameter."""
+    if max_instructions < 0:
+        raise ValueError(f"max_instructions must be non-negative, got {max_instructions}")
+    if max_instructions > _MAX_INSTRUCTIONS_LIMIT:
+        raise ValueError(f"max_instructions too large (max {_MAX_INSTRUCTIONS_LIMIT:,}), got {max_instructions:,}")
+    return max_instructions
+
+
 async def _subprocess_progress_reporter(ctx: Context, tool_name: str, timeout_seconds: int):
     """Report estimated progress for opaque subprocess operations."""
     start = asyncio.get_event_loop().time()
@@ -203,6 +214,7 @@ async def emulate_binary_with_qiling(
     await ctx.info("Emulating binary with Qiling Framework")
     _check_qiling("emulate_binary_with_qiling")
     _check_pe_loaded("emulate_binary_with_qiling")
+    _validate_max_instructions(max_instructions)
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_binary_with_qiling", timeout_seconds))
@@ -268,6 +280,7 @@ async def emulate_shellcode_with_qiling(
     """
     await ctx.info(f"Emulating shellcode with Qiling ({os_type}/{architecture})")
     _check_qiling("emulate_shellcode_with_qiling")
+    _validate_max_instructions(max_instructions)
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_shellcode_with_qiling", timeout_seconds))
@@ -326,6 +339,7 @@ async def qiling_trace_execution(
     await ctx.info("Tracing execution with Qiling")
     _check_qiling("qiling_trace_execution")
     _check_pe_loaded("qiling_trace_execution")
+    _validate_max_instructions(max_instructions)
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "qiling_trace_execution", timeout_seconds))
@@ -386,6 +400,7 @@ async def qiling_hook_api_calls(
     await ctx.info(f"Hooking API calls with Qiling: {apis_desc}")
     _check_qiling("qiling_hook_api_calls")
     _check_pe_loaded("qiling_hook_api_calls")
+    _validate_max_instructions(max_instructions)
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "qiling_hook_api_calls", timeout_seconds))
@@ -446,6 +461,7 @@ async def qiling_dump_unpacked_binary(
     await ctx.info("Dynamically unpacking with Qiling")
     _check_qiling("qiling_dump_unpacked_binary")
     _check_pe_loaded("qiling_dump_unpacked_binary")
+    _validate_max_instructions(max_instructions)
 
     if not output_path:
         base, ext = os.path.splitext(state.filepath)
@@ -671,6 +687,7 @@ async def qiling_memory_search(
     await ctx.info("Running binary and searching memory with Qiling")
     _check_qiling("qiling_memory_search")
     _check_pe_loaded("qiling_memory_search")
+    _validate_max_instructions(max_instructions)
 
     if not search_patterns and not search_hex:
         return {"error": "No search criteria provided. Specify search_patterns (strings) and/or search_hex (bytes)."}

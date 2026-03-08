@@ -238,7 +238,7 @@ except ImportError:
     class MockMCP:
         def __init__(self, name, description=""): self.name = name; self.description = description; self.app = object(); self.settings = MockSettings(); self._run_called_with_transport = None
         def tool(self): decorator = lambda func: func; return decorator
-        def run(self, transport: str = "stdio"): print(f"MockMCP '{self.name}' run method called with transport='{transport}'.")
+        def run(self, transport: str = "stdio"): raise NotImplementedError("MCP SDK is not installed. Install with: pip install 'mcp[cli]'")
     FastMCP = MockMCP  # type: ignore
     class Context:  # type: ignore
         async def info(self, msg): print(f"(mock ctx info): {msg}")

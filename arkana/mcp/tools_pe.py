@@ -22,8 +22,7 @@ from arkana.mcp._format_helpers import detect_format_from_magic
 from arkana.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from arkana.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
 
-# Upper bound on the 'limit' parameter to prevent excessive memory allocation
-_MAX_LIMIT = 100_000
+from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT
 from arkana.parsers.floss import _parse_floss_analysis
 from arkana.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
 from arkana.mcp._progress_bridge import ProgressBridge

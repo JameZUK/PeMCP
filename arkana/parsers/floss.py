@@ -20,6 +20,7 @@ from arkana.config import (
 )
 from arkana.constants import (
     MAX_FLOSS_ENRICHMENT_STRINGS,
+    MAX_FLOSS_REFS_PER_STRING,
     VIVISECT_BYTES_PER_SECOND_ESTIMATE,
     VIVISECT_POLL_INTERVAL,
 )
@@ -413,7 +414,10 @@ def _parse_floss_analysis(
                         total_enriched_strings += 1
                         logger.debug("Found %d cross-references for string at %s", len(xrefs), hex(string_va))
                         string_item["references"] = []
-                        for ref_tuple in xrefs:
+                        for ref_idx, ref_tuple in enumerate(xrefs):
+                            if ref_idx >= MAX_FLOSS_REFS_PER_STRING:
+                                string_item["_refs_truncated"] = len(xrefs)
+                                break
                             from_va = ref_tuple[0]
                             ref_func_va = vw.getFunction(from_va)
                             context_snippet = []

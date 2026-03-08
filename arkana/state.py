@@ -142,6 +142,7 @@ class AnalyzerState:
 
         # Timestamp of last activity (for session TTL cleanup)
         self.last_active: float = time.time()
+        self._closing: bool = False  # True when session is being cleaned up
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Thread-safe read of a background task."""
@@ -185,6 +186,8 @@ class AnalyzerState:
 
     def touch(self):
         """Update the last-active timestamp (called by the tool decorator)."""
+        if self._closing:
+            return
         self.last_active = time.time()
 
     def _evict_old_tasks(self):
@@ -585,6 +588,8 @@ class AnalyzerState:
                 # comparing ``is _default_state.pe_object`` because the
                 # default state's reference can change if another session
                 # calls ``open_file``.
+                # _default_state is a module-level singleton (never reassigned).
+                # For sessions: _inherited_pe_object prevents double-close.
                 if self is _default_state or not self._inherited_pe_object:
                     try:
                         self.pe_object.close()
@@ -653,6 +658,7 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             # Mark as closing so it cannot be reactivated if the id()
             # is reused by Python's memory allocator.
             stale_session.last_active = 0
+            stale_session._closing = True
             stale_to_cleanup.append(stale_session)
 
         if session_key not in _session_registry:
@@ -672,6 +678,9 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
                 new_state._inherited_pe_object = True
                 new_state.pefile_version = _default_state.pefile_version
                 new_state.loaded_from_cache = _default_state.loaded_from_cache
+                # angr objects are intentionally shared (read-only, expensive to copy).
+                # Mutations to angr state affect all sessions — this is acceptable
+                # because angr analysis is a global, immutable result.
                 new_state.angr_project = _default_state.angr_project
                 new_state.angr_cfg = _default_state.angr_cfg
             _session_registry[session_key] = new_state

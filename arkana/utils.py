@@ -1,5 +1,6 @@
 """Utility functions for PE analysis output and formatting."""
 import atexit
+import collections
 import concurrent.futures
 import datetime
 import math
@@ -141,9 +142,8 @@ def shannon_entropy(data: bytes) -> float:
         return 0.0
     # collections.Counter uses optimised C internals for counting, which is
     # significantly faster than a manual loop for large byte sequences.
-    from collections import Counter
     entropy = 0.0
-    for count in Counter(data).values():
+    for count in collections.Counter(data).values():
         p = count / length
         entropy -= p * math.log2(p)
     return entropy

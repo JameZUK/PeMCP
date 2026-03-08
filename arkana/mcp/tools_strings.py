@@ -22,8 +22,7 @@ from arkana.parsers.strings import _extract_strings_from_data, _search_specific_
 from arkana.mcp._input_helpers import _parse_int_param
 from arkana.utils import validate_regex_pattern as _validate_regex_pattern, safe_regex_search as _safe_regex_search
 
-# Upper bound on the 'limit' parameter to prevent excessive memory allocation
-_MAX_LIMIT = 100_000
+from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT
 
 if RAPIDFUZZ_AVAILABLE:
     from rapidfuzz import fuzz

@@ -468,14 +468,8 @@ async def _check_mcp_response_size(
             f"Auto-truncating."
         )
 
-        # Shallow copy outer container to avoid mutating shared state.
-        # Individual keys are deepcopied only when they are actually truncated.
-        if isinstance(data_to_return, dict):
-            modified_data = dict(data_to_return)
-        elif isinstance(data_to_return, list):
-            modified_data = list(data_to_return)
-        else:
-            modified_data = copy.deepcopy(data_to_return)
+        # Deep copy to avoid mutating the caller's data during truncation.
+        modified_data = copy.deepcopy(data_to_return)
 
         # Track current char count from the initial measurement to avoid
         # re-serialising on every loop iteration (expensive for large dicts).
@@ -557,11 +551,18 @@ async def _check_mcp_response_size(
         final_json = json.dumps(modified_data, ensure_ascii=False)
         final_size = len(final_json.encode('utf-8'))
         if final_size > MAX_MCP_RESPONSE_SIZE_BYTES:
-            truncated_str = final_json[:TARGET_BYTES - 200]
+            # Reserve space for the wrapper dict overhead (~200 bytes)
+            max_preview = TARGET_BYTES - 300
+            truncated_str = final_json[:max_preview]
             modified_data = {
                 "data_preview": truncated_str,
                 "_truncation_warning": f"Response could not be structurally reduced. Converted to truncated string preview ({final_size} bytes -> {len(truncated_str)} bytes)."
             }
+            # Final safety check — if still too large, reduce preview further
+            backstop_size = len(json.dumps(modified_data, ensure_ascii=False).encode('utf-8'))
+            if backstop_size > MAX_MCP_RESPONSE_SIZE_BYTES:
+                safe_len = max(100, max_preview - (backstop_size - MAX_MCP_RESPONSE_SIZE_BYTES))
+                modified_data["data_preview"] = truncated_str[:safe_len]
 
         return modified_data
 

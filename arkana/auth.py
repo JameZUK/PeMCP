@@ -28,7 +28,7 @@ class BearerAuthMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] in ("http", "websocket"):
-            headers = dict(scope.get("headers", []))
+            headers = {k.lower(): v for k, v in scope.get("headers", [])}
             auth_header = headers.get(b"authorization", b"").decode("utf-8", "ignore")
             expected = f"Bearer {self.api_key}"
             # Constant-time comparison to prevent timing side-channel attacks

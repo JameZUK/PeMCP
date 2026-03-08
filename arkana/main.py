@@ -243,9 +243,7 @@ def _resolve_paths(args: argparse.Namespace) -> _ResolvedConfig:
     cfg.abs_yara_rules_path = str(Path(args.yara_rules).resolve()) if args.yara_rules else None
 
     # Auto-resolve to default YARA rules store when not explicitly specified
-    if cfg.abs_yara_rules_path is None and YARA_AVAILABLE and "yara" not in (
-        getattr(args, '_skip_set', None) or []
-    ):
+    if cfg.abs_yara_rules_path is None and YARA_AVAILABLE and "yara" not in cfg.analyses_to_skip:
         from arkana.resources import get_default_yara_rules_path, ensure_yara_rules_exist
         cfg.abs_yara_rules_path = get_default_yara_rules_path()
         if cfg.abs_yara_rules_path is None:

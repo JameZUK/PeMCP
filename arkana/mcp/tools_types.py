@@ -1,7 +1,10 @@
 """MCP tools for managing custom struct/enum type definitions."""
 import asyncio
+import re
 
 from typing import Dict, Any, Optional, List
+
+_VALID_FIELD_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 from arkana.config import state, logger, Context, analysis_cache
 from arkana.constants import MAX_STRUCT_FIELDS, MAX_ENUM_VALUES
@@ -59,6 +62,24 @@ def _compute_struct_size(fields: list) -> int:
     return size
 
 
+def _check_struct_cycles(struct_name: str, fields: list, visited: Optional[set] = None) -> None:
+    """Detect recursive struct cycles. Raises ValueError if a cycle is found."""
+    if visited is None:
+        visited = set()
+    if struct_name in visited:
+        raise ValueError(
+            f"Recursive struct cycle detected: '{struct_name}' references itself "
+            f"(cycle path: {' -> '.join(visited)} -> {struct_name})"
+        )
+    visited.add(struct_name)
+    for field_def in fields:
+        ftype = field_def.get("type", "")
+        # Check if this field type references another custom struct
+        ref_type = state.get_custom_type(ftype) if ftype else None
+        if ref_type and ref_type.get("type") == "struct":
+            _check_struct_cycles(ftype, ref_type["fields"], visited.copy())
+
+
 @tool_decorator
 async def create_struct(
     ctx: Context,
@@ -95,6 +116,13 @@ async def create_struct(
         raise ValueError(f"Too many fields ({len(fields)}). Maximum is {MAX_STRUCT_FIELDS}.")
 
     _validate_field_types(fields)
+
+    # Validate field names
+    for i, f in enumerate(fields):
+        fname = f.get("name", "")
+        if fname and not _VALID_FIELD_NAME_RE.match(fname):
+            raise ValueError(f"Field {i}: invalid name '{fname}'. Must match [a-zA-Z_][a-zA-Z0-9_]*")
+
     size = _compute_struct_size(fields)
 
     entry = state.create_struct(name, fields, size)
@@ -137,10 +165,20 @@ async def create_enum(
     if size not in (1, 2, 4, 8):
         raise ValueError("size must be 1, 2, 4, or 8 bytes.")
 
-    # Validate all values are integers
+    # Validate all values are integers and in range
     for k, v in values.items():
         if not isinstance(v, int):
             raise ValueError(f"Value for '{k}' must be an integer, got {type(v).__name__}.")
+        max_val = (2 ** (size * 8)) - 1
+        if v < 0 or v > max_val:
+            raise ValueError(f"Enum value {v} for '{k}' out of range for {size}-byte type (0-{max_val})")
+
+    # Check for duplicate values
+    seen_values = {}
+    for k, v in values.items():
+        if v in seen_values:
+            raise ValueError(f"Duplicate enum value {v}: already used by '{seen_values[v]}', cannot reuse for '{k}'")
+        seen_values[v] = k
 
     entry = state.create_enum(name, values, size)
     _persist_types_to_cache()
@@ -183,6 +221,9 @@ async def apply_type_at_offset(
         )
     if type_def["type"] != "struct":
         raise ValueError(f"'{type_name}' is an enum, not a struct. Enums cannot be applied at offsets.")
+
+    # Check for recursive struct cycles before parsing
+    _check_struct_cycles(type_name, type_def["fields"])
 
     schema = type_def["fields"]
     struct_size = type_def["size"]

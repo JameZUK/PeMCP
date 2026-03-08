@@ -205,7 +205,7 @@ def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
 _IOC_CATEGORY_PATTERNS = (
     ("ipv4", re.compile(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")),
     ("url", re.compile(r"^(https?|ftp)://[^\s]{3,}$")),
-    ("domain", re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,6}$")),
+    ("domain", re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,16}$")),
     ("filepath_windows", re.compile(r"^[a-zA-Z]:\\[^\s]+")),
     ("registry_key", re.compile(r"^(HKLM|HKCU|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKCR|HKEY_CLASSES_ROOT|HKU|HKEY_USERS)\\[\w\\\s\-. ]+")),
     ("email", re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")),

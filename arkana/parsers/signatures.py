@@ -4,6 +4,7 @@ import re
 import concurrent.futures
 import logging
 import threading
+from collections import OrderedDict
 
 from typing import Dict, Any, Optional, List
 
@@ -17,7 +18,7 @@ if YARA_AVAILABLE:
 # Compiled rules are cached per rules-path so that repeated open_file /
 # perform_yara_scan calls don't recompile 100+ .yar files from disk.
 _MAX_RULES_CACHE = 8
-_compiled_rules_cache: Dict[str, List] = {}
+_compiled_rules_cache: OrderedDict[str, List] = OrderedDict()
 _compiled_rules_lock = threading.Lock()
 
 
@@ -67,7 +68,9 @@ def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, 
                             current_signature['pattern_bytes'] = byte_pat_list
                             try:
                                 current_signature['regex_pattern'] = re.compile(b''.join(regex_b_list))
-                            except re.error:
+                            except re.error as e:
+                                logger.debug("PEiD: Failed to compile signature '%s': %s",
+                                             current_signature.get('name', 'unknown'), e)
                                 current_signature = None  # Invalid regex pattern
                         else:
                             current_signature = None  # Invalid hex byte pattern
@@ -157,18 +160,19 @@ def _get_compiled_rules(yara_rules_path: str, verbose: bool = False) -> Optional
     if cached is not None:
         if verbose:
             logger.info("   [VERBOSE-YARA] Using cached compiled rules for: %s", resolved)
+        _compiled_rules_cache.move_to_end(resolved)
         return cached
     with _compiled_rules_lock:
         # Re-check after acquiring the lock.
         cached = _compiled_rules_cache.get(resolved)
         if cached is not None:
+            _compiled_rules_cache.move_to_end(resolved)
             return cached
         compiled = _compile_yara_rules(resolved, verbose)
         if compiled is not None:
-            # Evict oldest entry if cache is at capacity
+            # LRU eviction: remove least-recently-used entries
             while len(_compiled_rules_cache) >= _MAX_RULES_CACHE:
-                oldest_key = next(iter(_compiled_rules_cache))
-                del _compiled_rules_cache[oldest_key]
+                _compiled_rules_cache.popitem(last=False)  # LRU: evict least-recently-used
             _compiled_rules_cache[resolved] = compiled
         return compiled
 

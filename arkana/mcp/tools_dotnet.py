@@ -138,6 +138,9 @@ async def dotnet_analyze(
             except Exception:
                 pass
             result["method_definitions"] = methods
+            if len(methods) >= limit:
+                result["method_definitions_truncated"] = True
+                result["method_definitions_total_hint"] = f"Results capped at {limit}. Use limit parameter to see more."
 
             # AssemblyRef table
             refs = []
@@ -250,6 +253,9 @@ def _parse_with_dotnetfile(target: str, limit: int) -> Dict[str, Any]:
     except Exception as e:
         logger.debug("Error reading .NET MethodDef table: %s", e)
     result["method_definitions"] = methods
+    if len(methods) >= limit:
+        result["method_definitions_truncated"] = True
+        result["method_definitions_total_hint"] = f"Results capped at {limit}. Use limit parameter to see more."
 
     # Assembly references
     refs: List[Dict[str, Any]] = []

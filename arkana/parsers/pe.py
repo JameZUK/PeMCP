@@ -234,9 +234,9 @@ def _parse_resources_summary(pe: pefile.PE) -> List[Dict[str, Any]]:
 
             if hasattr(res_type_entry, 'name') and res_type_entry.name is not None:
                 try:
-                    type_name_str = f"{res_type_entry.name.decode('utf-16le', 'ignore')} ({type_name_str})"
+                    type_name_str = f"{res_type_entry.name.decode('utf-16le', 'ignore').rstrip(chr(0))} ({type_name_str})"
                 except Exception:
-                    type_name_str = f"{res_type_entry.name.decode('latin-1', 'ignore')} ({type_name_str})"
+                    type_name_str = f"{res_type_entry.name.decode('latin-1', 'ignore').rstrip(chr(0))} ({type_name_str})"
 
             if hasattr(res_type_entry, 'directory'):
                 for res_id_entry in res_type_entry.directory.entries:
@@ -246,12 +246,12 @@ def _parse_resources_summary(pe: pefile.PE) -> List[Dict[str, Any]]:
                     if hasattr(res_id_entry, 'name') and res_id_entry.name is not None:
                         try:
                             id_name_str = (
-                                f"{res_id_entry.name.decode('utf-16le', 'ignore')} "
+                                f"{res_id_entry.name.decode('utf-16le', 'ignore').rstrip(chr(0))} "
                                 f"(ID: {id_val if id_val is not None else 'N/A'})"
                             )
                         except Exception:
                             id_name_str = (
-                                f"{res_id_entry.name.decode('latin-1', 'ignore')} "
+                                f"{res_id_entry.name.decode('latin-1', 'ignore').rstrip(chr(0))} "
                                 f"(ID: {id_val if id_val is not None else 'N/A'})"
                             )
                     elif id_val is not None:
@@ -510,7 +510,7 @@ def _perform_peid_scan(pe: pefile.PE, peid_db_path: Optional[str], verbose: bool
                 logger.warning("PEiD section data error %s: %s", section_name_cleaned_for_log, e)
 
         if scan_tasks_args:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(os.cpu_count() or 1, 8)) as executor:
                 futures = [executor.submit(find_pattern_in_data_regex, *args) for args in scan_tasks_args]
                 for future in concurrent.futures.as_completed(futures):
                     try:
@@ -606,6 +606,8 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
                 ptr_size = 8 if magic_type_str == "PE32+ (64-bit)" else 4
                 ord_flag = IMG_ORDINAL_FLAG64 if ptr_size == 8 else IMG_ORDINAL_FLAG32
 
+                _max_delay_thunks = 10000
+                _thunk_count = 0
                 while True:
                     try:
                         thunk_val_raw = (
@@ -632,6 +634,10 @@ def _parse_delay_load_imports(pe: pefile.PE, magic_type_str: str) -> List[Dict[s
                             'thunk_rva': hex(thunk_rva),
                         })
                         thunk_rva += ptr_size
+                        _thunk_count += 1
+                        if _thunk_count >= _max_delay_thunks:
+                            logger.warning("Delay-load import thunk limit reached (%d), stopping.", _max_delay_thunks)
+                            break
                     except pefile.PEFormatError as e_pe:
                         logger.debug("Delay-load import table parsing error (PEFormatError): %s", e_pe)
                         break

@@ -5,6 +5,14 @@ from typing import List, Optional
 from arkana.state import get_current_state
 
 
+def normalize_address(address: str) -> str:
+    """Normalize a hex address to lowercase with 0x prefix."""
+    address = str(address).strip().lower()
+    if not address.startswith("0x"):
+        address = "0x" + address
+    return address
+
+
 # Pattern for auto-generated function names: sub_HEXADDR, FUN_HEXADDR, etc.
 _AUTO_FUNC_NAME_RE = re.compile(r'\b(sub_|FUN_)([0-9a-fA-F]+)\b')
 

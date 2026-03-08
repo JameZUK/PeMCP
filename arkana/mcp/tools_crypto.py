@@ -473,7 +473,7 @@ async def brute_force_simple_crypto(
     try:
         data = bytes.fromhex(data_hex.replace(" ", "").replace("0x", ""))
     except ValueError as e:
-        raise ValueError(f"Invalid data_hex: {e}")
+        raise ValueError(f"Invalid data_hex format (expected hex string): {str(e)[:50]}")
 
     if len(data) > 1024 * 1024:  # 1MB max
         raise ValueError("Data too large (max 1MB). Provide a smaller sample.")
@@ -485,7 +485,7 @@ async def brute_force_simple_crypto(
         try:
             specific_key = bytes.fromhex(key_hex.replace(" ", "").replace("0x", ""))
         except ValueError as e:
-            raise ValueError(f"Invalid key_hex: {e}")
+            raise ValueError(f"Invalid key_hex format (expected hex string): {str(e)[:50]}")
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
@@ -536,7 +536,7 @@ async def brute_force_simple_crypto(
         # --- Known-plaintext XOR key derivation (fast path) ---
         if known_plaintext and ("xor_single" in algorithms or "xor_multi" in algorithms):
             bridge.info("Trying known-plaintext XOR key derivation...")
-            pt = known_plaintext.encode('ascii', 'ignore')
+            pt = known_plaintext.encode('utf-8', 'replace')
             if len(pt) > 0 and len(data) >= len(pt):
                 derived_key = bytes(data[i] ^ pt[i % len(pt)] for i in range(len(pt)))
                 # Try as full-length key

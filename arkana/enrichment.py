@@ -23,6 +23,9 @@ from arkana.utils import _safe_env_int
 
 logger = logging.getLogger("Arkana")
 
+# Timeout for on-demand decompile yield (seconds)
+_ON_DEMAND_YIELD_TIMEOUT = 120
+
 # Environment overrides
 _AUTO_ENRICHMENT_ENABLED = os.environ.get("ARKANA_AUTO_ENRICHMENT", "1") != "0"
 _MAX_DECOMPILE = _safe_env_int("ARKANA_ENRICHMENT_MAX_DECOMPILE", ENRICHMENT_MAX_DECOMPILE)
@@ -44,11 +47,20 @@ def start_enrichment(current_state: AnalyzerState) -> None:
     if not isinstance(current_state, AnalyzerState):
         current_state = get_current_state()
 
-    # Wait for any previous enrichment thread to acknowledge cancellation
-    existing = current_state.get_task(TASK_ID)
-    if existing and existing.get("status") == TASK_RUNNING:
-        current_state._enrichment_cancel.set()
-        # Give old thread up to 5s to notice and exit
+    # Atomically cancel previous run and increment generation to prevent
+    # a race where two threads see the same generation.
+    previous_was_running = False
+    with current_state._enrichment_gen_lock:
+        existing = current_state.get_task(TASK_ID)
+        if existing and existing.get("status") == TASK_RUNNING:
+            current_state._enrichment_cancel.set()
+            previous_was_running = True
+
+        current_state._enrichment_generation += 1
+        generation = current_state._enrichment_generation
+
+    # Wait for previous thread to notice cancellation (outside lock to avoid blocking)
+    if previous_was_running:
         for _ in range(50):
             check = current_state.get_task(TASK_ID)
             if not check or check.get("status") != TASK_RUNNING:
@@ -57,11 +69,6 @@ def start_enrichment(current_state: AnalyzerState) -> None:
 
     # Reset cancellation flag for new run
     current_state._enrichment_cancel.clear()
-
-    # H5: Increment generation counter atomically to detect stale workers
-    with current_state._enrichment_gen_lock:
-        current_state._enrichment_generation += 1
-        generation = current_state._enrichment_generation
 
     current_state.set_task(TASK_ID, {
         "status": TASK_RUNNING,
@@ -327,7 +334,7 @@ def _decompile_sweep(
 
         # Yield to on-demand decompile requests (with 120s timeout)
         if state._decompile_on_demand_waiting:
-            wait_deadline = time.time() + 120
+            wait_deadline = time.time() + _ON_DEMAND_YIELD_TIMEOUT
             while state._decompile_on_demand_waiting:
                 time.sleep(0.1)
                 if _cancelled(state, generation) or time.time() > wait_deadline:
