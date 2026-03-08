@@ -34,8 +34,7 @@ def start_enrichment(current_state: AnalyzerState) -> None:
     """Launch the enrichment coordinator as a background daemon thread.
 
     Safe to call from any context (async or sync).  If enrichment is
-    disabled via ``ARKANA_AUTO_ENRICHMENT=0`` or the ``analyses_to_skip``
-    list, this is a no-op.
+    disabled via ``ARKANA_AUTO_ENRICHMENT=0``, this is a no-op.
     """
     if not _AUTO_ENRICHMENT_ENABLED:
         logger.debug("Auto-enrichment disabled via ARKANA_AUTO_ENRICHMENT=0")
@@ -45,7 +44,18 @@ def start_enrichment(current_state: AnalyzerState) -> None:
     if not isinstance(current_state, AnalyzerState):
         current_state = get_current_state()
 
-    # Reset cancellation flag from any prior run
+    # Wait for any previous enrichment thread to acknowledge cancellation
+    existing = current_state.get_task(TASK_ID)
+    if existing and existing.get("status") == TASK_RUNNING:
+        current_state._enrichment_cancel.set()
+        # Give old thread up to 5s to notice and exit
+        for _ in range(50):
+            check = current_state.get_task(TASK_ID)
+            if not check or check.get("status") != TASK_RUNNING:
+                break
+            time.sleep(0.1)
+
+    # Reset cancellation flag for new run
     current_state._enrichment_cancel.clear()
 
     current_state.set_task(TASK_ID, {
@@ -246,7 +256,7 @@ def _enrichment_worker(state: AnalyzerState) -> None:
         state._decompile_on_demand_waiting = False
 
 
-def _wait_for_cfg(state: AnalyzerState, timeout: int = 600) -> bool:
+def _wait_for_cfg(state: AnalyzerState, timeout: int = ENRICHMENT_TIMEOUT) -> bool:
     """Poll for angr CFG completion. Returns True if CFG is available."""
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -272,7 +282,7 @@ def _wait_for_cfg(state: AnalyzerState, timeout: int = 600) -> bool:
             # No angr task — CFG won't appear
             return False
 
-        time.sleep(2)
+        time.sleep(0.5)
 
     return False
 
@@ -304,12 +314,12 @@ def _decompile_sweep(
         if _cancelled(state):
             break
 
-        # Yield to on-demand decompile requests
+        # Yield to on-demand decompile requests (with 120s timeout)
         if state._decompile_on_demand_waiting:
-            # Wait for the on-demand decompile to finish
+            wait_deadline = time.time() + 120
             while state._decompile_on_demand_waiting:
                 time.sleep(0.1)
-                if _cancelled(state):
+                if _cancelled(state) or time.time() > wait_deadline:
                     break
 
         # Progress: map index to 40-90% range
@@ -326,11 +336,18 @@ def _decompile_sweep(
         # Skip if already cached (e.g. from a previous session)
         cache_key = (addr_int,)
         if _get_cached_lines(cache_key) is not None:
-            decompiled += 1
             continue
 
-        # Acquire decompile lock
-        state._decompile_lock.acquire()
+        # Acquire decompile lock (with cancellation check)
+        acquired = False
+        for _ in range(100):  # try for up to 50s
+            acquired = state._decompile_lock.acquire(timeout=0.5)
+            if acquired:
+                break
+            if _cancelled(state):
+                break
+        if not acquired:
+            continue
         try:
             proj, cfg = state.get_angr_snapshot()
             if proj is None or cfg is None:
@@ -404,7 +421,7 @@ def _auto_note_sweep(state: AnalyzerState) -> None:
             from arkana.mcp.tools_notes import _persist_notes_to_cache
             _persist_notes_to_cache()
         except Exception:
-            pass
+            logger.debug("Enrichment: note cache persistence failed", exc_info=True)
 
     logger.debug("Enrichment: auto-noted %d functions", noted)
 
@@ -426,64 +443,65 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
         # Keys we'll temporarily add to pe_data for serialization
         _enrichment_keys = []
 
-        # Store cached results in pe_data for cache persistence
-        if state._cached_triage:
-            state.pe_data['_cached_triage'] = state._cached_triage
-            _enrichment_keys.append('_cached_triage')
-        if state._cached_classification:
-            state.pe_data['_cached_classification'] = state._cached_classification
-            _enrichment_keys.append('_cached_classification')
-        if state._cached_similarity_hashes:
-            state.pe_data['_cached_similarity_hashes'] = state._cached_similarity_hashes
-            _enrichment_keys.append('_cached_similarity_hashes')
-        if state._cached_mitre_mapping:
-            state.pe_data['_cached_mitre_mapping'] = state._cached_mitre_mapping
-            _enrichment_keys.append('_cached_mitre_mapping')
-        if state._cached_iocs:
-            state.pe_data['_cached_iocs'] = state._cached_iocs
-            _enrichment_keys.append('_cached_iocs')
-        if state._cached_function_scores:
-            state.pe_data['_cached_function_scores'] = state._cached_function_scores
-            _enrichment_keys.append('_cached_function_scores')
-
-        # Save decompiled functions (metadata + code lines) for cache restore
         try:
-            from arkana.mcp.tools_angr import _decompile_meta
-            if _decompile_meta:
-                decompiled_funcs = []
-                for key, meta in _decompile_meta.items():
-                    if isinstance(key, tuple) and key:
-                        decompiled_funcs.append({
-                            "addr_int": key[0],
-                            "function_name": meta.get("function_name", ""),
-                            "address": meta.get("address", ""),
-                            "lines": meta.get("lines"),
-                        })
-                if decompiled_funcs:
-                    state.pe_data['_decompiled_functions'] = decompiled_funcs
-                    _enrichment_keys.append('_decompiled_functions')
-        except ImportError:
-            pass
+            # Store cached results in pe_data for cache persistence
+            if state._cached_triage:
+                state.pe_data['_cached_triage'] = state._cached_triage
+                _enrichment_keys.append('_cached_triage')
+            if state._cached_classification:
+                state.pe_data['_cached_classification'] = state._cached_classification
+                _enrichment_keys.append('_cached_classification')
+            if state._cached_similarity_hashes:
+                state.pe_data['_cached_similarity_hashes'] = state._cached_similarity_hashes
+                _enrichment_keys.append('_cached_similarity_hashes')
+            if state._cached_mitre_mapping:
+                state.pe_data['_cached_mitre_mapping'] = state._cached_mitre_mapping
+                _enrichment_keys.append('_cached_mitre_mapping')
+            if state._cached_iocs:
+                state.pe_data['_cached_iocs'] = state._cached_iocs
+                _enrichment_keys.append('_cached_iocs')
+            if state._cached_function_scores:
+                state.pe_data['_cached_function_scores'] = state._cached_function_scores
+                _enrichment_keys.append('_cached_function_scores')
 
-        sha = state.pe_data.get("file_hashes", {}).get("sha256")
-        if sha and state.filepath:
-            analysis_cache.put(sha, state.pe_data, state.filepath)
+            # Save decompiled functions (metadata + code lines) for cache restore
+            try:
+                from arkana.mcp.tools_angr import _decompile_meta
+                if _decompile_meta:
+                    decompiled_funcs = []
+                    # Snapshot to avoid RuntimeError: dict changed size during iteration
+                    for key, meta in dict(_decompile_meta).items():
+                        if isinstance(key, tuple) and key:
+                            decompiled_funcs.append({
+                                "addr_int": key[0],
+                                "function_name": meta.get("function_name", ""),
+                                "address": meta.get("address", ""),
+                                "lines": meta.get("lines"),
+                            })
+                    if decompiled_funcs:
+                        state.pe_data['_decompiled_functions'] = decompiled_funcs
+                        _enrichment_keys.append('_decompiled_functions')
+            except ImportError:
+                pass
 
-            # Also save session metadata
-            analysis_cache.update_session_data(
-                sha,
-                notes=state.get_all_notes_snapshot(),
-                tool_history=state.get_tool_history_snapshot(),
-                artifacts=state.get_all_artifacts_snapshot(),
-                renames=state.get_all_renames_snapshot(),
-                custom_types=state.get_all_types_snapshot(),
-                triage_status=state.get_all_triage_snapshot(),
-            )
+            sha = state.pe_data.get("file_hashes", {}).get("sha256")
+            if sha and state.filepath:
+                analysis_cache.put(sha, state.pe_data, state.filepath)
 
-        # Remove enrichment keys from pe_data — data lives on state attrs
-        # and _decompile_meta at runtime, pe_data is only for serialization
-        for key in _enrichment_keys:
-            state.pe_data.pop(key, None)
+                # Also save session metadata
+                analysis_cache.update_session_data(
+                    sha,
+                    notes=state.get_all_notes_snapshot(),
+                    tool_history=state.get_tool_history_snapshot(),
+                    artifacts=state.get_all_artifacts_snapshot(),
+                    renames=state.get_all_renames_snapshot(),
+                    custom_types=state.get_all_types_snapshot(),
+                    triage_status=state.get_all_triage_snapshot(),
+                )
+        finally:
+            # Always clean up injected keys — even if cache.put() throws
+            for key in _enrichment_keys:
+                state.pe_data.pop(key, None)
 
     except Exception as e:
         logger.warning("Enrichment: cache save failed: %s", e)

@@ -4,6 +4,8 @@ var _currentSort = 'address';
 var _sortAsc = true;
 var _openDetailPanels = {};  // addr -> {decompile: data, activeTab: 'xrefs'}
 var _analysisCache = {};     // addr -> fetched analysis data
+var _analysisCacheKeys = []; // LRU order (oldest first)
+var _ANALYSIS_CACHE_MAX = 50;
 
 function debounceReload() {
     clearTimeout(_debounceTimer);
@@ -51,13 +53,14 @@ function reloadFunctions() {
             var statusTags = '';
             if (f.is_renamed) statusTags += '<span class="badge badge-renamed" title="Renamed">REN</span> ';
             if (f.is_decompiled) statusTags += '<span class="badge badge-explored" title="Decompiled">DEC</span> ';
-            html += '<tr class="triage-' + f.triage_status + noteClass + exploredClass + renamedClass + '" data-addr="' + escapeHtml(f.address) + '">';
+            var triageClass = (['unreviewed','suspicious','clean','flagged'].indexOf(f.triage_status) !== -1) ? f.triage_status : 'unreviewed';
+            html += '<tr class="triage-' + triageClass + noteClass + exploredClass + renamedClass + '" data-addr="' + escapeHtml(f.address) + '">';
             html += '<td class="mono">' + f.address + '</td>';
             html += '<td>' + statusTags + escapeHtml(f.name) + noteIndicator + '</td>';
             html += '<td>' + f.size + '</td>';
             html += '<td>' + f.complexity + '</td>';
             html += '<td>' + f.score + '</td>';
-            html += '<td><span class="badge badge-' + f.triage_status + '">' + f.triage_status.toUpperCase() + '</span></td>';
+            html += '<td><span class="badge badge-' + triageClass + '">' + triageClass.toUpperCase() + '</span></td>';
             html += '<td class="triage-btns">';
             var safeAddr = escapeHtml(f.address);
             html += '<a class="btn-triage btn-graph" href="/dashboard/callgraph?focus=' + encodeURIComponent(f.address) + '" title="View in call graph">GRAPH</a>';
@@ -99,7 +102,7 @@ document.addEventListener('arkana-decompile-update', function(e) {
     var addrs = (e.detail && e.detail.addresses) || [];
     for (var i = 0; i < addrs.length; i++) {
         var addr = addrs[i];
-        var row = document.querySelector('tr[data-addr="' + addr + '"]');
+        var row = document.querySelector('tr[data-addr="' + CSS.escape(addr) + '"]');
         if (!row) continue;
         // Add DEC badge if not present
         var nameCell = row.children[1];
@@ -159,9 +162,11 @@ document.addEventListener('arkana-explored-changed', function(e) {
 
 // Bind all event listeners on DOMContentLoaded
 document.addEventListener('DOMContentLoaded', function() {
+    var validSorts = ['address', 'name', 'size', 'complexity', 'score', 'triage'];
     document.querySelectorAll('#func-table th.sortable').forEach(function(th) {
         th.addEventListener('click', function() {
-            sortBy(th.dataset.sort);
+            var col = th.dataset.sort;
+            if (validSorts.indexOf(col) !== -1) sortBy(col);
         });
     });
 
@@ -417,7 +422,15 @@ function fetchAnalysis(addr, callback) {
     fetch('/dashboard/api/function-analysis?address=' + encodeURIComponent(addr))
         .then(function(r) { return r.json(); })
         .then(function(data) {
+            // LRU eviction
+            var idx = _analysisCacheKeys.indexOf(addr);
+            if (idx !== -1) _analysisCacheKeys.splice(idx, 1);
+            _analysisCacheKeys.push(addr);
             _analysisCache[addr] = data;
+            while (_analysisCacheKeys.length > _ANALYSIS_CACHE_MAX) {
+                var evict = _analysisCacheKeys.shift();
+                delete _analysisCache[evict];
+            }
             callback(data);
         })
         .catch(function() { callback(null); });
@@ -507,7 +520,7 @@ function renderStringsTab(container, data) {
         var s = strings[i];
         var bc = typeBadge[s.type] || 'badge-dim';
         var truncated = s.string.length > 120 ? s.string.substring(0, 120) + '...' : s.string;
-        html += '<tr><td><span class="badge ' + bc + '">' + s.type + '</span></td>';
+        html += '<tr><td><span class="badge ' + bc + '">' + escapeHtml(s.type) + '</span></td>';
         html += '<td class="mono dim">' + escapeHtml(s.address || '') + '</td>';
         html += '<td class="str-content">' + escapeHtml(truncated) + '</td></tr>';
     }
@@ -520,7 +533,7 @@ function navigateToFunction(addr) {
     var tbody = document.getElementById('func-tbody');
     if (!tbody) return;
     // Find the row with this address
-    var targetRow = tbody.querySelector('tr[data-addr="' + addr + '"]');
+    var targetRow = tbody.querySelector('tr[data-addr="' + CSS.escape(addr) + '"]');
     if (targetRow) {
         targetRow.scrollIntoView({behavior: 'smooth', block: 'center'});
         targetRow.classList.add('highlight-flash');
@@ -535,7 +548,7 @@ function navigateToFunction(addr) {
         searchInput.value = addr;
         reloadFunctions();
         setTimeout(function() {
-            var row = tbody.querySelector('tr[data-addr="' + addr + '"]');
+            var row = tbody.querySelector('tr[data-addr="' + CSS.escape(addr) + '"]');
             if (row) {
                 row.scrollIntoView({behavior: 'smooth', block: 'center'});
                 row.classList.add('highlight-flash');
@@ -552,7 +565,7 @@ function _restoreDetailPanels() {
     var tbody = document.getElementById('func-tbody');
     if (!tbody) return;
     addrs.forEach(function(addr) {
-        var row = tbody.querySelector('tr[data-addr="' + addr + '"]');
+        var row = tbody.querySelector('tr[data-addr="' + CSS.escape(addr) + '"]');
         if (row) {
             var panelData = _openDetailPanels[addr];
             var tab = (panelData && panelData.activeTab) || 'xrefs';
@@ -561,16 +574,4 @@ function _restoreDetailPanels() {
     });
 }
 
-function showToast(msg, type) {
-    var container = document.querySelector('.toast-container');
-    if (!container) {
-        container = document.createElement('div');
-        container.className = 'toast-container';
-        document.body.appendChild(container);
-    }
-    var toast = document.createElement('div');
-    toast.className = 'toast toast-' + (type || 'info');
-    toast.textContent = msg;
-    container.appendChild(toast);
-    setTimeout(function() { toast.remove(); }, 4000);
-}
+// showToast is defined in dashboard.js (loaded on all pages via base.html)

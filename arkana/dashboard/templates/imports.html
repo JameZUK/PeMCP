@@ -105,7 +105,7 @@
                 {% for e in data.exports %}
                 <tr>
                     <td class="mono">{{ e.name }}</td>
-                    <td class="mono dim">{% if e.func_addr %}<a href="/dashboard/functions?highlight={{ e.func_addr }}" class="func-link">{{ e.address }}</a>{% else %}{{ e.address }}{% endif %}</td>
+                    <td class="mono dim">{% if e.func_addr %}<a href="/dashboard/functions?highlight={{ e.func_addr|urlencode }}" class="func-link">{{ e.address }}</a>{% else %}{{ e.address }}{% endif %}</td>
                     <td>{{ e.ordinal }}</td>
                 </tr>
                 {% endfor %}

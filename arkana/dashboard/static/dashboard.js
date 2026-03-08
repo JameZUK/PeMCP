@@ -222,7 +222,7 @@ function showToast(message, type) {
             }},
             {key: 'strings', label: 'STRINGS', render: function(item) {
                 return '<a class="search-result" href="/dashboard/strings?search=' + encodeURIComponent(q) + '">' +
-                    '<span class="badge badge-dim fs-9">' + item.type + '</span> ' + escHtml(item.string) + '</a>';
+                    '<span class="badge badge-dim fs-9">' + escHtml(item.type) + '</span> ' + escHtml(item.string) + '</a>';
             }},
             {key: 'imports', label: 'IMPORTS', render: function(item) {
                 return '<a class="search-result" href="/dashboard/imports">' +

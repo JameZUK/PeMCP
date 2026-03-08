@@ -8,6 +8,7 @@ var _contextMenuNode = null;
 var _focusedMode = false;
 var _marchingAntsRAF = null;
 var _marchingAntsOffset = 0;
+var _marchingAntsActive = false;
 var _minimapDebounce = null;
 var _searchDebounce = null;
 var _pendingFocusAddr = null;
@@ -264,16 +265,24 @@ function clearHighlight() {
 function startMarchingAnts() {
     stopMarchingAnts();
     _marchingAntsOffset = 0;
-    function step() {
-        _marchingAntsOffset += 0.5;
-        if (_marchingAntsOffset > 12) _marchingAntsOffset = 0;
-        cy.edges('.highlighted').style('line-dash-offset', _marchingAntsOffset);
+    _marchingAntsActive = true;
+    var lastTime = 0;
+    function step(now) {
+        if (!_marchingAntsActive) return;
+        // Throttle to ~15fps (every 66ms) to reduce CPU usage
+        if (now - lastTime >= 66) {
+            _marchingAntsOffset += 1;
+            if (_marchingAntsOffset > 12) _marchingAntsOffset = 0;
+            cy.edges('.highlighted').style('line-dash-offset', _marchingAntsOffset);
+            lastTime = now;
+        }
         _marchingAntsRAF = requestAnimationFrame(step);
     }
     _marchingAntsRAF = requestAnimationFrame(step);
 }
 
 function stopMarchingAnts() {
+    _marchingAntsActive = false;
     if (_marchingAntsRAF) {
         cancelAnimationFrame(_marchingAntsRAF);
         _marchingAntsRAF = null;
@@ -283,6 +292,8 @@ function stopMarchingAnts() {
 /* ========== NODE DETAILS SIDEBAR (F4: tabbed analysis panel) ========== */
 
 var _sidebarCache = {};  /* keyed by address: {analysis: ..., decompile: ...} */
+var _sidebarCacheKeys = []; /* LRU order (oldest first) */
+var _SIDEBAR_CACHE_MAX = 50;
 var _activeTab = 'info';
 var _sidebarNodeAddr = null;
 
@@ -291,7 +302,14 @@ function showNodeDetails(node) {
         var addr = node.id();
         /* Clear cache when switching to a different node */
         if (_sidebarNodeAddr !== addr) {
-            _sidebarCache[addr] = _sidebarCache[addr] || {};
+            if (!_sidebarCache[addr]) {
+                _sidebarCache[addr] = {};
+                _sidebarCacheKeys.push(addr);
+                while (_sidebarCacheKeys.length > _SIDEBAR_CACHE_MAX) {
+                    var evict = _sidebarCacheKeys.shift();
+                    delete _sidebarCache[evict];
+                }
+            }
             _sidebarNodeAddr = addr;
         }
         _activeTab = 'info';
@@ -537,7 +555,7 @@ function renderXrefsTab(data, node) {
         details.appendChild(compRow);
     }
 
-    if (!data.callers.length && !data.callees.length && !data.suspicious_apis.length) {
+    if (!(data.callers && data.callers.length) && !(data.callees && data.callees.length) && !(data.suspicious_apis && data.suspicious_apis.length)) {
         var empty = document.createElement('div');
         empty.className = 'detail-row dim';
         empty.textContent = 'No cross-references found';
@@ -759,11 +777,14 @@ function loadGraph() {
                 console.info('[callgraph] retried with cose layout — success');
             } catch (err2) {
                 console.error('[callgraph] cose fallback also failed:', err2);
+                var cyContainer = document.getElementById('cy');
+                var oldErr = cyContainer.querySelector('.empty-msg');
+                if (oldErr) oldErr.remove();
                 var errDiv = document.createElement('div');
                 errDiv.className = 'empty-msg';
                 errDiv.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--danger);';
                 errDiv.textContent = 'Graph init error: ' + err.message;
-                document.getElementById('cy').appendChild(errDiv);
+                cyContainer.appendChild(errDiv);
                 return;
             }
         }
@@ -790,6 +811,8 @@ function loadGraph() {
     }).catch(function(err) {
         console.error('[callgraph] loadGraph fetch error:', err);
         var cyEl = document.getElementById('cy');
+        var oldErr = cyEl.querySelector('.empty-msg');
+        if (oldErr) oldErr.remove();
         var errDiv = document.createElement('div');
         errDiv.id = 'cy-empty-msg';
         errDiv.className = 'empty-msg';
@@ -955,18 +978,7 @@ function doShowXrefs(addr) {
         .catch(function() { showToast('Xrefs request failed', 'error'); });
 }
 
-function showToast(msg, type) {
-    var container = document.querySelector('.toast-container');
-    if (!container) return;
-    var t = document.createElement('div');
-    t.className = 'toast toast-' + (type || 'info');
-    t.textContent = msg;
-    container.appendChild(t);
-    setTimeout(function() {
-        t.style.opacity = '0';
-        setTimeout(function() { t.remove(); }, 300);
-    }, 4000);
-}
+// showToast is defined in dashboard.js (loaded on all pages via base.html)
 
 /* ========== F2: SEARCH / FILTER ========== */
 

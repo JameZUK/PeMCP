@@ -212,7 +212,7 @@
                 <span class="badge badge-severity-{{ cap.severity|lower }}">{{ cap.severity|upper }}</span>
                 <span class="capability-name">{{ cap.capability }}</span>
                 {% if cap.namespace %}<span class="capability-ns">{{ cap.namespace }}</span>{% endif %}
-                {% if cap.func_addr %}<a href="/dashboard/functions?highlight={{ cap.func_addr }}" class="func-link">&rarr; {{ cap.func_name }}</a>{% endif %}
+                {% if cap.func_addr %}<a href="/dashboard/functions?highlight={{ cap.func_addr|urlencode }}" class="func-link">&rarr; {{ cap.func_name }}</a>{% endif %}
             </div>
             {% endfor %}
             {% else %}
@@ -225,7 +225,7 @@
             {% for ym in bs.yara_matches %}
             <div class="summary-row">
                 <span class="summary-label">{{ ym.rule }}</span>
-                <span>{{ ym.description }}{% if ym.match_count %} <span class="dim">({{ ym.match_count }} matches)</span>{% endif %}{% if ym.tags %} {% for t in ym.tags %}<span class="badge badge-dim">{{ t }}</span> {% endfor %}{% endif %}{% if ym.func_addr %} <a href="/dashboard/functions?highlight={{ ym.func_addr }}" class="func-link">&rarr; {{ ym.func_name }}</a>{% endif %}</span>
+                <span>{{ ym.description }}{% if ym.match_count %} <span class="dim">({{ ym.match_count }} matches)</span>{% endif %}{% if ym.tags %} {% for t in ym.tags %}<span class="badge badge-dim">{{ t }}</span> {% endfor %}{% endif %}{% if ym.func_addr %} <a href="/dashboard/functions?highlight={{ ym.func_addr|urlencode }}" class="func-link">&rarr; {{ ym.func_name }}</a>{% endif %}</span>
             </div>
             {% endfor %}
             {% else %}
@@ -285,7 +285,7 @@
             {% for s in bs.floss_top_decoded %}
             <tr>
                 <td class="mini-table-str warning" title="{{ s.string if s is mapping else s }}">{{ s.string if s is mapping else s }}</td>
-                <td class="mini-table-func">{% if s is mapping and s.func_addr %}<a href="/dashboard/functions?highlight={{ s.func_addr }}" class="func-link">&rarr; {{ s.func_name }}</a>{% endif %}</td>
+                <td class="mini-table-func">{% if s is mapping and s.func_addr %}<a href="/dashboard/functions?highlight={{ s.func_addr|urlencode }}" class="func-link">&rarr; {{ s.func_name }}</a>{% endif %}</td>
             </tr>
             {% endfor %}
             </table>
@@ -298,7 +298,7 @@
             {% for s in bs.floss_top_stack %}
             <tr>
                 <td class="mini-table-str" title="{{ s.string if s is mapping else s }}">{{ s.string if s is mapping else s }}</td>
-                <td class="mini-table-func">{% if s is mapping and s.func_addr %}<a href="/dashboard/functions?highlight={{ s.func_addr }}" class="func-link">&rarr; {{ s.func_name }}</a>{% endif %}</td>
+                <td class="mini-table-func">{% if s is mapping and s.func_addr %}<a href="/dashboard/functions?highlight={{ s.func_addr|urlencode }}" class="func-link">&rarr; {{ s.func_name }}</a>{% endif %}</td>
             </tr>
             {% endfor %}
             </table>
@@ -320,7 +320,7 @@
             <div class="ioc-group">
                 <div class="ioc-group-label">URLS</div>
                 {% for u in bs.ioc_urls %}
-                <div class="ioc-item" title="{{ u.value if u is mapping else u }}">{{ u.value if u is mapping else u }}{% if u is mapping and u.func_addr %} <a href="/dashboard/functions?highlight={{ u.func_addr }}" class="func-link">&rarr; {{ u.func_name }}</a>{% endif %}</div>
+                <div class="ioc-item" title="{{ u.value if u is mapping else u }}">{{ u.value if u is mapping else u }}{% if u is mapping and u.func_addr %} <a href="/dashboard/functions?highlight={{ u.func_addr|urlencode }}" class="func-link">&rarr; {{ u.func_name }}</a>{% endif %}</div>
                 {% endfor %}
             </div>
             {% endif %}
@@ -328,7 +328,7 @@
             <div class="ioc-group">
                 <div class="ioc-group-label">IP ADDRESSES</div>
                 {% for ip in bs.ioc_ips %}
-                <div class="ioc-item" title="{{ ip.value if ip is mapping else ip }}">{{ ip.value if ip is mapping else ip }}{% if ip is mapping and ip.func_addr %} <a href="/dashboard/functions?highlight={{ ip.func_addr }}" class="func-link">&rarr; {{ ip.func_name }}</a>{% endif %}</div>
+                <div class="ioc-item" title="{{ ip.value if ip is mapping else ip }}">{{ ip.value if ip is mapping else ip }}{% if ip is mapping and ip.func_addr %} <a href="/dashboard/functions?highlight={{ ip.func_addr|urlencode }}" class="func-link">&rarr; {{ ip.func_name }}</a>{% endif %}</div>
                 {% endfor %}
             </div>
             {% endif %}
@@ -336,7 +336,7 @@
             <div class="ioc-group">
                 <div class="ioc-group-label">DOMAINS</div>
                 {% for d in bs.ioc_domains %}
-                <div class="ioc-item" title="{{ d.value if d is mapping else d }}">{{ d.value if d is mapping else d }}{% if d is mapping and d.func_addr %} <a href="/dashboard/functions?highlight={{ d.func_addr }}" class="func-link">&rarr; {{ d.func_name }}</a>{% endif %}</div>
+                <div class="ioc-item" title="{{ d.value if d is mapping else d }}">{{ d.value if d is mapping else d }}{% if d is mapping and d.func_addr %} <a href="/dashboard/functions?highlight={{ d.func_addr|urlencode }}" class="func-link">&rarr; {{ d.func_name }}</a>{% endif %}</div>
                 {% endfor %}
             </div>
             {% endif %}
@@ -358,7 +358,7 @@
                 <span class="string-score">{{ s.sifter_score|round(1) }}</span>
                 <span class="capability-name mono">{{ s.string }}</span>
                 {% if s.category %}<span class="badge badge-dim">{{ s.category }}</span>{% endif %}
-                {% if s.func_addr %}<a href="/dashboard/functions?highlight={{ s.func_addr }}" class="func-link">&rarr; {{ s.func_name }}</a>{% endif %}
+                {% if s.func_addr %}<a href="/dashboard/functions?highlight={{ s.func_addr|urlencode }}" class="func-link">&rarr; {{ s.func_name }}</a>{% endif %}
             </div>
             {% endfor %}
             {% else %}
@@ -503,7 +503,7 @@
         <div class="recent-note">
             <div class="recent-note-header">
                 <span class="badge badge-cat-{{ n.category }}">{{ n.category }}</span>
-                {% if n.func_addr %}<a href="/dashboard/functions?highlight={{ n.func_addr }}" class="func-link mono">{{ n.address }}</a>{% elif n.address %}<span class="mono dim">{{ n.address }}</span>{% endif %}
+                {% if n.func_addr %}<a href="/dashboard/functions?highlight={{ n.func_addr|urlencode }}" class="func-link mono">{{ n.address }}</a>{% elif n.address %}<span class="mono dim">{{ n.address }}</span>{% endif %}
                 <span class="dim ml-auto fs-10">{{ n.timestamp }}</span>
             </div>
             <div class="recent-note-content">{{ n.content }}</div>

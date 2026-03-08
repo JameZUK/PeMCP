@@ -89,6 +89,10 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Check if this is a static file request
+        path = scope.get("path", "")
+        is_static = "/static/" in path
+
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
                 headers = list(message.get("headers", []))
@@ -99,6 +103,10 @@ class SecurityHeadersMiddleware:
                     (b"permissions-policy", b"geolocation=(), microphone=(), camera=()"),
                     (b"content-security-policy", _CSP_VALUE.encode()),
                 ]
+                if is_static:
+                    security_headers.append(
+                        (b"cache-control", b"public, max-age=3600, immutable")
+                    )
                 headers.extend(security_headers)
                 message = {**message, "headers": headers}
             await send(message)
@@ -168,11 +176,15 @@ def _is_authenticated(request: Request, dashboard_token: str) -> bool:
 
 
 def _make_auth_response(request: Request, dashboard_token: str, response: Response) -> Response:
-    """If authenticated via query param, set cookie on the response."""
+    """If authenticated via query param, set cookie on the response.
+
+    Always stores the canonical dashboard_token in the cookie, not the
+    user-supplied value, so the cookie is consistent.
+    """
     token_param = request.query_params.get("token")
     if token_param and _check_token(token_param, dashboard_token):
         response.set_cookie(
-            _COOKIE_NAME, token_param,
+            _COOKIE_NAME, dashboard_token,
             max_age=_COOKIE_MAX_AGE,
             httponly=True,
             samesite="strict",
@@ -200,7 +212,12 @@ def _validate_csrf(request: Request, form_token: str = "") -> bool:
 
 
 def _is_https(request: Request) -> bool:
-    """Detect HTTPS from scheme or X-Forwarded-Proto header."""
+    """Detect HTTPS from scheme or X-Forwarded-Proto header.
+
+    Note: trusts X-Forwarded-Proto unconditionally.  This is acceptable
+    because the dashboard is a local-only tool (127.0.0.1:8082) and the
+    header only affects whether the auth cookie gets the ``Secure`` flag.
+    """
     if request.url.scheme == "https":
         return True
     return request.headers.get("x-forwarded-proto", "") == "https"
@@ -235,8 +252,14 @@ def _create_routes(dashboard_token: str) -> list:
         # Rate limiting
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
+        # Prune all stale entries when dict gets large (prevent unbounded growth)
+        if len(_login_attempts) > 100:
+            stale_ips = [ip for ip, ts in _login_attempts.items()
+                         if not ts or now - ts[-1] > _LOGIN_WINDOW_SECONDS]
+            for ip in stale_ips:
+                del _login_attempts[ip]
         attempts = _login_attempts.get(client_ip, [])
-        # Prune stale entries
+        # Prune stale entries for this IP
         attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
         _login_attempts[client_ip] = attempts
         if len(attempts) >= _MAX_LOGIN_ATTEMPTS:
@@ -264,7 +287,11 @@ def _create_routes(dashboard_token: str) -> list:
                 return RedirectResponse("/dashboard/login", status_code=302)
             ctx = {"nav_active": nav}
             if data_fn:
-                ctx["data"] = data_fn()
+                try:
+                    ctx["data"] = data_fn()
+                except Exception:
+                    logger.debug("Page data function failed for %s", template, exc_info=True)
+                    ctx["data"] = {} if template != "functions.html" else []
             resp = HTMLResponse(_render(template, ctx))
             return _make_auth_response(request, dashboard_token, resp)
         return handler
@@ -282,26 +309,19 @@ def _create_routes(dashboard_token: str) -> list:
         return JSONResponse(get_overview_data())
 
     async def api_debug(request: Request) -> Response:
-        """Diagnostic endpoint — shows state isolation info (sanitized)."""
+        """Diagnostic endpoint — shows minimal state isolation info."""
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         from arkana.state import _default_state as ds, _session_registry, _registry_lock
         from arkana.dashboard.state_api import _get_state
         resolved = _get_state()
-        sessions = []
         with _registry_lock:
-            for key, st in _session_registry.items():
-                sessions.append({
-                    "key": key[:8] + "...",
-                    "has_file": st.filepath is not None,
-                    "notes": len(st.get_notes()),
-                })
+            session_count = len(_session_registry)
         return JSONResponse({
             "default_has_file": ds.filepath is not None,
             "resolved_has_file": resolved.filepath is not None,
             "resolved_is_default": resolved is ds,
-            "session_count": len(sessions),
-            "sessions": sessions,
+            "session_count": session_count,
         })
 
     async def api_functions(request: Request) -> Response:
@@ -328,6 +348,9 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        content_type = request.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
         try:
             body = await request.json()
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
@@ -364,6 +387,9 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        content_type = request.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
         try:
             body = await request.json()
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
@@ -382,8 +408,9 @@ def _create_routes(dashboard_token: str) -> list:
                 status_code=504,
             )
         except Exception as e:
+            logger.debug("Decompile endpoint error: %s", e, exc_info=True)
             return JSONResponse(
-                {"cached": False, "error": str(e)},
+                {"cached": False, "error": "Decompilation failed"},
                 status_code=500,
             )
         return JSONResponse(result)
@@ -436,7 +463,11 @@ def _create_routes(dashboard_token: str) -> list:
         address = request.query_params.get("address", "").strip()
         if not address:
             return JSONResponse({"error": "missing address"}, status_code=400)
-        return JSONResponse(get_function_xrefs_data(address))
+        try:
+            return JSONResponse(get_function_xrefs_data(address))
+        except Exception:
+            logger.debug("api_function_xrefs error for %s", address, exc_info=True)
+            return JSONResponse({"callers": [], "callees": []})
 
     async def api_function_analysis(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -444,7 +475,11 @@ def _create_routes(dashboard_token: str) -> list:
         address = request.query_params.get("address", "").strip()
         if not address:
             return JSONResponse({"error": "missing address"}, status_code=400)
-        return JSONResponse(get_function_analysis_data(address))
+        try:
+            return JSONResponse(get_function_analysis_data(address))
+        except Exception:
+            logger.debug("api_function_analysis error for %s", address, exc_info=True)
+            return JSONResponse({"address": address, "callers": [], "callees": [], "suspicious_apis": [], "strings": []})
 
     async def api_function_strings(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -452,7 +487,11 @@ def _create_routes(dashboard_token: str) -> list:
         address = request.query_params.get("address", "").strip()
         if not address:
             return JSONResponse({"error": "missing address"}, status_code=400)
-        return JSONResponse(get_function_strings_data(address))
+        try:
+            return JSONResponse(get_function_strings_data(address))
+        except Exception:
+            logger.debug("api_function_strings error for %s", address, exc_info=True)
+            return JSONResponse({"strings": []})
 
     async def api_timeline(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):

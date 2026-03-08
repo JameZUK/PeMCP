@@ -99,6 +99,14 @@ class TestStateApi:
             assert data["file_loaded"] is True
             assert data["filename"] == "test.exe"
             assert data["sha256"] == "abc123"
+            # Verify essential fields are present
+            assert "phase" in data
+            assert "total_functions" in data
+            assert "tool_calls" in data
+            assert "notes_count" in data
+            assert "binary_summary" in data
+            assert data["format"] == "PE"
+            assert data["md5"] == "def456"
         finally:
             _default_state.filepath = old_fp
             _default_state.pe_data = old_pd
@@ -134,6 +142,7 @@ class TestStateApi:
         from arkana.dashboard.state_api import get_functions_data
         data = get_functions_data()
         assert isinstance(data, list)
+        assert len(data) == 0  # no angr means no functions
 
     def test_callgraph_no_angr(self):
         from arkana.dashboard.state_api import get_callgraph_data
@@ -174,11 +183,60 @@ class TestStateApi:
         from arkana.dashboard.state_api import get_timeline_data
         data = get_timeline_data()
         assert isinstance(data, list)
+        assert len(data) == 0
 
     def test_notes_empty(self):
         from arkana.dashboard.state_api import get_notes_data
         data = get_notes_data()
         assert isinstance(data, list)
+        assert len(data) == 0
+
+    def test_notes_data_does_not_mutate_originals(self):
+        """get_notes_data() should not inject keys into canonical note dicts."""
+        from arkana.dashboard.state_api import get_notes_data
+        old_pd = _default_state.pe_data
+        _default_state.pe_data = {}
+        _default_state.add_note(
+            content="test note", category="function", address="0x401000"
+        )
+        try:
+            result = get_notes_data()
+            assert len(result) >= 1
+            # Original note should NOT have func_addr injected
+            original = _default_state.get_notes()[-1]
+            assert "func_addr" not in original
+        finally:
+            _default_state.notes.clear()
+            _default_state.pe_data = old_pd
+
+    def test_detect_phase(self):
+        from arkana.dashboard.state_api import _detect_phase
+        old_fp = _default_state.filepath
+        old_pd = _default_state.pe_data
+        _default_state.filepath = None
+        _default_state.pe_data = None
+        try:
+            assert _detect_phase(_default_state) == "not_started"
+        finally:
+            _default_state.filepath = old_fp
+            _default_state.pe_data = old_pd
+
+    def test_detect_phase_handles_missing_tool_name(self):
+        """_detect_phase should not crash on history entries missing tool_name."""
+        from arkana.dashboard.state_api import _detect_phase
+        old_fp = _default_state.filepath
+        old_pd = _default_state.pe_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"file_hashes": {"sha256": "abc"}}
+        # Inject a malformed history entry
+        _default_state.tool_history.append({"timestamp": "now"})  # no tool_name
+        try:
+            phase = _detect_phase(_default_state)
+            assert phase in ("not_started", "file_loaded", "triaged", "exploring", "advanced")
+        finally:
+            _default_state.tool_history.pop()
+            _default_state.filepath = old_fp
+            _default_state.pe_data = old_pd
 
     def test_imports_no_data(self):
         from arkana.dashboard.state_api import get_imports_data

@@ -58,7 +58,7 @@ function renderStringTable(data) {
         html += '<tr>';
         html += '<td class="mono">' + strEscapeHtml(s.address || '') + '</td>';
         html += '<td><span class="string-score">' + score + '</span></td>';
-        html += '<td><span class="badge ' + badgeClass + '">' + s.type + '</span></td>';
+        html += '<td><span class="badge ' + badgeClass + '">' + strEscapeHtml(s.type) + '</span></td>';
         html += '<td class="str-content" title="' + strEscapeHtml(s.string) + '">' + strEscapeHtml(truncated) + '</td>';
         html += '<td>' + catBadge + '</td>';
         html += '<td>';
@@ -83,7 +83,7 @@ function renderStats(data) {
         var html = '';
         var types = Object.keys(data.type_counts);
         for (var i = 0; i < types.length; i++) {
-            html += '<div class="stat-row"><span class="stat-label">' + types[i] + '</span><span>' + data.type_counts[types[i]] + '</span></div>';
+            html += '<div class="stat-row"><span class="stat-label">' + strEscapeHtml(types[i]) + '</span><span>' + data.type_counts[types[i]] + '</span></div>';
         }
         statTypes.innerHTML = html;
     }
@@ -93,7 +93,7 @@ function renderStats(data) {
         var html = '';
         var cats = Object.keys(data.category_counts);
         for (var i = 0; i < cats.length; i++) {
-            html += '<div class="stat-row"><span class="stat-label">' + cats[i] + '</span><span>' + data.category_counts[cats[i]] + '</span></div>';
+            html += '<div class="stat-row"><span class="stat-label">' + strEscapeHtml(cats[i]) + '</span><span>' + data.category_counts[cats[i]] + '</span></div>';
         }
         statCats.innerHTML = html || '<div class="dim p-6-0 fs-12">No categories</div>';
     }
@@ -106,6 +106,7 @@ function renderPagination(data) {
     var prev = document.getElementById('str-prev');
     var next = document.getElementById('str-next');
     var info = document.getElementById('str-page-info');
+    if (!prev || !next || !info) return;
     var start = data.offset + 1;
     var end = Math.min(data.offset + data.limit, data.total);
     if (data.total === 0) {
@@ -121,7 +122,11 @@ function copyString(str) {
     if (navigator.clipboard) {
         navigator.clipboard.writeText(str).then(function() {
             showToast('Copied to clipboard', 'success');
+        }).catch(function() {
+            showToast('Copy failed', 'error');
         });
+    } else {
+        showToast('Clipboard not available (requires HTTPS)', 'error');
     }
 }
 
@@ -156,9 +161,11 @@ function strDebounceReload() {
 
 document.addEventListener('DOMContentLoaded', function() {
     // Sort headers
+    var validSorts = ['score', 'length', 'type', 'address'];
     document.querySelectorAll('#str-table th.sortable').forEach(function(th) {
         th.addEventListener('click', function() {
-            strSortBy(th.dataset.sort);
+            var col = th.dataset.sort;
+            if (validSorts.indexOf(col) !== -1) strSortBy(col);
         });
     });
 

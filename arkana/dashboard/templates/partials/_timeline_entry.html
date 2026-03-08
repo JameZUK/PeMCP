@@ -10,7 +10,7 @@
                 <span class="timeline-name">{{ e.name }}</span>
                 {% if e.type == 'active' and e.total > 0 %}
                 <span class="dim">{{ e.progress }}%</span>
-                {% elif e.duration_ms > 0 %}
+                {% elif e.duration_ms is defined and e.duration_ms and e.duration_ms > 0 %}
                 <span class="dim">{{ e.duration_ms }}ms</span>
                 {% endif %}
                 {% if e.type != 'active' %}<span class="timeline-expand dim">&#9654;</span>{% endif %}
@@ -20,7 +20,7 @@
                 <div class="progress-fill" data-width="{{ (e.progress / e.total * 100)|int }}"></div>
             </div>
             {% endif %}
-            {% if e.address %}<div class="timeline-addr">{% if e.func_addr %}<a href="/dashboard/functions?highlight={{ e.func_addr }}" class="func-link mono">{{ e.address }}</a>{% else %}<span class="mono dim fs-10">{{ e.address }}</span>{% endif %}</div>{% endif %}
+            {% if e.address %}<div class="timeline-addr">{% if e.func_addr %}<a href="/dashboard/functions?highlight={{ e.func_addr|urlencode }}" class="func-link mono">{{ e.address }}</a>{% else %}<span class="mono dim fs-10">{{ e.address }}</span>{% endif %}</div>{% endif %}
             <div class="timeline-summary">{{ e.summary }}</div>
             <div class="timeline-time dim">{{ e.timestamp[:19] if e.timestamp else '' }}</div>
             {% if e.type == 'tool' and e.parameters %}

@@ -1,5 +1,5 @@
 /* Arkana Dashboard — Timeline expand/collapse */
-var _expandedEntries = {};
+var _expandedEntries = Object.create(null);
 
 function toggleTimelineDetail(entry) {
     var detail = entry.querySelector('.timeline-detail');

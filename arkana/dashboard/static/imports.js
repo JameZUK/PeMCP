@@ -4,7 +4,7 @@ function filterImports() {
     var q = document.getElementById('import-search').value.toLowerCase();
     var groups = document.querySelectorAll('.import-dll-group');
     for (var i = 0; i < groups.length; i++) {
-        var dll = groups[i].getAttribute('data-dll');
+        var dll = (groups[i].getAttribute('data-dll') || '').toLowerCase();
         var rows = groups[i].querySelectorAll('.import-func-row');
         var groupVisible = false;
         if (!q || dll.indexOf(q) !== -1) {
@@ -12,7 +12,7 @@ function filterImports() {
             for (var j = 0; j < rows.length; j++) rows[j].style.display = '';
         } else {
             for (var j = 0; j < rows.length; j++) {
-                var fn = rows[j].getAttribute('data-func');
+                var fn = (rows[j].getAttribute('data-func') || '').toLowerCase();
                 if (fn.indexOf(q) !== -1) {
                     rows[j].style.display = '';
                     groupVisible = true;
@@ -23,7 +23,8 @@ function filterImports() {
         }
         groups[i].style.display = groupVisible ? '' : 'none';
         if (groupVisible && q) {
-            groups[i].querySelector('details').open = true;
+            var details = groups[i].querySelector('details');
+            if (details) details.open = true;
         }
     }
 }

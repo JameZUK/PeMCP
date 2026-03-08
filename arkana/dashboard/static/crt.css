@@ -6,8 +6,8 @@
     --bg-raised: #001a00;
     --primary: #00ff41;
     --primary-dim: #00cc33;
-    --primary-muted: #009922;
-    --primary-ghost: #006611;
+    --primary-muted: #00bb33;
+    --primary-ghost: #008818;
     --highlight: #ccffcc;
     --danger: #ff4141;
     --warning: #ffaa00;
@@ -389,10 +389,7 @@ body {
     text-overflow: ellipsis;
 }
 
-@media (max-width: 768px) {
-    .summary-grid { grid-template-columns: 1fr; }
-    .summary-section + .summary-section { border-left: none; border-top: 1px solid var(--primary-ghost); }
-}
+/* summary-grid responsive: consolidated into @media block at end of file */
 
 /* === ACTIVE TOOL BANNER === */
 
@@ -476,6 +473,7 @@ tr.explored.renamed > td { color: #44ddff; }
 
 .badge-dim { color: var(--primary-muted); border-color: var(--primary-ghost); }
 .badge-danger { color: var(--danger); border-color: var(--danger); }
+.badge-warning { color: var(--warning); border-color: var(--warning); }
 .badge-flagged { color: var(--danger); border-color: var(--danger); }
 .badge-suspicious { color: var(--warning); border-color: var(--warning); }
 .badge-clean { color: var(--safe); border-color: var(--safe); }
@@ -527,10 +525,11 @@ tr.explored.renamed > td { color: #44ddff; }
     transition: all 0.2s;
 }
 
-.btn:hover {
+.btn:hover, .btn:focus-visible {
     border-color: var(--primary);
     text-shadow: 0 0 4px var(--primary);
     box-shadow: 0 0 8px rgba(0, 255, 65, 0.2);
+    outline: none;
 }
 
 .btn-triage {
@@ -552,6 +551,12 @@ tr.explored.renamed > td { color: #44ddff; }
 .btn-triage.active {
     background: rgba(0, 255, 65, 0.08);
     font-weight: bold;
+}
+
+.btn-triage:focus-visible {
+    border-color: var(--primary);
+    outline: none;
+    box-shadow: 0 0 6px rgba(0, 255, 65, 0.3);
 }
 
 .triage-btns { white-space: nowrap; }
@@ -1246,7 +1251,7 @@ details[open] > .import-dll-header::before {
 }
 .filter-input:focus {
     outline: none;
-    border-color: var(--primary-muted) !important;
+    border-color: var(--primary-muted);
     box-shadow: 0 0 4px var(--primary-ghost);
 }
 
@@ -1421,8 +1426,9 @@ details[open] > .import-dll-header::before {
     transition: color 0.2s, border-color 0.2s;
 }
 
-.detail-tab:hover {
+.detail-tab:hover, .detail-tab:focus-visible {
     color: #4488ff;
+    outline: none;
 }
 
 .detail-tab.active {
@@ -1805,8 +1811,9 @@ details[open] > .import-dll-header::before {
     transition: color 0.2s, border-color 0.2s;
 }
 
-.sidebar-tab:hover {
+.sidebar-tab:hover, .sidebar-tab:focus-visible {
     color: var(--primary);
+    outline: none;
 }
 
 .sidebar-tab.active {
@@ -1914,6 +1921,21 @@ details[open] > .import-dll-header::before {
 .func-link:hover {
     color: var(--primary);
     text-shadow: 0 0 4px var(--primary), 0 0 8px rgba(0, 255, 65, 0.3);
+}
+
+/* Timeline address links */
+.timeline-addr {
+    font-size: 10px;
+    margin-left: 4px;
+}
+
+/* Clickable xref entries (JS event delegation hook + visual) */
+.xref-clickable {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.xref-clickable:hover {
+    background: rgba(0, 255, 65, 0.06);
 }
 
 /* === MINI TABLE (scrollable string+func tables in overview) === */
@@ -2047,6 +2069,8 @@ details[open] > .import-dll-header::before {
 /* === RESPONSIVE === */
 
 @media (max-width: 768px) {
+    .summary-grid { grid-template-columns: 1fr; }
+    .summary-section + .summary-section { border-left: none; border-top: 1px solid var(--primary-ghost); }
     .nav-links { overflow-x: auto; }
     .stats-grid { grid-template-columns: 1fr; }
     .graph-panel { flex-direction: column; }

@@ -405,7 +405,7 @@ def get_overview_data() -> Dict[str, Any]:
         except Exception:
             pass
     # Count functions that have been decompiled (appear in result_cache)
-    explored_funcs = _count_explored_functions(st)
+    explored_funcs = len(_get_decompiled_addresses())
 
     # Background tasks
     tasks = []
@@ -435,7 +435,8 @@ def get_overview_data() -> Dict[str, Any]:
     notes = st.get_notes()
     notes_count = len(notes)
     tool_calls = len(st.get_tool_history())
-    artifacts_count = len(st.get_artifacts())
+    all_artifacts = st.get_artifacts()
+    artifacts_count = len(all_artifacts)
 
     # Binary summary from cached triage
     binary_summary = {}
@@ -731,7 +732,7 @@ def get_overview_data() -> Dict[str, Any]:
     try:
         _apply_overview_enrichment(st, pe_data, floss, binary_summary)
     except Exception:
-        pass  # enrichment is best-effort; overview must still render
+        logger.debug("Overview enrichment failed", exc_info=True)
 
     # Triage flags from dashboard
     triage_status = st.get_all_triage_snapshot()
@@ -780,7 +781,6 @@ def get_overview_data() -> Dict[str, Any]:
     )
 
     # Recent artifacts (last 5)
-    all_artifacts = st.get_artifacts()
     recent_artifacts = [
         {
             "description": a.get("description", "")[:100],
@@ -845,7 +845,7 @@ def get_functions_data(sort_by: str = "address",
         if not hasattr(kb, "functions"):
             return functions
 
-        triage = getattr(st, "triage_status", {})
+        triage = st.get_all_triage_snapshot()
         renames = st.get_renames().get("functions", {})
         decompiled_addrs = _get_decompiled_addresses()
 
@@ -906,11 +906,11 @@ def get_functions_data(sort_by: str = "address",
     if sort_by == "name":
         functions.sort(key=lambda f: f["name"].lower(), reverse=rev)
     elif sort_by == "size":
-        functions.sort(key=lambda f: f["size"], reverse=not rev)
+        functions.sort(key=lambda f: f["size"], reverse=rev)
     elif sort_by == "complexity":
-        functions.sort(key=lambda f: f["complexity"], reverse=not rev)
+        functions.sort(key=lambda f: f["complexity"], reverse=rev)
     elif sort_by == "score":
-        functions.sort(key=lambda f: f["score"], reverse=not rev)
+        functions.sort(key=lambda f: f["score"], reverse=rev)
     elif sort_by == "triage":
         order = {"flagged": 0, "suspicious": 1, "unreviewed": 2, "clean": 3}
         functions.sort(key=lambda f: order.get(f["triage_status"], 99), reverse=rev)
@@ -934,7 +934,7 @@ def get_callgraph_data() -> Dict[str, Any]:
         if not hasattr(kb, "functions"):
             return {"nodes": nodes, "edges": edges}
 
-        triage = getattr(st, "triage_status", {})
+        triage = st.get_all_triage_snapshot()
         renames = st.get_renames().get("functions", {})
         decompiled_addrs = _get_decompiled_addresses()
 
@@ -1016,7 +1016,7 @@ def get_imports_data(search: str = "") -> Dict[str, Any]:
     """Import/export tables for the imports dashboard page."""
     st = _get_state()
     pe_data = st.pe_data or {}
-    search_lower = search.lower().strip()
+    search_lower = search[:500].lower().strip()
 
     # Imports
     raw_imports = pe_data.get("imports", [])
@@ -1262,19 +1262,21 @@ def get_notes_data(category: Optional[str] = None) -> List[Dict[str, Any]]:
     st = _get_state()
     notes = st.get_notes(category=category)
     func_lookup = _build_function_lookup(st)
-    if func_lookup[0]:
-        for n in notes:
-            addr_str = n.get("address")
-            if addr_str:
-                try:
-                    addr_int = int(addr_str, 16)
-                    hit = _find_containing_function(func_lookup, addr_int)
-                    if hit:
-                        n["func_addr"] = hit[0]
-                        n["func_name"] = hit[1]
-                except (ValueError, TypeError):
-                    pass
-    return notes
+    enriched = []
+    for n in notes:
+        entry = dict(n)  # shallow copy — avoid mutating canonical note dicts
+        addr_str = entry.get("address")
+        if addr_str and func_lookup[0]:
+            try:
+                addr_int = int(addr_str, 16)
+                hit = _find_containing_function(func_lookup, addr_int)
+                if hit:
+                    entry["func_addr"] = hit[0]
+                    entry["func_name"] = hit[1]
+            except (ValueError, TypeError):
+                pass
+        enriched.append(entry)
+    return enriched
 
 
 def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
@@ -1393,19 +1395,24 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
             return {"cached": False, "error": f"No function found at {hex(addr_int)} in local CFG"}
         decompiler_cfg = local_cfg.model
 
+    # Acquire decompile lock for mutual exclusion with background enrichment sweep
+    st._decompile_lock.acquire()
     try:
         dec = project.analyses.Decompiler(func, cfg=decompiler_cfg)
         if not dec.codegen:
             return {"cached": False, "error": "Decompilation produced no code"}
-    except Exception as e:
-        return {"cached": False, "error": f"Decompilation failed: {e}"}
 
-    all_lines = dec.codegen.text.splitlines()
-    _decompile_meta[cache_key] = {
-        "function_name": func.name,
-        "address": hex(addr_to_use),
-        "lines": all_lines,
-    }
+        all_lines = dec.codegen.text.splitlines()
+        _decompile_meta[cache_key] = {
+            "function_name": func.name,
+            "address": hex(addr_to_use),
+            "lines": all_lines,
+        }
+        st._newly_decompiled.append(hex(addr_to_use))
+    except Exception:
+        return {"cached": False, "error": "Decompilation failed"}
+    finally:
+        st._decompile_lock.release()
 
     renamed_lines = apply_function_renames_to_lines(all_lines)
     renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(addr_int))
@@ -1426,9 +1433,9 @@ def _detect_phase(st) -> str:
         return "not_started"
 
     current_history = st.get_tool_history()
-    ran_tools = set(h["tool_name"] for h in current_history)
+    ran_tools = set(h.get("tool_name", "") for h in current_history)
     prev = getattr(st, "previous_session_history", []) or []
-    ran_tools |= set(h["tool_name"] for h in prev)
+    ran_tools |= set(h.get("tool_name", "") for h in prev)
 
     advanced_tools = {
         "find_path_to_address", "emulate_function_execution",
@@ -1449,10 +1456,6 @@ def _detect_phase(st) -> str:
         return "triaged"
     return "file_loaded"
 
-
-def _count_explored_functions(st) -> int:
-    """Count functions that have been explored via decompilation."""
-    return len(_get_decompiled_addresses())
 
 
 def _get_decompiled_addresses() -> set:
@@ -1568,7 +1571,21 @@ def get_strings_data(
 
     total_unfiltered = len(all_strings)
 
-    # Enrich strings that have function_va with func_addr/func_name
+    # Filter BEFORE enrichment to avoid unnecessary function lookups
+    search_lower = search[:500].lower().strip() if search else ""
+    type_lower = string_type.lower().strip() if string_type else "all"
+
+    if search_lower:
+        all_strings = [s for s in all_strings if search_lower in s["string"].lower()]
+    if type_lower and type_lower != "all":
+        all_strings = [s for s in all_strings if s["type"].lower() == type_lower]
+    if category:
+        cat_lower = category.lower().strip()
+        all_strings = [s for s in all_strings if s["category"].lower() == cat_lower]
+    if min_score > 0:
+        all_strings = [s for s in all_strings if s["sifter_score"] >= min_score]
+
+    # Enrich filtered strings with func_addr/func_name (post-filter for performance)
     func_lookup = _build_function_lookup(st)
     for item in all_strings:
         fva = item.get("function_va", "")
@@ -1587,27 +1604,19 @@ def get_strings_data(
         except (ValueError, TypeError):
             pass
 
-    # Filters
-    search_lower = search[:500].lower().strip() if search else ""
-    type_lower = string_type.lower().strip() if string_type else "all"
-
-    if search_lower:
-        all_strings = [s for s in all_strings if search_lower in s["string"].lower()]
-    if type_lower and type_lower != "all":
-        all_strings = [s for s in all_strings if s["type"].lower() == type_lower]
-    if category:
-        cat_lower = category.lower().strip()
-        all_strings = [s for s in all_strings if s["category"].lower() == cat_lower]
-    if min_score > 0:
-        all_strings = [s for s in all_strings if s["sifter_score"] >= min_score]
-
     # Sort
     if sort_by == "length":
         all_strings.sort(key=lambda s: len(s["string"]), reverse=not sort_asc)
     elif sort_by == "type":
         all_strings.sort(key=lambda s: s["type"], reverse=not sort_asc)
     elif sort_by == "address":
-        all_strings.sort(key=lambda s: s["address"], reverse=not sort_asc)
+        def _addr_key(s):
+            a = s["address"]
+            try:
+                return int(a, 16) if a.startswith("0x") else int(a)
+            except (ValueError, TypeError):
+                return 0
+        all_strings.sort(key=_addr_key, reverse=not sort_asc)
     else:  # score (default)
         all_strings.sort(key=lambda s: s["sifter_score"], reverse=not sort_asc)
 
@@ -1629,7 +1638,7 @@ def global_search(query: str, limit_per_category: int = 10) -> Dict[str, Any]:
     """Search across functions, strings, imports, and notes."""
     st = _get_state()
     pe_data = st.pe_data or {}
-    query_lower = query.lower().strip()
+    query_lower = query[:500].lower().strip()
     results: Dict[str, list] = {
         "functions": [],
         "strings": [],
