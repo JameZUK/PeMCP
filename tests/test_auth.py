@@ -111,3 +111,60 @@ class TestBearerAuthMiddleware:
         import inspect
         source = inspect.getsource(BearerAuthMiddleware.__call__)
         assert "hmac.compare_digest" in source or "compare_digest" in source
+
+    def test_duplicate_authorization_headers_returns_400(self):
+        """Multiple Authorization headers should be rejected (header smuggling)."""
+        app = BearerAuthMiddleware(_passthrough_app, api_key="secret-token-123")
+        status, body = asyncio.run(
+            _make_request(app, headers=[
+                (b"authorization", b"Bearer secret-token-123"),
+                (b"authorization", b"Bearer other-token"),
+            ])
+        )
+        assert status == 400
+        assert b"Ambiguous" in body
+
+    def test_websocket_rejected_without_auth(self):
+        """WebSocket connections without auth should get close code."""
+        app = BearerAuthMiddleware(_passthrough_app, api_key="secret-token-123")
+        scope = {
+            "type": "websocket",
+            "path": "/ws",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        }
+        messages = []
+
+        async def _run():
+            async def receive():
+                return {"type": "websocket.connect"}
+            async def send(msg):
+                messages.append(msg)
+            await app(scope, receive, send)
+
+        asyncio.run(_run())
+        assert any(m.get("type") == "websocket.close" for m in messages)
+
+    def test_websocket_duplicate_auth_rejected(self):
+        """WebSocket with duplicate auth headers should be rejected."""
+        app = BearerAuthMiddleware(_passthrough_app, api_key="secret-token-123")
+        scope = {
+            "type": "websocket",
+            "path": "/ws",
+            "headers": [
+                (b"authorization", b"Bearer secret-token-123"),
+                (b"authorization", b"Bearer other"),
+            ],
+            "client": ("127.0.0.1", 12345),
+        }
+        messages = []
+
+        async def _run():
+            async def receive():
+                return {"type": "websocket.connect"}
+            async def send(msg):
+                messages.append(msg)
+            await app(scope, receive, send)
+
+        asyncio.run(_run())
+        assert any(m.get("type") == "websocket.close" for m in messages)

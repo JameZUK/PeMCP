@@ -5,7 +5,7 @@ import time
 import pytest
 from unittest import mock
 
-from arkana.cache import AnalysisCache, CACHE_FORMAT_VERSION
+from arkana.cache import AnalysisCache, CACHE_FORMAT_VERSION, _validate_sha256
 
 
 @pytest.fixture
@@ -234,3 +234,75 @@ class TestCacheMetaHandling:
         # This exercises the OSError path in _save_meta
         cache.put("ee" * 32, data, "/test.exe")
         monkeypatch.setattr("arkana.cache.META_FILE", orig_meta)
+
+
+# ---------------------------------------------------------------------------
+# SHA256 validation
+# ---------------------------------------------------------------------------
+
+class TestSha256Validation:
+    def test_valid_sha256(self):
+        assert _validate_sha256("a" * 64) == "a" * 64
+
+    def test_uppercase_normalized(self):
+        assert _validate_sha256("A" * 64) == "a" * 64
+
+    def test_whitespace_stripped(self):
+        assert _validate_sha256("  " + "b" * 64 + "  ") == "b" * 64
+
+    def test_path_traversal_rejected(self):
+        with pytest.raises(ValueError, match="Invalid SHA256"):
+            _validate_sha256("../../etc/passwd")
+
+    def test_short_hash_rejected(self):
+        with pytest.raises(ValueError, match="Invalid SHA256"):
+            _validate_sha256("abcdef")
+
+    def test_non_hex_rejected(self):
+        with pytest.raises(ValueError, match="Invalid SHA256"):
+            _validate_sha256("g" * 64)
+
+    def test_empty_string_rejected(self):
+        with pytest.raises(ValueError, match="Invalid SHA256"):
+            _validate_sha256("")
+
+    def test_cache_get_rejects_invalid_sha(self, cache):
+        with pytest.raises(ValueError):
+            cache.get("../../../etc/passwd", "/test.exe")
+
+    def test_cache_put_rejects_invalid_sha(self, cache):
+        with pytest.raises(ValueError):
+            cache.put("invalid", {"data": 1}, "/test.exe")
+
+    def test_cache_update_session_rejects_invalid_sha(self, cache):
+        with pytest.raises(ValueError):
+            cache.update_session_data("bad-hash", notes=[])
+
+    def test_cache_remove_rejects_invalid_sha(self, cache):
+        with pytest.raises(ValueError):
+            cache.remove_entry_by_hash("not-a-sha256")
+
+
+# ---------------------------------------------------------------------------
+# Session data update (outside-lock I/O)
+# ---------------------------------------------------------------------------
+
+class TestCacheUpdateSessionData:
+    def test_update_notes(self, cache, sample_pe_data):
+        sha = "a" * 64
+        cache.put(sha, sample_pe_data, "/test.exe")
+        assert cache.update_session_data(sha, notes=[{"id": "n1", "text": "test"}]) is True
+        meta = cache.get_session_metadata(sha)
+        assert len(meta["notes"]) == 1
+        assert meta["notes"][0]["id"] == "n1"
+
+    def test_update_nonexistent_entry(self, cache):
+        assert cache.update_session_data("b" * 64, notes=[]) is False
+
+    def test_update_disabled_cache(self, cache_dir):
+        c = AnalysisCache(enabled=False)
+        assert c.update_session_data("a" * 64, notes=[]) is False
+
+    def test_get_session_metadata_disabled(self, cache_dir):
+        c = AnalysisCache(enabled=False)
+        assert c.get_session_metadata("a" * 64) is None

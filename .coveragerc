@@ -6,6 +6,9 @@ omit =
     arkana/mcp/server.py
     arkana/mcp/_angr_helpers.py
     arkana/mcp/_bsim_features.py
+    arkana/mcp/_progress_bridge.py
+    # Enrichment coordinator — requires full server context with angr/capa/FLOSS
+    arkana/enrichment.py
     # Parsers requiring optional heavy deps
     arkana/parsers/capa.py
     arkana/parsers/floss.py
