@@ -31,7 +31,7 @@ def _safe_env_int(key: str, default: int) -> int:
 
 # Module-level shared executor for regex timeout protection.
 # Using a small pool avoids per-call thread creation/teardown overhead.
-_regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+_regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 atexit.register(_regex_executor.shutdown, wait=False)
 
 # --- Safe slicing ---
@@ -64,7 +64,7 @@ _MAX_REGEX_PATTERN_LENGTH = 1000
 # Detects nested quantifiers that can cause catastrophic backtracking.
 # Matches patterns like (X+)+, (X*)+, (X+)*, (X{n,m})+ etc.
 _NESTED_QUANTIFIER_RE = re.compile(
-    r'\([^)]*[+*}\?][^)]*\)\s*[+*{]'
+    r'\((?:\?[:=!])?[^)]*[+*}\?][^)]*\)\s*[+*{]'
 )
 
 
@@ -121,6 +121,8 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
         return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
         future.cancel()
+        pattern_preview = str(compiled_re.pattern)[:80]
+        logger.warning("Regex timed out after %ss — pattern: %s", timeout, pattern_preview)
         raise ValueError(
             f"Regex execution timed out after {timeout}s. "
             "The pattern may cause catastrophic backtracking. "

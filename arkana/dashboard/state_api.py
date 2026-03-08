@@ -50,13 +50,18 @@ def _get_state():
     return _default_state
 
 
-_func_lookup_cache: Dict[int, tuple] = {}  # id(st) -> (expire_time, entries, starts)
+# H11: Use _state_uuid instead of id(st) to avoid key reuse after GC
+_func_lookup_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, entries, starts)
 _FUNC_LOOKUP_TTL = 5  # seconds
 _MAX_FUNC_LOOKUP_CACHE = 4  # max state objects to cache
 
 # Cache for overview enrichment (capa/YARA/FLOSS function link resolution)
-_overview_enrichment_cache: Dict[int, tuple] = {}  # id(st) -> (expire, enriched_data)
+_overview_enrichment_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire, enriched_data)
 _OVERVIEW_ENRICHMENT_TTL = 10  # seconds — enrichment data changes slowly
+
+# M19: Cache for get_overview_data (2s TTL)
+_overview_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, data)
+_OVERVIEW_TTL = 2  # seconds
 
 
 def _build_function_lookup(st) -> tuple:
@@ -70,7 +75,7 @@ def _build_function_lookup(st) -> tuple:
     is unavailable or no CFG loaded.
     """
     now = time.time()
-    cache_key = id(st)
+    cache_key = st._state_uuid
     cached = _func_lookup_cache.get(cache_key)
     if cached is not None:
         expire_time, cached_fp, entries, starts = cached
@@ -175,7 +180,7 @@ def _apply_overview_enrichment(st, pe_data: dict, floss: dict, binary_summary: d
 
     # Check enrichment cache (includes file hash to prevent cross-file pollution)
     now = time.time()
-    cache_key = id(st)
+    cache_key = st._state_uuid
     cached = _overview_enrichment_cache.get(cache_key)
     func_count = len(func_lookup[0]) if has_funcs else 0
     floss_strs = floss.get("strings", {}) if isinstance(floss, dict) else {}
@@ -382,6 +387,16 @@ def _apply_overview_enrichment(st, pe_data: dict, floss: dict, binary_summary: d
 def get_overview_data() -> Dict[str, Any]:
     """File info, hashes, phase, coverage stats, background tasks."""
     st = _get_state()
+
+    # M19: Short-TTL cache to avoid redundant work on rapid polling
+    now = time.time()
+    cache_key = st._state_uuid
+    cached = _overview_cache.get(cache_key)
+    if cached is not None:
+        expire_time, cached_data = cached
+        if now < expire_time:
+            return cached_data
+
     pe_data = st.pe_data or {}
 
     # Basic file info
@@ -799,10 +814,10 @@ def get_overview_data() -> Dict[str, Any]:
         active_tool_progress = st.active_tool_progress
         active_tool_total = st.active_tool_total
 
-    return {
+    result = {
         "file_loaded": filepath is not None,
         "filename": filename,
-        "filepath": filepath,
+        "filepath": os.path.basename(filepath) if filepath else None,
         "format": fmt,
         "mode": mode,
         "sha256": hashes.get("sha256"),
@@ -826,6 +841,16 @@ def get_overview_data() -> Dict[str, Any]:
         "active_tool_progress": active_tool_progress,
         "active_tool_total": active_tool_total,
     }
+
+    # M19: Cache the result
+    _overview_cache[cache_key] = (time.time() + _OVERVIEW_TTL, result)
+    # Evict stale entries
+    if len(_overview_cache) > _MAX_FUNC_LOOKUP_CACHE:
+        stale = [k for k, (exp, _) in _overview_cache.items() if time.time() > exp]
+        for k in stale:
+            _overview_cache.pop(k, None)
+
+    return result
 
 
 def get_functions_data(sort_by: str = "address",
@@ -925,9 +950,10 @@ def get_callgraph_data() -> Dict[str, Any]:
     st = _get_state()
     nodes = []
     edges = []
+    total_functions = 0
 
     if st.angr_project is None or st.angr_cfg is None:
-        return {"nodes": nodes, "edges": edges}
+        return {"nodes": nodes, "edges": edges, "truncated": False, "total_functions": 0}
 
     try:
         kb = st.angr_project.kb
@@ -953,7 +979,9 @@ def get_callgraph_data() -> Dict[str, Any]:
                 noted_addrs.add(a)
 
         # Build node list (limit to 500 for performance)
-        func_addrs = list(kb.functions.keys())[:500]
+        all_func_addrs = list(kb.functions.keys())
+        total_functions = len(all_func_addrs)
+        func_addrs = all_func_addrs[:500]
         addr_set = set(func_addrs)
 
         for addr in func_addrs:
@@ -1009,7 +1037,12 @@ def get_callgraph_data() -> Dict[str, Any]:
     except (AttributeError, KeyError, TypeError, RuntimeError):
         logger.debug("Error building call graph data from angr KB", exc_info=True)
 
-    return {"nodes": nodes, "edges": edges}
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "truncated": total_functions > 500,
+        "total_functions": total_functions,
+    }
 
 
 def get_imports_data(search: str = "") -> Dict[str, Any]:

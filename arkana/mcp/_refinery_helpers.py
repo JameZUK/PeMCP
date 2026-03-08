@@ -108,13 +108,9 @@ def _get_data_from_hex_or_file_with_offset(
 
 
 # --- Magic byte signatures for file type detection ---
+# Magic signatures for types NOT covered by detect_format_from_magic
+# (which handles PE, ELF, Mach-O).
 _MAGIC_SIGNATURES = [
-    (b"MZ", "pe"),
-    (b"\x7fELF", "elf"),
-    (b"\xfe\xed\xfa\xce", "macho"),  # Mach-O 32-bit
-    (b"\xfe\xed\xfa\xcf", "macho"),  # Mach-O 64-bit
-    (b"\xce\xfa\xed\xfe", "macho"),  # Mach-O 32-bit (reversed)
-    (b"\xcf\xfa\xed\xfe", "macho"),  # Mach-O 64-bit (reversed)
     (b"PK\x03\x04", "zip"),
     (b"\x1f\x8b", "gzip"),
     (b"Rar!", "rar"),
@@ -125,6 +121,11 @@ _MAGIC_SIGNATURES = [
 
 def _detect_file_type(data: bytes) -> Optional[str]:
     """Detect file type from magic bytes. Returns type string or None."""
+    from arkana.mcp._format_helpers import detect_format_from_magic
+    result = detect_format_from_magic(data[:8])
+    if result != "unknown":
+        return result
+    # Fallback for types not in format_helpers (zip, gzip, rar, ole, pdf)
     for magic, ftype in _MAGIC_SIGNATURES:
         if data[:len(magic)] == magic:
             return ftype

@@ -1092,6 +1092,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                     _timing[key] = elapsed
                 except concurrent.futures.TimeoutError:
                     logger.warning("%s timed out after %ds — storing error result.", key, timeout)
+                    logger.warning("Note: the %s thread may still be running in the background; Python cannot forcibly kill threads.", key)
                     pe_info_dict[key] = {
                         "status": f"Timed out after {timeout}s",
                         "error": f"{key} exceeded the {timeout}s timeout. "

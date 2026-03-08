@@ -8,6 +8,18 @@ from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_respo
 from arkana.state import TASK_RUNNING
 
 
+_ADVANCED_TOOLS = frozenset({
+    "find_path_to_address", "emulate_function_execution",
+    "find_path_with_custom_input", "emulate_with_watchpoints",
+    "run_speakeasy_emulation", "run_qiling_emulation",
+})
+_EXPLORING_TOOLS = frozenset({
+    "decompile_function_with_angr", "get_annotated_disassembly",
+    "get_function_cfg", "get_forward_slice", "get_backward_slice",
+    "get_reaching_definitions", "get_cross_reference_map",
+})
+
+
 def _detect_analysis_phase() -> str:
     """Determine what phase of analysis the session is in."""
     if not state.filepath or not state.pe_data:
@@ -18,20 +30,9 @@ def _detect_analysis_phase() -> str:
     prev = getattr(state, "previous_session_history", []) or []
     ran_tools |= set(h["tool_name"] for h in prev)
 
-    advanced_tools = {
-        "find_path_to_address", "emulate_function_execution",
-        "find_path_with_custom_input", "emulate_with_watchpoints",
-        "run_speakeasy_emulation", "run_qiling_emulation",
-    }
-    exploring_tools = {
-        "decompile_function_with_angr", "get_annotated_disassembly",
-        "get_function_cfg", "get_forward_slice", "get_backward_slice",
-        "get_reaching_definitions", "get_cross_reference_map",
-    }
-
-    if ran_tools & advanced_tools:
+    if ran_tools & _ADVANCED_TOOLS:
         return "advanced"
-    if ran_tools & exploring_tools:
+    if ran_tools & _EXPLORING_TOOLS:
         return "exploring"
     if "get_triage_report" in ran_tools:
         return "triaged"

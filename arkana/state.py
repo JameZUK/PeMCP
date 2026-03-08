@@ -6,10 +6,12 @@ In HTTP mode each MCP session gets its own ``AnalyzerState`` instance so
 concurrent clients cannot interfere with each other.
 """
 import contextvars
+import copy
 import datetime
 import logging
 import time
 import threading
+import uuid
 from collections import deque
 from typing import Dict, Any, Optional, List
 
@@ -33,6 +35,7 @@ TASK_FAILED = "failed"
 class AnalyzerState:
     """Per-session state for a single analyzed file."""
     def __init__(self):
+        self._state_uuid: str = str(uuid.uuid4())
         self.filepath: Optional[str] = None
         self.pe_data: Optional[Dict[str, Any]] = None
         self.pe_object: Optional[Any] = None  # pefile.PE or MockPE
@@ -119,8 +122,9 @@ class AnalyzerState:
         self._decompile_lock = threading.Lock()
         self._decompile_on_demand_waiting: bool = False
 
-        # Enrichment cancellation
+        # Enrichment cancellation and generation tracking
         self._enrichment_cancel = threading.Event()
+        self._enrichment_generation: int = 0
 
         # Newly-decompiled notification queue (SSE push to dashboard)
         self._newly_decompiled: deque = deque(maxlen=200)
@@ -175,7 +179,6 @@ class AnalyzerState:
                 return
         raise RuntimeError(
             f"Access denied: '{file_path}' is outside the allowed paths. "
-            f"Allowed: {self.allowed_paths}. "
             "Configure with --allowed-paths at server startup."
         )
 
@@ -654,7 +657,8 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             # replaces the reference on the session only.
             if _default_state.filepath is not None:
                 new_state.filepath = _default_state.filepath
-                new_state.pe_data = _default_state.pe_data
+                # C7: Deep copy pe_data so sessions can't mutate shared state
+                new_state.pe_data = copy.deepcopy(_default_state.pe_data)
                 new_state.pe_object = _default_state.pe_object
                 new_state._inherited_pe_object = True
                 new_state.pefile_version = _default_state.pefile_version

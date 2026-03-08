@@ -19,8 +19,10 @@ def apply_function_renames_to_lines(lines: List[str]) -> List[str]:
     # Build lookup: normalised hex (no prefix) -> user name
     lookup = {}
     for addr_hex, name in func_renames.items():
-        # Strip 0x prefix and lowercase for matching
-        clean = addr_hex.lower().lstrip("0x").lstrip("0") or "0"
+        # H2: Proper prefix removal (lstrip("0x") strips individual chars)
+        addr_lower = addr_hex.lower()
+        clean = addr_lower[2:] if addr_lower.startswith("0x") else addr_lower
+        clean = clean.lstrip("0") or "0"
         lookup[clean] = name
 
     if not lookup:
@@ -43,11 +45,15 @@ def apply_variable_renames_to_lines(lines: List[str], func_address: str) -> List
     if addr not in var_renames or not var_renames[addr]:
         return lines
 
+    # M7: Pre-compile patterns once outside the line loop
+    compiled_renames = [
+        (re.compile(r'\b' + re.escape(old_name) + r'\b'), new_name)
+        for old_name, new_name in var_renames[addr].items()
+    ]
     result = []
     for line in lines:
-        for old_name, new_name in var_renames[addr].items():
-            # Word-boundary replacement to avoid partial matches
-            line = re.sub(r'\b' + re.escape(old_name) + r'\b', new_name, line)
+        for pattern, new_name in compiled_renames:
+            line = pattern.sub(new_name, line)
         result.append(line)
     return result
 

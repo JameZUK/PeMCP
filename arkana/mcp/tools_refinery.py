@@ -546,9 +546,11 @@ async def refinery_extract_iocs(
         for t in types_to_scan:
             try:
                 found = []
+                found_set = set()
                 for chunk in data | xtp(t):
                     val = bytes(chunk).decode("utf-8", errors="replace")
-                    if val not in found:
+                    if val not in found_set:
+                        found_set.add(val)
                         found.append(val)
                     if len(found) >= limit:
                         break

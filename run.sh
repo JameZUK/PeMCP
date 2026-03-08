@@ -150,6 +150,7 @@ cmd_http() {
     # shellcheck disable=SC2046
     $RUNTIME run -it \
         $(common_args) \
+        -e ARKANA_DASHBOARD_HOST=0.0.0.0 \
         -p "$CONTAINER_PORT:8082" \
         "$IMAGE_NAME" \
         --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 \
@@ -167,6 +168,7 @@ cmd_stdio() {
     # shellcheck disable=SC2046
     $RUNTIME run -i \
         $(common_args) \
+        -e ARKANA_DASHBOARD_HOST=0.0.0.0 \
         -p "$CONTAINER_PORT:8082" \
         "$IMAGE_NAME" \
         --mcp-server \

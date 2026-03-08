@@ -1,5 +1,6 @@
 """MCP tools for angr-based binary analysis - decompilation, CFG, symbolic execution, etc."""
 import datetime
+import threading
 import time
 import uuid
 import asyncio
@@ -18,15 +19,36 @@ from arkana.mcp._rename_helpers import apply_function_renames_to_lines, apply_va
 
 # Cache for paginated decompilation results — avoids re-decompiling when
 # the client requests subsequent pages of the same function.
+# C5: Bounded with FIFO eviction and protected by lock.
 _decompile_meta: dict = {}  # cache_key -> {function_name, address, lines}
+_decompile_meta_lock = threading.Lock()
+_MAX_DECOMPILE_META = 500
 
 
 def _get_cached_lines(cache_key):
     """Look up decompiled lines from the authoritative meta store."""
-    meta = _decompile_meta.get(cache_key)
-    if meta:
-        return meta.get("lines")
+    with _decompile_meta_lock:
+        meta = _decompile_meta.get(cache_key)
+        if meta:
+            return meta.get("lines")
     return None
+
+
+def _set_decompile_meta(cache_key, value):
+    """Thread-safe store with FIFO eviction when exceeding max size."""
+    with _decompile_meta_lock:
+        _decompile_meta[cache_key] = value
+        if len(_decompile_meta) > _MAX_DECOMPILE_META:
+            # Evict oldest entries (FIFO — dict preserves insertion order)
+            to_remove = len(_decompile_meta) - _MAX_DECOMPILE_META
+            for key in list(_decompile_meta.keys())[:to_remove]:
+                del _decompile_meta[key]
+
+
+def clear_decompile_meta():
+    """Clear the decompile meta cache (called from close_file)."""
+    with _decompile_meta_lock:
+        _decompile_meta.clear()
 
 if ANGR_AVAILABLE:
     import angr
@@ -404,11 +426,11 @@ async def decompile_function_with_angr(
 
     # Cache full result (raw, before renames) and return paginated
     all_lines = result["c_pseudocode"].splitlines()
-    _decompile_meta[cache_key] = {
+    _set_decompile_meta(cache_key, {
         "function_name": result["function_name"],
         "address": result["address"],
         "lines": all_lines,
-    }
+    })
 
     # Apply user renames to output
     renamed_lines = apply_function_renames_to_lines(all_lines)
@@ -1304,14 +1326,25 @@ async def get_global_data_refs(
 
     def _scan_refs():
 
-        # Ensure a project exists via the standard locked path, then build a
-        # *local* CFG with collect_data_references=True.  We must NOT replace
-        # the shared state.angr_cfg because other tools expect a standard CFG
-        # built without data-reference collection.
+        # Ensure a project exists via the standard locked path, then try to
+        # reuse the existing CFG.  Only build a local CFG with
+        # collect_data_references=True if the function isn't found or the
+        # existing CFG lacks xref data.
         _ensure_project_and_cfg()
-        project, _ = state.get_angr_snapshot()
-        # Build a separate local CFG with data reference tracking
-        local_cfg = project.analyses.CFGFast(normalize=True, collect_data_references=True)
+        project, existing_cfg = state.get_angr_snapshot()
+
+        # M10: Try existing CFG first to avoid duplicate expensive builds
+        local_cfg = None
+        if existing_cfg and target_addr in existing_cfg.functions:
+            # Check if xrefs are available from the existing CFG
+            try:
+                xrefs = project.kb.xrefs.xrefs_by_ins_addr
+                if xrefs is not None:
+                    local_cfg = existing_cfg
+            except (AttributeError, TypeError):
+                pass
+        if local_cfg is None:
+            local_cfg = project.analyses.CFGFast(normalize=True, collect_data_references=True)
 
         try:
             func = local_cfg.functions[target_addr]
@@ -1663,11 +1696,11 @@ async def batch_decompile(
 
         # Cache raw lines and apply renames
         all_lines = result["c_pseudocode"].splitlines()
-        _decompile_meta[cache_key] = {
+        _set_decompile_meta(cache_key, {
             "function_name": result["function_name"],
             "address": result["address"],
             "lines": all_lines,
-        }
+        })
         renamed_lines = apply_function_renames_to_lines(all_lines)
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
         display_name = get_display_name(hex(target_addr), result["function_name"])

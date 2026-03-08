@@ -104,6 +104,9 @@ _SUSPICIOUS_IMPORTS_PATTERN = re.compile(
 #  Private helper: collect all string values from analysis data
 # ===================================================================
 
+_MAX_TRIAGE_STRINGS = 100_000  # H8: Cap to prevent unbounded memory usage
+
+
 def _collect_all_string_values() -> set:
     """Gather all string values from floss analysis and basic ASCII strings."""
     all_string_values: set = set()
@@ -118,6 +121,8 @@ def _collect_all_string_values() -> set:
                             all_string_values.add(s.get('string', ''))
                         elif isinstance(s, str):
                             all_string_values.add(s)
+                        if len(all_string_values) >= _MAX_TRIAGE_STRINGS:
+                            return all_string_values
 
     basic_strings = state.pe_data.get('basic_ascii_strings')
     if isinstance(basic_strings, list):
@@ -126,6 +131,8 @@ def _collect_all_string_values() -> set:
                 all_string_values.add(s.get('string', ''))
             elif isinstance(s, str):
                 all_string_values.add(s)
+            if len(all_string_values) >= _MAX_TRIAGE_STRINGS:
+                break
 
     return all_string_values
 
@@ -558,14 +565,15 @@ def _triage_capa_capabilities(indicator_limit: int) -> Tuple[List[Dict[str, Any]
 #  Section 5 — Network IOC Extraction
 # ===================================================================
 
+_TRIAGE_IP_RE = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
+_TRIAGE_URL_RE = re.compile(r'(?:https?|ftp)://[^\s\'"<>]+', re.IGNORECASE)
+_TRIAGE_DOMAIN_RE = re.compile(r'\b(?:[a-zA-Z0-9-]+\.)+(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion)\b', re.IGNORECASE)
+_TRIAGE_REGISTRY_RE = re.compile(r'(?:HKLM|HKCU|HKCR|HKU|HKCC|Software)\\[^\s\'"]+', re.IGNORECASE)
+
+
 def _triage_network_iocs(indicator_limit: int, all_string_values: set) -> Tuple[Dict[str, Any], int]:
     """Extract IPs, URLs, domains, and registry paths from strings."""
     risk_score = 0
-
-    ip_pattern = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
-    url_pattern = re.compile(r'(?:https?|ftp)://[^\s\'"<>]+', re.IGNORECASE)
-    domain_pattern = re.compile(r'\b(?:[a-zA-Z0-9-]+\.)+(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion)\b', re.IGNORECASE)
-    registry_pattern = re.compile(r'(?:HKLM|HKCU|HKCR|HKU|HKCC|Software)\\[^\s\'"]+', re.IGNORECASE)
 
     # Iterate over strings individually instead of joining into one large blob.
     # This avoids a memory spike from the concatenated text and improves cache
@@ -576,7 +584,7 @@ def _triage_network_iocs(indicator_limit: int, all_string_values: set) -> Tuple[
     found_registry: set = set()
 
     for s in all_string_values:
-        for m in ip_pattern.finditer(s):
+        for m in _TRIAGE_IP_RE.finditer(s):
             ip = m.group()
             octets = ip.split('.')
             if all(0 <= int(o) <= 255 for o in octets):
@@ -594,11 +602,11 @@ def _triage_network_iocs(indicator_limit: int, all_string_values: set) -> Tuple[
                     and not (first == 203 and second == 0 and third == 113)  # TEST-NET-3
                 ):
                     found_ips.add(ip)
-        for m in url_pattern.finditer(s):
+        for m in _TRIAGE_URL_RE.finditer(s):
             found_urls.add(m.group())
-        for m in domain_pattern.finditer(s):
+        for m in _TRIAGE_DOMAIN_RE.finditer(s):
             found_domains.add(m.group().lower())
-        for m in registry_pattern.finditer(s):
+        for m in _TRIAGE_REGISTRY_RE.finditer(s):
             found_registry.add(m.group())
 
     if found_ips or found_urls or found_domains:

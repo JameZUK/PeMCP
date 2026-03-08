@@ -589,15 +589,15 @@ def query_similar_functions(
         min_blocks = max(1, target_blocks // 3)
         max_blocks = max(target_blocks * 3, 3)
 
-        rows = conn.execute(
+        cursor = conn.execute(
             "SELECT f.*, b.sha256, b.filename, b.architecture "
             "FROM functions f JOIN binaries b ON f.binary_id = b.id "
             "WHERE f.block_count BETWEEN ? AND ?",
             (min_blocks, max_blocks),
-        ).fetchall()
+        )
 
         results = []
-        for row in rows:
+        for row in cursor:
             candidate = _row_to_features(row)
             scores = compute_similarity(target_features, candidate, metrics)
             score_key = metrics if metrics != "combined" else "combined"

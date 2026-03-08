@@ -157,27 +157,52 @@ def _empty_profile() -> Dict[str, Any]:
     }
 
 
+def _load_profile_unlocked() -> Dict[str, Any]:
+    """Load learner profile from disk without acquiring the lock.
+
+    Caller MUST hold ``_profile_lock``.
+    """
+    if _PROFILE_PATH.exists():
+        try:
+            data = json.loads(_PROFILE_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and data.get("version") == 1:
+                return data
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Learner profile corrupt, creating fresh: %s", exc)
+    return _empty_profile()
+
+
+def _save_profile_unlocked(profile: Dict[str, Any]) -> None:
+    """Persist learner profile to disk without acquiring the lock.
+
+    Caller MUST hold ``_profile_lock``.
+    """
+    profile["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _PROFILE_PATH.with_suffix(".tmp")
+    tmp.write_text(json.dumps(profile, indent=2, default=str), encoding="utf-8")
+    tmp.replace(_PROFILE_PATH)
+
+
 def _load_profile() -> Dict[str, Any]:
     """Load learner profile from disk, creating a fresh one if absent/corrupt."""
     with _profile_lock:
-        if _PROFILE_PATH.exists():
-            try:
-                data = json.loads(_PROFILE_PATH.read_text(encoding="utf-8"))
-                if isinstance(data, dict) and data.get("version") == 1:
-                    return data
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.warning("Learner profile corrupt, creating fresh: %s", exc)
-        return _empty_profile()
+        return _load_profile_unlocked()
 
 
 def _save_profile(profile: Dict[str, Any]) -> None:
     """Persist learner profile to disk."""
-    profile["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
     with _profile_lock:
-        _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = _PROFILE_PATH.with_suffix(".tmp")
-        tmp.write_text(json.dumps(profile, indent=2, default=str), encoding="utf-8")
-        tmp.replace(_PROFILE_PATH)
+        _save_profile_unlocked(profile)
+
+
+def _update_profile(modifier_fn) -> Dict[str, Any]:
+    """Load, modify, and save the learner profile atomically."""
+    with _profile_lock:
+        profile = _load_profile_unlocked()
+        modifier_fn(profile)
+        _save_profile_unlocked(profile)
+        return profile
 
 
 def _compute_tier(profile: Dict[str, Any]) -> str:

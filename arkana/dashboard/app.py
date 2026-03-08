@@ -60,6 +60,8 @@ _COOKIE_MAX_AGE = 30 * 24 * 3600
 # SSE connection limit
 _MAX_SSE_CONNECTIONS = 10
 _sse_connection_count = 0
+# H13: threading.Lock is acceptable here — held for nanoseconds (counter
+# increment only), so event loop blocking is negligible.
 _sse_lock = threading.Lock()
 
 # --- CSRF token (generated once per app instance) ---
@@ -67,8 +69,10 @@ _csrf_token: str = ""
 
 # --- Login rate limiting ---
 _login_attempts: dict[str, list[float]] = {}
+_login_lock = asyncio.Lock()
 _MAX_LOGIN_ATTEMPTS = 5
 _LOGIN_WINDOW_SECONDS = 60
+_MAX_LOGIN_IPS = 1000  # Hard cap to prevent unbounded memory growth
 
 # --- Content-Security-Policy value (single source of truth) ---
 _CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
@@ -249,35 +253,45 @@ def _create_routes(dashboard_token: str) -> list:
         csrf_field = form.get("csrf_token", "")
         if not _validate_csrf(request, form_token=csrf_field):
             return HTMLResponse("CSRF validation failed", status_code=403)
-        # Rate limiting
+        # Rate limiting (async-safe with bounded memory)
         client_ip = request.client.host if request.client else "unknown"
         now = time.time()
-        # Prune all stale entries when dict gets large (prevent unbounded growth)
-        if len(_login_attempts) > 100:
-            stale_ips = [ip for ip, ts in _login_attempts.items()
-                         if not ts or now - ts[-1] > _LOGIN_WINDOW_SECONDS]
-            for ip in stale_ips:
-                del _login_attempts[ip]
-        attempts = _login_attempts.get(client_ip, [])
-        # Prune stale entries for this IP
-        attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
-        _login_attempts[client_ip] = attempts
-        if len(attempts) >= _MAX_LOGIN_ATTEMPTS:
-            return HTMLResponse("Too many login attempts. Try again later.", status_code=429)
+        async with _login_lock:
+            # Hard cap: evict oldest IPs when dict exceeds limit
+            if len(_login_attempts) > _MAX_LOGIN_IPS:
+                stale_ips = [ip for ip, ts in _login_attempts.items()
+                             if not ts or now - ts[-1] > _LOGIN_WINDOW_SECONDS]
+                for ip in stale_ips:
+                    del _login_attempts[ip]
+                # If still over limit, evict oldest entries
+                if len(_login_attempts) > _MAX_LOGIN_IPS:
+                    sorted_ips = sorted(_login_attempts.items(),
+                                        key=lambda x: x[1][-1] if x[1] else 0)
+                    for ip, _ in sorted_ips[:len(_login_attempts) - _MAX_LOGIN_IPS]:
+                        del _login_attempts[ip]
+            attempts = _login_attempts.get(client_ip, [])
+            # Prune stale entries for this IP
+            attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
+            _login_attempts[client_ip] = attempts
+            if len(attempts) >= _MAX_LOGIN_ATTEMPTS:
+                return HTMLResponse("Too many login attempts. Try again later.", status_code=429)
         token = form.get("token", "").strip()
         if _check_token(token, dashboard_token):
-            _login_attempts.pop(client_ip, None)
+            async with _login_lock:
+                _login_attempts.pop(client_ip, None)
             resp = RedirectResponse("/dashboard/", status_code=302)
             resp.set_cookie(
-                _COOKIE_NAME, token,
+                _COOKIE_NAME, dashboard_token,
                 max_age=_COOKIE_MAX_AGE,
                 httponly=True,
                 samesite="strict",
                 secure=_is_https(request),
             )
             return resp
-        attempts.append(now)
-        _login_attempts[client_ip] = attempts
+        async with _login_lock:
+            attempts = _login_attempts.get(client_ip, [])
+            attempts.append(now)
+            _login_attempts[client_ip] = attempts
         return RedirectResponse("/dashboard/login?error=invalid", status_code=302)
 
     # --- Auth-required page wrapper ---
@@ -343,6 +357,8 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return JSONResponse(get_callgraph_data())
 
+    _MAX_POST_BODY_SIZE = 1024 * 1024  # 1 MB
+
     async def api_triage(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -351,6 +367,10 @@ def _create_routes(dashboard_token: str) -> list:
         content_type = request.headers.get("content-type", "")
         if "application/json" not in content_type:
             return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
+        # M17: Reject oversized POST bodies
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
         try:
             body = await request.json()
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
@@ -390,6 +410,10 @@ def _create_routes(dashboard_token: str) -> list:
         content_type = request.headers.get("content-type", "")
         if "application/json" not in content_type:
             return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
+        # M17: Reject oversized POST bodies
+        content_length = request.headers.get("content-length")
+        if content_length and int(content_length) > _MAX_POST_BODY_SIZE:
+            return JSONResponse({"error": "Request body too large"}, status_code=413)
         try:
             body = await request.json()
         except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
@@ -517,6 +541,9 @@ def _create_routes(dashboard_token: str) -> list:
                 )
             _sse_connection_count += 1
 
+        # C3: Capture auth token at connection time for re-validation
+        connection_token = request.cookies.get(_COOKIE_NAME, "")
+
         async def event_generator():
             global _sse_connection_count
             try:
@@ -547,6 +574,10 @@ def _create_routes(dashboard_token: str) -> list:
                 yield f"retry: 5000\nevent: state-update\ndata: {init_data}\n\n"
                 while True:
                     await asyncio.sleep(2)
+                    # C3: Re-validate auth each iteration; break if token revoked
+                    if connection_token and not _check_token(connection_token, dashboard_token):
+                        logger.debug("SSE: connection token invalidated, closing")
+                        return
                     try:
                         overview = get_overview_data()
                         current_tools = overview["tool_calls"]

@@ -94,6 +94,15 @@ class _ToolResultCache:
 #  Pagination helper
 # ---------------------------------------------------------------------------
 
+def _make_hashable(v):
+    """Recursively convert mutable values to hashable types for cache keys."""
+    if isinstance(v, dict):
+        return tuple(sorted((k, _make_hashable(val)) for k, val in v.items()))
+    if isinstance(v, (list, set)):
+        return tuple(_make_hashable(item) for item in v)
+    return v
+
+
 def _make_cache_key(**params) -> tuple:
     """Build a hashable cache key from keyword arguments.
 
@@ -105,12 +114,7 @@ def _make_cache_key(**params) -> tuple:
     for k in sorted(params):
         if k in _SKIP:
             continue
-        v = params[k]
-        # Make mutable values hashable
-        if isinstance(v, list):
-            v = tuple(v)
-        elif isinstance(v, dict):
-            v = tuple(sorted(v.items()))
+        v = _make_hashable(params[k])
         parts.append((k, v))
     return tuple(parts)
 

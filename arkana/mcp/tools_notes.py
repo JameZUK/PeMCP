@@ -75,7 +75,7 @@ async def get_notes(
         category: (Optional[str]) Filter by category: 'general', 'function', 'tool_result',
             'ioc', 'hypothesis', or 'manual'.
         address: (Optional[str]) Filter by hex address (e.g. '0x401000').
-        limit: (int) Maximum number of notes to return. Default: 50.
+        limit: (int) Maximum number of notes to return. Default: 20.
 
     Returns:
         A dictionary with notes list and count.
@@ -191,10 +191,14 @@ def _auto_note_single(function_address: str, custom_summary=None):
 
             callgraph = state.angr_cfg.functions.callgraph
             cats_seen: set = set()
+            # M13: Use precompiled regex as fast pre-filter
+            from arkana.mcp.tools_triage import _SUSPICIOUS_IMPORTS_PATTERN
             try:
                 for callee_addr in callgraph.successors(addr_used):
                     if callee_addr in state.angr_cfg.functions:
                         cname = state.angr_cfg.functions[callee_addr].name
+                        if not _SUSPICIOUS_IMPORTS_PATTERN.search(cname):
+                            continue
                         for api_name, (_risk, cat) in CATEGORIZED_IMPORTS_DB.items():
                             if api_name in cname:
                                 apis_called.append(cname)

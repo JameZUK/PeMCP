@@ -220,6 +220,12 @@ async def import_project(
     with tarfile.open(abs_path, "r:gz") as tar:
         # Security: validate member names to prevent path traversal
         for member in tar.getmembers():
+            # C1: Reject symlinks and hardlinks to prevent traversal attacks
+            if member.issym() or member.islnk():
+                raise RuntimeError(
+                    f"[import_project] Archive contains symlink/hardlink: '{member.name}'. "
+                    "Archive may have been tampered with."
+                )
             norm = os.path.normpath(member.name)
             if (member.name.startswith("/") or norm.startswith("/")
                     or norm.startswith("..") or norm.startswith(os.sep + "..")):
@@ -263,8 +269,14 @@ async def import_project(
             binary_prefix = "binary/"
             for member in tar.getmembers():
                 if member.name.startswith(binary_prefix) and member.isfile():
-                    # Use basename to prevent path traversal (e.g. "binary//etc/evil")
-                    binary_name = os.path.basename(member.name[len(binary_prefix):])
+                    # C6: Reject members with subdirectories beyond the prefix
+                    relative = member.name[len(binary_prefix):]
+                    if "/" in relative or "\\" in relative:
+                        raise RuntimeError(
+                            f"[import_project] Binary member has subdirectories: '{member.name}'. "
+                            "Archive may have been tampered with."
+                        )
+                    binary_name = os.path.basename(relative)
                     if not binary_name:
                         continue
                     bf = tar.extractfile(member)
@@ -272,13 +284,26 @@ async def import_project(
                         binary_data = bf.read()
                     break
 
-        # Read artifact files
+        # Read artifact files (C6: deduplicate colliding basenames)
         artifact_prefix = "artifacts/"
+        seen_basenames: set = set()
         for member in tar.getmembers():
             if member.name.startswith(artifact_prefix) and member.isfile():
-                art_basename = os.path.basename(member.name[len(artifact_prefix):])
+                relative = member.name[len(artifact_prefix):]
+                if "/" in relative or "\\" in relative:
+                    logger.warning("Skipping artifact with subdirectory: %s", member.name)
+                    continue
+                art_basename = os.path.basename(relative)
                 if not art_basename:
                     continue
+                # Deduplicate collisions by appending counter
+                original_basename = art_basename
+                counter = 1
+                while art_basename in seen_basenames:
+                    name, ext = os.path.splitext(original_basename)
+                    art_basename = f"{name}_{counter}{ext}"
+                    counter += 1
+                seen_basenames.add(art_basename)
                 af = tar.extractfile(member)
                 if af:
                     artifact_files[art_basename] = af.read()
@@ -295,17 +320,15 @@ async def import_project(
         with gzip.open(cache_entry_path, "wt", encoding="utf-8") as f:
             json.dump(wrapper, f)
 
-        # Update cache metadata
-        with analysis_cache._lock:
-            meta = analysis_cache._load_meta()
-            meta[sha256] = {
-                "original_filename": manifest.get("original_filename", "imported"),
-                "cached_at": __import__("time").time(),
-                "last_accessed": __import__("time").time(),
-                "size_bytes": cache_entry_path.stat().st_size,
-                "mode": manifest.get("mode", "unknown"),
-            }
-            analysis_cache._save_meta(meta)
+        # Update cache metadata via public API
+        import time as _time
+        analysis_cache.insert_raw_entry(sha256, {
+            "original_filename": manifest.get("original_filename", "imported"),
+            "cached_at": _time.time(),
+            "last_accessed": _time.time(),
+            "size_bytes": cache_entry_path.stat().st_size,
+            "mode": manifest.get("mode", "unknown"),
+        })
 
         await ctx.info(f"Analysis data imported into cache (SHA256: {sha256[:16]}...)")
 

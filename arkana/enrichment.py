@@ -58,6 +58,10 @@ def start_enrichment(current_state: AnalyzerState) -> None:
     # Reset cancellation flag for new run
     current_state._enrichment_cancel.clear()
 
+    # H5: Increment generation counter to detect stale workers
+    current_state._enrichment_generation += 1
+    generation = current_state._enrichment_generation
+
     current_state.set_task(TASK_ID, {
         "status": TASK_RUNNING,
         "progress_percent": 0,
@@ -69,12 +73,12 @@ def start_enrichment(current_state: AnalyzerState) -> None:
 
     t = threading.Thread(
         target=_enrichment_worker,
-        args=(current_state,),
+        args=(current_state, generation),
         daemon=True,
         name="arkana-enrichment",
     )
     t.start()
-    logger.info("Auto-enrichment background thread started (task_id=%s).", TASK_ID)
+    logger.info("Auto-enrichment background thread started (task_id=%s, gen=%d).", TASK_ID, generation)
 
 
 def _update(state: AnalyzerState, pct: int, msg: str) -> None:
@@ -87,12 +91,17 @@ def _update(state: AnalyzerState, pct: int, msg: str) -> None:
     )
 
 
-def _cancelled(state: AnalyzerState) -> bool:
-    """Check if enrichment has been cancelled."""
-    return state._enrichment_cancel.is_set()
+def _cancelled(state: AnalyzerState, generation: int = 0) -> bool:
+    """Check if enrichment has been cancelled or superseded by a newer run."""
+    if state._enrichment_cancel.is_set():
+        return True
+    # H5: If generation doesn't match, a newer run has started
+    if generation > 0 and state._enrichment_generation != generation:
+        return True
+    return False
 
 
-def _enrichment_worker(state: AnalyzerState) -> None:
+def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
     """Main enrichment coordinator. Runs sequentially through phases."""
     set_current_state(state)
 
@@ -101,7 +110,7 @@ def _enrichment_worker(state: AnalyzerState) -> None:
 
     try:
         # ── Phase 1a: Classify binary purpose ────────────────────────
-        if _cancelled(state):
+        if _cancelled(state, generation):
             return
         _update(state, 0, "Classifying binary purpose...")
         try:
@@ -114,7 +123,7 @@ def _enrichment_worker(state: AnalyzerState) -> None:
             phases_failed.append(("classify", str(e)))
 
         # ── Phase 1b: Triage report ──────────────────────────────────
-        if _cancelled(state):
+        if _cancelled(state, generation):
             return
         _update(state, 2, "Running triage report...")
         try:
@@ -132,7 +141,7 @@ def _enrichment_worker(state: AnalyzerState) -> None:
             phases_failed.append(("triage", str(e)))
 
         # ── Phase 1c: Similarity hashes ──────────────────────────────
-        if _cancelled(state):
+        if _cancelled(state, generation):
             return
         _update(state, 25, "Computing similarity hashes...")
         try:
@@ -148,7 +157,7 @@ def _enrichment_worker(state: AnalyzerState) -> None:
             phases_failed.append(("similarity_hashes", str(e)))
 
         # ── Phase 2a: MITRE ATT&CK mapping ──────────────────────────
-        if _cancelled(state):
+        if _cancelled(state, generation):
             return
         _update(state, 28, "Mapping MITRE ATT&CK techniques...")
         try:
@@ -161,7 +170,7 @@ def _enrichment_worker(state: AnalyzerState) -> None:
             phases_failed.append(("mitre_attack", str(e)))
 
         # ── Phase 2b: Structured IOCs ────────────────────────────────
-        if _cancelled(state):
+        if _cancelled(state, generation):
             return
         _update(state, 30, "Collecting structured IOCs...")
         try:
@@ -174,17 +183,17 @@ def _enrichment_worker(state: AnalyzerState) -> None:
             phases_failed.append(("iocs", str(e)))
 
         # ── Phase 3: Wait for angr CFG ───────────────────────────────
-        if _cancelled(state):
+        if _cancelled(state, generation):
             return
         _update(state, 32, "Waiting for angr CFG...")
-        cfg_ready = _wait_for_cfg(state)
+        cfg_ready = _wait_for_cfg(state, generation=generation)
 
         if not cfg_ready:
             _update(state, 35, "Angr CFG not available — skipping angr phases")
             logger.info("Enrichment: skipping angr-dependent phases (CFG not available)")
         else:
             # ── Phase 3a: Library function identification ────────────
-            if _cancelled(state):
+            if _cancelled(state, generation):
                 return
             _update(state, 35, "Identifying library functions...")
             try:
@@ -196,28 +205,28 @@ def _enrichment_worker(state: AnalyzerState) -> None:
                 phases_failed.append(("library_functions", str(e)))
 
             # ── Phase 3b: Decompile sweep ────────────────────────────
-            if _cancelled(state):
+            if _cancelled(state, generation):
                 return
             _update(state, 40, "Starting decompile sweep...")
             try:
-                _decompile_sweep(state, phases_completed, phases_failed)
+                _decompile_sweep(state, phases_completed, phases_failed, generation=generation)
             except Exception as e:
                 logger.warning("Enrichment: decompile sweep failed: %s", e)
                 phases_failed.append(("decompile_sweep", str(e)))
 
             # ── Phase 3c: Auto-note functions ────────────────────────
-            if _cancelled(state):
+            if _cancelled(state, generation):
                 return
             _update(state, 90, "Auto-noting functions...")
             try:
-                _auto_note_sweep(state)
+                _auto_note_sweep(state, generation=generation)
                 phases_completed.append("auto_notes")
             except Exception as e:
                 logger.warning("Enrichment: auto-note sweep failed: %s", e)
                 phases_failed.append(("auto_notes", str(e)))
 
         # ── Phase 4: Cache save ──────────────────────────────────────
-        if _cancelled(state):
+        if _cancelled(state, generation):
             return
         _update(state, 98, "Saving to cache...")
         try:
@@ -256,11 +265,11 @@ def _enrichment_worker(state: AnalyzerState) -> None:
         state._decompile_on_demand_waiting = False
 
 
-def _wait_for_cfg(state: AnalyzerState, timeout: int = ENRICHMENT_TIMEOUT) -> bool:
+def _wait_for_cfg(state: AnalyzerState, timeout: int = ENRICHMENT_TIMEOUT, generation: int = 0) -> bool:
     """Poll for angr CFG completion. Returns True if CFG is available."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if _cancelled(state):
+        if _cancelled(state, generation):
             return False
 
         # Check if CFG is already available
@@ -291,6 +300,7 @@ def _decompile_sweep(
     state: AnalyzerState,
     phases_completed: list,
     phases_failed: list,
+    generation: int = 0,
 ) -> None:
     """Decompile top-scored functions in priority order."""
     from arkana.mcp.tools_angr_disasm import _build_scored_functions
@@ -311,7 +321,7 @@ def _decompile_sweep(
     failed = 0
 
     for i, func_info in enumerate(scored[:max_funcs]):
-        if _cancelled(state):
+        if _cancelled(state, generation):
             break
 
         # Yield to on-demand decompile requests (with 120s timeout)
@@ -319,7 +329,7 @@ def _decompile_sweep(
             wait_deadline = time.time() + 120
             while state._decompile_on_demand_waiting:
                 time.sleep(0.1)
-                if _cancelled(state) or time.time() > wait_deadline:
+                if _cancelled(state, generation) or time.time() > wait_deadline:
                     break
 
         # Progress: map index to 40-90% range
@@ -344,7 +354,7 @@ def _decompile_sweep(
             acquired = state._decompile_lock.acquire(timeout=0.5)
             if acquired:
                 break
-            if _cancelled(state):
+            if _cancelled(state, generation):
                 break
         if not acquired:
             continue
@@ -381,7 +391,7 @@ def _decompile_sweep(
         phases_failed.append(("decompile_partial", f"{failed} functions failed"))
 
 
-def _auto_note_sweep(state: AnalyzerState) -> None:
+def _auto_note_sweep(state: AnalyzerState, generation: int = 0) -> None:
     """Auto-note top functions that have been decompiled."""
     from arkana.mcp.tools_notes import _auto_note_single
     from arkana.mcp.tools_angr import _get_cached_lines
@@ -390,7 +400,7 @@ def _auto_note_sweep(state: AnalyzerState) -> None:
     noted = 0
 
     for func_info in scored[:50]:
-        if _cancelled(state):
+        if _cancelled(state, generation):
             break
 
         addr_hex = func_info.get("addr", "")

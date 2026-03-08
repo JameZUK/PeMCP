@@ -650,6 +650,13 @@ async def close_file(ctx: Context) -> Dict[str, str]:
             triage_status=state.get_all_triage_snapshot(),
         )
 
+    # C5: Clear decompile meta cache on file close
+    try:
+        from arkana.mcp.tools_angr import clear_decompile_meta
+        clear_decompile_meta()
+    except ImportError:
+        pass
+
     # Use atomic reset methods (safe for shared references from default state)
     state.close_pe()
     state.reset_angr()

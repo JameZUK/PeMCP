@@ -63,11 +63,16 @@ class TestStateApi:
         with _registry_lock:
             self._saved_registry = dict(_session_registry)
             _session_registry.clear()
+        # Clear overview cache to prevent stale data between tests
+        from arkana.dashboard.state_api import _overview_cache
+        _overview_cache.clear()
 
     def teardown_method(self):
         with _registry_lock:
             _session_registry.clear()
             _session_registry.update(self._saved_registry)
+        from arkana.dashboard.state_api import _overview_cache
+        _overview_cache.clear()
 
     def test_overview_no_file(self):
         from arkana.dashboard.state_api import get_overview_data
@@ -459,11 +464,15 @@ class TestFlossDecodedStrings:
         with _registry_lock:
             self._saved_registry = dict(_session_registry)
             _session_registry.clear()
+        from arkana.dashboard.state_api import _overview_cache
+        _overview_cache.clear()
 
     def teardown_method(self):
         with _registry_lock:
             _session_registry.clear()
             _session_registry.update(self._saved_registry)
+        from arkana.dashboard.state_api import _overview_cache
+        _overview_cache.clear()
 
     def test_overview_includes_floss_top_decoded(self):
         from arkana.dashboard.state_api import get_overview_data

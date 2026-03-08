@@ -301,6 +301,8 @@ async def auto_extract_crypto_keys(
     """
     await ctx.info("Searching for cryptographic keys")
     _check_pe_loaded("auto_extract_crypto_keys")
+    # H6: Cap search_radius to prevent excessive memory/CPU usage
+    search_radius = min(search_radius, 65536)
 
     pe = state.pe_object
     file_data = pe.__data__
@@ -527,7 +529,9 @@ async def brute_force_simple_crypto(
                 score += 1.0
             # Known string patterns
             for pattern in [b"http", b"https", b".com", b".exe", b".dll", b"windows", b"KERNEL32"]:
-                if pattern in decrypted.lower() if pattern.isalpha() else pattern in decrypted:
+                # M11: Fix operator precedence — search case-insensitive for alpha patterns
+                haystack = decrypted.lower() if pattern.isalpha() else decrypted
+                if pattern in haystack:
                     score += 0.5
             return score
 
@@ -562,6 +566,10 @@ async def brute_force_simple_crypto(
         bridge.report_progress(5, 100)
         bridge.info("Trying XOR single-byte...")
 
+        # H7: Preview size for scoring — only decrypt first 512 bytes for scoring,
+        # full decrypt only for keys that score well enough.
+        _PREVIEW = 512
+
         # --- XOR single byte ---
         if "xor_single" in algorithms:
             if specific_key and len(specific_key) == 1:
@@ -569,9 +577,11 @@ async def brute_force_simple_crypto(
             else:
                 key_range = range(1, 256)
             for key in key_range:
-                dec = bytes(b ^ key for b in data)
-                score = _score_result(dec)
-                _add_result("xor_single", f"0x{key:02x}", dec, score)
+                preview = bytes(b ^ key for b in data[:_PREVIEW])
+                score = _score_result(preview)
+                if score >= 1.0:
+                    dec = bytes(b ^ key for b in data)
+                    _add_result("xor_single", f"0x{key:02x}", dec, score)
                 if len(results) >= limit:
                     break
 
@@ -657,7 +667,7 @@ async def brute_force_simple_crypto(
         bridge.report_progress(60, 100)
         bridge.info("Trying ADD/SUB/ROL/ROR...")
 
-        # --- ADD/SUB single byte ---
+        # --- ADD/SUB single byte (H7: preview-based scoring) ---
         for algo_name in ["add", "sub"]:
             if algo_name in algorithms and len(results) < limit:
                 if specific_key and len(specific_key) == 1:
@@ -666,24 +676,34 @@ async def brute_force_simple_crypto(
                     key_range = range(1, 256)
                 for key in key_range:
                     if algo_name == "add":
-                        dec = bytes((b + key) & 0xFF for b in data)
+                        preview = bytes((b + key) & 0xFF for b in data[:_PREVIEW])
                     else:
-                        dec = bytes((b - key) & 0xFF for b in data)
-                    score = _score_result(dec)
-                    _add_result(algo_name, f"0x{key:02x}", dec, score)
+                        preview = bytes((b - key) & 0xFF for b in data[:_PREVIEW])
+                    score = _score_result(preview)
+                    if score >= 1.0:
+                        if algo_name == "add":
+                            dec = bytes((b + key) & 0xFF for b in data)
+                        else:
+                            dec = bytes((b - key) & 0xFF for b in data)
+                        _add_result(algo_name, f"0x{key:02x}", dec, score)
                     if len(results) >= limit:
                         break
 
-        # --- ROL/ROR single byte ---
+        # --- ROL/ROR single byte (H7: preview-based scoring) ---
         for algo_name in ["rol", "ror"]:
             if algo_name in algorithms and len(results) < limit:
                 for shift in range(1, 8):
                     if algo_name == "rol":
-                        dec = bytes(((b << shift) | (b >> (8 - shift))) & 0xFF for b in data)
+                        preview = bytes(((b << shift) | (b >> (8 - shift))) & 0xFF for b in data[:_PREVIEW])
                     else:
-                        dec = bytes(((b >> shift) | (b << (8 - shift))) & 0xFF for b in data)
-                    score = _score_result(dec)
-                    _add_result(algo_name, f"shift={shift}", dec, score)
+                        preview = bytes(((b >> shift) | (b << (8 - shift))) & 0xFF for b in data[:_PREVIEW])
+                    score = _score_result(preview)
+                    if score >= 1.0:
+                        if algo_name == "rol":
+                            dec = bytes(((b << shift) | (b >> (8 - shift))) & 0xFF for b in data)
+                        else:
+                            dec = bytes(((b >> shift) | (b << (8 - shift))) & 0xFF for b in data)
+                        _add_result(algo_name, f"shift={shift}", dec, score)
                     if len(results) >= limit:
                         break
 

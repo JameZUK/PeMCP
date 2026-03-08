@@ -153,7 +153,11 @@ def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
                         match_addresses.add(item[0]['value'])
 
             for addr in match_addresses:
-                capa_func_map[addr].append(capa_id)
+                try:
+                    addr_int = int(addr, 0) if isinstance(addr, str) else int(addr)
+                except (ValueError, TypeError):
+                    continue
+                capa_func_map[addr_int].append(capa_id)
 
         # 2. Iterate through all FLOSS strings and check for correlation
         all_strings_with_refs = []
@@ -202,7 +206,7 @@ _IOC_CATEGORY_PATTERNS = (
     ("ipv4", re.compile(r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$")),
     ("url", re.compile(r"^(https?|ftp)://[^\s/$.?#].[^\s]*$")),
     ("domain", re.compile(r"^(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,6}$")),
-    ("filepath_windows", re.compile(r"^[a-zA-Z]:\\[\\\S|*\S].*")),
+    ("filepath_windows", re.compile(r"^[a-zA-Z]:\\[^\s]+")),
     ("registry_key", re.compile(r"^(HKLM|HKCU|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKCR|HKEY_CLASSES_ROOT|HKU|HKEY_USERS)\\[\w\\\s\-. ]+")),
     ("email", re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")),
 )

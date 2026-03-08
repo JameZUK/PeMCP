@@ -496,6 +496,19 @@ class AnalysisCache:
                 },
             }
 
+    def insert_raw_entry(self, sha256: str, meta_entry: Dict[str, Any]) -> None:
+        """Insert or update cache metadata for a pre-written entry.
+
+        Used by ``import_project`` to register an entry whose ``.json.gz``
+        file has already been written to the cache directory.  Acquires
+        ``_lock``, loads meta, updates the entry, and saves.
+        """
+        sha256 = sha256.lower()
+        with self._lock:
+            meta = self._load_meta()
+            meta[sha256] = meta_entry
+            self._save_meta(meta)
+
     def remove_entry_by_hash(self, sha256: str) -> bool:
         """Remove a single entry by hash.  Returns True if it existed."""
         sha256 = sha256.lower()

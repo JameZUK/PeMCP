@@ -11,6 +11,14 @@ if ANGR_AVAILABLE:
 _init_lock = threading.Lock()
 
 
+def _make_return_hook(rv, bits):
+    """H1: Factory function to create a SimProcedure with correct closure binding."""
+    class _ReturnHook(angr.SimProcedure):
+        def run(self):
+            return self.state.solver.BVV(rv, bits)
+    return _ReturnHook()
+
+
 def _rebuild_project_with_hooks():
     """Rebuild the angr project from scratch and re-apply user hooks.
 
@@ -34,14 +42,7 @@ def _rebuild_project_with_hooks():
 
         # Build the same SimProcedure that hook_function creates
         if ret_val is not None:
-            rv = ret_val
-            bits = proj.arch.bits
-
-            class _ReturnHook(angr.SimProcedure):
-                def run(self):
-                    return self.state.solver.BVV(rv, bits)
-
-            hook_proc = _ReturnHook()
+            hook_proc = _make_return_hook(ret_val, proj.arch.bits)
         else:
             class _VoidHook(angr.SimProcedure):
                 IS_FUNCTION = True

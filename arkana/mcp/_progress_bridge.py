@@ -120,8 +120,7 @@ class ProgressBridge:
         if self._loop is None or self._loop.is_closed():
             return
         try:
-            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-            future.result(timeout=self._delivery_timeout)
+            asyncio.run_coroutine_threadsafe(coro, self._loop)
         except Exception:
             # Never let progress reporting break an analysis.
-            logger.debug("ProgressBridge: notification delivery failed", exc_info=True)
+            logger.debug("ProgressBridge: notification dispatch failed", exc_info=True)

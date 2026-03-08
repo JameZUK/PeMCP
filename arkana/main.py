@@ -339,6 +339,8 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
     """Pre-load a file into state for MCP server mode."""
     abs_input_file = cfg.abs_input_file
     logger.info("MCP Server: Loading input file: %s (Mode: %s)", abs_input_file, args.mode)
+    # H4: Initialize before try block so except handlers always have it defined
+    temp_pe_obj_for_preload = None
     try:
         if not os.path.isfile(abs_input_file):
             logger.critical("Input path for MCP server is not a file: %s", abs_input_file)
@@ -399,7 +401,6 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
             logger.info("Loaded %s binary: %s", format_label, abs_input_file)
 
         else:
-            temp_pe_obj_for_preload = None
             temp_pe_obj_for_preload = pefile.PE(abs_input_file, fast_load=False)
             state.filepath = abs_input_file
             state.pe_object = temp_pe_obj_for_preload
@@ -522,9 +523,9 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
         if not dashboard_disabled and dashboard_port > 0:
             try:
                 from arkana.dashboard.app import start_dashboard_thread
-                # Bind to 0.0.0.0 so the dashboard is reachable from
-                # outside a container (port is mapped via -p in run.sh).
-                dashboard_host = os.environ.get("ARKANA_DASHBOARD_HOST", "0.0.0.0")
+                # M2: Default to 127.0.0.1 for security; Docker run.sh
+                # sets ARKANA_DASHBOARD_HOST=0.0.0.0 explicitly.
+                dashboard_host = os.environ.get("ARKANA_DASHBOARD_HOST", "127.0.0.1")
                 start_dashboard_thread(host=dashboard_host, port=dashboard_port)
             except Exception as e:
                 logger.warning("Failed to start dashboard server: %s", e)
