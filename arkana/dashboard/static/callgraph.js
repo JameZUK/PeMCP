@@ -574,7 +574,9 @@ function _appendXrefRow(container, entry) {
     row.style.gap = '6px';
     /* Triage dot */
     var dot = document.createElement('span');
-    dot.className = 'xref-triage-dot dot-' + (entry.triage || 'unreviewed');
+    var _validTriage = ['clean', 'flagged', 'suspicious', 'unreviewed'];
+    var triageVal = _validTriage.indexOf(entry.triage) >= 0 ? entry.triage : 'unreviewed';
+    dot.className = 'xref-triage-dot dot-' + triageVal;
     row.appendChild(dot);
     /* Name */
     var nameSpan = document.createElement('span');
@@ -638,8 +640,10 @@ function renderStringsTab(data) {
         row.style.fontSize = '12px';
         /* Type badge */
         var badge = document.createElement('span');
+        var _allowedStrTypes = ['ascii', 'static', 'stack', 'decoded', 'tight'];
         var typeLower = (s.type || 'ascii').toLowerCase();
-        badge.className = 'badge badge-str-' + typeLower;
+        var safeType = _allowedStrTypes.indexOf(typeLower) >= 0 ? typeLower : 'ascii';
+        badge.className = 'badge badge-str-' + safeType;
         badge.textContent = (s.type || 'ASCII');
         badge.style.fontSize = '9px';
         badge.style.flexShrink = '0';

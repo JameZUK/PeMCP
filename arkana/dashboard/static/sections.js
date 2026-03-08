@@ -3,6 +3,7 @@
     "use strict";
 
     var _entropyData = null;
+    var _heatmapListenerAttached = false;
 
     function loadEntropy() {
         fetch("/dashboard/api/entropy")
@@ -62,16 +63,19 @@
                 "</div>";
         target.innerHTML = html;
 
-        // Click heatmap cell to jump to hex view
-        target.addEventListener("click", function (e) {
-            var cell = e.target.closest(".heatmap-cell");
-            if (cell) {
-                var offset = cell.getAttribute("data-offset");
-                if (offset) {
-                    window.location.href = "/dashboard/hexview?offset=0x" + parseInt(offset, 10).toString(16).toUpperCase();
+        // Click heatmap cell to jump to hex view (attach once to prevent accumulation)
+        if (!_heatmapListenerAttached) {
+            _heatmapListenerAttached = true;
+            target.addEventListener("click", function (e) {
+                var cell = e.target.closest(".heatmap-cell");
+                if (cell) {
+                    var offset = cell.getAttribute("data-offset");
+                    if (offset) {
+                        window.location.href = "/dashboard/hexview?offset=0x" + parseInt(offset, 10).toString(16).toUpperCase();
+                    }
                 }
-            }
-        });
+            });
+        }
     }
 
     function loadResources() {

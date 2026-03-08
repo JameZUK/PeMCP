@@ -728,21 +728,27 @@ function searchDecompiledCode() {
                 escapeHtml(String(data.total_matches)) + ' matches across ' +
                 escapeHtml(String(data.searched_functions)) + ' functions (' +
                 escapeHtml(String(data.total_cached)) + ' cached)</div>';
-            var escapedQ = escapeHtml(q);
-            var qRe = new RegExp('(' + escapedQ.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+            var qRe = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
             for (var i = 0; i < matches.length; i++) {
                 var m = matches[i];
                 html += '<div class="code-search-result-item">';
                 html += '<div class="code-search-result-header">';
-                html += '<a class="code-search-func-link" href="javascript:void(0)" data-nav-addr="' +
+                html += '<a class="code-search-func-link" href="#" data-nav-addr="' +
                     escapeHtml(m.address) + '">' + escapeHtml(m.function_name) + '</a>';
                 html += ' <span class="dim mono fs-10">' + escapeHtml(m.address) + ':' + escapeHtml(String(m.line_number)) + '</span>';
                 html += '</div>';
                 if (m.context_before) {
                     html += '<div class="code-match-context dim">' + escapeHtml(m.context_before) + '</div>';
                 }
-                var escapedLine = escapeHtml(m.line_text);
-                html += '<div class="code-match-line">' + escapedLine.replace(qRe, '<mark class="code-match-highlight">$1</mark>') + '</div>';
+                // Highlight: split raw text on matches, escape each part separately
+                var parts = m.line_text.split(qRe);
+                var highlightedLine = '';
+                for (var p = 0; p < parts.length; p++) {
+                    highlightedLine += (p % 2 === 1)
+                        ? '<mark class="code-match-highlight">' + escapeHtml(parts[p]) + '</mark>'
+                        : escapeHtml(parts[p]);
+                }
+                html += '<div class="code-match-line">' + highlightedLine + '</div>';
                 if (m.context_after) {
                     html += '<div class="code-match-context dim">' + escapeHtml(m.context_after) + '</div>';
                 }

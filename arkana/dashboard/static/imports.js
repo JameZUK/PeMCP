@@ -33,6 +33,10 @@ function filterImports() {
 document.addEventListener('DOMContentLoaded', function() {
     var input = document.getElementById('import-search');
     if (input) {
-        input.addEventListener('input', filterImports);
+        var _importDebounce;
+        input.addEventListener('input', function() {
+            clearTimeout(_importDebounce);
+            _importDebounce = setTimeout(filterImports, 200);
+        });
     }
 });

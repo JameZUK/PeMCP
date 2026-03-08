@@ -113,7 +113,7 @@ class SecurityHeadersMiddleware:
 
         # Check if this is a static file request
         path = scope.get("path", "")
-        is_static = "/static/" in path
+        is_static = path.startswith("/dashboard/static/") or path.startswith("/static/")
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
@@ -262,7 +262,9 @@ def _create_routes(dashboard_token: str) -> list:
     async def login_page(request: Request) -> Response:
         if _is_authenticated(request, dashboard_token):
             return RedirectResponse("/dashboard/", status_code=302)
-        error = request.query_params.get("error", "")
+        _KNOWN_ERRORS = {"invalid": "Invalid token.", "rate_limited": "Too many attempts. Try again later."}
+        error_key = request.query_params.get("error", "")
+        error = _KNOWN_ERRORS.get(error_key, "")
         html = _render("login.html", {"error": error})
         return HTMLResponse(html)
 
@@ -312,6 +314,34 @@ def _create_routes(dashboard_token: str) -> list:
             attempts.append(now)
             _login_attempts[client_ip] = attempts
         return RedirectResponse("/dashboard/login?error=invalid", status_code=302)
+
+    # --- JSON POST body helper ---
+    async def _parse_json_body(request: Request) -> tuple:
+        """Parse and validate a JSON POST body.
+
+        Returns (body_dict, None) on success, or (None, error_response) on failure.
+        """
+        content_type = request.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            return None, JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
+        content_length = request.headers.get("content-length")
+        try:
+            cl_int = int(content_length) if content_length else 0
+        except (ValueError, TypeError):
+            cl_int = 0
+        if cl_int > _MAX_POST_BODY_SIZE:
+            return None, JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            raw_body = await request.body()
+        except Exception:
+            return None, JSONResponse({"error": "Failed to read request body"}, status_code=400)
+        if len(raw_body) > _MAX_POST_BODY_SIZE:
+            return None, JSONResponse({"error": "Request body too large"}, status_code=413)
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+            return None, JSONResponse({"error": "invalid JSON"}, status_code=400)
+        return body, None
 
     # --- Auth-required page wrapper ---
     def _auth_page(template: str, nav: str, data_fn=None):
@@ -383,27 +413,9 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        content_type = request.headers.get("content-type", "")
-        if "application/json" not in content_type:
-            return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
-        # M17: Reject oversized POST bodies
-        content_length = request.headers.get("content-length")
-        try:
-            cl_int = int(content_length) if content_length else 0
-        except (ValueError, TypeError):
-            cl_int = 0
-        if cl_int > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            raw_body = await request.body()
-        except Exception:
-            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
-        if len(raw_body) > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            body = json.loads(raw_body)
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
         address = body.get("address", "").strip().lower()
         status = body.get("status", "").strip()
         if len(address) > 40:
@@ -442,27 +454,9 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        content_type = request.headers.get("content-type", "")
-        if "application/json" not in content_type:
-            return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
-        # M17: Reject oversized POST bodies
-        content_length = request.headers.get("content-length")
-        try:
-            cl_int = int(content_length) if content_length else 0
-        except (ValueError, TypeError):
-            cl_int = 0
-        if cl_int > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            raw_body = await request.body()
-        except Exception:
-            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
-        if len(raw_body) > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            body = json.loads(raw_body)
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
         address = body.get("address", "").strip().lower()
         if len(address) > 40:
             return JSONResponse({"error": "address too long"}, status_code=400)
@@ -592,9 +586,6 @@ def _create_routes(dashboard_token: str) -> list:
                     {"error": "too many SSE connections"},
                     status_code=429,
                 )
-            # Reserve the slot here; generator's finally block handles release.
-            # This is safe because StreamingResponse always invokes the generator.
-            _sse_connection_count += 1
 
         # C3: Capture auth token at connection time for re-validation
         # Check cookie, then Bearer header, then query param as fallback sources
@@ -608,6 +599,13 @@ def _create_routes(dashboard_token: str) -> list:
 
         async def event_generator():
             global _sse_connection_count
+            # Reserve SSE slot inside the generator to prevent leaks if the
+            # generator never starts (e.g. framework error between reservation
+            # and first iteration).
+            with _sse_lock:
+                if _sse_connection_count >= _MAX_SSE_CONNECTIONS:
+                    return
+                _sse_connection_count += 1
             try:
                 # Seed with current state so the first tick isn't a false "file-changed"
                 try:
@@ -772,7 +770,8 @@ def _create_routes(dashboard_token: str) -> list:
             length = max(1, min(length, 4096))
         except (ValueError, TypeError):
             length = 256
-        return JSONResponse(get_hex_dump_data(offset, length))
+        data = await asyncio.to_thread(get_hex_dump_data, offset, length)
+        return JSONResponse(data)
 
     async def api_mitre(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -828,7 +827,8 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_entropy(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_entropy_data())
+        data = await asyncio.to_thread(get_entropy_data)
+        return JSONResponse(data)
 
     async def api_resources(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -861,23 +861,9 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        content_length = request.headers.get("content-length")
-        try:
-            cl_int = int(content_length) if content_length else 0
-        except (ValueError, TypeError):
-            cl_int = 0
-        if cl_int > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            raw_body = await request.body()
-        except Exception:
-            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
-        if len(raw_body) > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            body = json.loads(raw_body)
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
         name = body.get("name", "").strip()
         if not name or not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', name):
             return JSONResponse({"error": "invalid name"}, status_code=400)
@@ -887,11 +873,10 @@ def _create_routes(dashboard_token: str) -> list:
         if not isinstance(fields, list):
             return JSONResponse({"error": "fields must be a list"}, status_code=400)
         st = _get_active_state()
-        custom_types = getattr(st, "custom_types", {})
-        if not isinstance(custom_types, dict):
-            custom_types = {}
-        custom_types[name] = {"kind": "struct", "fields": fields, "size": body.get("size", 0)}
-        st.custom_types = custom_types
+        try:
+            st.create_struct(name, fields, body.get("size", 0))
+        except Exception as e:
+            return JSONResponse({"error": str(e)[:200]}, status_code=400)
         return JSONResponse({"ok": True, "name": name})
 
     async def api_types_enum_post(request: Request) -> Response:
@@ -900,23 +885,9 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        content_length = request.headers.get("content-length")
-        try:
-            cl_int = int(content_length) if content_length else 0
-        except (ValueError, TypeError):
-            cl_int = 0
-        if cl_int > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            raw_body = await request.body()
-        except Exception:
-            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
-        if len(raw_body) > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            body = json.loads(raw_body)
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
         name = body.get("name", "").strip()
         if not name or not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', name):
             return JSONResponse({"error": "invalid name"}, status_code=400)
@@ -926,11 +897,10 @@ def _create_routes(dashboard_token: str) -> list:
         if not isinstance(values, dict):
             return JSONResponse({"error": "values must be a dict"}, status_code=400)
         st = _get_active_state()
-        custom_types = getattr(st, "custom_types", {})
-        if not isinstance(custom_types, dict):
-            custom_types = {}
-        custom_types[name] = {"kind": "enum", "values": values, "size": body.get("size", 4)}
-        st.custom_types = custom_types
+        try:
+            st.create_enum(name, values, body.get("size", 4))
+        except Exception as e:
+            return JSONResponse({"error": str(e)[:200]}, status_code=400)
         return JSONResponse({"ok": True, "name": name})
 
     async def api_types_delete(request: Request) -> Response:
@@ -943,10 +913,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not name or len(name) > 128:
             return JSONResponse({"error": "invalid name"}, status_code=400)
         st = _get_active_state()
-        custom_types = getattr(st, "custom_types", {})
-        if isinstance(custom_types, dict) and name in custom_types:
-            del custom_types[name]
-            st.custom_types = custom_types
+        if st.delete_custom_type(name):
             return JSONResponse({"ok": True})
         return JSONResponse({"error": "type not found"}, status_code=404)
 
@@ -974,7 +941,8 @@ def _create_routes(dashboard_token: str) -> list:
             file_info = report.get("file_info", {})
             if file_info.get("filename"):
                 base = os.path.splitext(file_info["filename"])[0]
-                filename = f"arkana_report_{base}.json"
+                safe_base = re.sub(r'[^a-zA-Z0-9_\-.]', '_', base)[:100]
+                filename = f"arkana_report_{safe_base}.json"
             return Response(
                 content=report_json,
                 media_type="application/json",
@@ -1010,26 +978,9 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        content_type = request.headers.get("content-type", "")
-        if "application/json" not in content_type:
-            return JSONResponse({"error": "Content-Type must be application/json"}, status_code=415)
-        content_length = request.headers.get("content-length")
-        try:
-            cl_int = int(content_length) if content_length else 0
-        except (ValueError, TypeError):
-            cl_int = 0
-        if cl_int > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            raw_body = await request.body()
-        except Exception:
-            return JSONResponse({"error": "Failed to read request body"}, status_code=400)
-        if len(raw_body) > _MAX_POST_BODY_SIZE:
-            return JSONResponse({"error": "Request body too large"}, status_code=413)
-        try:
-            body = json.loads(raw_body)
-        except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
-            return JSONResponse({"error": "invalid JSON"}, status_code=400)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
         file_path_b = body.get("file_path_b", "")
         if not isinstance(file_path_b, str) or not file_path_b.strip():
             return JSONResponse({"error": "file_path_b is required"}, status_code=400)
@@ -1038,10 +989,31 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "file_path_b too long"}, status_code=400)
         if "\x00" in file_path_b:
             return JSONResponse({"error": "invalid path"}, status_code=400)
-        if not os.path.isfile(file_path_b):
-            return JSONResponse({"error": "file not found or not accessible"}, status_code=400)
+        # If it's a relative path (from file browser), reconstruct full path
+        st = _get_active_state()
+        if not os.path.isabs(file_path_b):
+            samples_path = getattr(st, "samples_path", None) or getattr(
+                __import__('arkana.state', fromlist=['_default_state'])._default_state,
+                "samples_path", None)
+            if not samples_path:
+                return JSONResponse({"error": "no samples directory configured"}, status_code=400)
+            file_path_b = os.path.join(samples_path, file_path_b)
+        # Resolve symlinks and validate path is within allowed directories
         try:
-            data = await asyncio.to_thread(get_diff_data, file_path_b)
+            resolved = os.path.realpath(file_path_b)
+            st.check_path_allowed(resolved)
+        except RuntimeError:
+            return JSONResponse({"error": "path is outside allowed directories"}, status_code=403)
+
+        def _run_diff():
+            if not os.path.isfile(resolved):
+                return {"error": "file not found or not accessible"}
+            return get_diff_data(resolved)
+
+        try:
+            data = await asyncio.to_thread(_run_diff)
+            if data.get("error") == "file not found or not accessible":
+                return JSONResponse(data, status_code=400)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_diff error", exc_info=True)
@@ -1057,7 +1029,8 @@ def _create_routes(dashboard_token: str) -> list:
         sort_by = request.query_params.get("sort", "name")
         if sort_by not in ("name", "size", "format"):
             sort_by = "name"
-        return JSONResponse(get_list_files_data(search=search, sort_by=sort_by))
+        data = await asyncio.to_thread(get_list_files_data, search, sort_by)
+        return JSONResponse(data)
 
     return [
         Route("/login", endpoint=login_page, methods=["GET"]),

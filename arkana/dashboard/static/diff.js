@@ -47,8 +47,9 @@
         var html = "";
         for (var i = 0; i < files.length; i++) {
             var f = files[i];
-            var cls = (_selectedFilePath === f.path) ? "file-browser-row selected" : "file-browser-row";
-            html += "<tr class=\"" + cls + "\" data-path=\"" + escapeHtml(f.path) + "\">";
+            var fpath = f.relative_path || f.name;
+            var cls = (_selectedFilePath === fpath) ? "file-browser-row selected" : "file-browser-row";
+            html += "<tr class=\"" + cls + "\" data-path=\"" + escapeHtml(fpath) + "\">";
             html += "<td class=\"mono\">" + escapeHtml(f.relative_path || f.name) + "</td>";
             html += "<td class=\"dim\">" + escapeHtml(f.size_human) + "</td>";
             html += "<td><span class=\"badge badge-dim\">" + escapeHtml(f.format_hint) + "</span></td>";

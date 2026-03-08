@@ -65,6 +65,7 @@ _MAX_FUNC_LOOKUP_CACHE = 4  # max state objects to cache
 # Cache for overview enrichment (capa/YARA/FLOSS function link resolution)
 _overview_enrichment_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire, enriched_data)
 _OVERVIEW_ENRICHMENT_TTL = 10  # seconds — enrichment data changes slowly
+_MAX_OVERVIEW_ENRICHMENT_CACHE = 4  # max cached entries
 
 # M19: Cache for get_overview_data (2s TTL)
 _overview_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, data)
@@ -410,6 +411,20 @@ def _apply_overview_enrichment(st, pe_data: dict, floss: dict, binary_summary: d
             enriched_data[key] = copy.deepcopy(binary_summary[key])
     with _cache_lock:
         _overview_enrichment_cache[cache_key] = (now + _OVERVIEW_ENRICHMENT_TTL, version, enriched_data)
+        # Evict stale/excess entries
+        if len(_overview_enrichment_cache) > _MAX_OVERVIEW_ENRICHMENT_CACHE:
+            stale = [k for k, v in _overview_enrichment_cache.items()
+                     if k != cache_key and v[0] < now]
+            for k in stale:
+                del _overview_enrichment_cache[k]
+            if len(_overview_enrichment_cache) > _MAX_OVERVIEW_ENRICHMENT_CACHE:
+                oldest_key = min(
+                    (k for k in _overview_enrichment_cache if k != cache_key),
+                    key=lambda k: _overview_enrichment_cache[k][0],
+                    default=None,
+                )
+                if oldest_key:
+                    del _overview_enrichment_cache[oldest_key]
 
 
 def get_overview_data() -> Dict[str, Any]:
@@ -921,7 +936,7 @@ def get_functions_data(sort_by: str = "address",
             complexity = 0
             if hasattr(func, "graph") and func.graph is not None:
                 try:
-                    complexity = len(list(func.graph.nodes()))
+                    complexity = func.graph.number_of_nodes()
                 except (AttributeError, TypeError, RuntimeError):
                     pass
 
@@ -1014,7 +1029,7 @@ def get_callgraph_data() -> Dict[str, Any]:
             complexity = 0
             if hasattr(func, "graph") and func.graph is not None:
                 try:
-                    complexity = len(list(func.graph.nodes()))
+                    complexity = func.graph.number_of_nodes()
                 except (AttributeError, TypeError, RuntimeError):
                     pass
             explored = is_renamed or addr_hex in decompiled_addrs or addr_hex in noted_addrs
@@ -1386,7 +1401,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {"cached": False, "error": "invalid address"}
 
-    from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines
+    from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock, _get_cached_lines
     from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg
     from arkana.mcp._rename_helpers import (
         apply_function_renames_to_lines,
@@ -1433,8 +1448,9 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     else:
         try:
             local_cfg = _build_region_cfg(project, addr_int)
-        except Exception as e:
-            return {"cached": False, "error": f"Failed to build local CFG: {e}"}
+        except Exception:
+            logger.debug("Failed to build local CFG for %s", hex(addr_int), exc_info=True)
+            return {"cached": False, "error": "Failed to build local CFG"}
         addr_to_use = addr_int
         if addr_to_use not in local_cfg.functions:
             if (st.pe_object
@@ -1459,11 +1475,12 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
             return {"cached": False, "error": "Decompilation produced no code"}
 
         all_lines = dec.codegen.text.splitlines()
-        _decompile_meta[cache_key] = {
-            "function_name": func.name,
-            "address": hex(addr_to_use),
-            "lines": all_lines,
-        }
+        with _decompile_meta_lock:
+            _decompile_meta[cache_key] = {
+                "function_name": func.name,
+                "address": hex(addr_to_use),
+                "lines": all_lines,
+            }
         st._newly_decompiled.append(hex(addr_to_use))
     except Exception:
         return {"cached": False, "error": "Decompilation failed"}
@@ -2447,6 +2464,7 @@ def get_function_variables_data(address_hex: str) -> Dict[str, Any]:
     st = _get_state()
     params = []
     locals_list = []
+    cc_info = ""
 
     if st.angr_project is None:
         return {"parameters": params, "locals": locals_list, "error": "no angr project"}
@@ -2495,7 +2513,7 @@ def get_function_variables_data(address_hex: str) -> Dict[str, Any]:
     return {
         "parameters": params,
         "locals": locals_list,
-        "calling_convention": cc_info if 'cc_info' in dir() else "",
+        "calling_convention": cc_info,
         "function_address": address_hex,
     }
 
@@ -2505,18 +2523,45 @@ def get_function_variables_data(address_hex: str) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _compute_entropy(data: bytes) -> float:
-    """Shannon entropy of a byte sequence (0.0 – 8.0)."""
+    """Shannon entropy of a byte sequence (0.0 – 8.0).
+
+    Uses collections.Counter (C implementation) for fast byte counting.
+    """
     if not data:
         return 0.0
-    counts = [0] * 256
-    for b in data:
-        counts[b] += 1
+    from collections import Counter
+    counts = Counter(data)
     length = len(data)
     entropy = 0.0
-    for c in counts:
-        if c > 0:
-            p = c / length
-            entropy -= p * math.log2(p)
+    for c in counts.values():
+        p = c / length
+        entropy -= p * math.log2(p)
+    return round(entropy, 4)
+
+
+def _compute_entropy_streaming(filepath: str, max_size: int = 50 * 1024 * 1024) -> float:
+    """Compute Shannon entropy by streaming the file in chunks."""
+    from collections import Counter
+    counts = Counter()
+    total = 0
+    try:
+        with open(filepath, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                counts.update(chunk)
+                total += len(chunk)
+                if total >= max_size:
+                    break
+    except OSError:
+        return 0.0
+    if total == 0:
+        return 0.0
+    entropy = 0.0
+    for c in counts.values():
+        p = c / total
+        entropy -= p * math.log2(p)
     return round(entropy, 4)
 
 
@@ -2543,13 +2588,12 @@ def get_entropy_data() -> Dict[str, Any]:
                     "permissions": _section_permissions(s),
                 })
 
-    # Overall file entropy (compute from file if small enough)
+    # Overall file entropy (streamed to avoid loading entire file into memory)
     if filepath:
         try:
             file_size = os.path.getsize(filepath)
             if file_size <= 50 * 1024 * 1024:  # 50MB limit
-                with open(filepath, "rb") as f:
-                    overall = _compute_entropy(f.read())
+                overall = _compute_entropy_streaming(filepath)
         except OSError:
             pass
 
@@ -3027,9 +3071,9 @@ def get_diff_data(file_path_b: str, limit: int = 50) -> Dict[str, Any]:
             "unmatched_in_b": unmatched_b,
         }
 
-    except Exception as e:
+    except Exception:
         logger.debug("BinDiff error", exc_info=True)
-        return {"error": f"BinDiff failed: {str(e)[:200]}"}
+        return {"error": "BinDiff analysis failed"}
     finally:
         # Cleanup angr objects for the second binary
         try:
@@ -3043,26 +3087,47 @@ def get_diff_data(file_path_b: str, limit: int = 50) -> Dict[str, Any]:
 #  File listing for dashboard file browser
 # ---------------------------------------------------------------------------
 
+_MAX_LIST_FILES = 10000  # hard cap to prevent DoS on large/misconfigured directories
+_MAX_LIST_DEPTH = 10     # maximum directory recursion depth
+
+
 def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, Any]:
     """List files in the configured samples directory for the dashboard file browser.
 
-    Returns a list of files with name, path, size, and format hint.
+    Returns a list of files with name, relative path, size, and format hint.
+    Full filesystem paths are never exposed to the client.
     """
     st = _get_state()
     samples_path = getattr(st, "samples_path", None) or getattr(_default_state, "samples_path", None)
     if not samples_path or not os.path.isdir(samples_path):
         return {"files": [], "samples_path": None, "error": "No samples directory configured"}
 
+    # Resolve to real path once to prevent symlink traversal
+    resolved_samples = os.path.realpath(samples_path)
+
     from arkana.mcp._format_helpers import get_magic_hint
 
     files = []
+    truncated = False
     try:
-        for root, dirs, filenames in os.walk(samples_path):
+        for root, dirs, filenames in os.walk(resolved_samples, followlinks=False):
+            # Enforce depth limit
+            depth = root[len(resolved_samples):].count(os.sep)
+            if depth >= _MAX_LIST_DEPTH:
+                dirs.clear()
+                continue
             dirs[:] = [d for d in dirs if not d.startswith(".")]
             for fname in filenames:
                 if fname.startswith("."):
                     continue
+                if len(files) >= _MAX_LIST_FILES:
+                    truncated = True
+                    break
                 full_path = os.path.join(root, fname)
+                # Verify resolved path stays within samples directory
+                real_file = os.path.realpath(full_path)
+                if not real_file.startswith(resolved_samples + os.sep) and real_file != resolved_samples:
+                    continue
                 try:
                     stat_info = os.stat(full_path)
                     size = stat_info.st_size
@@ -3073,10 +3138,9 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
                     else:
                         size_human = f"{size} B"
                     fmt = get_magic_hint(full_path)
-                    rel_path = os.path.relpath(full_path, samples_path)
+                    rel_path = os.path.relpath(full_path, resolved_samples)
                     files.append({
                         "name": fname,
-                        "path": full_path,
                         "relative_path": rel_path,
                         "size_bytes": size,
                         "size_human": size_human,
@@ -3084,6 +3148,8 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
                     })
                 except (OSError, ValueError):
                     continue
+            if truncated:
+                break
     except OSError:
         return {"files": [], "samples_path": samples_path, "error": "Failed to read samples directory"}
 
@@ -3101,4 +3167,7 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
     else:
         files.sort(key=lambda f: f["name"].lower())
 
-    return {"files": files, "samples_path": samples_path, "total": len(files)}
+    result = {"files": files, "samples_path": samples_path, "total": len(files)}
+    if truncated:
+        result["truncated"] = True
+    return result
