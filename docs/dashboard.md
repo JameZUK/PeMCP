@@ -8,7 +8,7 @@ The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard
 
 ## Overview
 
-Binary summary with risk score, packing status, security mitigations, key findings, and recent notes.
+Binary summary with risk score, packing status, security mitigations, key findings with clickable function pivot links (`→ func_name`), recent notes with clickable addresses, and an analysis digest panel with AI-generated conclusion (synthesised from classification, triage findings, IOCs, and hypothesis notes). The FILE stat card shows the AI's hypothesis assessment when available, falling back to the generic binary classification.
 
 ![Dashboard Overview](Dashboard-Overview.png)
 
@@ -16,7 +16,7 @@ Binary summary with risk score, packing status, security mitigations, key findin
 
 ## Functions
 
-Sortable function explorer with triage buttons (FLAG / SUS / CLN). Flagged functions are automatically prioritised by the AI in subsequent analysis via `get_session_summary()`, `get_analysis_digest()`, and `suggest_next_action()`.
+Sortable function explorer with triage buttons (FLAG / SUS / CLN), enrichment score column, inline notes, full-text code search, and symbol tree view (TABLE/TREE toggle with 6 category groups). Supports `?highlight=0xADDR` deep linking from other pages. Flagged functions are automatically prioritised by the AI in subsequent analysis via `get_session_summary()`, `get_analysis_digest()`, and `suggest_next_action()`.
 
 Each function row has an **XREF** button that opens an inline analysis panel with three tabs:
 
@@ -32,7 +32,7 @@ The XREF panel opens without requiring decompilation, enabling fast cross-refere
 
 ## Call Graph
 
-Interactive Cytoscape.js call graph with dagre hierarchical layout. Nodes are coloured by triage status, with explored/renamed nodes visually distinguished.
+Interactive Cytoscape.js call graph with dagre hierarchical layout. Nodes are coloured by triage status, with explored/renamed nodes visually distinguished. Enrichment score drives border thickness (higher-score nodes have thicker borders). Supports `?focus=0xADDR` deep linking.
 
 Clicking a node opens a **tabbed sidebar** with four tabs:
 
@@ -49,9 +49,39 @@ Additional features: search with match highlighting, right-click context menu (d
 
 ## Sections
 
-PE/ELF section permissions with anomaly highlighting (W+X detection).
+PE/ELF section permissions with anomaly highlighting (W+X detection) and entropy heatmap with clickable cells linking to hex view.
 
 ![Dashboard Sections](Dashboard-Sections.png)
+
+---
+
+## Hex View
+
+Infinite-scroll hex dump with 16 bytes per row. Loads 4096-byte chunks on demand, keeps a maximum of 64KB in the DOM (trims from the opposite end). Jump-to-offset navigation for quick access to specific file locations.
+
+---
+
+## CAPA
+
+Capa capability matches grouped by namespace with clickable function links. Shows the mapping between binary behaviours and the MITRE ATT&CK framework.
+
+---
+
+## MITRE
+
+ATT&CK technique matrix with IOC panel. Aggregates findings from capa, import classification, behavioural indicators, and string matches into a visual technique grid.
+
+---
+
+## Types
+
+Custom struct and enum type editor for defining binary data structures. Create structs with typed fields (uint8-64, cstring, wstring, ipv4, bytes, padding) and enums with name-to-integer mappings. Apply types at file offsets to parse binary data.
+
+---
+
+## Diff
+
+Binary diff powered by angr BinDiff. File browser (BROWSE tab) to select a comparison binary from the samples directory, or manual path entry (MANUAL PATH tab). Shows identical, differing, and unmatched functions.
 
 ---
 
@@ -65,7 +95,7 @@ Chronological log of every tool call and note, with expandable detail panels sho
 
 ## Imports
 
-DLL import tables with export/function grouping, showing imported functions organised by DLL.
+DLL import tables with export/function grouping, showing imported functions organised by DLL. Export addresses are clickable, linking to the containing function on the Functions page.
 
 ---
 
@@ -76,13 +106,14 @@ Unified string explorer combining ASCII strings, FLOSS static, stack, decoded, a
 - **FLOSS detail panel** -- Collapsible panel above the string table showing FLOSS analysis status, type breakdown (STATIC / STACK / DECODED / TIGHT counts), top decoded and stack strings, and analysis metadata. Auto-refreshes while FLOSS analysis is running.
 - **Filtering** -- Filter by string type, category, and free-text search.
 - **Sifter scores** -- StringSifter relevance scoring for prioritising interesting strings.
+- **Function column** -- Clickable links showing which function references each string.
 - **Pagination** -- Large string sets are paginated for performance.
 
 ---
 
 ## Notes
 
-Category-filtered view of all analysis notes (function, tool_result, IOC, hypothesis, manual).
+Category-filtered view of all analysis notes (general, function, tool_result, IOC, hypothesis, manual). Addresses are clickable when they resolve to a known function, linking to the Functions page.
 
 ![Dashboard Notes](Dashboard-Notes.png)
 

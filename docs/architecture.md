@@ -19,6 +19,7 @@ arkana/
 ├── hashing.py                  # ssdeep implementation
 ├── mock.py                     # MockPE for non-PE/shellcode mode
 ├── background.py               # Background task management
+├── enrichment.py               # Auto-enrichment background coordinator
 ├── resources.py                # PEiD/capa/YARA rule downloads
 ├── parsers/
 │   ├── pe.py                   # PE structure parsing
@@ -41,8 +42,11 @@ arkana/
     ├── _format_helpers.py        - Shared binary format helpers
     ├── _refinery_helpers.py      - Shared Binary Refinery utilities (hex conversion, safety limits)
     ├── _progress_bridge.py       - Thread-safe MCP progress bridge for background tools
+    ├── _bsim_features.py          - BSim function similarity feature extraction & matching
     ├── _category_maps.py         - Category mappings for tool organisation
     ├── _input_helpers.py         - Hex/int parameter parsing, LRU result cache, pagination utilities
+    ├── _search_helpers.py        - Regex search-with-context for decompiled code and disassembly
+    ├── _rename_helpers.py        - Function/variable rename application for decompilation output
     ├── tools_pe.py               - File management & PE data retrieval (7 tools)
     ├── tools_pe_extended.py      - Extended PE analysis (14 tools)
     ├── tools_strings.py          - String analysis, capa, fuzzy search & custom YARA (13 tools)
@@ -75,6 +79,13 @@ arkana/
     ├── tools_ioc.py              - Structured IOC export (JSON/CSV/STIX) (1 tool)
     ├── tools_unpack.py           - Multi-method unpacking & OEP detection (3 tools)
     ├── tools_diff.py             - Binary payload comparison (1 tool)
+    ├── tools_rename.py             - Function/variable renames & address labels (6 tools)
+    ├── tools_types.py              - Custom struct/enum type definitions (5 tools)
+    ├── tools_struct.py             - Binary struct parsing (1 tool)
+    ├── tools_similarity.py         - BSim function similarity matching (5 tools)
+    ├── tools_malware_id.py         - Malware family identification (3 tools)
+    ├── tools_detection.py          - Detection engineering: YARA/Sigma rule generation (2 tools)
+    ├── tools_forensic_pe.py        - PE forensics & detection engineering (7 tools)
     ├── tools_workflow.py         - Report generation & sample naming (2 tools)
     ├── tools_refinery.py         - Binary Refinery core transforms (11 tools)
     ├── tools_refinery_advanced.py  - Refinery advanced transforms (8 tools)
@@ -96,8 +107,13 @@ arkana/
 - **Disk-Based Caching**  - Analysis results are cached in `~/.arkana/cache/` as gzip-compressed JSON, keyed by SHA256. Re-opening a previously analysed file loads from cache in under 10 ms. LRU eviction keeps cache size bounded.
 - **Lazy Loading**  - Heavy analysis (Angr CFG) runs in the background. The server is usable immediately.
 - **Pagination**  - Tools that return lists support `limit` and `offset` parameters with LRU result caching, preventing response truncation and giving AI clients control over data volume per call (default limit 20 for most tools).
-- **Smart Truncation**  - MCP responses exceeding 64KB are intelligently truncated (lists shortened, strings clipped) whilst preserving structure.
+- **Smart Truncation**  - MCP responses use a dual-limit system: a soft character limit (8K by default, tuned for Claude Code CLI) plus a hard 64KB byte-limit backstop per the MCP protocol specification. The `tool_decorator` includes a safety net that auto-enforces the soft limit even for tools that don't call `_check_mcp_response_size()` explicitly. Set `ARKANA_MCP_RESPONSE_LIMIT_CHARS=65536` to restore 64KB-only behaviour for non-Claude-Code clients.
 - **Graceful Degradation**  - All 20+ optional libraries are detected at startup. Tools that require unavailable libraries return clear error messages instead of crashing.
+- **Auto-Enrichment**  - After `open_file`, a background coordinator (`arkana/enrichment.py`) automatically runs classification, triage, similarity hashing, MITRE mapping, IOC collection, FLIRT library identification, a decompilation sweep, and auto-noting. Each phase checks a cancellation event and yields to on-demand decompile requests. Disable with `ARKANA_AUTO_ENRICHMENT=0`; control sweep depth with `ARKANA_ENRICHMENT_MAX_DECOMPILE=N`.
+- **Tool Decorator**  - Every MCP tool is wrapped by `tool_decorator` in `server.py`, which handles session activation, heartbeat updates, tool history recording, error enrichment, and response size enforcement.
+- **Rename/Annotation Layer**  - Users can rename functions and variables, and add address labels. Renames persist via cache alongside notes and are automatically applied in decompilation and disassembly output. `batch_rename` supports bulk operations with two-pass validate-then-apply atomicity.
+- **Custom Types**  - User-defined structs and enums for parsing binary data. Field types reuse `parse_binary_struct` types. Persisted via cache with validation guards (field name regex, enum byte-size checks, duplicate detection, cycle detection for recursive structs).
+- **Artifacts**  - Tools that extract files (unpacking, payload carving, config extraction) register them via `state.register_artifact()` with path, hashes, source tool, and type detection. Artifacts persist via cache and are included in project export/import archives.
 
 ---
 
@@ -140,9 +156,13 @@ The default `limit` varies by tool to balance context efficiency with completene
 
 The hard upper bound on `limit` is **100,000** (enforced in `get_pe_data` and string tools) to prevent excessive memory allocation.
 
+### Search Within Results
+
+Three tools support an optional `search` parameter for regex grep within their output: `decompile_function_with_angr`, `batch_decompile`, and `get_annotated_disassembly`. When `search` is provided, only matching lines/instructions with surrounding context are returned instead of full paginated output. The `context_lines` parameter (default 2, max 20) controls how many lines of context surround each match, and `case_sensitive` (default False) controls case sensitivity. Search is a view/filter on cached results — it does not affect cache keys, so the same cached decompilation serves both paginated browsing and search queries. `batch_decompile` with `search` excludes functions that have no matches.
+
 ### Result Caching (LRU)
 
-Paginated results are cached in an **LRU cache** (5 slots per tool) so that paging through results doesn't re-compute the full dataset on each call. The cache is keyed by tool name and non-pagination parameters  - changing `offset` or `limit` hits the same cache entry. The internal maximum cached items per result set is **5,000**.
+Paginated results are cached in an **LRU cache** (5 slots per tool) so that paging through results doesn't re-compute the full dataset on each call. The cache is keyed by tool name and non-pagination parameters  - changing `offset`, `limit`, `search`, `context_lines`, or `case_sensitive` hits the same cache entry. The internal maximum cached items per result set is **5,000**.
 
 ### Session & State Limits
 

@@ -212,8 +212,9 @@ disassembly.
   a specific address. Use to examine specific code regions, verify decompiler
   output, or explore functions instruction by instruction.
 - **`get_annotated_disassembly(address)`** — Disassembly enriched with variable
-  names, cross-references, and comments. The best tool for beginners because
-  annotations provide context that raw disassembly lacks.
+  names, cross-references, and comments. Supports `search` parameter for regex
+  grep within instructions (e.g., `search="call"` to find all calls). The best
+  tool for beginners because annotations provide context that raw disassembly lacks.
 - **`disassemble_raw_bytes(hex_bytes)`** — Disassemble arbitrary bytes without
   needing a loaded binary. Useful for teaching: give the learner hex bytes and
   ask them to predict what the disassembly will look like.

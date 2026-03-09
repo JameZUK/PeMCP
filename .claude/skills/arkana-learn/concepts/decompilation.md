@@ -90,8 +90,30 @@ essential when:
 - Security-sensitive logic (crypto, auth checks) needs precise understanding
 
 Use `get_annotated_disassembly(address)` alongside `decompile_function_with_angr(address)`
-to cross-reference. The disassembly is ground truth; the decompilation is an
-interpretation.
+to cross-reference. Both support a `search` parameter for regex grep within the output
+(e.g., `search="xor"` to find crypto operations). The disassembly is ground truth; the
+decompilation is an interpretation.
+
+### Searching Within Decompiled Code
+
+When a function has hundreds of lines of pseudocode, reading it all at once is
+overwhelming. The `search` parameter lets you jump directly to relevant code:
+
+```
+decompile_function_with_angr(address="0x401200", search="xor|encrypt", context_lines=3)
+```
+
+This returns only lines matching the pattern, with surrounding context. It is like
+using Ctrl+F in a text editor — you do not read the entire document to find what
+you need.
+
+**When to search**: You have a specific question ("does this function use XOR?",
+"where is CreateFile called?"). **When to read fully**: You are seeing a function for
+the first time and need to understand its overall structure.
+
+`batch_decompile` also supports `search` — it scans up to 20 functions and returns
+only those containing matches. This is how you efficiently find which functions are
+relevant before committing to full analysis.
 
 ### Using Cross-References (Xrefs)
 
@@ -110,7 +132,7 @@ entry point, trace forward through callees to see the execution flow.
 
 | Tool | Purpose |
 |------|---------|
-| `decompile_function_with_angr(address)` | Produce C-like pseudocode for a function (paginated — 80 lines/page, use `line_offset` for more) |
+| `decompile_function_with_angr(address)` | Produce C-like pseudocode for a function (paginated — 80 lines/page, use `line_offset` for more). Supports `search` parameter for regex grep within decompiled code. |
 | `auto_note_function(address)` | Record a behavioral summary after decompiling — always call this |
 | `get_function_xrefs(address)` | Find callers and callees of a function |
 | `get_function_variables(address)` | List stack and register variables with types and offsets |
@@ -163,6 +185,18 @@ digest. This teaches disciplined analysis documentation.
   *Expected direction*: Likely `test eax, eax` / `jz` or `cmp eax, 0` / `je`. The
   decompiler reconstructed the condition from the flag-setting instruction and the
   conditional jump.
+
+- "This function is 250 lines long and we suspect it contains a decryption loop.
+  How would you find the relevant code without reading all 250 lines?"
+  *Expected direction*: Use `search="xor|shr|shl|crypt"` to locate the crypto
+  operations directly. Then read the full function only around those matches if
+  more context is needed.
+
+- "You need to check 15 functions for network communication code. What is more
+  efficient than decompiling each one individually?"
+  *Expected direction*: Use `batch_decompile(addresses=[...], search="socket|connect|send|http")`
+  to scan all 15 at once. Only functions with matches are returned, saving context
+  window space for reasoning about the results.
 
 ---
 

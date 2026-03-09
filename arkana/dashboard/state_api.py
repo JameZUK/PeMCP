@@ -5,6 +5,7 @@ import datetime
 import logging
 import math
 import os
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -574,6 +575,21 @@ def get_overview_data() -> Dict[str, Any]:
         elif isinstance(compiler, str):
             binary_summary["language"] = compiler
 
+        # Classification (from auto-enrichment)
+        classification = getattr(st, "_cached_classification", None)
+        if classification and isinstance(classification, dict):
+            binary_summary["classification"] = classification.get("primary_type", "")
+            binary_summary["classification_confidence"] = classification.get("confidence", "")
+
+    # AI assessment — hypothesis notes take priority over generic classification
+    hypothesis_notes = [
+        n for n in notes
+        if n.get("category") == "hypothesis" and n.get("content")
+    ]
+    if hypothesis_notes:
+        binary_summary["ai_assessment"] = hypothesis_notes[-1].get("content", "")[:300]
+
+    if triage and isinstance(triage, dict):
         # Capabilities (capa matches) — top 10
         capabilities = triage.get("suspicious_capabilities", [])
         if isinstance(capabilities, list) and capabilities:
@@ -1050,6 +1066,7 @@ def get_callgraph_data() -> Dict[str, Any]:
         out_deg: Dict[str, int] = {}
         if hasattr(kb, "callgraph"):
             cg = kb.callgraph
+            max_edges = 5000
             for caller, callee in cg.edges():
                 if caller in addr_set and callee in addr_set:
                     src = hex(caller)
@@ -1057,6 +1074,8 @@ def get_callgraph_data() -> Dict[str, Any]:
                     edges.append({"data": {"source": src, "target": tgt}})
                     out_deg[src] = out_deg.get(src, 0) + 1
                     in_deg[tgt] = in_deg.get(tgt, 0) + 1
+                    if len(edges) >= max_edges:
+                        break
 
         # Enrich nodes with degree counts and function size
         for node in nodes:
@@ -1534,8 +1553,10 @@ def _get_decompiled_addresses() -> set:
     """Return set of hex addresses that have been decompiled."""
     addrs = set()
     try:
-        from arkana.mcp.tools_angr import _decompile_meta
-        for key in list(_decompile_meta.keys()):
+        from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+        with _decompile_meta_lock:
+            keys = list(_decompile_meta.keys())
+        for key in keys:
             # Key is a tuple: (target_addr,) where target_addr is int
             if isinstance(key, tuple) and key:
                 addrs.add(hex(key[0]))
@@ -2902,7 +2923,9 @@ def search_decompiled_code(query: str, max_results: int = 100) -> Dict[str, Any]
     if not query or not query.strip():
         return result
 
-    query_lower = query.strip().lower()
+    # M4: Bound query length to prevent excessive memory/CPU
+    query = query.strip()[:500]
+    query_lower = query.lower()
 
     try:
         from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
@@ -2986,6 +3009,17 @@ def get_diff_data(file_path_b: str, limit: int = 50) -> Dict[str, Any]:
         return {"error": "angr is not available"}
 
     limit = max(1, min(limit, 500))
+
+    # Validate file_path_b — must be a real file, no path traversal
+    file_path_b = os.path.realpath(file_path_b)
+    if not os.path.isfile(file_path_b):
+        return {"error": "File not found: " + os.path.basename(file_path_b)}
+    samples_dir = os.environ.get("ARKANA_SAMPLES_DIR", "")
+    if samples_dir:
+        samples_real = os.path.realpath(samples_dir)
+        if not file_path_b.startswith(samples_real + os.sep) and file_path_b != samples_real:
+            return {"error": "File must be within the samples directory"}
+
     proj_a = st.angr_project
     cfg_a = st.angr_cfg
     renames_a = st.get_renames().get("functions", {})
@@ -3170,3 +3204,448 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
     if truncated:
         result["truncated"] = True
     return result
+
+
+# ---------------------------------------------------------------------------
+#  Analysis Digest (read-only, no side effects)
+# ---------------------------------------------------------------------------
+
+def get_digest_data() -> Dict[str, Any]:
+    """Return structured analysis digest for the dashboard.
+
+    Mirrors ``get_analysis_digest()`` from ``tools_session.py`` but never
+    updates ``last_digest_timestamp`` (dashboard is read-only).
+    """
+    st = _get_state()
+    result: Dict[str, Any] = {"available": False}
+
+    if not st.filepath or not st.pe_data:
+        return result
+
+    result["available"] = True
+
+    # --- Binary profile ---
+    triage = getattr(st, "_cached_triage", None)
+    if triage and isinstance(triage, dict):
+        risk = triage.get("risk_level", "UNKNOWN")
+        score = triage.get("risk_score", 0)
+        mode = (st.pe_data or {}).get("mode", "unknown")
+        packing = triage.get("packing_assessment", {})
+        packed = packing.get("likely_packed", False) if isinstance(packing, dict) else False
+        packer = packing.get("packer_name", "") if isinstance(packing, dict) else ""
+        sig = triage.get("digital_signature", {})
+        signed = sig.get("embedded_signature_present", False) if isinstance(sig, dict) else False
+
+        parts = [mode.upper()]
+        if packed:
+            parts.append(f"packed ({packer})" if packer else "packed")
+        parts.append("signed" if signed else "unsigned")
+        parts.append(f"{risk} risk (score {score})")
+        result["binary_profile"] = ", ".join(parts)
+    else:
+        result["binary_profile"] = "Triage not yet run"
+
+    # --- Analysis phase ---
+    phase = _detect_analysis_phase(st)
+    result["analysis_phase"] = phase
+
+    # --- Coverage ---
+    total_functions = 0
+    try:
+        from arkana.imports import ANGR_AVAILABLE
+        if ANGR_AVAILABLE and st.angr_cfg:
+            total_functions = sum(
+                1 for f in st.angr_cfg.functions.values()
+                if not f.is_simprocedure and not f.is_syscall
+            )
+    except Exception:
+        pass
+
+    all_notes = st.get_notes()
+    func_note_count = len([n for n in all_notes if n.get("category") == "function"])
+    pct = round(func_note_count / total_functions * 100, 1) if total_functions > 0 else 0.0
+    result["coverage"] = {
+        "explored": func_note_count,
+        "total": total_functions,
+        "pct": f"{pct}%",
+    }
+
+    # --- Key findings (tool_result notes) ---
+    key_findings = [
+        n.get("content", "")
+        for n in all_notes
+        if n.get("category") == "tool_result"
+    ][:15]
+    result["key_findings"] = key_findings
+
+    # --- Conclusion / hypothesis ---
+    try:
+        from arkana.mcp._rename_helpers import get_display_name
+    except ImportError:
+        get_display_name = None
+
+    conclusion_parts: list = []
+    classification = getattr(st, "_cached_classification", None)
+    if classification and isinstance(classification, dict):
+        purpose = classification.get("primary_type", "")
+        confidence = classification.get("confidence", "")
+        if purpose:
+            line = f"Binary classified as: {purpose}"
+            if confidence:
+                line += f" (confidence: {confidence})"
+            conclusion_parts.append(line)
+
+    if triage and isinstance(triage, dict):
+        suspicious_imports = triage.get("suspicious_imports", [])
+        if isinstance(suspicious_imports, list) and suspicious_imports:
+            count = len(suspicious_imports)
+            top = [s.get("name", str(s)) if isinstance(s, dict) else str(s)
+                   for s in suspicious_imports[:5]]
+            conclusion_parts.append(
+                f"{count} suspicious import(s): {', '.join(top)}"
+            )
+        capabilities = triage.get("capabilities", [])
+        if isinstance(capabilities, list) and capabilities:
+            conclusion_parts.append(
+                f"Capabilities: {', '.join(str(c) for c in capabilities[:5])}"
+            )
+        network = triage.get("network_iocs", {})
+        if isinstance(network, dict):
+            urls = network.get("urls", [])
+            ips = network.get("ips", [])
+            domains = network.get("domains", [])
+            net_items = urls + ips + domains
+            if net_items:
+                conclusion_parts.append(
+                    f"Network indicators: {', '.join(str(i) for i in net_items[:5])}"
+                )
+
+    iocs = getattr(st, "_cached_iocs", None)
+    if iocs and isinstance(iocs, dict):
+        total_iocs = sum(
+            len(v) for v in iocs.values() if isinstance(v, list)
+        )
+        if total_iocs > 0:
+            conclusion_parts.append(f"Total IOCs extracted: {total_iocs}")
+
+    if key_findings:
+        conclusion_parts.append(
+            f"{len(key_findings)} key finding(s) recorded from analysis tools"
+        )
+
+    func_notes = [n for n in all_notes if n.get("category") == "function"]
+    hypothesis_notes = [
+        n for n in all_notes if n.get("category") == "hypothesis"
+    ]
+    if hypothesis_notes:
+        for hn in hypothesis_notes[:3]:
+            conclusion_parts.append(f"Hypothesis: {hn.get('content', '')[:200]}")
+
+    result["conclusion"] = conclusion_parts
+
+    # --- Unexplored high-priority ---
+    scored = getattr(st, "_cached_function_scores", None)
+    unexplored_hp = []
+    if scored:
+        explored_addrs = {n.get("address") for n in func_notes}
+        for f in scored:
+            if not isinstance(f, dict):
+                continue
+            addr = f.get("addr", "")
+            if addr in explored_addrs or f.get("score", 0) <= 10:
+                continue
+            name = f.get("name", addr)
+            if get_display_name:
+                name = get_display_name(addr, name)
+            unexplored_hp.append({
+                "addr": addr,
+                "name": name,
+                "score": f.get("score", 0),
+                "reason": f.get("reason", ""),
+            })
+            if len(unexplored_hp) >= 10:
+                break
+    result["unexplored_high_priority"] = unexplored_hp
+
+    # --- Analyst notes (general) ---
+    general_notes = [
+        {"content": n.get("content", "")[:300], "category": n.get("category", "general")}
+        for n in all_notes
+        if n.get("category") == "general"
+    ][:10]
+    result["analyst_notes"] = general_notes
+
+    # --- User triage flags ---
+    triage_snapshot = st.get_all_triage_snapshot()
+    flagged = []
+    suspicious = []
+    if triage_snapshot:
+        for addr, s in triage_snapshot.items():
+            if s == "flagged":
+                flagged.append(addr)
+            elif s == "suspicious":
+                suspicious.append(addr)
+    result["user_flags"] = {"flagged": flagged, "suspicious": suspicious}
+
+    return result
+
+
+def _detect_analysis_phase(st) -> str:
+    """Determine analysis phase for a given state object.
+
+    Dashboard version — reads from any AnalyzerState without requiring
+    the global ``state`` proxy.
+    """
+    if not st.filepath or not st.pe_data:
+        return "not_started"
+
+    current_history = st.get_tool_history()
+    ran_tools = set(h.get("tool_name", "") for h in current_history)
+    prev = getattr(st, "previous_session_history", []) or []
+    ran_tools |= set(h.get("tool_name", "") for h in prev)
+
+    _ADVANCED = {
+        "emulate_function_execution", "find_path_to_address",
+        "emulate_with_watchpoints", "find_path_with_custom_input",
+        "analyze_binary_loops", "get_reaching_definitions",
+        "get_data_dependencies", "get_value_set_analysis",
+        "identify_cpp_classes", "emulate_pe_with_windows_apis",
+        "emulate_shellcode_with_speakeasy", "emulate_binary_with_qiling",
+    }
+    _EXPLORING = {
+        "decompile_function_with_angr", "batch_decompile",
+        "get_annotated_disassembly", "get_function_cfg",
+        "get_function_xrefs", "get_backward_slice", "get_forward_slice",
+    }
+
+    if ran_tools & _ADVANCED:
+        return "advanced"
+    if ran_tools & _EXPLORING:
+        return "exploring"
+    if "get_triage_report" in ran_tools:
+        return "triaged"
+    return "file_loaded"
+
+
+# ---------------------------------------------------------------------------
+#  Generate Markdown Report
+# ---------------------------------------------------------------------------
+
+def generate_report_text() -> Dict[str, Any]:
+    """Generate a markdown analysis report for the dashboard.
+
+    Reuses logic from ``generate_analysis_report()`` in ``tools_workflow.py``.
+    """
+    import datetime as _dt
+
+    st = _get_state()
+    if not st.filepath or not st.pe_data:
+        return {"available": False, "report": "", "format": "markdown", "filename": "report.md"}
+
+    pe_data = st.pe_data or {}
+    hashes = pe_data.get("file_hashes", {})
+    if not isinstance(hashes, dict):
+        hashes = {}
+    filepath = st.filepath or "unknown"
+    filename = os.path.basename(filepath)
+
+    triage = getattr(st, "_cached_triage", None) or {}
+    notes = st.get_notes()
+    history = (getattr(st, "previous_session_history", None) or []) + st.get_tool_history()
+
+    risk_level = triage.get("risk_level", "UNKNOWN")
+    risk_score = triage.get("risk_score", 0)
+    mode = pe_data.get("mode", "unknown")
+    key_findings = [n["content"] for n in notes if n.get("category") == "tool_result"][:10]
+
+    sections: List[str] = []
+
+    # --- Executive Summary ---
+    sections.append(f"# Malware Analysis Report: {filename}\n")
+    sections.append(f"**Date:** {_dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}\n")
+    sections.append("## Executive Summary\n")
+    sections.append(f"- **Risk Level:** {risk_level} (score: {risk_score})")
+    sections.append(f"- **File Type:** {mode}")
+    sections.append(f"- **Tools Used:** {len(history)} invocations")
+    sections.append(f"- **Functions Explored:** {len([n for n in notes if n.get('category') == 'function'])}")
+    sections.append("")
+
+    # --- File Information ---
+    sections.append("## File Information\n")
+    sections.append("| Property | Value |")
+    sections.append("|----------|-------|")
+    sections.append(f"| Filename | {filename} |")
+    sections.append(f"| MD5 | {hashes.get('md5', 'N/A')} |")
+    sections.append(f"| SHA-256 | {hashes.get('sha256', 'N/A')} |")
+
+    file_size = pe_data.get("file_size")
+    if not file_size and triage:
+        file_info = triage.get("file_info", {})
+        if isinstance(file_info, dict):
+            file_size = file_info.get("file_size")
+    if not file_size:
+        try:
+            file_size = os.path.getsize(filepath)
+        except OSError:
+            file_size = None
+    if file_size and isinstance(file_size, (int, float)):
+        sb = int(file_size)
+        if sb >= 1_048_576:
+            sh = f"{sb / 1_048_576:.1f} MB"
+        elif sb >= 1024:
+            sh = f"{sb / 1024:.1f} KB"
+        else:
+            sh = f"{sb} B"
+        sections.append(f"| Size | {sb:,} bytes ({sh}) |")
+    else:
+        sections.append("| Size | N/A |")
+    sections.append(f"| Format | {mode} |")
+    sections.append("")
+
+    # --- Risk Assessment ---
+    if triage:
+        sections.append("## Risk Assessment\n")
+        sections.append(f"**Risk Level:** {risk_level} ({risk_score}/100)\n")
+        sus_imports = triage.get("suspicious_imports", [])
+        if sus_imports:
+            sections.append("### Suspicious Imports\n")
+            for imp in sus_imports[:15]:
+                if isinstance(imp, dict):
+                    sections.append(f"- **{imp.get('risk', '?')}**: {imp.get('function', '?')} ({imp.get('dll', '?')})")
+            sections.append("")
+        packing = triage.get("packing_assessment", {})
+        if isinstance(packing, dict) and packing.get("likely_packed"):
+            sections.append("### Packing\n")
+            sections.append(f"Binary appears packed: {packing.get('packer_name', 'unknown packer')}")
+            sections.append("")
+
+    # --- Key Findings ---
+    if key_findings:
+        sections.append("## Key Findings\n")
+        for i, finding in enumerate(key_findings, 1):
+            sections.append(f"{i}. {finding}")
+        sections.append("")
+
+    # --- Functions Explored ---
+    func_notes = [n for n in notes if n.get("category") == "function"]
+    if func_notes:
+        sections.append("## Explored Functions\n")
+        sections.append("| Address | Summary |")
+        sections.append("|---------|---------|")
+        for n in func_notes[:30]:
+            sections.append(f"| {n.get('address', '?')} | {n.get('content', '?')} |")
+        sections.append("")
+
+    # --- IOCs ---
+    net_iocs = triage.get("network_iocs", {})
+    if isinstance(net_iocs, dict):
+        has_iocs = any(net_iocs.get(k) for k in ["ip_addresses", "urls", "domains"])
+        if has_iocs:
+            sections.append("## Indicators of Compromise\n")
+            for category in ["ip_addresses", "urls", "domains", "registry_keys"]:
+                items = net_iocs.get(category, [])
+                if items:
+                    sections.append(f"### {category.replace('_', ' ').title()}\n")
+                    for item in items[:20]:
+                        sections.append(f"- {item}")
+                    sections.append("")
+
+    # --- Analyst Notes ---
+    general_notes = [n for n in notes if n.get("category") == "general"]
+    if general_notes:
+        sections.append("## Analyst Notes\n")
+        for n in general_notes:
+            sections.append(f"- {n.get('content', '')}")
+        sections.append("")
+
+    # --- Tool History ---
+    sections.append("## Analysis Timeline\n")
+    sections.append(f"Total tool invocations: {len(history)}\n")
+    from collections import Counter
+    tool_counts = Counter(h.get("tool_name", "") for h in history)
+    sections.append("### Most Used Tools\n")
+    for tool_name, count in tool_counts.most_common(10):
+        sections.append(f"- {tool_name}: {count}x")
+    sections.append("")
+
+    report_text = "\n".join(sections)
+
+    # Suggested filename
+    safe_base = re.sub(r"[^a-zA-Z0-9_\-.]", "_", os.path.splitext(filename)[0])[:100]
+    dl_filename = f"arkana_report_{safe_base}.md" if safe_base else "arkana_report.md"
+
+    return {
+        "available": True,
+        "report": report_text,
+        "format": "markdown",
+        "filename": dl_filename,
+    }
+
+
+# ---------------------------------------------------------------------------
+#  IOC Summary (overview card)
+# ---------------------------------------------------------------------------
+
+def get_ioc_summary_data() -> Dict[str, Any]:
+    """Return a compact IOC summary for the overview card."""
+    st = _get_state()
+    iocs: Dict[str, list] = {}
+
+    # From cached IOCs (enrichment)
+    cached_iocs = getattr(st, "_cached_iocs", None)
+    if cached_iocs and isinstance(cached_iocs, dict):
+        for ioc_type in ("urls", "ips", "domains", "emails", "registry_keys", "file_paths", "mutexes"):
+            items = cached_iocs.get(ioc_type, [])
+            if isinstance(items, list) and items:
+                iocs[ioc_type] = items[:10]
+
+    # Also from triage network_iocs
+    triage = getattr(st, "_cached_triage", None)
+    if triage and isinstance(triage, dict):
+        net_iocs = triage.get("network_iocs", {})
+        if isinstance(net_iocs, dict):
+            for k in ("ip_addresses", "urls", "domains"):
+                items = net_iocs.get(k, [])
+                # Normalize key names
+                norm_key = k.replace("ip_addresses", "ips")
+                if isinstance(items, list) and items and norm_key not in iocs:
+                    iocs[norm_key] = items[:10]
+
+    total = sum(len(v) for v in iocs.values())
+    return {
+        "available": total > 0,
+        "iocs": iocs,
+        "total": total,
+    }
+
+
+# ---------------------------------------------------------------------------
+#  Capabilities Summary (overview card)
+# ---------------------------------------------------------------------------
+
+def get_capabilities_summary_data() -> Dict[str, Any]:
+    """Return a compact capabilities summary for the overview card."""
+    st = _get_state()
+    pe_data = st.pe_data or {}
+    capa = pe_data.get("capa_analysis", {})
+    if not isinstance(capa, dict):
+        return {"available": False, "capabilities": [], "total": 0}
+
+    rules_raw = capa.get("rules", capa.get("capabilities", []))
+    names: List[str] = []
+
+    if isinstance(rules_raw, dict):
+        for name in rules_raw:
+            names.append(str(name))
+    elif isinstance(rules_raw, list):
+        for r in rules_raw:
+            if isinstance(r, dict):
+                names.append(r.get("name", str(r)))
+            else:
+                names.append(str(r))
+
+    return {
+        "available": len(names) > 0,
+        "capabilities": names[:20],
+        "total": len(names),
+    }

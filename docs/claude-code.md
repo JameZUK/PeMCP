@@ -189,6 +189,8 @@ Arkana understands analytical intent, not just tool commands. Here are examples 
 
 **Reverse Engineering:**
 - *"Decompile the function at 0x00401230 and explain what it does."*
+- *"Search the decompiled code for xor operations."* → uses `decompile_function_with_angr(search="xor")`
+- *"Which of the top 20 functions contain crypto patterns?"* → uses `batch_decompile(search="xor|aes|rc4")`
 - *"What functions call VirtualAlloc? Which ones look suspicious?"*
 - *"Find all the string references in the main function."*
 - *"Is there shellcode injection happening? Check for VirtualAlloc → WriteProcessMemory patterns."*

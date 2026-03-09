@@ -7,7 +7,17 @@
 </div>
 
 <div class="panel">
-    <div class="panel-header">EVENTS <span class="badge badge-dim">{{ data|length if data else 0 }}</span></div>
+    <div class="panel-header">
+        EVENTS <span class="badge badge-dim" id="timeline-count">{{ data|length if data else 0 }}</span>
+        <div style="float:right;display:flex;gap:8px;margin-top:-2px">
+            <input type="text" id="timeline-search" class="input-search" placeholder="Search..." style="width:150px">
+            <select id="timeline-type-filter" class="input-search" style="width:120px">
+                <option value="">ALL TYPES</option>
+                <option value="tool">TOOLS</option>
+                <option value="note">NOTES</option>
+            </select>
+        </div>
+    </div>
     <div id="timeline-entries" hx-get="/dashboard/partials/timeline" hx-trigger="every 5s" hx-swap="innerHTML">
         {% include "partials/_timeline_entry.html" %}
     </div>

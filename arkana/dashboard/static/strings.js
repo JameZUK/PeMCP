@@ -20,7 +20,7 @@ function reloadStrings() {
         '&asc=' + (_strSortAsc ? '1' : '0') +
         '&offset=' + _strOffset +
         '&limit=' + _strLimit;
-    fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    fetchJSON(url).then(function(data) {
         renderStringTable(data);
         renderStats(data);
         renderPagination(data);
@@ -233,7 +233,7 @@ document.addEventListener('DOMContentLoaded', function() {
 var _flossRefreshTimer = null;
 
 function loadFlossPanel() {
-    fetch('/dashboard/api/floss-summary').then(function(r) { return r.json(); }).then(function(data) {
+    fetchJSON('/dashboard/api/floss-summary').then(function(data) {
         renderFlossPanel(data);
     }).catch(function() {});
 }

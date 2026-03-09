@@ -1157,3 +1157,221 @@ class TestFlossParseProgressCallback:
                     [], [], [], True,
                     # No progress_callback — just verify no exception
                 )
+
+
+# ---------------------------------------------------------------------------
+#  Digest and Report tests
+# ---------------------------------------------------------------------------
+
+class TestDigestData:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+        self._old_fp = _default_state.filepath
+        self._old_pd = _default_state.pe_data
+        self._old_triage = getattr(_default_state, "_cached_triage", None)
+        self._old_scores = getattr(_default_state, "_cached_function_scores", None)
+        self._old_notes = list(_default_state.get_notes())
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+        _default_state.filepath = self._old_fp
+        _default_state.pe_data = self._old_pd
+        _default_state._cached_triage = self._old_triage
+        _default_state._cached_function_scores = self._old_scores
+        # Restore notes by clearing and re-adding
+        _default_state.notes.clear()
+        for n in self._old_notes:
+            _default_state.notes.append(n)
+
+    def test_digest_no_file(self):
+        from arkana.dashboard.state_api import get_digest_data
+        _default_state.filepath = None
+        _default_state.pe_data = None
+        data = get_digest_data()
+        assert data["available"] is False
+
+    def test_digest_file_loaded_no_triage(self):
+        from arkana.dashboard.state_api import get_digest_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "pe"}
+        _default_state._cached_triage = None
+        data = get_digest_data()
+        assert data["available"] is True
+        assert "Triage not yet run" in data["binary_profile"]
+        assert data["analysis_phase"] == "file_loaded"
+        assert data["coverage"]["total"] == 0
+
+    def test_digest_with_triage(self):
+        from arkana.dashboard.state_api import get_digest_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "PE64"}
+        _default_state._cached_triage = {
+            "risk_level": "HIGH",
+            "risk_score": 82,
+            "packing_assessment": {"likely_packed": True, "packer_name": "UPX"},
+            "digital_signature": {"embedded_signature_present": False},
+        }
+        data = get_digest_data()
+        assert data["available"] is True
+        assert "PE64" in data["binary_profile"]
+        assert "packed (UPX)" in data["binary_profile"]
+        assert "unsigned" in data["binary_profile"]
+        assert "HIGH risk" in data["binary_profile"]
+
+    def test_digest_key_findings(self):
+        from arkana.dashboard.state_api import get_digest_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "pe"}
+        _default_state._cached_triage = None
+        # Add some tool_result notes
+        _default_state.notes.clear()
+        _default_state.add_note("Finding 1", category="tool_result")
+        _default_state.add_note("Finding 2", category="tool_result")
+        _default_state.add_note("General note", category="general")
+        data = get_digest_data()
+        assert len(data["key_findings"]) == 2
+        assert "Finding 1" in data["key_findings"]
+        assert len(data["analyst_notes"]) == 1
+        assert data["analyst_notes"][0]["content"] == "General note"
+
+    def test_digest_user_flags(self):
+        from arkana.dashboard.state_api import get_digest_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "pe"}
+        _default_state.set_triage_status("0x401000", "flagged")
+        _default_state.set_triage_status("0x402000", "suspicious")
+        try:
+            data = get_digest_data()
+            assert "0x401000" in data["user_flags"]["flagged"]
+            assert "0x402000" in data["user_flags"]["suspicious"]
+        finally:
+            _default_state.clear_triage()
+
+    def test_digest_unexplored_high_priority(self):
+        from arkana.dashboard.state_api import get_digest_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "pe"}
+        _default_state._cached_function_scores = [
+            {"addr": "0x401000", "name": "main", "score": 50, "reason": "complex"},
+            {"addr": "0x402000", "name": "helper", "score": 5, "reason": "simple"},
+        ]
+        _default_state.notes.clear()
+        data = get_digest_data()
+        assert len(data["unexplored_high_priority"]) == 1
+        assert data["unexplored_high_priority"][0]["addr"] == "0x401000"
+        assert data["unexplored_high_priority"][0]["score"] == 50
+
+    def test_digest_conclusion_with_hypothesis(self):
+        from arkana.dashboard.state_api import get_digest_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "pe"}
+        _default_state.notes.clear()
+        _default_state.add_note("This binary is a keylogger", category="hypothesis")
+        data = get_digest_data()
+        assert "conclusion" in data
+        found = [c for c in data["conclusion"] if "keylogger" in c]
+        assert len(found) == 1
+
+
+class TestGenerateReportText:
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+        self._old_fp = _default_state.filepath
+        self._old_pd = _default_state.pe_data
+        self._old_triage = getattr(_default_state, "_cached_triage", None)
+        self._old_notes = list(_default_state.get_notes())
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+        _default_state.filepath = self._old_fp
+        _default_state.pe_data = self._old_pd
+        _default_state._cached_triage = self._old_triage
+        _default_state.notes.clear()
+        for n in self._old_notes:
+            _default_state.notes.append(n)
+
+    def test_report_no_file(self):
+        from arkana.dashboard.state_api import generate_report_text
+        _default_state.filepath = None
+        _default_state.pe_data = None
+        data = generate_report_text()
+        assert data["available"] is False
+        assert data["report"] == ""
+
+    def test_report_basic(self):
+        from arkana.dashboard.state_api import generate_report_text
+        _default_state.filepath = "/tmp/malware.exe"
+        _default_state.pe_data = {
+            "mode": "PE32",
+            "file_hashes": {"sha256": "abc123", "md5": "def456"},
+        }
+        _default_state._cached_triage = {
+            "risk_level": "HIGH",
+            "risk_score": 85,
+        }
+        _default_state.notes.clear()
+        data = generate_report_text()
+        assert data["available"] is True
+        assert data["format"] == "markdown"
+        assert "malware.exe" in data["report"]
+        assert "HIGH" in data["report"]
+        assert "abc123" in data["report"]
+        assert data["filename"].endswith(".md")
+        assert "malware" in data["filename"]
+
+    def test_report_includes_findings(self):
+        from arkana.dashboard.state_api import generate_report_text
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "pe", "file_hashes": {}}
+        _default_state._cached_triage = {"risk_level": "MEDIUM", "risk_score": 50}
+        _default_state.notes.clear()
+        _default_state.add_note("Found suspicious API usage", category="tool_result")
+        _default_state.add_note("Analyst observation", category="general")
+        data = generate_report_text()
+        assert "suspicious API" in data["report"]
+        assert "Analyst observation" in data["report"]
+        assert "Key Findings" in data["report"]
+        assert "Analyst Notes" in data["report"]
+
+    def test_report_includes_iocs(self):
+        from arkana.dashboard.state_api import generate_report_text
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "pe", "file_hashes": {}}
+        _default_state._cached_triage = {
+            "risk_level": "HIGH",
+            "risk_score": 90,
+            "network_iocs": {
+                "ip_addresses": ["1.2.3.4"],
+                "urls": ["http://evil.com"],
+                "domains": ["evil.com"],
+            },
+        }
+        _default_state.notes.clear()
+        data = generate_report_text()
+        assert "1.2.3.4" in data["report"]
+        assert "evil.com" in data["report"]
+        assert "Indicators of Compromise" in data["report"]
+
+    def test_report_includes_suspicious_imports(self):
+        from arkana.dashboard.state_api import generate_report_text
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {"mode": "pe", "file_hashes": {}}
+        _default_state._cached_triage = {
+            "risk_level": "HIGH",
+            "risk_score": 80,
+            "suspicious_imports": [
+                {"risk": "CRITICAL", "function": "VirtualAlloc", "dll": "kernel32.dll"},
+            ],
+        }
+        _default_state.notes.clear()
+        data = generate_report_text()
+        assert "VirtualAlloc" in data["report"]
+        assert "CRITICAL" in data["report"]

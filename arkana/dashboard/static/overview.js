@@ -1,126 +1,199 @@
-/* Arkana Dashboard — Overview enhancements (triage, packing, similarity, export) */
+/* Arkana Dashboard — Overview (digest + report) */
 (function () {
     "use strict";
 
-    function loadTriagePanel() {
-        var target = document.getElementById("triage-panel-content");
+    var _rawReport = "";
+
+    function loadDigest() {
+        var target = document.getElementById("digest-content");
         if (!target) return;
-        fetch("/dashboard/api/triage-report")
-            .then(function (r) { return r.json(); })
+        target.innerHTML = "<div class=\"dim\">Loading digest...</div>";
+        fetchJSON("/dashboard/api/digest")
             .then(function (data) {
                 if (!data.available) {
-                    target.innerHTML = "<div class=\"dim\">Triage data not yet available. Enrichment may still be running.</div>";
+                    target.innerHTML = "<div class=\"digest-empty\">No analysis data yet. Load a file and run analysis tools.</div>";
                     return;
                 }
-                var riskClass = "badge-dim";
-                var level = (data.risk_level || "unknown").toLowerCase();
-                if (level === "critical" || level === "high") riskClass = "badge-danger";
-                else if (level === "medium" || level === "suspicious") riskClass = "badge-warning";
-                else if (level === "low" || level === "clean") riskClass = "badge-completed";
+                var html = "";
 
-                var html = "<div class=\"triage-summary-grid\">";
-                html += "<div class=\"triage-card\"><div class=\"triage-card-label\">RISK LEVEL</div>";
-                html += "<div class=\"badge " + riskClass + " triage-risk-badge\">" + escapeHtml(String(data.risk_level || "UNKNOWN").toUpperCase()) + "</div></div>";
+                // Profile
+                if (data.binary_profile) {
+                    html += "<div class=\"digest-profile\">" + escapeHtml(data.binary_profile) + "</div>";
+                }
 
-                if (data.risk_score !== undefined) {
-                    html += "<div class=\"triage-card\"><div class=\"triage-card-label\">RISK SCORE</div>";
-                    html += "<div class=\"triage-card-value\">" + escapeHtml(String(data.risk_score)) + "</div></div>";
+                // Phase + Coverage row
+                html += "<div class=\"digest-meta-row\">";
+                if (data.analysis_phase) {
+                    html += "<span class=\"badge badge-phase-" + escapeHtml(data.analysis_phase) + "\">" +
+                            escapeHtml(data.analysis_phase.toUpperCase().replace("_", " ")) + "</span>";
                 }
-                if (data.suspicious_count !== undefined) {
-                    html += "<div class=\"triage-card\"><div class=\"triage-card-label\">SUSPICIOUS</div>";
-                    html += "<div class=\"triage-card-value\">" + escapeHtml(String(data.suspicious_count)) + "</div></div>";
-                }
-                if (data.capabilities_count !== undefined) {
-                    html += "<div class=\"triage-card\"><div class=\"triage-card-label\">CAPABILITIES</div>";
-                    html += "<div class=\"triage-card-value\">" + escapeHtml(String(data.capabilities_count)) + "</div></div>";
+                if (data.coverage) {
+                    var pctNum = parseFloat(data.coverage.pct) || 0;
+                    html += "<span class=\"digest-coverage\">" +
+                            escapeHtml(String(data.coverage.explored)) + "/" +
+                            escapeHtml(String(data.coverage.total)) + " functions (" +
+                            escapeHtml(data.coverage.pct) + ")</span>";
+                    html += "<div class=\"progress-bar digest-progress\"><div class=\"progress-fill\" style=\"width:" +
+                            Math.min(pctNum, 100) + "%\"></div></div>";
                 }
                 html += "</div>";
 
                 // Key findings
-                if (data.findings && data.findings.length > 0) {
-                    html += "<div class=\"triage-findings\"><div class=\"dim\">KEY FINDINGS:</div><ul>";
-                    data.findings.slice(0, 10).forEach(function (f) {
-                        var text = typeof f === "string" ? f : (f.description || f.finding || JSON.stringify(f));
-                        html += "<li>" + escapeHtml(text.substring(0, 200)) + "</li>";
+                if (data.key_findings && data.key_findings.length > 0) {
+                    html += "<div class=\"digest-section\">";
+                    html += "<div class=\"digest-section-title\">KEY FINDINGS (" + escapeHtml(String(data.key_findings.length)) + ")</div>";
+                    html += "<ul class=\"digest-findings\">";
+                    var showCount = Math.min(data.key_findings.length, 5);
+                    for (var i = 0; i < showCount; i++) {
+                        html += "<li>" + escapeHtml(data.key_findings[i].substring(0, 200)) + "</li>";
+                    }
+                    if (data.key_findings.length > 5) {
+                        html += "<li class=\"dim\">... and " + escapeHtml(String(data.key_findings.length - 5)) + " more</li>";
+                    }
+                    html += "</ul></div>";
+                }
+
+                // Conclusion / hypothesis
+                if (data.conclusion && data.conclusion.length > 0) {
+                    html += "<div class=\"digest-section\">";
+                    html += "<div class=\"digest-section-title\">CONCLUSION</div>";
+                    html += "<ul class=\"digest-findings\">";
+                    data.conclusion.forEach(function (line) {
+                        html += "<li>" + escapeHtml(line) + "</li>";
                     });
                     html += "</ul></div>";
                 }
-                target.innerHTML = html;
-            })
-            .catch(function () {
-                if (target) target.innerHTML = "<div class=\"dim\">Failed to load triage data.</div>";
-            });
-    }
 
-    function loadPackingCard() {
-        var target = document.getElementById("packing-card-content");
-        if (!target) return;
-        fetch("/dashboard/api/packing")
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                if (!data.available) {
-                    target.innerHTML = "<span class=\"dim\">N/A</span>";
-                    return;
-                }
-                var html = "<div class=\"packing-info\">";
-                var likelihood = String(data.packed_likelihood || "unknown");
-                var packClass = likelihood.toLowerCase() === "high" || likelihood === "true" ? "badge-danger" :
-                                likelihood.toLowerCase() === "medium" ? "badge-warning" : "badge-dim";
-                html += "<span class=\"badge " + packClass + "\">" + escapeHtml(likelihood.toUpperCase()) + "</span>";
-                if (data.packer_name) {
-                    html += " <span class=\"dim\">" + escapeHtml(data.packer_name) + "</span>";
-                }
-                if (data.indicators && data.indicators.length > 0) {
-                    html += "<div class=\"dim fs-10\" style=\"margin-top:4px\">";
-                    data.indicators.slice(0, 5).forEach(function (ind) {
-                        var text = typeof ind === "string" ? ind : (ind.description || JSON.stringify(ind));
-                        html += escapeHtml(text.substring(0, 100)) + "<br>";
+                // Unexplored high priority
+                if (data.unexplored_high_priority && data.unexplored_high_priority.length > 0) {
+                    html += "<div class=\"digest-section\">";
+                    html += "<div class=\"digest-section-title\">HIGH PRIORITY (" +
+                            escapeHtml(String(data.unexplored_high_priority.length)) + ")</div>";
+                    html += "<div class=\"digest-functions\">";
+                    data.unexplored_high_priority.forEach(function (fn) {
+                        html += "<div class=\"digest-func-row digest-priority\">" +
+                                "<span class=\"badge badge-warning\">" + escapeHtml(String(fn.score)) + "</span> " +
+                                "<a class=\"func-link\" href=\"/dashboard/functions?highlight=" +
+                                encodeURIComponent(fn.addr) + "\">" +
+                                escapeHtml(fn.addr) + "</a> " +
+                                "<span class=\"dim\">" + escapeHtml(fn.name) + "</span> " +
+                                "<span class=\"digest-func-summary dim\">" + escapeHtml(fn.reason) + "</span>" +
+                                "</div>";
                     });
-                    html += "</div>";
+                    html += "</div></div>";
                 }
-                html += "</div>";
+
+                // Analyst notes
+                if (data.analyst_notes && data.analyst_notes.length > 0) {
+                    html += "<div class=\"digest-section\">";
+                    html += "<div class=\"digest-section-title\">ANALYST NOTES (" +
+                            escapeHtml(String(data.analyst_notes.length)) + ")</div>";
+                    html += "<ul class=\"digest-findings\">";
+                    data.analyst_notes.forEach(function (n) {
+                        html += "<li><span class=\"badge badge-cat-" + escapeHtml(n.category) + "\">" +
+                                escapeHtml(n.category.toUpperCase()) + "</span> " +
+                                escapeHtml(n.content) + "</li>";
+                    });
+                    html += "</ul></div>";
+                }
+
+                // User flags
+                if (data.user_flags) {
+                    var flagged = data.user_flags.flagged || [];
+                    var suspicious = data.user_flags.suspicious || [];
+                    if (flagged.length > 0 || suspicious.length > 0) {
+                        html += "<div class=\"digest-section\">";
+                        html += "<div class=\"digest-section-title\">TRIAGE FLAGS</div>";
+                        if (flagged.length > 0) {
+                            html += "<div><span class=\"badge badge-flagged\">FLAGGED</span> ";
+                            flagged.forEach(function (addr) {
+                                html += "<a class=\"func-link\" href=\"/dashboard/functions?highlight=" +
+                                        encodeURIComponent(addr) + "\">" + escapeHtml(addr) + "</a> ";
+                            });
+                            html += "</div>";
+                        }
+                        if (suspicious.length > 0) {
+                            html += "<div style=\"margin-top:4px\"><span class=\"badge badge-suspicious\">SUSPICIOUS</span> ";
+                            suspicious.forEach(function (addr) {
+                                html += "<a class=\"func-link\" href=\"/dashboard/functions?highlight=" +
+                                        encodeURIComponent(addr) + "\">" + escapeHtml(addr) + "</a> ";
+                            });
+                            html += "</div>";
+                        }
+                        html += "</div>";
+                    }
+                }
+
                 target.innerHTML = html;
             })
             .catch(function () {
-                if (target) target.innerHTML = "<span class=\"dim\">Error</span>";
+                if (target) target.innerHTML = "<div class=\"dim\">Failed to load digest.</div>";
             });
     }
 
-    function loadSimilarityCard() {
-        var target = document.getElementById("similarity-card-content");
-        if (!target) return;
-        fetch("/dashboard/api/similarity")
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                if (!data.available) {
-                    target.innerHTML = "<span class=\"dim\">N/A</span>";
-                    return;
-                }
-                var html = "<div class=\"similarity-hashes\">";
-                if (data.imphash) {
-                    html += "<div class=\"hash-row\"><span class=\"dim\">IMPHASH:</span> <span class=\"mono\">" +
-                            escapeHtml(data.imphash) + "</span> <button class=\"btn-copy\" data-copy=\"" +
-                            escapeHtml(data.imphash) + "\">COPY</button></div>";
-                }
-                if (data.ssdeep) {
-                    html += "<div class=\"hash-row\"><span class=\"dim\">SSDEEP:</span> <span class=\"mono\">" +
-                            escapeHtml(data.ssdeep) + "</span> <button class=\"btn-copy\" data-copy=\"" +
-                            escapeHtml(data.ssdeep) + "\">COPY</button></div>";
-                }
-                if (data.tlsh) {
-                    html += "<div class=\"hash-row\"><span class=\"dim\">TLSH:</span> <span class=\"mono\">" +
-                            escapeHtml(data.tlsh) + "</span> <button class=\"btn-copy\" data-copy=\"" +
-                            escapeHtml(data.tlsh) + "\">COPY</button></div>";
-                }
-                if (!data.imphash && !data.ssdeep && !data.tlsh) {
-                    html += "<span class=\"dim\">No similarity hashes available.</span>";
-                }
-                html += "</div>";
-                target.innerHTML = html;
-            })
-            .catch(function () {
-                if (target) target.innerHTML = "<span class=\"dim\">Error</span>";
+    function openReportModal() {
+        var modal = document.getElementById("report-modal");
+        if (modal) modal.style.display = "flex";
+    }
+
+    function closeReportModal() {
+        var modal = document.getElementById("report-modal");
+        if (modal) modal.style.display = "none";
+    }
+
+    function generateReport() {
+        var reportText = document.getElementById("report-text");
+        if (reportText) reportText.textContent = "Generating report...";
+        _rawReport = "";
+        openReportModal();
+
+        fetch("/dashboard/api/generate-report", {
+            method: "POST",
+            headers: {"X-CSRF-Token": getCsrfToken()},
+        }).then(function (r) {
+            if (!r.ok) throw new Error("Generation failed (" + r.status + ")");
+            return r.json();
+        }).then(function (data) {
+            if (!data.available) {
+                if (reportText) reportText.textContent = "No analysis data available. Load a file first.";
+                return;
+            }
+            _rawReport = data.report || "";
+            if (reportText) reportText.textContent = _rawReport;
+        }).catch(function (err) {
+            if (reportText) reportText.textContent = "Error: " + (err.message || "report generation failed");
+        });
+    }
+
+    function copyReport() {
+        if (!_rawReport) {
+            showToast("No report to copy", "error");
+            return;
+        }
+        if (navigator.clipboard) {
+            navigator.clipboard.writeText(_rawReport).then(function () {
+                showToast("Report copied to clipboard", "success");
+            }).catch(function () {
+                showToast("Copy failed — check browser permissions", "error");
             });
+        }
+    }
+
+    function downloadReport() {
+        if (!_rawReport) {
+            showToast("No report to download", "error");
+            return;
+        }
+        var blob = new Blob([_rawReport], {type: "text/markdown"});
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "arkana_report.md";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast("Report downloaded", "success");
     }
 
     function exportReport() {
@@ -152,23 +225,31 @@
         });
     }
 
-    // Copy button handler
+    // Event delegation
     document.addEventListener("click", function (e) {
-        if (e.target.classList.contains("btn-copy")) {
-            var text = e.target.getAttribute("data-copy");
-            if (text && navigator.clipboard) {
-                navigator.clipboard.writeText(text).then(function () {
-                    showToast("Copied", "success");
-                });
-            }
-        }
-        if (e.target.id === "btn-export-report") {
+        var action = e.target.getAttribute("data-action");
+        if (action === "refresh-digest") {
+            loadDigest();
+        } else if (action === "generate-report") {
+            generateReport();
+        } else if (action === "copy-report") {
+            copyReport();
+        } else if (action === "download-report") {
+            downloadReport();
+        } else if (action === "close-report") {
+            closeReportModal();
+        } else if (e.target.id === "btn-export-report") {
             exportReport();
         }
     });
 
-    // Initialize panels
-    loadTriagePanel();
-    loadPackingCard();
-    loadSimilarityCard();
+    // Close modal on Escape
+    document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+            closeReportModal();
+        }
+    });
+
+    // Initialize
+    loadDigest();
 })();

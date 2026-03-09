@@ -34,8 +34,7 @@
 
         if (name) {
             // Load existing type
-            fetch("/dashboard/api/types")
-                .then(function (r) { return r.json(); })
+            fetchJSON("/dashboard/api/types")
                 .then(function (data) {
                     var list = kind === "struct" ? data.structs : data.enums;
                     var found = null;
@@ -132,14 +131,14 @@
         // Delete old name if renamed
         var chain = Promise.resolve();
         if (_editingOrigName && _editingOrigName !== name) {
-            chain = fetch("/dashboard/api/types/delete?name=" + encodeURIComponent(_editingOrigName), {
+            chain = fetchJSON("/dashboard/api/types/delete?name=" + encodeURIComponent(_editingOrigName), {
                 method: "POST",
                 headers: {"X-CSRF-Token": getCsrfToken()},
             });
         }
 
         chain.then(function () {
-            return fetch(url, {
+            return fetchJSON(url, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -147,7 +146,7 @@
                 },
                 body: JSON.stringify(body),
             });
-        }).then(function (r) { return r.json(); })
+        })
         .then(function (data) {
             if (data.error) {
                 modalError.textContent = data.error;
@@ -165,10 +164,10 @@
 
     function deleteType(name) {
         if (!confirm("Delete type '" + name + "'?")) return;
-        fetch("/dashboard/api/types/delete?name=" + encodeURIComponent(name), {
+        fetchJSON("/dashboard/api/types/delete?name=" + encodeURIComponent(name), {
             method: "POST",
             headers: {"X-CSRF-Token": getCsrfToken()},
-        }).then(function (r) { return r.json(); })
+        })
         .then(function (data) {
             if (!data.error) window.location.reload();
             else showToast(data.error, "error");

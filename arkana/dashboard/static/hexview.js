@@ -62,8 +62,7 @@
     function fetchChunk(offset, length, callback) {
         if (offset < 0) offset = 0;
         if (_totalSize > 0 && offset >= _totalSize) { callback(null); return; }
-        fetch("/dashboard/api/hex?offset=" + offset + "&length=" + length)
-            .then(function (r) { return r.json(); })
+        fetchJSON("/dashboard/api/hex?offset=" + offset + "&length=" + length)
             .then(function (data) {
                 if (data.error) { callback(null); return; }
                 if (data.total_size) _totalSize = data.total_size;

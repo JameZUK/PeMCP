@@ -22,8 +22,7 @@
         var url = "/dashboard/api/list-files?sort=" + encodeURIComponent(sort);
         if (search) url += "&search=" + encodeURIComponent(search);
 
-        fetch(url)
-            .then(function (r) { return r.json(); })
+        fetchJSON(url)
             .then(function (data) {
                 if (data.error) {
                     document.getElementById("file-browser-tbody").innerHTML =
@@ -80,7 +79,7 @@
         errorPanel.classList.add("d-none");
         resultsPanel.classList.add("d-none");
 
-        fetch("/dashboard/api/diff", {
+        fetchJSON("/dashboard/api/diff", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -88,7 +87,6 @@
             },
             body: JSON.stringify({ file_path_b: filePath })
         })
-        .then(function (r) { return r.json(); })
         .then(function (data) {
             spinner.classList.add("d-none");
             runBtn.disabled = false;

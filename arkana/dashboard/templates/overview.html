@@ -4,31 +4,23 @@
 {% block content %}
 <div class="page-header">
     <h1 class="glow">SYSTEM OVERVIEW</h1>
-    <button class="btn-triage btn-decompile" id="btn-export-report" style="float:right">EXPORT REPORT</button>
+    <div style="display:flex;gap:8px;float:right">
+        <button class="btn-triage btn-decompile" data-action="generate-report">GENERATE REPORT</button>
+        <button class="btn-triage btn-decompile" id="btn-export-report">EXPORT REPORT</button>
+    </div>
 </div>
 
 <div id="overview-stats" hx-get="/dashboard/partials/overview-stats" hx-trigger="every 5s" hx-swap="innerHTML">
     {% include "partials/_overview_stats.html" %}
 </div>
 
-<div class="overview-cards-row">
-    <div class="panel overview-card">
-        <div class="panel-header">TRIAGE SUMMARY</div>
-        <div id="triage-panel-content" class="p-6-0">
-            <div class="dim">Loading triage data...</div>
-        </div>
+<div class="panel" id="digest-panel">
+    <div class="panel-header">
+        ANALYSIS DIGEST
+        <button class="btn-triage" data-action="refresh-digest" style="float:right;margin-top:-2px">REFRESH</button>
     </div>
-    <div class="panel overview-card">
-        <div class="panel-header">PACKING</div>
-        <div id="packing-card-content" class="p-6-0">
-            <div class="dim">Loading...</div>
-        </div>
-    </div>
-    <div class="panel overview-card">
-        <div class="panel-header">SIMILARITY HASHES</div>
-        <div id="similarity-card-content" class="p-6-0">
-            <div class="dim">Loading...</div>
-        </div>
+    <div id="digest-content" class="p-6-0">
+        <div class="dim">Loading digest...</div>
     </div>
 </div>
 
@@ -36,6 +28,23 @@
     <div class="panel-header">BACKGROUND TASKS</div>
     <div id="task-list" hx-get="/dashboard/partials/task-list" hx-trigger="every 3s" hx-swap="innerHTML">
         {% include "partials/_task_list.html" %}
+    </div>
+</div>
+
+<div id="report-modal" class="report-modal" style="display:none">
+    <div class="report-modal-backdrop" data-action="close-report"></div>
+    <div class="report-modal-content">
+        <div class="report-modal-header">
+            <span>ANALYSIS REPORT</span>
+            <div style="display:flex;gap:8px">
+                <button class="btn-sm" data-action="copy-report">COPY</button>
+                <button class="btn-sm" data-action="download-report">DOWNLOAD</button>
+                <button class="btn-sm" data-action="close-report">&times;</button>
+            </div>
+        </div>
+        <div class="report-modal-body">
+            <pre id="report-text"></pre>
+        </div>
     </div>
 </div>
 {% endblock %}

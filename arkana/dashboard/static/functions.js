@@ -37,7 +37,7 @@ function reloadFunctions() {
               '&search=' + encodeURIComponent(search) +
               '&sort=' + encodeURIComponent(_currentSort) +
               '&asc=' + (_sortAsc ? '1' : '0');
-    fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    fetchJSON(url).then(function(data) {
         var tbody = document.getElementById('func-tbody');
         document.getElementById('func-count').textContent = data.length;
         if (!data.length) {
@@ -88,11 +88,12 @@ function reloadFunctions() {
 }
 // escapeHtml is defined globally in dashboard.js
 function setTriage(addr, status) {
-    fetch('/dashboard/api/triage', {
+    fetchJSON('/dashboard/api/triage', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
         body: JSON.stringify({address: addr, status: status})
-    }).then(function() { reloadFunctions(); });
+    }).then(function() { reloadFunctions(); })
+    .catch(function() { showToast('Triage update failed', 'error'); });
 }
 
 // --- Live decompile updates ---
@@ -255,8 +256,7 @@ function toggleDecompile(btn) {
         return;
     }
     btn.textContent = '...';
-    fetch('/dashboard/api/decompile?address=' + encodeURIComponent(addr))
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/decompile?address=' + encodeURIComponent(addr))
         .then(function(data) {
             if (data.cached) {
                 _openDetailPanels[addr] = _openDetailPanels[addr] || {};
@@ -268,11 +268,11 @@ function toggleDecompile(btn) {
             } else {
                 // Trigger decompilation
                 btn.textContent = '<<<';
-                fetch('/dashboard/api/decompile', {
+                fetchJSON('/dashboard/api/decompile', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
                     body: JSON.stringify({address: addr})
-                }).then(function(r) { return r.json(); })
+                })
                 .then(function(result) {
                     btn.textContent = 'DEC';
                     if (result.cached || result.lines) {
@@ -384,8 +384,7 @@ function _renderTabContent(container, tab, addr) {
         });
     } else if (tab === 'strings') {
         container.innerHTML = '<div class="dim p-10">Loading strings...</div>';
-        fetch('/dashboard/api/function-strings?address=' + encodeURIComponent(addr))
-            .then(function(r) { return r.json(); })
+        fetchJSON('/dashboard/api/function-strings?address=' + encodeURIComponent(addr))
             .then(function(data) { renderStringsTab(container, data); })
             .catch(function() { container.innerHTML = '<div class="dim p-10">Failed to load strings.</div>'; });
     } else if (tab === 'asm') {
@@ -419,8 +418,7 @@ function fetchAnalysis(addr, callback) {
         callback(_analysisCache[addr]);
         return;
     }
-    fetch('/dashboard/api/function-analysis?address=' + encodeURIComponent(addr))
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/function-analysis?address=' + encodeURIComponent(addr))
         .then(function(data) {
             // LRU eviction
             var idx = _analysisCacheKeys.indexOf(addr);
@@ -552,8 +550,7 @@ function toggleDetailTab(btn, tabName) {
 // --- ASM tab renderer ---
 function renderAsmTab(container, addr) {
     container.innerHTML = '<div class="dim p-10">Loading disassembly...</div>';
-    fetch('/dashboard/api/disassembly?address=' + encodeURIComponent(addr) + '&count=200')
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/disassembly?address=' + encodeURIComponent(addr) + '&count=200')
         .then(function(data) {
             var insns = data.instructions || [];
             if (!insns.length) {
@@ -581,8 +578,7 @@ function renderAsmTab(container, addr) {
 // --- VARS tab renderer ---
 function renderVarsTab(container, addr) {
     container.innerHTML = '<div class="dim p-10">Loading variables...</div>';
-    fetch('/dashboard/api/function-variables?address=' + encodeURIComponent(addr))
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/function-variables?address=' + encodeURIComponent(addr))
         .then(function(data) {
             var params = data.parameters || [];
             var locals = data.locals || [];
@@ -626,8 +622,7 @@ function renderVarsTab(container, addr) {
 // --- SIM tab renderer ---
 function renderSimTab(container, addr) {
     container.innerHTML = '<div class="dim p-10">Loading similarity data...</div>';
-    fetch('/dashboard/api/function-similarity?address=' + encodeURIComponent(addr))
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/function-similarity?address=' + encodeURIComponent(addr))
         .then(function(data) {
             var matches = data.matches || [];
             if (!matches.length) {
@@ -708,8 +703,7 @@ function searchDecompiledCode() {
     var countBadge = document.getElementById('code-search-count');
     resultsPanel.classList.remove('d-none');
     body.innerHTML = '<div class="dim p-10">Searching...</div>';
-    fetch('/dashboard/api/search-code?q=' + encodeURIComponent(q) + '&limit=100')
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/search-code?q=' + encodeURIComponent(q) + '&limit=100')
         .then(function(data) {
             if (data.error) {
                 body.innerHTML = '<div class="dim p-10">' + escapeHtml(data.error) + '</div>';
@@ -795,7 +789,7 @@ function loadTreeView() {
               '&search=' + encodeURIComponent(search) +
               '&sort=' + encodeURIComponent(_currentSort) +
               '&asc=' + (_sortAsc ? '1' : '0');
-    fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    fetchJSON(url).then(function(data) {
         _cachedFunctions = data;
         renderSymbolTree(data);
     });

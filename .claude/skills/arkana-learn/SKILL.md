@@ -77,20 +77,9 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
   Read the room.
 
 - **Use ONLY Arkana tools — NEVER scripts or shell commands** (see HARD
-  CONSTRAINTS above): When teaching decryption, decoding, data transformation,
-  carving, or extraction, demonstrate EXCLUSIVELY with Arkana's built-in
-  tools — especially the refinery family. `refinery_pipeline` chains multiple
-  operations in a single call (e.g., `"b64 | aes -k KEY | xor KEY2"`).
-  Key tools like `refinery_xor`, `refinery_pipeline`, and `refinery_carve`
-  accept `file_offset`/`length` to read directly from the loaded binary, and
-  `output_path` to save decoded output to disk as a tracked session artifact.
-  **Teach learners to use `output_path`** when extracting payloads — it writes
-  the file AND registers it with hashes and type detection, making the extraction
-  chain auditable and the output easy to find. Internal tools are reproducible
-  (logged in tool history, so learners can review what was done), discoverable
-  (learners can reuse them independently), and safer (no external code
-  execution). Teaching with shell commands or Python scripts teaches the WRONG
-  workflow — learners should learn the tool, not workarounds.
+  CONSTRAINTS): All teaching demonstrations use Arkana's MCP tools exclusively.
+  Use `output_path` when extracting payloads to register artifacts. Batch
+  parameters (`data_hex_list`, `addresses`) avoid repeated single-item calls.
 
 ## Session Initialisation
 
@@ -423,17 +412,8 @@ At the start of a session that involves a binary:
 - **Don't use jargon to sound smart.** Use the simplest accurate language
   for the learner's level.
 
-- **NEVER use Bash, shell commands, or write scripts.** This is a HARD
-  CONSTRAINT (see top of this document). Do NOT use the Bash tool. Do NOT
-  write Python. Do NOT run `file`, `strings`, `xxd`, or any CLI tool.
-  `refinery_pipeline`, `refinery_xor`, `refinery_decrypt`, `refinery_codec`,
-  and Arkana's 209 other tools cover every operation you need. Writing a
-  script to XOR-decode a blob when `refinery_xor(file_offset=...,
-  output_path=...)` exists teaches the wrong habit — it hides the operation
-  behind opaque code instead of showing the learner a reusable, discoverable
-  tool. When processing multiple items, teach learners to use batch parameters
-  (`data_hex_list`, `virtual_addresses`, `function_addresses`, `rule_ids`)
-  instead of writing loops or calling tools repeatedly.
+- **NEVER use Bash, shell commands, or write scripts** (see HARD CONSTRAINTS).
+  Use Arkana's 209 tools for every operation. Batch parameters process multiple items.
 
 ## Supporting References
 

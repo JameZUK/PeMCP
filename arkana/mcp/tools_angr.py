@@ -16,6 +16,7 @@ from arkana.background import _update_progress, _run_background_task_wrapper, _l
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
 from arkana.mcp._rename_helpers import apply_function_renames_to_lines, apply_variable_renames_to_lines, get_display_name
+from arkana.mcp._search_helpers import search_lines_with_context
 
 # Cache for paginated decompilation results — avoids re-decompiling when
 # the client requests subsequent pages of the same function.
@@ -274,6 +275,9 @@ async def decompile_function_with_angr(
     function_address: str,
     line_offset: int = 0,
     line_limit: int = 80,
+    search: Optional[str] = None,
+    context_lines: int = 2,
+    case_sensitive: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Decompiles a function into C-like pseudocode using Angr.
@@ -282,6 +286,11 @@ async def decompile_function_with_angr(
     Output is paginated by line. The first call decompiles and caches the full
     result; subsequent calls with different ``line_offset`` values serve from
     cache without re-decompiling.
+
+    When ``search`` is provided, returns only matching lines with surrounding
+    context instead of paginated output.  Useful for finding specific patterns
+    (e.g. ``search="xor"`` or ``search="CreateFile"``) without reading the
+    entire function.
 
     When to use: After identifying a function of interest via get_function_map() or get_function_complexity_list().
     Next steps: auto_note_function(address) to save a behavioral summary, get_function_cfg() for control flow,
@@ -296,6 +305,10 @@ async def decompile_function_with_angr(
         function_address: Hex address of the function to decompile (e.g. '0x140001000').
         line_offset: Start returning lines from this index (0-based). Default 0.
         line_limit: Maximum number of lines to return per page. Default 80.
+        search: Optional regex pattern to grep for within the decompiled code.
+            When provided, only matching lines with context are returned.
+        context_lines: Number of context lines around each match (default 2, max 20).
+        case_sensitive: Whether the search is case-sensitive (default False).
     """
 
     await ctx.info(f"Requesting Angr decompilation for: {function_address}")
@@ -311,9 +324,42 @@ async def decompile_function_with_angr(
         # Apply user renames to output
         renamed_lines = apply_function_renames_to_lines(cached_lines)
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
+        display_name = get_display_name(hex(target_addr), cached_entry.get("function_name", "unknown"))
+
+        if search:
+            search_result = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
+            flat_lines = []
+            for region in search_result["matched_regions"]:
+                flat_lines.extend(region["items"])
+            page = flat_lines[line_offset:line_offset + line_limit]
+            has_more = (line_offset + line_limit) < len(flat_lines)
+            return {
+                "function_name": display_name,
+                "address": cached_entry.get("address", hex(target_addr)),
+                "lines": page,
+                "count": len(page),
+                "_search": {
+                    "pattern": search,
+                    "total_matches": search_result["total_matches"],
+                    "total_lines": search_result["total_lines"],
+                    "truncated": search_result["truncated"],
+                    "regions": len(search_result["matched_regions"]),
+                },
+                "_pagination": {
+                    "total": len(flat_lines),
+                    "offset": line_offset,
+                    "limit": line_limit,
+                    "has_more": has_more,
+                },
+                "next_step": (
+                    f"Call decompile_function_with_angr('{function_address}', search='{search}', line_offset={line_offset + line_limit}) to see more matches."
+                    if has_more else
+                    "Call auto_note_function(address) to save a behavioral summary of this function."
+                ),
+            }
+
         page = renamed_lines[line_offset:line_offset + line_limit]
         has_more = (line_offset + line_limit) < len(renamed_lines)
-        display_name = get_display_name(hex(target_addr), cached_entry.get("function_name", "unknown"))
         return {
             "function_name": display_name,
             "address": cached_entry.get("address", hex(target_addr)),
@@ -443,25 +489,57 @@ async def decompile_function_with_angr(
     renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
     display_name = get_display_name(hex(target_addr), result["function_name"])
 
-    page = renamed_lines[line_offset:line_offset + line_limit]
-    has_more = (line_offset + line_limit) < len(renamed_lines)
-    paginated_result = {
-        "function_name": display_name,
-        "address": result["address"],
-        "lines": page,
-        "count": len(page),
-        "_pagination": {
-            "total": len(all_lines),
-            "offset": line_offset,
-            "limit": line_limit,
-            "has_more": has_more,
-        },
-        "next_step": (
-            f"Call decompile_function_with_angr('{function_address}', line_offset={line_offset + line_limit}) to see more lines."
-            if has_more else
-            "Call auto_note_function(address) to save a behavioral summary of this function."
-        ),
-    }
+    if search:
+        search_result = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
+        flat_lines = []
+        for region in search_result["matched_regions"]:
+            flat_lines.extend(region["items"])
+        page = flat_lines[line_offset:line_offset + line_limit]
+        has_more = (line_offset + line_limit) < len(flat_lines)
+        paginated_result = {
+            "function_name": display_name,
+            "address": result["address"],
+            "lines": page,
+            "count": len(page),
+            "_search": {
+                "pattern": search,
+                "total_matches": search_result["total_matches"],
+                "total_lines": search_result["total_lines"],
+                "truncated": search_result["truncated"],
+                "regions": len(search_result["matched_regions"]),
+            },
+            "_pagination": {
+                "total": len(flat_lines),
+                "offset": line_offset,
+                "limit": line_limit,
+                "has_more": has_more,
+            },
+            "next_step": (
+                f"Call decompile_function_with_angr('{function_address}', search='{search}', line_offset={line_offset + line_limit}) to see more matches."
+                if has_more else
+                "Call auto_note_function(address) to save a behavioral summary of this function."
+            ),
+        }
+    else:
+        page = renamed_lines[line_offset:line_offset + line_limit]
+        has_more = (line_offset + line_limit) < len(renamed_lines)
+        paginated_result = {
+            "function_name": display_name,
+            "address": result["address"],
+            "lines": page,
+            "count": len(page),
+            "_pagination": {
+                "total": len(all_lines),
+                "offset": line_offset,
+                "limit": line_limit,
+                "has_more": has_more,
+            },
+            "next_step": (
+                f"Call decompile_function_with_angr('{function_address}', line_offset={line_offset + line_limit}) to see more lines."
+                if has_more else
+                "Call auto_note_function(address) to save a behavioral summary of this function."
+            ),
+        }
     return await _check_mcp_response_size(
         ctx, paginated_result, "decompile_function_with_angr",
         "line_offset and line_limit parameters",
@@ -1611,11 +1689,17 @@ async def batch_decompile(
     addresses: List[str],
     max_lines_per_function: int = 30,
     summary_mode: bool = False,
+    search: Optional[str] = None,
+    context_lines: int = 2,
+    case_sensitive: bool = False,
 ) -> Dict[str, Any]:
     """
-    [Phase: deep-dive] Decompile multiple functions in a single call. Returns
-    truncated pseudocode for each function. Results are cached per-function so
-    subsequent single-function requests hit cache.
+    [Phase: deep-dive] Decompile multiple functions in a single call. Results
+    are cached per-function so subsequent single-function requests hit cache.
+
+    When ``search`` is provided, only functions containing matches are returned,
+    with matched lines and context.  Useful for finding a pattern across many
+    functions (e.g. ``search="xor"`` to locate crypto routines).
 
     When to use: After get_function_map identifies several interesting functions,
     batch-decompile them to get a quick overview before deep-diving into specifics.
@@ -1625,6 +1709,10 @@ async def batch_decompile(
         addresses: (List[str]) List of function addresses to decompile (max 20).
         max_lines_per_function: (int) Max lines per function (default 30).
         summary_mode: (bool) If True, return only signature + first 5 lines.
+        search: Optional regex pattern to grep for. Only functions with matches
+            are included in results.
+        context_lines: Number of context lines around each match (default 2, max 20).
+        case_sensitive: Whether the search is case-sensitive (default False).
 
     Returns:
         Decompilation results for each function.
@@ -1636,10 +1724,16 @@ async def batch_decompile(
     if len(addresses) > MAX_BATCH_DECOMPILE:
         raise ValueError(f"Maximum {MAX_BATCH_DECOMPILE} functions per batch call.")
 
+    # Validate search pattern once before the loop (fail fast)
+    if search:
+        from arkana.utils import validate_regex_pattern
+        validate_regex_pattern(search)
+
     lines_limit = 5 if summary_mode else max_lines_per_function
     results = []
     succeeded = 0
     failed = 0
+    total_search_matches = 0
 
     for i, addr_str in enumerate(addresses):
         await ctx.report_progress(i, len(addresses))
@@ -1654,11 +1748,26 @@ async def batch_decompile(
             renamed_lines = apply_function_renames_to_lines(cached_lines)
             renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
             display_name = get_display_name(hex(target_addr), meta.get("function_name", "unknown"))
-            page = renamed_lines[:lines_limit]
-            func_result["function_name"] = display_name
-            func_result["lines"] = page
-            func_result["total_lines"] = len(renamed_lines)
-            func_result["from_cache"] = True
+
+            if search:
+                sr = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
+                if sr["total_matches"] == 0:
+                    continue  # Skip functions with no matches
+                flat = []
+                for region in sr["matched_regions"]:
+                    flat.extend(region["items"])
+                func_result["function_name"] = display_name
+                func_result["lines"] = flat
+                func_result["match_count"] = sr["total_matches"]
+                func_result["total_lines"] = sr["total_lines"]
+                func_result["from_cache"] = True
+                total_search_matches += sr["total_matches"]
+            else:
+                page = renamed_lines[:lines_limit]
+                func_result["function_name"] = display_name
+                func_result["lines"] = page
+                func_result["total_lines"] = len(renamed_lines)
+                func_result["from_cache"] = True
             results.append(func_result)
             succeeded += 1
             continue
@@ -1711,11 +1820,25 @@ async def batch_decompile(
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
         display_name = get_display_name(hex(target_addr), result["function_name"])
 
-        page = renamed_lines[:lines_limit]
-        func_result["function_name"] = display_name
-        func_result["lines"] = page
-        func_result["total_lines"] = len(renamed_lines)
-        func_result["from_cache"] = False
+        if search:
+            sr = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
+            if sr["total_matches"] == 0:
+                continue  # Skip functions with no matches
+            flat = []
+            for region in sr["matched_regions"]:
+                flat.extend(region["items"])
+            func_result["function_name"] = display_name
+            func_result["lines"] = flat
+            func_result["match_count"] = sr["total_matches"]
+            func_result["total_lines"] = sr["total_lines"]
+            func_result["from_cache"] = False
+            total_search_matches += sr["total_matches"]
+        else:
+            page = renamed_lines[:lines_limit]
+            func_result["function_name"] = display_name
+            func_result["lines"] = page
+            func_result["total_lines"] = len(renamed_lines)
+            func_result["from_cache"] = False
         results.append(func_result)
         succeeded += 1
 
@@ -1730,4 +1853,10 @@ async def batch_decompile(
             "max_lines_per_function": lines_limit,
         },
     }
+    if search:
+        output["_search"] = {
+            "pattern": search,
+            "functions_with_matches": len([r for r in results if "match_count" in r]),
+            "total_matches_across_functions": total_search_matches,
+        }
     return await _check_mcp_response_size(ctx, output, "batch_decompile")

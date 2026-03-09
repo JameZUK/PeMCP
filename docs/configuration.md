@@ -50,7 +50,7 @@ Arkana caches analysis results to disk so that re-opening a previously analysed 
 | Setting | Environment Variable | Default | Description |
 |---|---|---|---|
 | `cache_enabled` | `ARKANA_CACHE_ENABLED` | `true` | Set to `"false"` to disable caching entirely |
-| `cache_max_size_mb` | `ARKANA_CACHE_MAX_SIZE_MB` | `500` | Maximum total cache size in MB |
+| `cache_max_size_mb` | `ARKANA_CACHE_MAX_SIZE_MB` | `500` | Maximum total cache size in MB (clamped to 1–50,000 MB) |
 
 **Cache management MCP tools:**
 
@@ -85,6 +85,38 @@ docker run --rm -i \
   -v "$(pwd)/samples:/samples:ro" \
   arkana-toolkit --mcp-server --samples-path /samples
 ```
+
+---
+
+## Environment Variables
+
+Beyond the cache and API key settings above, Arkana supports several environment variables for tuning server behaviour:
+
+### Response Limits
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARKANA_MCP_RESPONSE_LIMIT_CHARS` | `8000` | Soft character limit for MCP responses. The default 8K is tuned for Claude Code CLI compatibility. Set to `65536` to restore 64KB-only behaviour for non-Claude-Code clients. |
+
+### Background Tasks
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARKANA_BACKGROUND_TASK_TIMEOUT` | `1800` | Default timeout (seconds) for background analysis tasks (symbolic execution, emulation, binary diffing, etc.). Applies to all 12 background tools. |
+| `ARKANA_BSIM_BACKGROUND_TIMEOUT` | `1800` | Separate timeout (seconds) for BSim function similarity background tasks (`find_similar_functions`, `build_function_signature_db`). |
+
+### Concurrency
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARKANA_MAX_CONCURRENT_ANALYSES` | `3` | Maximum concurrent heavy analysis operations (semaphore). Prevents CPU/memory exhaustion when multiple tools run simultaneously. |
+
+### Auto-Enrichment
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARKANA_AUTO_ENRICHMENT` | `1` | Set to `0` to disable automatic background enrichment after `open_file`. When enabled, Arkana automatically runs classification, triage, similarity hashing, MITRE mapping, IOC collection, library identification, and a decompilation sweep. |
+| `ARKANA_ENRICHMENT_MAX_DECOMPILE` | `50` | Maximum number of functions to decompile during the auto-enrichment background sweep. Higher values provide more coverage but take longer. |
 
 ---
 

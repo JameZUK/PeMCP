@@ -6,8 +6,7 @@
     var _heatmapListenerAttached = false;
 
     function loadEntropy() {
-        fetch("/dashboard/api/entropy")
-            .then(function (r) { return r.json(); })
+        fetchJSON("/dashboard/api/entropy")
             .then(function (data) {
                 _entropyData = data;
                 renderEntropyBar(data);
@@ -79,8 +78,7 @@
     }
 
     function loadResources() {
-        fetch("/dashboard/api/resources")
-            .then(function (r) { return r.json(); })
+        fetchJSON("/dashboard/api/resources")
             .then(function (data) {
                 renderResources(data);
             })

@@ -33,6 +33,7 @@
         <div class="panel-header">FILE</div>
         <div class="stat-value">{{ data.filename or 'None' }}</div>
         <div class="stat-detail mono">{{ data.format }}{% if bs.file_size %} &middot; {{ (bs.file_size / 1024)|round(1) }} KB{% endif %}{% if bs.language %} &middot; {{ bs.language }}{% endif %}</div>
+        {% if bs.ai_assessment %}<div class="stat-detail warning">{{ bs.ai_assessment }}</div>{% elif bs.classification %}<div class="stat-detail dim">{{ bs.classification }}</div>{% endif %}
     </div>
     <div class="panel stat-card">
         <div class="panel-header">RISK</div>
@@ -230,79 +231,6 @@
             {% endfor %}
             {% else %}
             <div class="dim p-6-0 fs-12">No YARA matches</div>
-            {% endif %}
-        </div>
-    </div>
-</div>
-{% endif %}
-
-<!-- Panel: String Analysis Summary -->
-{% if bs.basic_string_count or bs.floss_static_count or bs.floss_stack_count or bs.floss_decoded_count %}
-<div class="panel">
-    <div class="panel-header">STRING ANALYSIS</div>
-    <div class="summary-grid">
-        <div class="summary-section">
-            <div class="summary-section-title">COUNTS</div>
-            {% if bs.basic_string_count %}
-            <div class="summary-row">
-                <span class="summary-label">BASIC ASCII:</span>
-                <span>{{ bs.basic_string_count }}</span>
-            </div>
-            {% endif %}
-            {% if bs.floss_static_count %}
-            <div class="summary-row">
-                <span class="summary-label">FLOSS STATIC:</span>
-                <span>{{ bs.floss_static_count }}</span>
-            </div>
-            {% endif %}
-            {% if bs.floss_stack_count %}
-            <div class="summary-row">
-                <span class="summary-label">STACK STRINGS:</span>
-                <span class="warning">{{ bs.floss_stack_count }}</span>
-            </div>
-            {% endif %}
-            {% if bs.floss_decoded_count %}
-            <div class="summary-row">
-                <span class="summary-label">DECODED:</span>
-                <span class="warning">{{ bs.floss_decoded_count }}</span>
-            </div>
-            {% endif %}
-        </div>
-        <div class="summary-section">
-            <div class="summary-section-title">STATUS</div>
-            {% if bs.floss_status %}
-            <div class="summary-row">
-                <span class="summary-label">FLOSS:</span>
-                <span class="dim">{{ bs.floss_status }}</span>
-            </div>
-            {% else %}
-            <div class="summary-row dim">FLOSS analysis not yet run</div>
-            {% endif %}
-            {% if bs.floss_top_decoded %}
-            <div class="summary-section-title mt-4">DECODED STRINGS (TOP {{ bs.floss_top_decoded|length }})</div>
-            <div class="mini-table-wrap">
-            <table class="mini-table">
-            {% for s in bs.floss_top_decoded %}
-            <tr>
-                <td class="mini-table-str warning" title="{{ s.string if s is mapping else s }}">{{ s.string if s is mapping else s }}</td>
-                <td class="mini-table-func">{% if s is mapping and s.func_addr %}<a href="/dashboard/functions?highlight={{ s.func_addr|urlencode }}" class="func-link">&rarr; {{ s.func_name }}</a>{% endif %}</td>
-            </tr>
-            {% endfor %}
-            </table>
-            </div>
-            {% endif %}
-            {% if bs.floss_top_stack %}
-            <div class="summary-section-title mt-4">STACK STRINGS (TOP {{ bs.floss_top_stack|length }})</div>
-            <div class="mini-table-wrap">
-            <table class="mini-table">
-            {% for s in bs.floss_top_stack %}
-            <tr>
-                <td class="mini-table-str" title="{{ s.string if s is mapping else s }}">{{ s.string if s is mapping else s }}</td>
-                <td class="mini-table-func">{% if s is mapping and s.func_addr %}<a href="/dashboard/functions?highlight={{ s.func_addr|urlencode }}" class="func-link">&rarr; {{ s.func_name }}</a>{% endif %}</td>
-            </tr>
-            {% endfor %}
-            </table>
-            </div>
             {% endif %}
         </div>
     </div>

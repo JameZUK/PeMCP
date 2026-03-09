@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlencode
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -54,6 +55,10 @@ from arkana.dashboard.state_api import (
     search_decompiled_code,
     get_diff_data,
     get_list_files_data,
+    get_digest_data,
+    generate_report_text,
+    get_ioc_summary_data,
+    get_capabilities_summary_data,
 )
 
 logger = logging.getLogger("Arkana.dashboard")
@@ -128,6 +133,10 @@ class SecurityHeadersMiddleware:
                 if is_static:
                     security_headers.append(
                         (b"cache-control", b"public, max-age=3600")
+                    )
+                else:
+                    security_headers.append(
+                        (b"cache-control", b"no-store")
                     )
                 headers.extend(security_headers)
                 message = {**message, "headers": headers}
@@ -209,9 +218,7 @@ def _make_auth_response(request: Request, dashboard_token: str, response: Respon
         other_params = {k: v for k, v in request.query_params.items() if k != "token"}
         clean_url = request.url.path
         if other_params:
-            clean_url += "?" + "&".join(
-                f"{k}={v}" for k, v in other_params.items()
-            )
+            clean_url += "?" + urlencode(other_params)
         redirect = RedirectResponse(clean_url, status_code=302)
         redirect.set_cookie(
             _COOKIE_NAME, dashboard_token,
@@ -402,7 +409,8 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_state(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_overview_data())
+        data = await asyncio.to_thread(get_overview_data)
+        return JSONResponse(data)
 
     async def api_debug(request: Request) -> Response:
         """Diagnostic endpoint — shows minimal state isolation info."""
@@ -481,7 +489,7 @@ def _create_routes(dashboard_token: str) -> list:
         err = _validate_address(address)
         if err:
             return err
-        result = get_decompiled_code(address)
+        result = await asyncio.to_thread(get_decompiled_code, address)
         return JSONResponse(result)
 
     async def api_decompile_post(request: Request) -> Response:
@@ -557,7 +565,8 @@ def _create_routes(dashboard_token: str) -> list:
         if len(q) < 2:
             return JSONResponse({"error": "query too short (min 2 chars)"}, status_code=400)
         q = q[:500]
-        return JSONResponse(global_search(q))
+        data = await asyncio.to_thread(global_search, q)
+        return JSONResponse(data)
 
     async def api_function_xrefs(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -567,7 +576,8 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            return JSONResponse(get_function_xrefs_data(address))
+            data = await asyncio.to_thread(get_function_xrefs_data, address)
+            return JSONResponse(data)
         except Exception:
             logger.debug("api_function_xrefs error for %s", address, exc_info=True)
             return JSONResponse({"callers": [], "callees": [], "_error": True})
@@ -580,7 +590,8 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            return JSONResponse(get_function_analysis_data(address))
+            data = await asyncio.to_thread(get_function_analysis_data, address)
+            return JSONResponse(data)
         except Exception:
             logger.debug("api_function_analysis error for %s", address, exc_info=True)
             return JSONResponse({"address": address, "callers": [], "callees": [], "suspicious_apis": [], "strings": [], "_error": True})
@@ -593,7 +604,8 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            return JSONResponse(get_function_strings_data(address))
+            data = await asyncio.to_thread(get_function_strings_data, address)
+            return JSONResponse(data)
         except Exception:
             logger.debug("api_function_strings error for %s", address, exc_info=True)
             return JSONResponse({"strings": [], "_error": True})
@@ -606,7 +618,8 @@ def _create_routes(dashboard_token: str) -> list:
             limit = max(1, min(limit, 5000))
         except (ValueError, TypeError):
             limit = 100
-        return JSONResponse(get_timeline_data(limit=limit))
+        data = await asyncio.to_thread(get_timeline_data, limit=limit)
+        return JSONResponse(data)
 
     async def api_events(request: Request) -> Response:
         """SSE endpoint — streams state changes every 2 seconds."""
@@ -753,7 +766,7 @@ def _create_routes(dashboard_token: str) -> list:
         category = request.query_params.get("category", "").strip() or None
         if category and category not in _VALID_NOTE_CATEGORIES:
             category = None
-        data = get_notes_data(category=category)
+        data = await asyncio.to_thread(get_notes_data, category=category)
         ctx = {"nav_active": "notes", "data": data, "active_category": category or "all"}
         resp = HTMLResponse(_render("notes.html", ctx))
         return _make_auth_response(request, dashboard_token, resp)
@@ -761,35 +774,52 @@ def _create_routes(dashboard_token: str) -> list:
     async def partial_overview_stats(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return HTMLResponse("", status_code=401)
-        data = get_overview_data()
-        html = _render("partials/_overview_stats.html", {"data": data})
-        return HTMLResponse(html)
+        try:
+            data = await asyncio.to_thread(get_overview_data)
+            html = _render("partials/_overview_stats.html", {"data": data})
+            return HTMLResponse(html)
+        except Exception:
+            logger.debug("partial_overview_stats error", exc_info=True)
+            return HTMLResponse("")
 
     async def partial_task_list(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return HTMLResponse("", status_code=401)
-        data = get_overview_data()
-        html = _render("partials/_task_list.html", {"data": data})
-        return HTMLResponse(html)
+        try:
+            data = await asyncio.to_thread(get_overview_data)
+            html = _render("partials/_task_list.html", {"data": data})
+            return HTMLResponse(html)
+        except Exception:
+            logger.debug("partial_task_list error", exc_info=True)
+            return HTMLResponse("")
 
     async def partial_timeline_entry(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return HTMLResponse("", status_code=401)
-        entries = get_timeline_data(limit=20)
-        html = _render("partials/_timeline_entry.html", {"entries": entries})
-        return HTMLResponse(html)
+        try:
+            entries = await asyncio.to_thread(get_timeline_data, limit=20)
+            html = _render("partials/_timeline_entry.html", {"entries": entries})
+            return HTMLResponse(html)
+        except Exception:
+            logger.debug("partial_timeline_entry error", exc_info=True)
+            return HTMLResponse("")
 
     async def partial_global_status(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return HTMLResponse("", status_code=401)
-        data = get_overview_data()
-        html = _render("partials/_global_status.html", {"data": data})
-        return HTMLResponse(html)
+        try:
+            data = await asyncio.to_thread(get_overview_data)
+            html = _render("partials/_global_status.html", {"data": data})
+            return HTMLResponse(html)
+        except Exception:
+            logger.debug("partial_global_status error", exc_info=True)
+            return HTMLResponse("")
 
     async def api_floss_summary(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_floss_summary())
+        data = await asyncio.to_thread(get_floss_summary)
+        return JSONResponse(data)
 
     # --- New API endpoints (Batch 1-3) ---
 
@@ -829,7 +859,8 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            return JSONResponse(get_function_cfg_data(address))
+            data = await asyncio.to_thread(get_function_cfg_data, address)
+            return JSONResponse(data)
         except Exception:
             logger.debug("api_function_cfg error for %s", address, exc_info=True)
             return JSONResponse({"nodes": [], "edges": [], "error": "analysis error"})
@@ -847,7 +878,8 @@ def _create_routes(dashboard_token: str) -> list:
         except (ValueError, TypeError):
             count = 200
         try:
-            return JSONResponse(get_disassembly_data(address, count))
+            data = await asyncio.to_thread(get_disassembly_data, address, count)
+            return JSONResponse(data)
         except Exception:
             logger.debug("api_disassembly error for %s", address, exc_info=True)
             return JSONResponse({"instructions": [], "error": "disassembly error"})
@@ -860,7 +892,8 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            return JSONResponse(get_function_variables_data(address))
+            data = await asyncio.to_thread(get_function_variables_data, address)
+            return JSONResponse(data)
         except Exception:
             logger.debug("api_function_variables error for %s", address, exc_info=True)
             return JSONResponse({"parameters": [], "locals": [], "error": "analysis error"})
@@ -898,7 +931,8 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_types(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_custom_types_data())
+        data = await asyncio.to_thread(get_custom_types_data)
+        return JSONResponse(data)
 
     async def api_types_struct_post(request: Request) -> Response:
         """Create or update a struct type."""
@@ -970,7 +1004,8 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            return JSONResponse(get_function_similarity_data(address))
+            data = await asyncio.to_thread(get_function_similarity_data, address)
+            return JSONResponse(data)
         except Exception:
             logger.debug("api_function_similarity error for %s", address, exc_info=True)
             return JSONResponse({"matches": [], "available": False})
@@ -981,7 +1016,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
         try:
-            report = get_export_report_data()
+            report = await asyncio.to_thread(get_export_report_data)
             report_json = json.dumps(report, indent=2, default=str)
             filename = "arkana_report.json"
             file_info = report.get("file_info", {})
@@ -996,6 +1031,48 @@ def _create_routes(dashboard_token: str) -> list:
             )
         except Exception:
             logger.debug("api_export_report error", exc_info=True)
+            return JSONResponse({"error": "report generation failed"}, status_code=500)
+
+    # --- IOC Summary ---
+    async def api_ioc_summary(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        data = await asyncio.to_thread(get_ioc_summary_data)
+        return JSONResponse(data)
+
+    # --- Capabilities Summary ---
+    async def api_capabilities_summary(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        data = await asyncio.to_thread(get_capabilities_summary_data)
+        return JSONResponse(data)
+
+    # --- Analysis Digest ---
+    async def api_digest(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            data = await asyncio.to_thread(get_digest_data)
+            return JSONResponse(data)
+        except Exception:
+            logger.debug("api_digest error", exc_info=True)
+            return JSONResponse({"available": False}, status_code=500)
+
+    # --- Generate Markdown Report ---
+    async def api_generate_report(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        try:
+            data = await asyncio.wait_for(
+                asyncio.to_thread(generate_report_text), timeout=60
+            )
+            return JSONResponse(data)
+        except asyncio.TimeoutError:
+            return JSONResponse({"error": "report generation timed out"}, status_code=504)
+        except Exception:
+            logger.debug("api_generate_report error", exc_info=True)
             return JSONResponse({"error": "report generation failed"}, status_code=500)
 
     # --- Batch 4: Full-text decompiled search ---
@@ -1136,6 +1213,10 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/types/delete", endpoint=api_types_delete, methods=["POST"]),
         Route("/api/function-similarity", endpoint=api_function_similarity, methods=["GET"]),
         Route("/api/export-report", endpoint=api_export_report, methods=["POST"]),
+        Route("/api/digest", endpoint=api_digest, methods=["GET"]),
+        Route("/api/generate-report", endpoint=api_generate_report, methods=["POST"]),
+        Route("/api/ioc-summary", endpoint=api_ioc_summary, methods=["GET"]),
+        Route("/api/capabilities-summary", endpoint=api_capabilities_summary, methods=["GET"]),
         # New API endpoints (Batch 4)
         Route("/api/search-code", endpoint=api_search_code, methods=["GET"]),
         Route("/api/diff", endpoint=api_diff, methods=["POST"]),

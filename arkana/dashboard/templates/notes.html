@@ -21,11 +21,14 @@
 </div>
 
 <div class="panel">
-    <div class="panel-header">NOTES <span class="badge badge-dim">{{ data|length if data else 0 }}</span></div>
+    <div class="panel-header">
+        NOTES <span class="badge badge-dim" id="notes-count">{{ data|length if data else 0 }}</span>
+        <input type="text" id="notes-search" class="input-search" placeholder="Search notes..." style="float:right;margin-top:-2px;width:200px">
+    </div>
     {% if data %}
-    <div class="notes-list">
+    <div class="notes-list" id="notes-list">
         {% for n in data %}
-        <div class="note-card">
+        <div class="note-card" data-note-text="{{ n.content|lower }}">
             <div class="note-header">
                 <span class="badge badge-cat-{{ n.category }}">{{ n.category|upper }}</span>
                 {% if n.func_addr %}
@@ -46,4 +49,8 @@
     <div class="empty-msg">No {% if cat != 'all' %}{{ cat }}{% endif %} notes yet.</div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/notes.js"></script>
 {% endblock %}

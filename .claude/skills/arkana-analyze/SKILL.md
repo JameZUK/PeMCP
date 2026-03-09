@@ -125,24 +125,10 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
   immediately. When you discover any finding, call `add_note()` to record it. This
   is non-negotiable — notes are how context survives across a long session and how
   the final digest and report are built.
-- **Use ONLY Arkana tools — NEVER scripts or shell commands** (see HARD
-  CONSTRAINTS above): For ALL data transformation — decryption, decoding,
-  decompression, carving, extraction, deobfuscation — use Arkana's built-in
-  tools. The refinery family is particularly powerful: `refinery_pipeline`
-  chains multiple operations in a single call (e.g., `"b64 | aes -k KEY |
-  xor KEY2"`), replacing multi-step scripts entirely. Other key tools:
-  `refinery_xor`, `refinery_decrypt`, `refinery_auto_decrypt`,
-  `refinery_codec`, `refinery_decompress`, `refinery_carve`,
-  `refinery_regex_extract`.
-  - **Batch mode**: When you need to decrypt/decode multiple blobs (e.g.,
-    95 Base64+RC4 config entries), use `data_hex_list` in `refinery_pipeline`
-    instead of calling the tool 95 times. Similarly,
-    `get_string_at_va(virtual_addresses=[...])`,
-    `auto_note_function(function_addresses=[...])`, and
-    `get_capa_rule_match_details(rule_ids=[...])` accept batch lists.
-- **Trust Arkana's built-in guidance**: When tools error, Arkana returns enriched
-  error messages with actionable next steps and alternative tool suggestions.
-  Follow those hints rather than guessing at workarounds.
+- **Use ONLY Arkana tools** (see HARD CONSTRAINTS): For all data transformation use
+  Arkana's built-in tools — especially `refinery_pipeline` which chains operations
+  in a single call. Use batch parameters (`data_hex_list`, `addresses`,
+  `function_addresses`, `rule_ids`) to process multiple items in one call.
 - **Packed binaries: unpack first, analyze second**: When triage identifies a
   packed binary (likely_packed=true, entropy > 7.2, imports < 10, PEiD match),
   do NOT attempt to decompile individual functions or decrypt embedded resources.
@@ -158,40 +144,20 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
   to be processed by the UNPACKED code. You cannot understand the decryption
   without first understanding the code that performs it, and you cannot
   understand that code until the binary is unpacked.
-- **Wait for angr on unpacked binaries**: When working with an unpacked (or
-  never-packed) binary and a tool returns "Angr background analysis is still
-  in progress", follow this sequence:
-  1. Call `check_task_status('startup-angr')` to check progress — it now shows
-     `functions_discovered_so_far` and `stall_detection` for angr CFG tasks
-  2. If progress is advancing (percentage increasing or new functions being
-     discovered), do ONE round of productive non-angr work (e.g.,
-     `get_strings_summary`, `extract_resources`)
-  3. Check status again and retry decompilation once complete
-  4. Do NOT substitute hex dump reading for decompilation — wait for the
-     real thing
-
-  If angr is STUCK (`stall_detection.is_stalled=true` or same percentage for
-  multiple checks), the CFG will time out after 10 minutes. You do NOT need
-  to wait — use these tools immediately:
-  - `get_angr_partial_functions()` — lists functions discovered so far
-  - `decompile_function_with_angr(address)` — works WITHOUT full CFG by
-    building a local region CFG automatically
-  - `disassemble_at_address(address)` — works immediately (no CFG needed)
-
-  For packed binaries, unpack first rather than waiting for the timeout.
-- **Background task monitoring**: All 10 angr background tools (symbolic
-  execution, emulation, data flow analysis, binary diffing, loop analysis,
-  class identification) have automatic timeouts (300-600s) and stall
-  detection. Use `check_task_status(task_id)` to monitor any background task:
-  - `elapsed_seconds` / `elapsed_human` — always shown
-  - `stall_detection.is_stalled` — true when no progress update in 60s
-  - `timed_out` + `partial_result` — on timeout, 4 tools capture partial
-    results: `find_path_to_address` and `find_path_with_custom_input` (steps
-    completed, active states), `emulate_function_execution` (steps, partial
-    stdout), `emulate_with_watchpoints` (captured events list)
-  - Tasks time out automatically — you do NOT need to wait indefinitely.
-    When a task times out, check `partial_result` for salvageable data.
-  - Configure with `ARKANA_BACKGROUND_TASK_TIMEOUT` env var (default 600s).
+- **Wait for angr on unpacked binaries**: When a tool returns "Angr background
+  analysis is still in progress":
+  1. `check_task_status('startup-angr')` — shows `functions_discovered_so_far`
+     and `stall_detection`
+  2. Do one round of non-angr work (strings, resources, imports) while waiting
+  3. Check status again, then retry
+  4. If stalled (`is_stalled=true`), don't wait — use `decompile_function_with_angr`
+     (builds a local CFG automatically), `get_angr_partial_functions()`, or
+     `disassemble_at_address()` immediately. Use `search="pattern"` to grep
+     within decompiled code without paginating.
+- **Background tasks**: All background tools auto-timeout (configurable via
+  `ARKANA_BACKGROUND_TASK_TIMEOUT`). `check_task_status(task_id)` shows elapsed
+  time and stall detection. On timeout, check `partial_result` for salvageable
+  data (4 tools capture partial results).
 - **Evidence hierarchy — decompilation first**: When understanding what code
   does, always prefer higher-quality evidence:
   1. **Decompiled C pseudocode** (`decompile_function_with_angr`) — gold standard
@@ -199,18 +165,12 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
   3. **Raw disassembly** (`disassemble_at_address`) — acceptable for short stubs
   4. **Hex dump** (`get_hex_dump`) — for DATA only, never for understanding code
 
-  Do NOT read hex dumps to understand what code does. You cannot reliably
-  disassemble x86 machine code by reading hex bytes. Hex dumps are for
-  examining data regions (encrypted blobs, config structs, overlay content,
-  PE headers). For code, always use decompilation or disassembly tools.
-- **Handle tool limits gracefully**: MCP responses are soft-capped at 8K chars
-  (configurable via `ARKANA_MCP_RESPONSE_LIMIT_CHARS`) to prevent Claude Code CLI
-  from truncating responses. Responses that exceed the limit are auto-truncated
-  with pagination hints. `decompile_function_with_angr()` uses line-based
-  pagination (`line_offset`/`line_limit`) — request additional pages with
-  `line_offset=80` to continue reading. Angr analyses timeout at 300s — if a
-  decompilation times out, try a simpler function first or use
-  `get_annotated_disassembly()` as a lighter alternative.
+  Do NOT read hex dumps to understand what code does. Hex dumps are for examining
+  data regions (encrypted blobs, config structs, overlay content, PE headers).
+- **Handle tool limits gracefully**: Responses are soft-capped at 8K chars. Use
+  `line_offset`/`line_limit` for pagination. Use `search="pattern"` to grep within
+  decompiled/disassembled code — far more efficient than paginating. `batch_decompile`
+  decompiles up to 20 functions per call.
 
 ## Role & Adaptive Goal Detection
 
@@ -252,24 +212,9 @@ Adapt tool selection and reporting to the detected goal throughout the session.
 
 4. Check `list_samples()` if the user hasn't specified a file.
 
-**Library availability matrix**: Based on `get_config()` results, identify which
-phases degrade when libraries are missing:
-
-| Library Missing | Impact | Alternatives |
-|---|---|---|
-| angr | No decompilation (Phase 4 Tier 1-2) | Use `get_annotated_disassembly()`, `disassemble_at_address()` |
-| capa | No capability mapping | Rely on `get_focused_imports()` + `get_strings_summary()` |
-| FLOSS | No decoded strings | Use `find_and_decode_encoded_strings()` + `extract_strings_from_binary()` |
-| Qiling | No full binary emulation | Use Speakeasy (`emulate_pe_with_windows_apis()`) |
-| Speakeasy | No PE emulation | Use Qiling or angr `emulate_function_execution()` |
-| binary-refinery | No refinery tools | Use built-in deobfuscation tools |
-| lief | Reduced multi-format support | Use format-specific tools (`elf_analyze`, etc.) |
-
-**Host vs container mode**: If `get_config()` shows host execution (no Docker):
-- Sample paths will be local filesystem paths, not `/samples`
-- Output paths must be user-specified (no `/output` mount)
-- Qiling rootfs may not be available — check `qiling_setup_check()` before emulation
-- Speakeasy/Unipacker venvs may not exist
+If a library is missing, tools return actionable alternatives. Key fallbacks:
+no angr → `disassemble_at_address`/`get_annotated_disassembly`; no Qiling → Speakeasy;
+no capa → `get_focused_imports` + `get_strings_summary`.
 
 ## Phase 1: Identify
 
@@ -379,79 +324,32 @@ Use as needed based on goal:
 
 - **Imports**: `get_focused_imports()` — security-relevant imports categorized by
   threat behavior (networking, process injection, crypto, persistence, anti-analysis).
-  Only use `get_pe_data(key='imports')` if you need the full unfiltered list.
   **Important**: These categories reflect capability, not confirmed intent. Before
   reporting imports as suspicious, consider the binary's compiler and runtime — Rust,
   Go, .NET, and Delphi binaries routinely import APIs that get flagged as
   "anti_analysis" or "execution" as part of their standard runtime. Cross-reference
   with the binary's detected language/framework before drawing conclusions.
 
-- **Strings**: `get_strings_summary()` — categorized string intelligence (URLs, IPs,
-  paths, registry keys, mutexes, crypto markers). NOT raw string dumps.
-  - For deeper string analysis: `get_top_sifted_strings()` (ML-ranked relevance)
-  - For FLOSS decoded strings: `get_floss_analysis_info()`
+- **Strings**: `get_strings_summary()` — categorized string intelligence. For deeper
+  analysis: `get_top_sifted_strings()` (ML-ranked), `get_floss_analysis_info()` (decoded).
 
-- **Functions**: `get_function_map(limit=15)` — functions ranked by interestingness,
-  grouped by purpose (includes `display_name` showing user-assigned renames). This
-  is your decompilation priority list. Increase `limit` if needed.
+- **Functions**: `get_function_map(limit=15)` — ranked by interestingness. This is your
+  decompilation priority list.
 
-- **Hex pattern search**: `search_hex_pattern(pattern)` — search binary for hex byte
-  patterns with `??` wildcards. Useful for finding byte signatures, magic values, or
-  specific instruction sequences. Optional `section` filter restricts to a named PE
-  section.
+- **Attribution**: `identify_malware_family()` — match API hash algorithm/seed, config
+  encryption, constants, and YARA indicators. Call as soon as you identify an API hash
+  function or config encryption pattern. Use `list_malware_signatures()` to review families.
 
-- **Capabilities**: `get_capa_analysis_info()` — ATT&CK technique mappings.
-  Use `get_capa_rule_match_details(rule_name)` for specific rule deep-dives.
-
-- **Crypto**: `identify_crypto_algorithm()` — detects crypto constants, algorithm
-  signatures (AES, RC4, ChaCha20, RSA, custom XOR).
-
-- **Malware Attribution**: `identify_malware_family()` — match API hash algorithm/seed,
-  config encryption, constants, and YARA indicators against the malware signatures
-  knowledge base. Call this as soon as you identify an API hash function or
-  config encryption pattern. Use `list_malware_signatures()` to review available
-  families and their fingerprints.
-
-- **API Hash Detection**: `scan_for_api_hashes()` — scan binary for DWORD values
-  matching known Windows API name hashes. Supports ror13, djb2, crc32, fnv1a
-  algorithms with configurable seeds. Use `family_hint` to auto-configure from
-  the knowledge base. When hash constants are found, feed the algorithm and seed
-  to `identify_malware_family()` for attribution.
-
-- **Structure**: `get_cross_reference_map(function_addresses=[...])` — call
-  relationships between key functions in a single call.
-
-- **Embedded content**: `scan_for_embedded_files()` — detect nested PE, ZIP, PDF,
-  scripts, certificates embedded within the binary.
-
-- **Anti-analysis**: `find_anti_debug_comprehensive()` — comprehensive anti-debug,
-  anti-VM (93 hypervisor indicators), and instruction-level scanning (RDTSC, CPUID,
-  INT 2Dh, SIDT). Use after triage flags anti-analysis imports.
-
-- **C2 detection**: `match_c2_indicators()` — match against 8 C2 framework profiles
-  (Cobalt Strike, Metasploit, Sliver, Havoc, etc.). `detect_dga_indicators()` — scan
-  for DGA capability from API co-occurrence patterns.
-
-- **PE forensics**: `analyze_debug_directory()` — PDB paths, Rich header, timestamp
-  anomalies. `analyze_relocations()` — relocation integrity, ASLR bypass indicators.
-  `analyze_seh_handlers()` — SEH anti-debug patterns, suspicious handlers.
-  `parse_authenticode()` — certificate details, signature validation.
-  `unify_artifact_timeline()` — correlate all timestamps, detect timestomping.
-
-- **Kernel drivers**: `analyze_kernel_driver()` — DriverEntry detection, kernel API
-  categorization, IOCTL handlers, DKOM/rootkit indicators. Use when subsystem is
-  Native (1).
-
-- **Batch comparison**: `analyze_batch(directory)` — multi-file hashing, import overlap,
-  timestamp analysis, ssdeep/TLSH clustering. Does not modify loaded file.
-
-- **Function similarity**: `extract_function_features()` — get feature vectors for
-  functions. `find_similar_functions(addr, file_path_b)` — compare against another
-  binary (background). `build_function_signature_db()` + `query_signature_db(addr)` —
-  index and search across all previously analyzed binaries. `list_signature_dbs()` —
-  see what's indexed.
+- **Search sweep**: `batch_decompile(addresses, search="pattern")` to scan top-ranked
+  functions for specific capabilities without reading each fully. Only matching functions
+  are returned. See [search-patterns.md](search-patterns.md) for regex patterns.
 
 - **Synthesize**: `get_analysis_digest()` — aggregate findings so far before deep dive.
+
+See [tooling-reference.md](tooling-reference.md) for the full tool catalog with
+parameters and decision guidance — including hex pattern search, capabilities, crypto
+detection, API hashing, structure analysis, embedded content, anti-analysis, C2
+detection, PE forensics, kernel drivers, batch comparison, and function similarity.
 
 ## Phase 4: Deep Dive
 
@@ -463,41 +361,31 @@ Continue autonomously only after the user confirms.
 Progressive depth — use the minimum tier needed to answer your question.
 
 **Scaling considerations**:
-- **Large binaries (>10MB)**: Avoid `get_full_analysis_results()`. Use targeted
-  `get_pe_data(key=...)`. Angr CFG recovery may be slow — start with specific
-  functions, not whole-binary analysis.
-- **Many functions (>1000)**: Use `get_function_map(limit=15)` to focus on the most
-  interesting. Don't attempt to decompile exhaustively.
-- **Angr on packed binaries**: If the binary is packed and angr is stuck at a
-  low percentage, the CFG build will time out after 10 minutes. Packed code
-  contains anti-analysis patterns that defeat CFG construction. Go back to
-  Phase 2 and unpack first. While waiting or after timeout, you can still:
-  - `get_angr_partial_functions()` to see what was discovered
-  - `decompile_function_with_angr(address)` builds a local CFG automatically
-  - `disassemble_at_address(address)` works without any CFG
-- **Angr startup delay on normal binaries**: For unpacked binaries, angr
-  typically builds its CFG within 30-120 seconds. During this window,
-  `check_task_status('startup-angr')` shows function discovery progress and
-  stall detection. Most angr tools wait for CFG completion, but
-  `decompile_function_with_angr`, `disassemble_at_address`, and
+- **Large binaries (>10MB)**: Use targeted `get_pe_data(key=...)` instead of
+  `get_full_analysis_results()`. Start with specific functions, not whole-binary.
+- **Many functions (>1000)**: Use `get_function_map(limit=15)` to focus. Don't
+  decompile exhaustively.
+- **Angr on packed binaries**: CFG times out after 10 min — go back to Phase 2.
+  Meanwhile: `decompile_function_with_angr` builds local CFGs, `disassemble_at_address`
+  works without any CFG.
+- **Angr startup on normal binaries**: Typically 30-120s. `check_task_status('startup-angr')`
+  shows progress. `decompile_function_with_angr`, `disassemble_at_address`, and
   `get_angr_partial_functions` work without full CFG.
-- **Angr timeout**: If decompilation times out AFTER angr is ready (different
-  from startup delay), try: (1) a smaller function first to verify angr works,
-  (2) `get_annotated_disassembly()` as a fallback, (3) increasing timeout.
-- **Background task timeouts**: All 10 angr background tools time out
-  automatically (symbolic execution 600s, emulation/data-flow 300s, diffing
-  600s). `check_task_status(task_id)` shows elapsed time and detects stalls.
-  On timeout, check `partial_result` — `find_path_to_address`,
-  `find_path_with_custom_input`, `emulate_function_execution`, and
-  `emulate_with_watchpoints` capture partial results (steps, states, events).
-- **Emulation limits**: Qiling/Speakeasy may not terminate for complex binaries. Always
-  set a `timeout` parameter. Check results even on partial execution.
+- **Background timeouts**: Auto-timeout (symbolic exec 600s, emulation/data-flow 300s).
+  On timeout, check `partial_result` for salvageable data.
+- **Emulation**: Always set a `timeout` parameter. Check results on partial execution.
 
 ### Tier 1: Static Analysis (start here)
 - `decompile_function_with_angr(address)` — C-like pseudocode (paginated, default
-  80 lines; use `line_offset` for subsequent pages). Applies user-assigned renames.
+  80 lines; use `line_offset` for subsequent pages). Use `search="pattern"` to
+  grep within decompiled code. Applies user-assigned renames.
 - `batch_decompile(addresses)` — decompile up to 20 functions in one call with
   per-function 60s timeout. Use `summary_mode=True` for signatures + first 5 lines.
+  Use `search="pattern"` to find a pattern across many functions (only matching
+  functions are returned).
+- **Search-first for targeted questions**: When you have a hypothesis ("does this
+  function use crypto?"), use `search` before full decompilation. See
+  [search-patterns.md](search-patterns.md) for workflow recipes.
 - **ALWAYS** call `auto_note_function(address)` after each decompilation
 - `rename_function(address, new_name)` — assign meaningful names to functions after
   understanding their purpose. Applied automatically in subsequent decompilation output.
@@ -508,7 +396,8 @@ Progressive depth — use the minimum tier needed to answer your question.
 - `get_function_cfg(address)` — control flow graph (default `node_limit=50`,
   `edge_limit=100`)
 - `get_function_xrefs(address)` — callers and callees
-- `get_annotated_disassembly(address)` — disassembly with variable names and xrefs
+- `get_annotated_disassembly(address)` — disassembly with variable names and xrefs;
+  use `search="pattern"` to grep within instructions
 - `get_function_variables(address)` — stack and register variables
 - `get_calling_conventions(address)` — parameter recovery
 
@@ -580,158 +469,30 @@ function. The automated tools (`extract_config_automated`,
   and struct parsing in one call. Use after `verify_malware_attribution()` confirms
   the family. Falls back to generic extraction if no family-specific extractor exists.
 
-### Binary Refinery Operations
-For manual decoding when automated extraction fails. Key tools now support
-`file_offset` (hex offset into loaded file, e.g. `"0x3B80"`), `length` (bytes
-to read), and `output_path` (save decoded output to disk as a session artifact):
-
-- `refinery_xor(operation, key_hex, file_offset, length, output_path)` — XOR
-  decryption with known key; `file_offset`/`length` read directly from the loaded
-  binary, `output_path` saves the result and registers it as a session artifact
-- `refinery_decrypt(data, algorithm, key)` — AES/RC4/DES/ChaCha20 decryption
-- `refinery_auto_decrypt(data)` — auto-detect and decrypt XOR/SUB patterns
-- `refinery_decompress(data, algorithm)` — gzip/bzip2/lz4/zlib decompression
-- `refinery_pipeline(steps, file_offset, length, output_path)` — chain multiple
-  refinery operations including encoding (b64, hex), compression (zl, lzma),
-  crypto (xor, rc4, aes), slicing (snip, chop, pick), bitwise (ror, rol, shl,
-  shr, and, or, not, add, sub), padding (pad, terminate), and utility (nop);
-  accepts file offset input, saves final output as artifact, supports batch mode
-  via `data_hex_list` (up to 100 items)
-- `refinery_carve(data, pattern, output_path)` — carve out embedded files/payloads;
-  `output_path` saves all carved items to disk as artifacts
-- `refinery_regex_extract(data, pattern)` — regex-based data extraction
-- `refinery_codec(data, operation, codec)` — encoding/decoding (base64, hex, etc.)
-
-**Prefer `file_offset`/`length` over `get_hex_dump()` + `data_hex`** when working
-with embedded payloads — it's a single step instead of two, avoids hex-encoding
-large blobs, and produces cleaner tool history.
-
-**Always use `output_path`** when extracting payloads, decrypted configs, or carved
-files that need further analysis. The file is written to disk AND registered as a
-session artifact with hashes and file type detection. Artifacts are:
-- Included in `export_project()` archives (up to 50 MB total)
-- Persisted in cache — restored on next `open_file()` of the same binary
-- Tracked in session state — use `get_artifacts()` to list them
-
-### Batch Operations
-
-Several tools support batch mode to avoid repeated single-item calls:
-
-| Tool | Batch Parameter | Cap | Use Case |
-|------|----------------|-----|----------|
-| `refinery_pipeline` | `data_hex_list` | 100 | Decrypt/decode many blobs with the same pipeline (e.g., 95 Base64+RC4 config entries) |
-| `get_string_at_va` | `virtual_addresses` | 50 | Extract strings at multiple VAs from decompilation/disassembly output |
-| `batch_decompile` | `addresses` | 20 | Decompile many functions in one call (per-function 60s timeout) |
-| `auto_note_function` | `function_addresses` | 20 | Auto-note many functions after batch decompilation |
-| `get_capa_rule_match_details` | `rule_ids` | 20 | Get match details for multiple capa rules at once |
-| `batch_rename` | `renames` | 50 | Bulk apply function/variable/label renames |
-
-Batch results include per-item error isolation — individual failures don't fail
-the batch. Each response includes `total`, `succeeded`, and `failed` counts.
-
-### .NET-Specific Extraction
-- `refinery_dotnet(data, operation)` — .NET resource/metadata extraction
-- `dotnet_analyze()` — .NET assembly structure and method listing
-- `dotnet_disassemble_method(method)` — CIL disassembly of specific methods
-
-### Payload & Container Extraction
-- `extract_resources()` — PE resource extraction
-- `extract_steganography()` — detect data hidden after image EOF markers
-- `parse_custom_container()` — parse custom malware container formats
-- `refinery_extract(data, format)` — extract from archives/containers
-- `refinery_executable(data, operation)` — executable-level analysis via refinery
-
-### C2 Attribution (before extraction)
-Before extracting a C2 config, **always verify the family attribution**:
-
-1. `identify_malware_family()` with all available evidence (hash algorithm, seed,
-   hash constants, config encryption, compiler, constants, matched strings)
-2. `verify_malware_attribution(family=<top candidate>)` to confirm the match
-3. Only then follow the family-specific extraction recipe
-4. Use `extract_config_for_family(family=<confirmed>)` for automated KB-driven
-   extraction, or follow the manual recipe in config-extraction.md
-5. Parse decrypted config structures with `parse_binary_struct(schema=[...])`
-   when the config is a binary struct (not plaintext)
-
-**Why this matters**: Different C2 frameworks share techniques (e.g., DJB2
-hashing used by both Havoc and AdaptixC2, ROR13 used by both Cobalt Strike and
-BRc4). Without checking discriminating indicators like hash seeds and specific
-constants, you will misattribute. The `verify_malware_attribution()` tool catches
-these errors before they propagate into your report.
-
 ### Malware Config Patterns
 See [config-extraction.md](config-extraction.md) for family-specific extraction strategies.
 
-### Documenting the Extraction Chain
-
-Whenever you extract a C2 config, decryption key, encoded payload, or any derived
-artefact, **record the full chain of evidence** so your workings can be verified.
-Use `add_note()` to document each step. The note should answer:
-
-1. **Where** the encrypted/encoded data was found (section, offset, resource name,
-   .NET field, overlay — be specific)
-2. **How** you identified the algorithm (which function was decompiled, what crypto
-   constants were matched, what pattern was recognised)
-3. **Where** the key/IV came from (hardcoded at address X, derived via PBKDF2 from
-   field Y with salt Z, first N bytes of the blob, etc.)
-4. **What tools** you called in what order to perform the decryption/decoding
-5. **What the output was** and how you validated it (plausible IPs/domains, correct
-   struct size, re-encryption produces the original, etc.)
-
-Example note:
-```
-add_note(content="""C2 config extraction chain:
-- Encrypted blob: 256 bytes at .data+0x4020 (identified via analyze_entropy_by_offset)
-- Algorithm: RC4 (identified by decompiling sub_401830 which calls CryptDecrypt
-  with CALG_RC4, confirmed by identify_crypto_algorithm matching RC4 init loop)
-- Key: 16-byte value at .rdata+0x5000 (traced via get_reaching_definitions on
-  the CryptImportKey call in sub_401830)
-- Decrypted with: refinery_decrypt(algorithm="rc4", key=<hex>)
-- Result: 4 C2 URLs, validated as syntactically correct with plausible TLDs
-- Artifact: saved to /output/decrypted_config.bin (artifact_id: art_1709300000_1)
-""", category="ioc")
+For refinery operations, batch mode, .NET extraction, payload/container extraction,
+C2 attribution workflow, and extraction chain documentation, see
+[extraction-guide.md](extraction-guide.md).
 
 ## Phase 6: Research
 
-**Reminder: research means READ and UNDERSTAND public analysis, then TRANSLATE
-to Arkana tool calls. NEVER execute downloaded scripts or write your own.**
+When automated extraction (Phase 5) fails and you have a family name or behavioral
+signature, research public analysis to find a decoding approach.
 
-When automated extraction (Phase 5) fails to recover a config or payload, and you
-have a family name or behavioral signature to work with, research public analysis
-to find a decoding approach.
+**When to enter**: Automated extraction returned nothing, and VT detections, YARA
+matches, or string patterns suggest a known family.
 
-**When to enter this phase**: Automated `extract_config_automated()` returned no
-results, refinery auto-decrypt failed, and at least one of these is true:
-- VT detections or behavioral patterns suggest a known family
-- YARA matches indicate a specific malware family
-- String patterns or capa rules point to a named threat
+**What to extract from research**: (1) algorithm, (2) data location, (3) key source.
 
-**What to extract from research**:
-1. **Algorithm** — what cipher or encoding protects the config (AES-CBC, RC4, XOR,
-   Base64, custom)
-2. **Data location** — where the encrypted config lives (PE resource, .data section
-   offset, .NET field, overlay, registry key)
-3. **Key source** — where the decryption key comes from (hardcoded bytes at offset,
-   PBKDF2 from password, first N bytes of the blob, derived from PE timestamp)
+**Workflow**: Identify family → search public reports → read and understand decoder
+logic → translate to Arkana tool calls → execute → validate → document with
+`add_note()`. See [online-research.md](online-research.md) for the full translation
+table and workflow examples.
 
-**Research workflow**:
-1. **Identify** the family from strings, YARA, VT detections, or behavioral patterns
-2. **Search** for public analysis reports and decoder scripts
-3. **Read and understand** the decoder logic — map it to the three elements above
-4. **Translate** decoder operations to Arkana tool equivalents (see
-   [online-research.md](online-research.md) for the full translation table and
-   workflow examples)
-5. **Execute** using Arkana tools and validate results
-6. **Document** findings with `add_note()`
-
-**Safety rules**:
-- **NEVER** execute downloaded scripts directly — not in Arkana, not in a shell
-- **NEVER** write a Python script when a Arkana tool can do the job — translate
-  decoder logic to internal tool calls, especially `refinery_pipeline` for
-  multi-step operations. Scripts hide operations behind opaque code; tool calls
-  are logged, reproducible, and auditable.
-- Always read, understand, and translate to Arkana tool calls
-- Verify tool output against expected format before trusting decoded results
+**Safety**: Read and translate public decoders — NEVER execute them or write scripts.
+All operations use Arkana tools (see HARD CONSTRAINTS).
 
 ## Phase 7: Report
 
@@ -769,64 +530,30 @@ The summary must:
 - **Be brief**: aim for a short, scannable summary — not a wall of text. Bullet
   points or a short table are preferred.
 
-After the summary, offer the user two follow-up options:
-
-1. **Detailed report**: "Would you like me to generate a full analysis report?"
-   If yes → `get_analysis_digest()` then `generate_analysis_report()`, optionally
-   `auto_name_sample()` for a descriptive filename.
-
-2. **Detection signatures**: "Would you like YARA/Sigma detection rules?"
-   If yes → `generate_yara_rule(scan_after_generate=True)` for a YARA rule
-   (generates and validates in one call), `generate_sigma_rule(rule_type='all')`
-   for Sigma rules. `map_mitre_attack(include_navigator_layer=True)` for an
-   ATT&CK mapping with Navigator layer.
-
-3. **Session export**: "Would you like to export this session as a portable archive?"
-   If yes → `export_project()` — saves all notes, history, findings, extracted
-   artifacts, and cached analysis as a self-contained archive that can be imported
-   later with `import_project()`. Artifacts (extracted payloads, decoded configs)
-   are included up to 50 MB total.
+After the summary, offer follow-up options:
+1. **Detailed report**: `get_analysis_digest()` → `generate_analysis_report()`,
+   optionally `auto_name_sample()` for a descriptive filename.
+2. **Detection signatures**: `generate_yara_rule(scan_after_generate=True)`,
+   `generate_sigma_rule(rule_type='all')`, `map_mitre_attack(include_navigator_layer=True)`.
+3. **Session export**: `export_project()` — saves all notes, history, findings,
+   and extracted artifacts as a portable archive (importable via `import_project()`).
 
 ### Goal-Adapted Detail (when full report is requested)
 
-**Malware triage**: Verdict (MALICIOUS/SUSPICIOUS/BENIGN) + evidence summary (what
-was confirmed, not just what indicators flagged) + IOC table (hashes, network,
-host-based) + validated capabilities with the functions/code that implement them.
-The verdict must be based on **confirmed behaviors**, not on tool labels or raw
-indicator counts. Specifically:
-- Do not cite runtime imports as evidence of anti-analysis unless you confirmed
-  deliberate defensive use. APIs like IsDebuggerPresent, QueryPerformanceCounter,
-  VirtualAlloc, and VirtualProtect appear in the standard runtimes of Rust, Go,
-  .NET, Delphi, C++, and many other languages and frameworks.
-- Do not cite packer/loader mechanics (minimal imports, dynamic resolution,
-  reflective loading) as evidence of evasion — they are how packers and loaders
-  work. Describe the mechanism, not an assumed intent.
-- Do not cite YARA matches without verifying what was matched and where — byte
-  pattern rules frequently fire on compiler-generated code, crypto libraries,
-  and coincidental instruction sequences.
-- Identify the compiler, runtime, language, and packer early, and factor them
-  into every subsequent assessment. An API flagged as "anti_analysis" that comes
-  from the language's standard library is not evidence of anything.
-- If a binary is packed with a known commercial protector, note the protector by
-  name and do not treat its standard behavior as suspicious.
+**Malware triage**: Verdict + evidence + IOC table + validated capabilities. Apply
+fair interpretation rules from Operating Principles — do not cite runtime imports or
+packer mechanics as evidence. Identify compiler/runtime early.
 
-**Deep RE**: Technical findings organized by function/module. Call graphs, data flows,
-algorithm descriptions, annotated decompilation highlights.
+**Deep RE**: Findings by function/module, call graphs, data flows, algorithms.
 
-**Vulnerability audit**: Attack surface summary, unsafe function usage, format string
-vulnerabilities, buffer overflow candidates, hardening assessment, mitigations.
+**Vulnerability audit**: Attack surface, unsafe functions, hardening assessment.
 
-**Firmware/embedded**: Crypto inventory, hardcoded credentials, communication protocols,
-update mechanisms, debug interfaces.
+**Firmware**: Crypto inventory, credentials, protocols, debug interfaces.
 
-**Threat intel**: Family attribution (verified via `verify_malware_attribution()`),
-C2 infrastructure, campaign indicators, YARA signatures, MITRE ATT&CK mapping,
-IOC export in STIX/OpenIOC format. Attribution must cite the specific evidence
-that confirmed the family (hash seed, constants, config structure) — never
-attribute based solely on behavioral similarity or string matches.
+**Threat intel**: Verified attribution (cite specific evidence — hash seed, constants,
+config structure), C2 infra, YARA/Sigma, MITRE, IOC export.
 
-**Comparison**: Function-level diff summary, similarity scores, patch analysis,
-behavioral changes between versions.
+**Comparison**: Function-level diffs, similarity scores, behavioral changes.
 
 ## Context Management
 
@@ -854,90 +581,17 @@ Additional context management:
 5. **Guided next steps**: `suggest_next_action()` recommends tools based on current
    analysis state. `list_tools_by_phase()` shows available tools per workflow phase.
 
+6. **After patching** (`patch_binary_memory` / `save_patched_binary`), call
+   `reanalyze_loaded_pe_file()` to refresh. Use `remove_cached_analysis(sha256)`
+   to evict stale cache entries.
+
 ## Multi-File Workflows
 
-Arkana loads one binary at a time. Use `close_file()` then `open_file()` to switch.
-Notes and session data for each file are preserved independently — switching back
-restores the previous session context automatically.
+Arkana loads one binary at a time. `close_file()` → `open_file()` to switch. Session
+data for each file is preserved independently.
 
-### Cross-File Reference Discovery
-
-Malicious binaries frequently reference companion files — payloads they drop,
-DLLs they sideload, configs they read, or other stage components. When analysing
-any binary, actively look for these references:
-
-1. **String search**: Use `get_strings_summary()` and `search_for_specific_strings()`
-   to look for filenames, paths, and extensions (.dll, .exe, .dat, .bin, .cfg, .tmp).
-   Pay attention to `LoadLibrary`/`GetModuleHandle` string arguments.
-2. **Resource names**: Use `extract_resources()` — resource names often match dropped
-   filenames or contain embedded companion files.
-3. **Decompilation context**: When decompiling functions that call `CreateFile`,
-   `WriteFile`, `LoadLibrary`, `ShellExecute`, or `WinExec`, note the filename
-   arguments — these reveal what the binary expects to find or intends to create.
-4. **Import context**: `get_focused_imports()` — functions like `LoadLibraryA/W`
-   paired with specific DLL name strings indicate sideloading targets.
-
-If the user has provided multiple files (e.g., a ZIP with an EXE and a DLL), check
-whether the primary binary references the companion files by name before analysing
-them separately. This establishes the relationship and priorities — analyse the
-orchestrator first, then its dependencies/payloads.
-
-### Dropper + Payload
-When a dropper extracts or decrypts a payload during analysis:
-1. Complete the dropper analysis through to extraction (Phases 0-5)
-2. When extracting the payload, use `output_path` to save it as an artifact:
-   e.g., `refinery_xor(file_offset="0x3B80", length=103935, key_hex="42",
-   output_path="/output/payload.bin")` — this writes the file AND registers it
-3. Note the extraction method and relationship: `add_note("Drops payload via
-   resource decryption (RC4, key from .rdata)", category="tool_result")`
-4. Search for references to the payload filename in the dropper's strings and
-   decompiled code to understand how it is loaded/executed
-5. `close_file()` the dropper and `open_file()` the extracted payload artifact
-6. Analyse the payload as a fresh binary (Phases 1-7)
-7. In the final summary, present both files together with their relationship
-
-### Bundled Dependencies (DLL Sideloading, Config Files)
-When the user provides a binary alongside DLLs, data files, or configs:
-1. Start with the primary executable — identify it from file type and naming
-2. Search its strings and imports for references to the companion filenames:
-   `search_for_specific_strings(patterns=["companion.dll", "config.dat", ...])`
-3. Note which functions load each companion and how they are used
-4. Analyse each companion file in order of relevance — the one most referenced
-   or loaded earliest is likely most important
-5. For DLL sideloading: check whether the DLL exports match what the EXE imports
-   (`get_pe_data(key='exports')` on the DLL vs `get_pe_data(key='imports')` on the EXE)
-
-### Campaign Sample Comparison
-When comparing related samples (variants, updates, different builds):
-1. Analyse the first sample fully, ensure thorough notes
-2. `close_file()` and `open_file()` the second sample
-3. Use `diff_binaries()` or `compare_file_similarity()` for structural comparison
-4. Use `compute_similarity_hashes()` on each for ssdeep/TLSH clustering
-5. Focus the second analysis on what differs — skip what is identical
-
-### Shellcode Extracted from a Loader
-When analysis reveals embedded shellcode:
-1. Extract the shellcode bytes using `file_offset`/`length`/`output_path`:
-   e.g., `refinery_xor(file_offset="0x1000", length=4096, key_hex="FF",
-   output_path="/output/shellcode.bin")` — saves and registers as artifact
-2. Emulate directly with `emulate_shellcode_with_qiling()` or
-   `emulate_shellcode_with_speakeasy()` — no need to switch files
-3. Use `qiling_memory_search()` post-emulation to find next-stage URLs or configs
-4. If the shellcode drops a PE, extract it and `open_file()` for full analysis
-
-**Session scale**: When analyzing many files (>5 in a session), notes and session
-data accumulate. If the session becomes sluggish or context is getting large, use
-`export_project()` to save progress, then start a fresh session with
-`import_project()`.
-
-## Cache Interaction
-
-- After patching a binary with `patch_binary_memory()` or `save_patched_binary()`,
-  call `reanalyze_loaded_pe_file()` to refresh results. The cache serves the
-  pre-patch analysis otherwise.
-- If results seem stale or inconsistent, check `get_cache_stats()` and use
-  `remove_cached_analysis(sha256)` to evict the stale entry.
-- Cache persists across container restarts via the `~/.arkana` volume mount.
+See [multi-file-workflows.md](multi-file-workflows.md) for dropper+payload, DLL
+sideloading, campaign comparison, and shellcode extraction patterns.
 
 ## Supporting References
 
@@ -945,3 +599,6 @@ data accumulate. If the session becomes sluggish or context is getting large, us
 - [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to Arkana tool calls
+- [search-patterns.md](search-patterns.md) — Regex patterns for decompilation/disassembly search, workflow recipes, context-lines guidance, and decision tree for when to search vs read full output
+- [extraction-guide.md](extraction-guide.md) — Refinery operations, batch mode, .NET/payload extraction, C2 attribution workflow, extraction chain documentation
+- [multi-file-workflows.md](multi-file-workflows.md) — Dropper+payload, DLL sideloading, campaign comparison, shellcode extraction patterns

@@ -386,8 +386,7 @@ function _fetchAnalysis(addr, callback) {
     loading.className = 'detail-row dim';
     loading.textContent = 'Loading...';
     details.appendChild(loading);
-    fetch('/dashboard/api/function-analysis?address=' + encodeURIComponent(addr))
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/function-analysis?address=' + encodeURIComponent(addr))
         .then(function(data) {
             if (!_sidebarCache[addr]) _sidebarCache[addr] = {};
             _sidebarCache[addr].analysis = data;
@@ -693,12 +692,11 @@ function renderCodeTab(addr) {
     loading.textContent = 'Decompiling...';
     details.appendChild(loading);
 
-    fetch('/dashboard/api/decompile', {
+    fetchJSON('/dashboard/api/decompile', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
         body: JSON.stringify({address: addr}),
     })
-        .then(function(r) { return r.json(); })
         .then(function(data) {
             if (!_sidebarCache[addr]) _sidebarCache[addr] = {};
             _sidebarCache[addr].decompile = data;
@@ -742,8 +740,7 @@ function renderCfgTab(addr) {
     loading.textContent = 'Loading CFG...';
     details.appendChild(loading);
 
-    fetch('/dashboard/api/function-cfg?address=' + encodeURIComponent(addr))
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/function-cfg?address=' + encodeURIComponent(addr))
         .then(function(data) {
             if (_sidebarNodeAddr !== addr || _activeTab !== 'cfg') return;
             details.textContent = '';
@@ -809,7 +806,7 @@ function hideSidebar() {
 /* ========== GRAPH LOAD / LAYOUT / FIT ========== */
 
 function loadGraph() {
-    fetch('/dashboard/api/callgraph').then(function(r) { return r.json(); }).then(function(data) {
+    fetchJSON('/dashboard/api/callgraph').then(function(data) {
         var elements = data.nodes.concat(data.edges);
         if (cy) {
             stopMarchingAnts();
@@ -999,12 +996,11 @@ function contextMenuAction(action) {
 }
 
 function doDecompile(addr) {
-    fetch('/dashboard/api/decompile', {
+    fetchJSON('/dashboard/api/decompile', {
         method: 'POST',
         headers: {'Content-Type': 'application/json', 'X-CSRF-Token': getCsrfToken()},
         body: JSON.stringify({address: addr}),
     })
-        .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.error) {
                 showToast(data.error, 'error');
@@ -1056,8 +1052,7 @@ function doTriage(node, status) {
 }
 
 function doShowXrefs(addr) {
-    fetch('/dashboard/api/function-xrefs?address=' + encodeURIComponent(addr))
-        .then(function(r) { return r.json(); })
+    fetchJSON('/dashboard/api/function-xrefs?address=' + encodeURIComponent(addr))
         .then(function(data) {
             if (data.error) { showToast(data.error, 'error'); return; }
             var lines = ['XREFS for ' + addr + ':'];

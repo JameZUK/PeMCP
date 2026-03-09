@@ -8,6 +8,7 @@ from arkana.config import state, logger, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _format_cc_info, _raise_on_error_dict
 from arkana.mcp._rename_helpers import get_display_name
+from arkana.mcp._search_helpers import search_instructions_with_context
 
 if ANGR_AVAILABLE:
     import angr
@@ -442,10 +443,17 @@ async def get_annotated_disassembly(
     ctx: Context,
     function_address: str,
     limit: int = 50,
+    search: Optional[str] = None,
+    context_lines: int = 2,
+    case_sensitive: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Returns disassembly annotated with variable names,
     cross-references, and string references. Richer than raw disassembly.
+
+    When ``search`` is provided, returns only matching instructions with
+    surrounding context.  Searches mnemonics, operands, call targets, and
+    labels (e.g. ``search="xor"`` or ``search="CreateProcess"``).
 
     When to use: When decompiled pseudocode is insufficient and you need
     instruction-level detail with variable names and xref annotations.
@@ -456,6 +464,9 @@ async def get_annotated_disassembly(
     Args:
         function_address: Hex address of the function.
         limit: Max instructions to return.
+        search: Optional regex pattern to grep for within instructions.
+        context_lines: Number of context instructions around each match (default 2, max 20).
+        case_sensitive: Whether the search is case-sensitive (default False).
     """
     await ctx.info(f"Generating annotated disassembly for {function_address}")
     _check_angr_ready("get_annotated_disassembly")
@@ -564,16 +575,41 @@ async def get_annotated_disassembly(
             except Exception:
                 pass
 
-        result = {
-            "function_name": func.name,
-            "address": hex(addr_used),
-            "instruction_count": len(instructions),
-            "instructions": instructions,
-            "next_step": (
-                "Call auto_note_function(address) to save a behavioral summary, "
-                "or add_note(content, category='tool_result') to record specific findings."
-            ),
-        }
+        if search:
+            sr = search_instructions_with_context(
+                instructions, search, context_lines, case_sensitive,
+            )
+            flat_insns = []
+            for region in sr["matched_regions"]:
+                flat_insns.extend(region["instructions"])
+            result = {
+                "function_name": func.name,
+                "address": hex(addr_used),
+                "instruction_count": len(flat_insns),
+                "instructions": flat_insns,
+                "_search": {
+                    "pattern": search,
+                    "total_matches": sr["total_matches"],
+                    "total_instructions": sr["total_instructions"],
+                    "truncated": sr["truncated"],
+                    "regions": len(sr["matched_regions"]),
+                },
+                "next_step": (
+                    "Call auto_note_function(address) to save a behavioral summary, "
+                    "or add_note(content, category='tool_result') to record specific findings."
+                ),
+            }
+        else:
+            result = {
+                "function_name": func.name,
+                "address": hex(addr_used),
+                "instruction_count": len(instructions),
+                "instructions": instructions,
+                "next_step": (
+                    "Call auto_note_function(address) to save a behavioral summary, "
+                    "or add_note(content, category='tool_result') to record specific findings."
+                ),
+            }
         if warning:
             result["warning"] = warning
         return result

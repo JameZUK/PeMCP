@@ -9,8 +9,7 @@
     var _debounce;
 
     function reloadCapabilities() {
-        fetch("/dashboard/api/capabilities")
-            .then(function (r) { return r.json(); })
+        fetchJSON("/dashboard/api/capabilities")
             .then(function (data) {
                 renderRules(data);
                 var ruleCount = document.getElementById("capa-rule-count");

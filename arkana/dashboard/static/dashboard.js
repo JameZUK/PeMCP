@@ -13,6 +13,14 @@ function getCsrfToken() {
     return meta ? meta.getAttribute('content') : '';
 }
 
+// Shared fetch+JSON helper — checks r.ok, throws on HTTP errors
+function fetchJSON(url, options) {
+    return fetch(url, options).then(function(r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+    });
+}
+
 // Apply data-width attributes as inline styles (for CSP-compliant dynamic widths)
 function applyDataWidths(root) {
     (root || document).querySelectorAll('[data-width]').forEach(function(el) {
@@ -204,8 +212,7 @@ function showToast(message, type) {
             dropdown.classList.add('hidden');
             return;
         }
-        fetch('/dashboard/api/search?q=' + encodeURIComponent(q))
-            .then(function(r) { return r.json(); })
+        fetchJSON('/dashboard/api/search?q=' + encodeURIComponent(q))
             .then(function(data) {
                 renderDropdown(data, q);
             })

@@ -195,8 +195,8 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 |---|---|
 | `list_angr_analyses` | **Discovery tool**  - lists all available angr analysis capabilities grouped by category (decompilation, CFG, symbolic, slicing, forensic, hooks, modification) with parameter descriptions. Call this first to understand available analyses. |
 | `get_angr_partial_functions` | List functions discovered in angr's knowledge base, even while CFG is still building or has timed out. Works without full CFG. Paginated (default limit 50). |
-| `decompile_function_with_angr` | C-like pseudocode for a function at a given address. Works without full CFG by building a local region CFG. Applies user-assigned renames (function names and variables) to the output. |
-| `batch_decompile` | Decompile up to 20 functions in a single call. Per-function timeout of 60s. Results cached per-function via `_ToolResultCache`. Applies rename helpers. Use `summary_mode=True` for signature + first 5 lines only. Self-reporting progress. |
+| `decompile_function_with_angr` | C-like pseudocode for a function at a given address. Works without full CFG by building a local region CFG. Applies user-assigned renames (function names and variables) to the output. Supports `search` parameter for regex grep within decompiled code (with `context_lines` and `case_sensitive` options). |
+| `batch_decompile` | Decompile up to 20 functions in a single call. Per-function timeout of 60s. Results cached per-function via `_ToolResultCache`. Applies rename helpers. Use `summary_mode=True` for signature + first 5 lines only. Supports `search` parameter to grep across all functions and return only those with matches. Self-reporting progress. |
 | `get_function_cfg` | Control flow graph (nodes and edges) for a function. |
 | `find_path_to_address` | Symbolic execution to find inputs reaching a target address. |
 | `emulate_function_execution` | Emulate a function with concrete arguments. |
@@ -233,7 +233,7 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `get_call_graph` | Generate full or filtered inter-procedural call graph. Paginated (default limit 50). |
 | `find_path_with_custom_input` | Symbolic execution with custom constraints. |
 | `emulate_with_watchpoints` | Emulate with memory/register watchpoints. |
-| `get_annotated_disassembly` | Rich disassembly with resolved names and comments. Paginated (default limit 300). |
+| `get_annotated_disassembly` | Rich disassembly with resolved names and comments. Paginated (default limit 300). Supports `search` parameter for regex grep within instructions (mnemonics, operands, call targets, labels). |
 | `get_value_set_analysis` | Determine possible values at program points. Computationally expensive; consider `get_reaching_definitions` or `propagate_constants` for lighter analysis. Paginated (default limit 80). |
 | `detect_packing` | Heuristic packing/encryption detection (not paginated). |
 | `save_patched_binary` | Save a patched binary to disk. |
@@ -498,11 +498,15 @@ Notes and tool history are the primary mechanism for preserving analysis context
 - **Manual findings**: `add_note(content, category='tool_result')` records specific observations (decoded C2 URLs, crypto keys, evasion techniques)
 - **Aggregation**: `get_analysis_digest()` compiles all notes into an actionable summary with coverage stats and unexplored targets
 - **Persistence**: Notes survive server restarts. When the same file is reopened, all previous notes and history are restored automatically
-- **Export**: `export_project` bundles analysis + notes + history + optionally the binary into a `.arkana_project.tar.gz` for sharing
+- **Export**: `export_project` bundles analysis + notes + history + artifacts + optionally the binary into a `.arkana_project.tar.gz` for sharing
+
+**Note categories:** `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `manual`
+
+**Artifacts:** Tools that extract files (unpacking, payload carving, config extraction) register them via `state.register_artifact()`. Artifacts are tracked with path, SHA256 hash, source tool, and type detection. They persist via cache alongside notes and are included in `export_project` / `import_project` archives. Limits: `MAX_ARTIFACT_FILE_SIZE` (100 MB per file), `MAX_TOTAL_ARTIFACT_EXPORT_SIZE` (50 MB total export).
 
 | Tool | Description |
 |---|---|
-| `add_note` | Record a finding or observation (persisted to disk cache, survives restarts). |
+| `add_note` | Record a finding or observation. Categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `manual`. Persisted to disk cache, survives restarts. |
 | `get_notes` | Retrieve notes, filtered by category or address. Paginated (default limit 20). |
 | `update_note` / `delete_note` | Modify or remove notes. |
 | `auto_note_function` | Auto-generate and save a one-line function summary from API patterns. |
@@ -533,6 +537,8 @@ Persistent function renames, variable renames, and address labels. Renames are a
 ## Custom Types (5 tools)
 
 User-defined structs and enums for parsing binary data. Struct field types reuse `parse_binary_struct` types (uint8-64 LE/BE, cstring, wstring, ipv4, bytes:N, padding:N). Persisted via cache.
+
+**Validation guards:** Field names must match `[a-zA-Z_][a-zA-Z0-9_]*`. Enum values are checked against the declared byte size with duplicate detection. Cycle detection prevents recursive struct references. Padding bounds are 0–10 MB. Cstrings are decoded as UTF-8 with Latin-1 fallback.
 
 | Tool | Description |
 |---|---|

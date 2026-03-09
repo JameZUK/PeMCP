@@ -2572,3 +2572,170 @@ button.view-toggle-btn.active {
     color: var(--warning);
     padding: 0 1px;
 }
+
+/* ========================================================================
+   Analysis Digest Panel + Report Modal
+   ======================================================================== */
+
+/* Digest panel */
+.digest-empty {
+    text-align: center;
+    color: var(--primary-ghost);
+    padding: 24px 0;
+}
+.digest-profile {
+    font-size: 13px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--primary-ghost);
+    margin-bottom: 8px;
+    letter-spacing: 1px;
+}
+.digest-meta-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 0;
+    flex-wrap: wrap;
+}
+.digest-coverage {
+    font-size: 12px;
+    color: var(--primary-dim);
+}
+.digest-progress {
+    width: 120px;
+    height: 6px;
+    margin: 0;
+}
+.digest-section {
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px solid var(--primary-ghost);
+}
+.digest-section-title {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--primary-dim);
+    margin-bottom: 6px;
+}
+.digest-findings {
+    padding-left: 16px;
+    font-size: 12px;
+    border-left: 2px solid var(--primary-ghost);
+    margin-left: 4px;
+}
+.digest-findings li {
+    margin-bottom: 4px;
+    color: var(--primary-dim);
+}
+.digest-functions {
+    font-size: 12px;
+}
+.digest-func-row {
+    padding: 3px 0;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+}
+.digest-func-row .func-link {
+    font-family: 'Courier New', Courier, monospace;
+    color: var(--primary);
+    text-decoration: none;
+    flex-shrink: 0;
+}
+.digest-func-row .func-link:hover {
+    color: var(--highlight);
+    text-shadow: 0 0 4px var(--primary);
+}
+.digest-func-summary {
+    color: var(--primary-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+}
+.digest-priority:hover {
+    background: var(--bg-raised);
+}
+
+/* Report modal */
+.report-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+}
+.report-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.85);
+}
+.report-modal-content {
+    position: relative;
+    width: 90vw;
+    max-width: 900px;
+    max-height: 85vh;
+    margin-top: 5vh;
+    border: 1px solid var(--primary);
+    background: var(--bg-surface);
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.15);
+}
+.report-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--primary);
+    font-size: 12px;
+    letter-spacing: 2px;
+}
+.report-modal-body {
+    overflow-y: auto;
+    padding: 1rem;
+    flex: 1;
+}
+.report-modal-body pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--primary-dim);
+}
+
+/* Inline search inputs */
+.input-search {
+    font-size: 11px;
+    padding: 3px 8px;
+    height: 24px;
+}
+
+/* IOC summary card */
+.ioc-summary { font-size: 12px; }
+.ioc-total { margin-bottom: 8px; }
+.ioc-type-row { margin-top: 6px; font-size: 11px; }
+.ioc-items { padding-left: 8px; }
+.ioc-item {
+    font-size: 11px;
+    color: var(--primary-dim);
+    padding: 1px 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Capabilities summary card */
+.capa-summary { font-size: 12px; }
+.capa-total { margin-bottom: 8px; }
+.capa-item {
+    font-size: 11px;
+    color: var(--primary-dim);
+    padding: 2px 0;
+    border-left: 2px solid var(--primary-ghost);
+    padding-left: 8px;
+    margin-bottom: 2px;
+}
