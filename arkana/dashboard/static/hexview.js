@@ -182,7 +182,7 @@
                 loadEarlier();
             }
         }, 50);
-    });
+    }, {passive: true});
 
     // --- Jump-to controls ---
     goBtn.addEventListener("click", function () {
@@ -207,7 +207,7 @@
         if (e.deltaY < 0 && scrollTop <= 5) {
             loadEarlier();
         }
-    });
+    }, {passive: true});
 
     // --- Initial load ---
     var params = new URLSearchParams(window.location.search);

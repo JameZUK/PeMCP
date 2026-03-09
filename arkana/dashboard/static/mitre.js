@@ -5,21 +5,6 @@
     var matrixContainer = document.getElementById("mitre-matrix");
     var summaryContainer = document.getElementById("mitre-summary");
 
-    function refreshMitre() {
-        fetch("/dashboard/api/mitre")
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                renderSummary(data);
-                renderMatrix(data);
-                renderIOCs(data);
-            })
-            .catch(function () {
-                if (summaryContainer) {
-                    summaryContainer.innerHTML = "<div class=\"empty-msg\">Failed to load MITRE data.</div>";
-                }
-            });
-    }
-
     function renderSummary(data) {
         if (!summaryContainer) return;
         var techCount = document.getElementById("mitre-tech-count");

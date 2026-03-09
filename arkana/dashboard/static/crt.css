@@ -43,7 +43,6 @@ body {
     );
     pointer-events: none;
     z-index: 9999;
-    will-change: transform;
 }
 
 /* Vignette */
@@ -57,7 +56,6 @@ body {
     );
     pointer-events: none;
     z-index: 9998;
-    will-change: transform;
 }
 
 /* Glow effect */
@@ -473,18 +471,11 @@ tr.explored.renamed > td { color: #44ddff; }
     border-radius: 2px;
 }
 
-.badge-dim { color: var(--primary-muted); border-color: var(--primary-ghost); }
-.badge-danger { color: var(--danger); border-color: var(--danger); }
-.badge-warning { color: var(--warning); border-color: var(--warning); }
-.badge-flagged { color: var(--danger); border-color: var(--danger); }
-.badge-suspicious { color: var(--warning); border-color: var(--warning); }
-.badge-clean { color: var(--safe); border-color: var(--safe); }
-.badge-unreviewed { color: var(--primary-muted); border-color: var(--primary-ghost); }
-.badge-running { color: var(--warning); border-color: var(--warning); }
-.badge-completed { color: var(--safe); border-color: var(--safe); }
-.badge-failed { color: var(--danger); border-color: var(--danger); }
+.badge-dim, .badge-unreviewed { color: var(--primary-muted); border-color: var(--primary-ghost); }
+.badge-danger, .badge-flagged, .badge-failed { color: var(--danger); border-color: var(--danger); }
+.badge-warning, .badge-suspicious, .badge-running { color: var(--warning); border-color: var(--warning); }
+.badge-clean, .badge-completed, .badge-note { color: var(--safe); border-color: var(--safe); }
 .badge-tool { color: #4488ff; border-color: #4488ff; }
-.badge-note { color: var(--safe); border-color: var(--safe); }
 .badge-active { color: var(--warning); border-color: var(--warning); animation: pulse-glow 2s ease-in-out infinite; }
 
 /* Phase badges */
@@ -991,7 +982,7 @@ tr.note-row > td {
     font-size: 11px;
     margin-top: 4px;
     padding: 3px 8px;
-    border: 1px solid var(--warning);
+    border: 1px solid var(--primary-muted);
     background: rgba(255, 170, 0, 0.08);
     animation: pulse-glow 2s ease-in-out infinite;
 }
@@ -1266,9 +1257,9 @@ details[open] > .import-dll-header::before {
 .btn-decompile { border-color: #4488ff; color: #4488ff; }
 .btn-decompile:hover, .btn-decompile.active { border-color: #66aaff; color: #66aaff; background: rgba(68,136,255,0.12); }
 
-.decompile-row > td {
-    padding: 0 !important;
-    border-top: none !important;
+.data-table .decompile-row > td {
+    padding: 0;
+    border-top: none;
 }
 
 .decompile-panel {
@@ -1457,7 +1448,7 @@ details[open] > .import-dll-header::before {
 }
 
 .global-status-inner {
-    border: 1px solid var(--primary-ghost);
+    border: 1px solid var(--primary-muted);
     background: var(--bg-surface);
     margin-top: 8px;
     animation: pulse-glow 2s ease-in-out infinite;
@@ -1505,7 +1496,7 @@ details[open] > .import-dll-header::before {
 .gs-stall {
     font-size: 10px;
     padding: 1px 6px;
-    border: 1px solid var(--warning);
+    border: 1px solid var(--primary-muted);
     animation: pulse-glow 2s ease-in-out infinite;
 }
 
@@ -1783,12 +1774,12 @@ details[open] > .import-dll-header::before {
     color: var(--primary);
 }
 
-.bookmark-go, .bookmark-del {
-    padding: 1px 6px !important;
-    font-size: 9px !important;
+button.bookmark-go, button.bookmark-del {
+    padding: 1px 6px;
+    font-size: 9px;
 }
 
-.bookmark-del { border-color: var(--danger) !important; color: var(--danger) !important; }
+button.bookmark-del { border-color: var(--danger); color: var(--danger); }
 
 /* === SIDEBAR TABS (callgraph) === */
 
@@ -1989,27 +1980,27 @@ details[open] > .import-dll-header::before {
 
 /* === GRAPH BUTTON === */
 
-.btn-graph {
-    border-color: var(--primary-ghost) !important;
-    color: var(--primary-muted) !important;
+button.btn-graph, a.btn-graph {
+    border-color: var(--primary-ghost);
+    color: var(--primary-muted);
     text-decoration: none;
     display: inline-block;
     text-align: center;
 }
-.btn-graph:hover {
-    border-color: var(--primary-dim) !important;
-    color: var(--primary) !important;
+button.btn-graph:hover, a.btn-graph:hover {
+    border-color: var(--primary-dim);
+    color: var(--primary);
 }
 
 /* === ANALYSIS BUTTON === */
 
-.btn-analysis {
-    border-color: var(--primary-dim) !important;
-    color: var(--primary-dim) !important;
+button.btn-analysis {
+    border-color: var(--primary-dim);
+    color: var(--primary-dim);
 }
-.btn-analysis:hover {
-    border-color: var(--primary) !important;
-    color: var(--primary) !important;
+button.btn-analysis:hover {
+    border-color: var(--primary);
+    color: var(--primary);
 }
 
 /* === HIGHLIGHT FLASH (navigate-to-function) === */
@@ -2067,14 +2058,6 @@ details[open] > .import-dll-header::before {
     min-height: 0;
     max-height: none;
     overflow: auto;
-    padding: 10px 12px;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 12px;
-    line-height: 1.6;
-    color: #88ccff;
-    white-space: pre;
-    tab-size: 4;
-    margin: 0;
 }
 
 /* === RESPONSIVE === */
@@ -2188,8 +2171,9 @@ details[open] > .import-dll-header::before {
 .data-table-sm { font-size: 12px; }
 
 /* JS-generated xref section headers */
-.xref-section-header { font-size: 10px; letter-spacing: 2px; color: var(--primary-dim); margin-bottom: 6px; }
-.xref-section-header-mt { font-size: 10px; letter-spacing: 2px; color: var(--primary-dim); margin: 10px 0 6px; }
+.xref-section-header, .xref-section-header-mt { font-size: 10px; letter-spacing: 2px; color: var(--primary-dim); }
+.xref-section-header { margin-bottom: 6px; }
+.xref-section-header-mt { margin: 10px 0 6px; }
 .xref-complexity { font-size: 10px; letter-spacing: 1px; color: var(--primary-dim); margin-top: 10px; }
 .mb-6 { margin-bottom: 6px; }
 
@@ -2203,6 +2187,7 @@ details[open] > .import-dll-header::before {
     overflow-y: auto;
     overflow-x: auto;
     position: relative;
+    contain: layout style;
 }
 .hex-table { font-size: 13px; }
 .hex-table td { padding: 2px 8px; white-space: nowrap; }
@@ -2536,14 +2521,14 @@ details[open] > .import-dll-header::before {
 
 /* --- View Toggle --- */
 .view-toggle { margin-left: auto; }
-.view-toggle-btn.active {
-    border-color: var(--primary) !important;
-    color: var(--primary) !important;
+button.view-toggle-btn.active {
+    border-color: var(--primary);
+    color: var(--primary);
     background: rgba(0, 255, 65, 0.08);
 }
 
 /* --- Full-Text Code Search --- */
-.code-search-results { max-height: 500px; overflow-y: auto; }
+.code-search-results { }
 .code-search-body { max-height: 440px; overflow-y: auto; }
 .code-search-stats { border-bottom: 1px solid var(--primary-ghost); }
 .code-search-result-item {

@@ -1401,7 +1401,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {"cached": False, "error": "invalid address"}
 
-    from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock, _get_cached_lines
+    from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock, _get_cached_lines, _set_decompile_meta
     from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg
     from arkana.mcp._rename_helpers import (
         apply_function_renames_to_lines,
@@ -1475,12 +1475,11 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
             return {"cached": False, "error": "Decompilation produced no code"}
 
         all_lines = dec.codegen.text.splitlines()
-        with _decompile_meta_lock:
-            _decompile_meta[cache_key] = {
-                "function_name": func.name,
-                "address": hex(addr_to_use),
-                "lines": all_lines,
-            }
+        _set_decompile_meta(cache_key, {
+            "function_name": func.name,
+            "address": hex(addr_to_use),
+            "lines": all_lines,
+        })
         st._newly_decompiled.append(hex(addr_to_use))
     except Exception:
         return {"cached": False, "error": "Decompilation failed"}
@@ -3100,7 +3099,7 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
     st = _get_state()
     samples_path = getattr(st, "samples_path", None) or getattr(_default_state, "samples_path", None)
     if not samples_path or not os.path.isdir(samples_path):
-        return {"files": [], "samples_path": None, "error": "No samples directory configured"}
+        return {"files": [], "error": "No samples directory configured"}
 
     # Resolve to real path once to prevent symlink traversal
     resolved_samples = os.path.realpath(samples_path)
@@ -3151,7 +3150,7 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
             if truncated:
                 break
     except OSError:
-        return {"files": [], "samples_path": samples_path, "error": "Failed to read samples directory"}
+        return {"files": [], "error": "Failed to read samples directory"}
 
     # Search filter
     if search:
@@ -3167,7 +3166,7 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
     else:
         files.sort(key=lambda f: f["name"].lower())
 
-    result = {"files": files, "samples_path": samples_path, "total": len(files)}
+    result = {"files": files, "total": len(files)}
     if truncated:
         result["truncated"] = True
     return result

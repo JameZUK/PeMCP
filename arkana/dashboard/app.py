@@ -127,7 +127,7 @@ class SecurityHeadersMiddleware:
                 ]
                 if is_static:
                     security_headers.append(
-                        (b"cache-control", b"public, max-age=3600, immutable")
+                        (b"cache-control", b"public, max-age=3600")
                     )
                 headers.extend(security_headers)
                 message = {**message, "headers": headers}
@@ -198,14 +198,22 @@ def _is_authenticated(request: Request, dashboard_token: str) -> bool:
 
 
 def _make_auth_response(request: Request, dashboard_token: str, response: Response) -> Response:
-    """If authenticated via query param, set cookie on the response.
+    """If authenticated via query param, set cookie and redirect to strip token from URL.
 
     Always stores the canonical dashboard_token in the cookie, not the
     user-supplied value, so the cookie is consistent.
     """
     token_param = request.query_params.get("token")
     if token_param and _check_token(token_param, dashboard_token):
-        response.set_cookie(
+        # Build clean URL without the token parameter
+        other_params = {k: v for k, v in request.query_params.items() if k != "token"}
+        clean_url = request.url.path
+        if other_params:
+            clean_url += "?" + "&".join(
+                f"{k}={v}" for k, v in other_params.items()
+            )
+        redirect = RedirectResponse(clean_url, status_code=302)
+        redirect.set_cookie(
             _COOKIE_NAME, dashboard_token,
             max_age=_COOKIE_MAX_AGE,
             httponly=True,
@@ -213,6 +221,7 @@ def _make_auth_response(request: Request, dashboard_token: str, response: Respon
             secure=_is_https(request),
             path="/dashboard",
         )
+        return redirect
     return response
 
 
@@ -246,6 +255,22 @@ def _is_https(request: Request) -> bool:
     return request.headers.get("x-forwarded-proto", "") == "https"
 
 
+_VALID_NOTE_CATEGORIES = {"general", "function", "tool_result", "ioc", "hypothesis", "manual"}
+
+_HEX_ADDR_RE = re.compile(r'0x[0-9a-fA-F]+$')
+
+
+def _validate_address(address: str):
+    """Return an error JSONResponse if address is invalid, else None."""
+    if not address:
+        return JSONResponse({"error": "missing address"}, status_code=400)
+    if len(address) > 40:
+        return JSONResponse({"error": "address too long"}, status_code=400)
+    if not _HEX_ADDR_RE.match(address):
+        return JSONResponse({"error": "invalid address (expected 0x hex)"}, status_code=400)
+    return None
+
+
 # ---------------------------------------------------------------------------
 #  Route handlers
 # ---------------------------------------------------------------------------
@@ -269,6 +294,14 @@ def _create_routes(dashboard_token: str) -> list:
         return HTMLResponse(html)
 
     async def login_post(request: Request) -> Response:
+        # Reject oversized bodies before reading (login form should be tiny)
+        content_length = request.headers.get("content-length")
+        try:
+            cl_int = int(content_length) if content_length else 0
+        except (ValueError, TypeError):
+            cl_int = 0
+        if cl_int > 65536:
+            return HTMLResponse("Request too large", status_code=413)
         form = await request.form()
         # CSRF check
         csrf_field = form.get("csrf_token", "")
@@ -351,7 +384,7 @@ def _create_routes(dashboard_token: str) -> list:
             ctx = {"nav_active": nav}
             if data_fn:
                 try:
-                    ctx["data"] = data_fn()
+                    ctx["data"] = await asyncio.to_thread(data_fn)
                 except Exception:
                     logger.debug("Page data function failed for %s", template, exc_info=True)
                     ctx["data"] = {} if template != "functions.html" else []
@@ -398,13 +431,17 @@ def _create_routes(dashboard_token: str) -> list:
             filter_triage = "all"
         search = request.query_params.get("search", "")[:500]
         sort_asc = request.query_params.get("asc", "1") == "1"
-        data = get_functions_data(sort_by=sort_by, filter_triage=filter_triage, search=search, sort_asc=sort_asc)
+        data = await asyncio.to_thread(
+            get_functions_data, sort_by=sort_by, filter_triage=filter_triage,
+            search=search, sort_asc=sort_asc,
+        )
         return JSONResponse(data)
 
     async def api_callgraph(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_callgraph_data())
+        data = await asyncio.to_thread(get_callgraph_data)
+        return JSONResponse(data)
 
     _MAX_POST_BODY_SIZE = 1024 * 1024  # 1 MB
 
@@ -441,10 +478,9 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         address = request.query_params.get("address", "").strip()
-        if not address:
-            return JSONResponse({"error": "missing address parameter"}, status_code=400)
-        if len(address) > 40:
-            return JSONResponse({"error": "address too long"}, status_code=400)
+        err = _validate_address(address)
+        if err:
+            return err
         result = get_decompiled_code(address)
         return JSONResponse(result)
 
@@ -507,11 +543,12 @@ def _create_routes(dashboard_token: str) -> list:
             lim = max(1, min(lim, 500))
         except (ValueError, TypeError):
             lim = 100
-        return JSONResponse(get_strings_data(
-            search=search, string_type=string_type, category=cat,
-            min_score=min_score, sort_by=sort, sort_asc=asc,
-            offset=off, limit=lim,
-        ))
+        data = await asyncio.to_thread(
+            get_strings_data, search=search, string_type=string_type,
+            category=cat, min_score=min_score, sort_by=sort,
+            sort_asc=asc, offset=off, limit=lim,
+        )
+        return JSONResponse(data)
 
     async def api_search(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -526,10 +563,9 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         address = request.query_params.get("address", "").strip()
-        if not address:
-            return JSONResponse({"error": "missing address"}, status_code=400)
-        if len(address) > 40:
-            return JSONResponse({"error": "address too long"}, status_code=400)
+        err = _validate_address(address)
+        if err:
+            return err
         try:
             return JSONResponse(get_function_xrefs_data(address))
         except Exception:
@@ -540,10 +576,9 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         address = request.query_params.get("address", "").strip()
-        if not address:
-            return JSONResponse({"error": "missing address"}, status_code=400)
-        if len(address) > 40:
-            return JSONResponse({"error": "address too long"}, status_code=400)
+        err = _validate_address(address)
+        if err:
+            return err
         try:
             return JSONResponse(get_function_analysis_data(address))
         except Exception:
@@ -554,10 +589,9 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         address = request.query_params.get("address", "").strip()
-        if not address:
-            return JSONResponse({"error": "missing address"}, status_code=400)
-        if len(address) > 40:
-            return JSONResponse({"error": "address too long"}, status_code=400)
+        err = _validate_address(address)
+        if err:
+            return err
         try:
             return JSONResponse(get_function_strings_data(address))
         except Exception:
@@ -635,7 +669,7 @@ def _create_routes(dashboard_token: str) -> list:
                 while True:
                     await asyncio.sleep(2)
                     # C3: Re-validate auth each iteration; break if token revoked
-                    if connection_token and not _check_token(connection_token, dashboard_token):
+                    if not connection_token or not _check_token(connection_token, dashboard_token):
                         logger.debug("SSE: connection token invalidated, closing")
                         return
                     try:
@@ -717,6 +751,8 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return RedirectResponse("/dashboard/login", status_code=302)
         category = request.query_params.get("category", "").strip() or None
+        if category and category not in _VALID_NOTE_CATEGORIES:
+            category = None
         data = get_notes_data(category=category)
         ctx = {"nav_active": "notes", "data": data, "active_category": category or "all"}
         resp = HTMLResponse(_render("notes.html", ctx))
@@ -776,19 +812,22 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_mitre(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_mitre_data())
+        data = await asyncio.to_thread(get_mitre_data)
+        return JSONResponse(data)
 
     async def api_capabilities(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_capa_data())
+        data = await asyncio.to_thread(get_capa_data)
+        return JSONResponse(data)
 
     async def api_function_cfg(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         address = request.query_params.get("address", "").strip()
-        if not address or len(address) > 40:
-            return JSONResponse({"error": "invalid address"}, status_code=400)
+        err = _validate_address(address)
+        if err:
+            return err
         try:
             return JSONResponse(get_function_cfg_data(address))
         except Exception:
@@ -799,8 +838,9 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         address = request.query_params.get("address", "").strip()
-        if not address or len(address) > 40:
-            return JSONResponse({"error": "invalid address"}, status_code=400)
+        err = _validate_address(address)
+        if err:
+            return err
         try:
             count = int(request.query_params.get("count", "200"))
             count = max(1, min(count, 2000))
@@ -816,8 +856,9 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         address = request.query_params.get("address", "").strip()
-        if not address or len(address) > 40:
-            return JSONResponse({"error": "invalid address"}, status_code=400)
+        err = _validate_address(address)
+        if err:
+            return err
         try:
             return JSONResponse(get_function_variables_data(address))
         except Exception:
@@ -833,22 +874,26 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_resources(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_resources_data())
+        data = await asyncio.to_thread(get_resources_data)
+        return JSONResponse(data)
 
     async def api_triage_report(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_triage_report_data())
+        data = await asyncio.to_thread(get_triage_report_data)
+        return JSONResponse(data)
 
     async def api_packing(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_packing_data())
+        data = await asyncio.to_thread(get_packing_data)
+        return JSONResponse(data)
 
     async def api_similarity(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return JSONResponse(get_similarity_data())
+        data = await asyncio.to_thread(get_similarity_data)
+        return JSONResponse(data)
 
     async def api_types(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -921,8 +966,9 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         address = request.query_params.get("address", "").strip()
-        if not address or len(address) > 40:
-            return JSONResponse({"error": "invalid address"}, status_code=400)
+        err = _validate_address(address)
+        if err:
+            return err
         try:
             return JSONResponse(get_function_similarity_data(address))
         except Exception:
@@ -967,7 +1013,8 @@ def _create_routes(dashboard_token: str) -> list:
         except (ValueError, TypeError):
             limit = 100
         try:
-            return JSONResponse(search_decompiled_code(q, max_results=limit))
+            data = await asyncio.to_thread(search_decompiled_code, q, max_results=limit)
+            return JSONResponse(data)
         except Exception:
             logger.debug("api_search_code error", exc_info=True)
             return JSONResponse({"error": "search failed"}, status_code=500)
@@ -998,6 +1045,11 @@ def _create_routes(dashboard_token: str) -> list:
             if not samples_path:
                 return JSONResponse({"error": "no samples directory configured"}, status_code=400)
             file_path_b = os.path.join(samples_path, file_path_b)
+            # Ensure relative paths stay within the samples directory
+            resolved = os.path.realpath(file_path_b)
+            resolved_samples = os.path.realpath(samples_path)
+            if not resolved.startswith(resolved_samples + os.sep) and resolved != resolved_samples:
+                return JSONResponse({"error": "path is outside samples directory"}, status_code=403)
         # Resolve symlinks and validate path is within allowed directories
         try:
             resolved = os.path.realpath(file_path_b)

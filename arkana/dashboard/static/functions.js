@@ -784,6 +784,7 @@ function toggleView(mode) {
     } else {
         if (tableWrap) tableWrap.classList.remove('d-none');
         tree.classList.add('d-none');
+        _cachedFunctions = null;
     }
 }
 

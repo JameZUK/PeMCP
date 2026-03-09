@@ -52,7 +52,7 @@
                         <td>
                             {% for addr in rule.addresses %}
                             {% if addr.func_name %}
-                            <a href="/dashboard/functions?highlight={{ addr.func_addr }}" class="capa-func-link">&#8594; {{ addr.func_name }}</a>
+                            <a href="/dashboard/functions?highlight={{ addr.func_addr|urlencode }}" class="capa-func-link">&#8594; {{ addr.func_name }}</a>
                             {% else %}
                             <span class="mono dim">{{ addr.address }}</span>
                             {% endif %}

@@ -484,9 +484,7 @@ function renderInfoTab(node) {
             xrow.className = 'sidebar-xref-row';
             xrow.textContent = n.data('label') || n.id();
             xrow.title = n.id();
-            xrow.addEventListener('click', function() {
-                navigateToNode(n);
-            });
+            xrow.dataset.nodeId = n.id();
             details.appendChild(xrow);
         });
     }
@@ -501,9 +499,7 @@ function renderInfoTab(node) {
             xrow.className = 'sidebar-xref-row';
             xrow.textContent = n.data('label') || n.id();
             xrow.title = n.id();
-            xrow.addEventListener('click', function() {
-                navigateToNode(n);
-            });
+            xrow.dataset.nodeId = n.id();
             details.appendChild(xrow);
         });
     }
@@ -623,14 +619,7 @@ function _appendXrefRow(container, entry) {
         row.appendChild(sBadge);
     }
     row.title = entry.address;
-    /* Click to navigate */
-    row.addEventListener('click', function() {
-        if (!cy) return;
-        var n = cy.getElementById(entry.address);
-        if (n.length) {
-            navigateToNode(n);
-        }
-    });
+    row.dataset.nodeId = entry.address;
     container.appendChild(row);
 }
 
@@ -1651,6 +1640,17 @@ document.addEventListener('DOMContentLoaded', function() {
         tabBar.addEventListener('click', function(e) {
             var tab = e.target.getAttribute('data-tab');
             if (tab) switchSidebarTab(tab);
+        });
+    }
+
+    /* Delegated click handler for sidebar xref/caller/callee rows */
+    var nodeDetails = document.getElementById('node-details');
+    if (nodeDetails) {
+        nodeDetails.addEventListener('click', function(e) {
+            var row = e.target.closest('[data-node-id]');
+            if (!row || !cy) return;
+            var n = cy.getElementById(row.dataset.nodeId);
+            if (n.length) navigateToNode(n);
         });
     }
 
