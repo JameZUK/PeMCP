@@ -1317,7 +1317,7 @@ async def get_function_complexity_list(
     if compact:
         top = [{"name": f["name"], "addr": f["addr"], "blocks": f["blocks"]} for f in sorted_funcs[:limit]]
     else:
-        top = sorted_funcs[:limit]
+        top = [dict(f) for f in sorted_funcs[:limit]]
 
     result = {
         "total_functions_scanned": len(cached_funcs),
@@ -1606,9 +1606,10 @@ async def get_cross_reference_map(
                     if isinstance(addr, int) and val:
                         string_addrs_build[addr] = val[:80]
             string_addrs = string_addrs_build
+            # List wrapper required: result_cache API expects list values for get/set
             state.result_cache.set("_string_addr_map", (), [string_addrs])
         elif isinstance(string_addrs, list) and string_addrs:
-            string_addrs = string_addrs[0]
+            string_addrs = string_addrs[0]  # Unwrap from list (see set() above)
 
         functions_result: Dict[str, Any] = {}
 

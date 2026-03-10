@@ -26,8 +26,11 @@ async def _write_multi_file_artifacts(
     tool_name: str,
 ) -> List[Dict[str, Any]]:
     """Write multiple extracted files to a directory and register as artifacts."""
+    from pathlib import Path
+    state.check_path_allowed(str(Path(output_dir).resolve()))
     os.makedirs(output_dir, exist_ok=True)
     artifacts: List[Dict[str, Any]] = []
+    seen_names: set = set()
     for i, raw in enumerate(raw_items):
         name = (
             results[i].get("path")
@@ -38,6 +41,14 @@ async def _write_multi_file_artifacts(
         name = os.path.basename(name)
         if not name:
             name = f"file_{i}.bin"
+        # Deduplicate filenames
+        base_name = name
+        counter = 1
+        while name in seen_names:
+            stem, ext = os.path.splitext(base_name)
+            name = f"{stem}_{counter}{ext}"
+            counter += 1
+        seen_names.add(name)
         item_path = os.path.join(output_dir, name)
         artifact_meta = await asyncio.to_thread(
             _write_output_and_register_artifact,

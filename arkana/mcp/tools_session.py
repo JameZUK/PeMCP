@@ -279,10 +279,11 @@ async def get_analysis_digest(
         except (ValueError, TypeError):
             return True
 
-    # Build a notes-by-category lookup (cached for 10s via result_cache)
+    # Build a notes-by-category lookup (cached via result_cache, 1hr TTL, version-keyed)
     all_notes = state.get_notes()
     _notes_count = len(all_notes)
-    _digest_cache_key = ("_notes_by_cat", _notes_count)
+    _notes_version = sum(len(n.get("content", "")) for n in all_notes)
+    _digest_cache_key = ("_notes_by_cat", _notes_count, _notes_version)
     notes_by_cat = state.result_cache.get("_digest_notes_by_cat", _digest_cache_key)
     if notes_by_cat is None:
         notes_by_cat_build: Dict[str, list] = {}
@@ -864,8 +865,9 @@ async def get_analysis_timeline(
     all_notes = state.get_notes()
     total_events = len(tool_history) + len(all_notes)
 
-    # Cache the merged+sorted event list (keyed on event count as version)
-    _timeline_cache_key = ("_timeline", total_events)
+    # Cache the merged+sorted event list (keyed on event count + content version)
+    _content_version = sum(len(n.get("content", "")) for n in all_notes)
+    _timeline_cache_key = ("_timeline", total_events, _content_version)
     events = state.result_cache.get("_timeline_events", _timeline_cache_key)
     if events is None:
         events = []

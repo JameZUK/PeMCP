@@ -101,22 +101,21 @@ def get_magic_hint(file_path: str) -> str:
     return "Unknown"
 
 
+_FORMAT_LABELS = {"pe": "PE Executable", "elf": "ELF Binary", "macho": "Mach-O Binary"}
+
 # ── Extended format detection ──────────────────────────────────────────────
 
-_EXTENDED_SIGNATURES = {
+# 2-byte prefix signatures (checked after 4-byte)
+_EXTENDED_SIGNATURES_2 = {
     b'PK': ("zip", "ZIP/Archive"),
     b'\x1f\x8b': ("gzip", "GZIP Compressed"),
-    b'%P': ("pdf", "PDF Document"),       # matches %PDF prefix via 2 bytes
     b'\xd0\xcf': ("ole", "OLE/MS-CFB (Office)"),
     b'\x7fC': ("cgc", "CGC Binary"),       # \x7fCGC
-    b'MD': ("minidump", "Windows Minidump"),  # MDMP
-    b'Ra': ("rar", "RAR Archive"),          # Rar!
-    b'7z': ("7z", "7-Zip Archive"),
     b'\xfd7': ("xz", "XZ Compressed"),
     b'de': ("dex", "Android DEX/ODEX"),     # dex\n or dey\n
 }
 
-# 4-byte signatures that need exact match
+# 4-byte signatures (checked first — more specific, fewer false positives)
 _EXTENDED_SIGNATURES_4 = {
     b'\xa1\xb2\xc3\xd4': ("pcap", "PCAP Capture"),
     b'\xd4\xc3\xb2\xa1': ("pcap", "PCAP Capture (swapped)"),
@@ -125,6 +124,7 @@ _EXTENDED_SIGNATURES_4 = {
     b'%PDF': ("pdf", "PDF Document"),
     b'dex\n': ("dex", "Android DEX"),
     b'dey\n': ("odex", "Android ODEX"),
+    b'7z\xbc\xaf': ("7z", "7-Zip Archive"),
 }
 
 
@@ -139,8 +139,7 @@ def detect_format_extended(magic: bytes) -> dict:
     """
     fmt = detect_format_from_magic(magic)
     if fmt != "unknown":
-        labels = {"pe": "PE Executable", "elf": "ELF Binary", "macho": "Mach-O Binary"}
-        return {"code": fmt, "label": labels.get(fmt, fmt.upper())}
+        return {"code": fmt, "label": _FORMAT_LABELS.get(fmt, fmt.upper())}
 
     # Try 4-byte exact matches first
     if len(magic) >= 4:
@@ -150,7 +149,7 @@ def detect_format_extended(magic: bytes) -> dict:
 
     # Try 2-byte prefix matches
     if len(magic) >= 2:
-        match = _EXTENDED_SIGNATURES.get(magic[:2])
+        match = _EXTENDED_SIGNATURES_2.get(magic[:2])
         if match:
             return {"code": match[0], "label": match[1]}
 

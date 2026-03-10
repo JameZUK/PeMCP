@@ -183,15 +183,20 @@ class TestCachedFlatStrings:
         result1 = _get_cached_flat_strings(include_basic_ascii=True, deduplicate=True)
         assert len(result1) == 1
 
-        # Modify underlying data — shouldn't affect cached result
+        # Same data — cache hit returns same object
+        result2 = _get_cached_flat_strings(include_basic_ascii=True, deduplicate=True)
+        assert result2 is result1
+        assert len(result2) == 1
+
+        # Modify underlying data — cache key includes content version,
+        # so the cache correctly invalidates and returns fresh data
         mock_state.pe_data['floss_analysis']['strings']['static_strings'].append(
             {'string': 'bar', 'sifter_score': 2.0}
         )
 
-        result2 = _get_cached_flat_strings(include_basic_ascii=True, deduplicate=True)
-        # Same cached list returned
-        assert result2 is result1
-        assert len(result2) == 1
+        result3 = _get_cached_flat_strings(include_basic_ascii=True, deduplicate=True)
+        assert result3 is not result1
+        assert len(result3) == 2
 
     def test_source_type_added(self, monkeypatch):
         from arkana.mcp.tools_strings import _get_cached_flat_strings

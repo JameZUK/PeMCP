@@ -365,7 +365,7 @@ def _is_https(request: Request) -> bool:
     return request.headers.get("x-forwarded-proto", "") == "https"
 
 
-_VALID_NOTE_CATEGORIES = {"general", "function", "tool_result", "ioc", "hypothesis", "manual"}
+_VALID_NOTE_CATEGORIES = {"general", "function", "tool_result", "ioc", "hypothesis", "conclusion", "manual"}
 
 _HEX_ADDR_RE = re.compile(r'0x[0-9a-fA-F]+$')
 

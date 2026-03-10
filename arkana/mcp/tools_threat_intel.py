@@ -380,14 +380,23 @@ async def map_mitre_attack(
 
     analysis = await asyncio.to_thread(_map)
 
-    if output_path and analysis.get("navigator_layer"):
-        text_bytes = json.dumps(analysis["navigator_layer"], indent=2).encode("utf-8")
-        artifact_meta = await asyncio.to_thread(
-            _write_output_and_register_artifact,
-            output_path, text_bytes, "map_mitre_attack",
-            f"ATT&CK Navigator layer ({analysis.get('technique_count', 0)} techniques)",
-        )
-        analysis["artifact"] = artifact_meta
+    if output_path:
+        if analysis.get("navigator_layer"):
+            text_bytes = json.dumps(analysis["navigator_layer"], indent=2).encode("utf-8")
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                output_path, text_bytes, "map_mitre_attack",
+                f"ATT&CK Navigator layer ({analysis.get('technique_count', 0)} techniques)",
+            )
+            analysis["artifact"] = artifact_meta
+        else:
+            text_bytes = json.dumps(analysis, indent=2, default=str).encode("utf-8")
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                output_path, text_bytes, "map_mitre_attack",
+                f"MITRE ATT&CK analysis ({analysis.get('technique_count', 0)} techniques)",
+            )
+            analysis["artifact"] = artifact_meta
 
     return await _check_mcp_response_size(ctx, analysis, "map_mitre_attack")
 

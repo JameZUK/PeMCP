@@ -218,6 +218,8 @@ async def extract_steganography(
 
     if output_path and raw_items:
         import os
+        from pathlib import Path
+        state.check_path_allowed(str(Path(output_path).resolve()))
         os.makedirs(output_path, exist_ok=True)
         artifacts: List[Dict[str, Any]] = []
         for i, raw in enumerate(raw_items):
@@ -425,6 +427,8 @@ async def parse_custom_container(
 
     if output_path and raw_items:
         import os
+        from pathlib import Path
+        state.check_path_allowed(str(Path(output_path).resolve()))
         os.makedirs(output_path, exist_ok=True)
         artifacts: List[Dict[str, Any]] = []
         for i, raw in enumerate(raw_items):

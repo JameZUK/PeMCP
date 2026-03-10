@@ -180,6 +180,8 @@ def _write_output_and_register_artifact(
     detected_type = _detect_file_type(data)
 
     # Write to disk
+    if Path(abs_path).exists():
+        logger.warning("Overwriting existing file: %s", abs_path)
     Path(abs_path).write_bytes(data)
     logger.info("Artifact written: %s (%d bytes, type=%s)", abs_path, len(data), detected_type)
 

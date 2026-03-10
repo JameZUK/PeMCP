@@ -595,7 +595,7 @@ def get_overview_data() -> Dict[str, Any]:
         if n.get("category") == "conclusion" and n.get("content")
     ]
     if conclusion_notes:
-        binary_summary["ai_conclusion"] = conclusion_notes[-1].get("content", "")
+        binary_summary["ai_conclusion"] = conclusion_notes[-1].get("content", "")[:10000]
 
     if triage and isinstance(triage, dict):
         # Capabilities (capa matches) — top 10

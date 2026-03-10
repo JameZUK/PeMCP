@@ -55,13 +55,20 @@ def _get_cached_flat_strings(include_basic_ascii: bool = True, deduplicate: bool
     else:
         cache_key = f"{'deduped' if deduplicate else 'all'}_{'with_basic' if include_basic_ascii else 'floss'}"
 
-    cached = cache.get("_flat_strings", cache_key)
+    pe_data = state.pe_data or {}
+
+    # Include content-based version to invalidate when FLOSS analysis completes
+    floss_counts = sum(len(v) if isinstance(v, list) else 0
+                       for v in (pe_data.get('floss_analysis', {}).get('strings', {}) or {}).values())
+    basic_count = len(pe_data.get('basic_ascii_strings', [])) if include_basic_ascii else 0
+    versioned_key = (cache_key, floss_counts, basic_count)
+
+    cached = cache.get("_flat_strings", versioned_key)
     if cached is not None:
         return cached
 
     all_strings = []
     seen = set() if deduplicate else None
-    pe_data = state.pe_data or {}
 
     # FLOSS strings
     if 'floss_analysis' in pe_data and isinstance(pe_data['floss_analysis'], dict):
@@ -102,7 +109,7 @@ def _get_cached_flat_strings(include_basic_ascii: bool = True, deduplicate: bool
                         if val in seen:
                             continue
                         seen.add(val)
-                    all_strings.append(item)
+                    all_strings.append(item.copy())
                 elif isinstance(item, str) and item:
                     if seen is not None:
                         if item in seen:
@@ -110,7 +117,7 @@ def _get_cached_flat_strings(include_basic_ascii: bool = True, deduplicate: bool
                         seen.add(item)
                     all_strings.append({"string": item})
 
-    cache.set("_flat_strings", cache_key, all_strings)
+    cache.set("_flat_strings", versioned_key, all_strings)
     return all_strings
 
 
@@ -476,8 +483,10 @@ async def get_capa_analysis_info(ctx: Context,
     filtered_rule_items = state.result_cache.get("_capa_filtered_rules", _capa_cache_key)
     if filtered_rule_items is None:
         filtered_rule_items = []
+        skipped_rules = 0
         for rule_id, rule_details_original in all_rules_dict_from_capa.items():
             if not isinstance(rule_details_original, dict):
+                skipped_rules += 1
                 continue
 
             meta = rule_details_original.get("meta", {})
@@ -549,6 +558,8 @@ async def get_capa_analysis_info(ctx: Context,
 
     await ctx.info(f"Returning capa_analysis_overview. Rules on page: {base_pagination_info['current_items_count']} of {base_pagination_info['total_items_after_filtering']}.")
     data_to_send = {"rules": final_rules_output_dict, "pagination": base_pagination_info, "report_metadata": processed_report_meta}
+    if skipped_rules > 0:
+        data_to_send["_skipped_malformed_rules"] = skipped_rules
     limit_info_str = "parameters like 'limit' (for rules), 'offset', or by using filters (e.g., 'filter_rule_name')"
     return await _check_mcp_response_size(ctx, data_to_send, "get_capa_analysis_info", limit_info_str)
 
@@ -997,7 +1008,7 @@ async def get_top_sifted_strings(
     if include_floss and not include_basic:
         all_strings = all_cached
     elif include_basic and not include_floss:
-        all_strings = [s for s in all_cached if 'source_type' not in s or not s.get('source_type', '').startswith('floss')]
+        all_strings = [s for s in all_cached if 'source_type' not in s]
     else:
         all_strings = all_cached
     # Only include items with sifter_score
@@ -1186,7 +1197,7 @@ async def fuzzy_search_strings(
     if include_floss and not include_basic:
         all_strings = all_cached
     elif include_basic and not include_floss:
-        all_strings = [s for s in all_cached if 'source_type' not in s or not s.get('source_type', '').startswith('floss')]
+        all_strings = [s for s in all_cached if 'source_type' not in s]
     else:
         all_strings = all_cached
 

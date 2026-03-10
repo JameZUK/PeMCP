@@ -32,6 +32,22 @@ from arkana.utils import shannon_entropy
 
 logger = logging.getLogger(__name__)
 
+# ── Module-level constants ────────────────────────────────────────────────
+
+# Known PE COFF machine types
+_KNOWN_MACHINES = {
+    0x0, 0x14C, 0x166, 0x169, 0x1A2, 0x1A3, 0x1A6, 0x1A8,
+    0x1C0, 0x1C2, 0x1C4, 0x1D3, 0x200, 0x266, 0x284, 0x366,
+    0x466, 0x5032, 0x5064, 0x8664, 0x9041, 0xAA64, 0xC0EE,
+}
+
+# PE section table entry size (bytes)
+_SECTION_ENTRY_SIZE = 40
+
+# Mach-O load command types
+_LC_SEGMENT = 1
+_LC_SEGMENT_64 = 0x19
+
 # ── Severity ordering (for classification) ─────────────────────────────────
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
@@ -210,12 +226,6 @@ def _check_pe_integrity(
     details["machine"] = f"{machine:#06x}"
     details["num_sections"] = num_sections
 
-    # Known machine types
-    _KNOWN_MACHINES = {
-        0x0, 0x14C, 0x166, 0x169, 0x1A2, 0x1A3, 0x1A6, 0x1A8,
-        0x1C0, 0x1C2, 0x1C4, 0x1D3, 0x200, 0x266, 0x284, 0x366,
-        0x466, 0x5032, 0x5064, 0x8664, 0x9041, 0xAA64, 0xC0EE,
-    }
     if machine not in _KNOWN_MACHINES:
         issues.append(
             _issue(
@@ -308,7 +318,6 @@ def _check_pe_integrity(
 
     # Section table validation
     section_table_offset = opt_offset + size_of_optional
-    _SECTION_ENTRY_SIZE = 40
     sections_checked = min(num_sections, INTEGRITY_MAX_SECTIONS_PE)
     for i in range(sections_checked):
         sec_off = section_table_offset + i * _SECTION_ENTRY_SIZE
@@ -349,7 +358,7 @@ def _check_elf_integrity(
 
     if length < 16:
         issues.append(
-            _issue("high", "PE_COFF_TRUNCATED", "ELF header truncated (< 16 bytes).")
+            _issue("high", "ELF_TRUNCATED", "ELF header truncated (< 16 bytes).")
         )
         flags["truncated"] = True
         return issues, flags, details
@@ -401,7 +410,7 @@ def _check_elf_integrity(
         issues.append(
             _issue(
                 "high",
-                "PE_COFF_TRUNCATED",
+                "ELF_TRUNCATED",
                 f"ELF header truncated ({length} bytes, need {min_hdr}).",
             )
         )
@@ -571,9 +580,6 @@ def _check_macho_integrity(
 
     # Walk load commands
     offset = cmds_start
-    # LC_SEGMENT=1, LC_SEGMENT_64=0x19
-    _LC_SEGMENT = 1
-    _LC_SEGMENT_64 = 0x19
     max_walk = min(ncmds, 256)  # cap iteration
     for i in range(max_walk):
         if offset + 8 > length:
@@ -646,6 +652,10 @@ def _check_macho_fat(
     details: Dict[str, Any],
 ) -> Tuple[List[Dict[str, str]], Dict[str, bool], Dict[str, Any]]:
     """Validate a Mach-O fat/universal binary header."""
+    # Work on copies to avoid mutating caller data
+    issues = list(issues)
+    flags = dict(flags)
+    details = dict(details)
     length = len(data)
     details["macho_type"] = "Fat/Universal"
 

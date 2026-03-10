@@ -476,12 +476,22 @@ async def refinery_decompile(
         return results
 
     results = await asyncio.to_thread(_run_autoit)
-    return await _check_mcp_response_size(ctx, {
+    response = {
         "language": lang,
         "input_size": len(data),
         "items_found": len(results),
         "results": results,
-    }, "refinery_decompile")
+    }
+    if output_path:
+        import json as _json
+        text_bytes = _json.dumps(results, indent=2, default=str).encode("utf-8")
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, text_bytes, "refinery_decompile",
+            f"Decompiled AutoIt ({len(results)} items)",
+        )
+        response["artifact"] = artifact_meta
+    return await _check_mcp_response_size(ctx, response, "refinery_decompile")
 
 
 # ===================================================================
