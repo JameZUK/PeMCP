@@ -28,13 +28,38 @@
 {% endfor %}
 {% endif %}
 {% endif %}
-<div class="stats-grid">
-    <div class="panel stat-card">
-        <div class="panel-header">FILE</div>
-        <div class="stat-value">{{ data.filename or 'None' }}</div>
-        <div class="stat-detail mono">{{ data.format }}{% if bs.file_size %} &middot; {{ (bs.file_size / 1024)|round(1) }} KB{% endif %}{% if bs.language %} &middot; {{ bs.language }}{% endif %}</div>
-        {% if bs.ai_assessment %}<div class="stat-detail warning">{{ bs.ai_assessment }}</div>{% elif bs.classification %}<div class="stat-detail dim">{{ bs.classification }}</div>{% endif %}
+<!-- File Identity Banner -->
+<div class="panel file-identity">
+    <div class="panel-header">FILE IDENTITY</div>
+    <div class="file-identity-name">
+        <span title="{{ data.filename or 'None' }}">{{ data.filename or 'None' }}</span>
+        <span class="file-identity-detail">{{ data.format }}{% if bs.file_size %} &middot; {{ (bs.file_size / 1024)|round(1) }} KB{% endif %}{% if bs.language %} &middot; {{ bs.language }}{% endif %}</span>
     </div>
+    <div class="file-identity-hashes">
+        {% if data.sha256 %}
+        <div class="file-identity-hash-row">
+            <span class="file-identity-hash-label">SHA256</span>
+            <span class="file-identity-hash-value">{{ data.sha256 }}</span>
+            <button class="btn btn-ghost btn-xs" data-action="copy-hash" data-hash="{{ data.sha256 }}" title="Copy SHA256">COPY</button>
+        </div>
+        {% endif %}
+        {% if data.md5 %}
+        <div class="file-identity-hash-row">
+            <span class="file-identity-hash-label">MD5</span>
+            <span class="file-identity-hash-value">{{ data.md5 }}</span>
+            <button class="btn btn-ghost btn-xs" data-action="copy-hash" data-hash="{{ data.md5 }}" title="Copy MD5">COPY</button>
+        </div>
+        {% endif %}
+    </div>
+    {% if bs.ai_assessment %}
+    <div class="file-identity-assessment warning">{{ bs.ai_assessment }}</div>
+    {% elif bs.classification %}
+    <div class="file-identity-assessment dim">{{ bs.classification }}</div>
+    {% endif %}
+</div>
+
+<!-- Compact stat cards -->
+<div class="stats-grid-sm">
     <div class="panel stat-card">
         <div class="panel-header">RISK</div>
         {% if bs.risk_level %}
@@ -455,12 +480,6 @@
     {% endif %}
 </div>
 
-<!-- Hashes -->
-<div class="panel hash-panel">
-    <div class="panel-header">HASHES</div>
-    <div class="hash-row"><span class="hash-label">SHA256:</span> <span class="mono hash-value">{{ data.sha256 or 'N/A' }}</span></div>
-    <div class="hash-row"><span class="hash-label">MD5:</span> <span class="mono hash-value">{{ data.md5 or 'N/A' }}</span></div>
-</div>
 {% elif data and data.active_tool %}
 <div class="panel">
     <div class="panel-header">ACTIVE OPERATION</div>

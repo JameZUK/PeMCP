@@ -86,4 +86,72 @@ def get_magic_hint(file_path: str) -> str:
         return "OLE/MS-CFB"
     if magic[:4] == b'%PDF':
         return "PDF"
+    if magic[:4] == b'MDMP':
+        return "Minidump"
+    if magic[:4] == b'Rar!':
+        return "RAR"
+    if magic[:4] == b'7z\xbc\xaf':
+        return "7-Zip"
+    if magic[:4] == b'\xfd7zX':
+        return "XZ"
+    if magic[:4] in (b'dex\n', b'dey\n'):
+        return "DEX" if magic[:4] == b'dex\n' else "ODEX"
+    if magic[:4] in (b'\xa1\xb2\xc3\xd4', b'\xd4\xc3\xb2\xa1'):
+        return "PCAP"
     return "Unknown"
+
+
+# ── Extended format detection ──────────────────────────────────────────────
+
+_EXTENDED_SIGNATURES = {
+    b'PK': ("zip", "ZIP/Archive"),
+    b'\x1f\x8b': ("gzip", "GZIP Compressed"),
+    b'%P': ("pdf", "PDF Document"),       # matches %PDF prefix via 2 bytes
+    b'\xd0\xcf': ("ole", "OLE/MS-CFB (Office)"),
+    b'\x7fC': ("cgc", "CGC Binary"),       # \x7fCGC
+    b'MD': ("minidump", "Windows Minidump"),  # MDMP
+    b'Ra': ("rar", "RAR Archive"),          # Rar!
+    b'7z': ("7z", "7-Zip Archive"),
+    b'\xfd7': ("xz", "XZ Compressed"),
+    b'de': ("dex", "Android DEX/ODEX"),     # dex\n or dey\n
+}
+
+# 4-byte signatures that need exact match
+_EXTENDED_SIGNATURES_4 = {
+    b'\xa1\xb2\xc3\xd4': ("pcap", "PCAP Capture"),
+    b'\xd4\xc3\xb2\xa1': ("pcap", "PCAP Capture (swapped)"),
+    b'MDMP': ("minidump", "Windows Minidump"),
+    b'Rar!': ("rar", "RAR Archive"),
+    b'%PDF': ("pdf", "PDF Document"),
+    b'dex\n': ("dex", "Android DEX"),
+    b'dey\n': ("odex", "Android ODEX"),
+}
+
+
+def detect_format_extended(magic: bytes) -> dict:
+    """Return extended format info from the first 4 bytes.
+
+    First checks binary formats via detect_format_from_magic(), then
+    tries extended signatures for non-binary file types.
+
+    Returns:
+        {"code": str, "label": str}  e.g. {"code": "pdf", "label": "PDF Document"}
+    """
+    fmt = detect_format_from_magic(magic)
+    if fmt != "unknown":
+        labels = {"pe": "PE Executable", "elf": "ELF Binary", "macho": "Mach-O Binary"}
+        return {"code": fmt, "label": labels.get(fmt, fmt.upper())}
+
+    # Try 4-byte exact matches first
+    if len(magic) >= 4:
+        match = _EXTENDED_SIGNATURES_4.get(magic[:4])
+        if match:
+            return {"code": match[0], "label": match[1]}
+
+    # Try 2-byte prefix matches
+    if len(magic) >= 2:
+        match = _EXTENDED_SIGNATURES.get(magic[:2])
+        if match:
+            return {"code": match[0], "label": match[1]}
+
+    return {"code": "unknown", "label": "Unknown"}

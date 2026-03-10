@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 209 MCP tools organized by use case.
+Complete catalog of all 210 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -32,8 +32,9 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `open_file` | Loading any binary for analysis | `file_path` |
+| `open_file` | Loading any binary for analysis. Returns `file_integrity` assessment. Unknown formats auto-fallback to raw mode. | `file_path`, `mode`, `force` (override format fallback) |
 | `close_file` | Done with current file, loading another | — |
+| `check_file_integrity` | Pre-parse validation of a binary — detects truncation, null-padding, header corruption. Can run before or after `open_file`. Does not modify state. | `file_path` (optional — defaults to loaded file) |
 | `reanalyze_loaded_pe_file` | Need fresh analysis after patching | — |
 | `list_samples` | Browsing available samples in /samples | — |
 | `detect_binary_format` | File type unknown, need magic byte detection | — |
@@ -72,7 +73,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `extract_resources` | Extract PE resource data | `resource_type` (optional) |
 | `extract_manifest` | Extract embedded manifest XML | — |
 | `get_import_hash_analysis` | Imphash, section hash analysis | — |
-| `parse_binary_with_lief` | Cross-format PE/ELF/Mach-O parsing via LIEF | — |
+| `parse_binary_with_lief` | Cross-format PE/ELF/Mach-O parsing via LIEF. **Use as fallback** when pefile fails (timeout, crash, corrupt headers). LIEF handles malformed binaries that pefile cannot. | — |
 | `modify_pe_section` | Modify section content for patching | `section_name`, `data` |
 
 ## Multi-Format Analysis

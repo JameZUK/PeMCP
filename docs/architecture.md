@@ -20,6 +20,7 @@ arkana/
 ├── mock.py                     # MockPE for non-PE/shellcode mode
 ├── background.py               # Background task management
 ├── enrichment.py               # Auto-enrichment background coordinator
+├── integrity.py                # Pre-parse file integrity checks (PE/ELF/Mach-O)
 ├── resources.py                # PEiD/capa/YARA rule downloads
 ├── parsers/
 │   ├── pe.py                   # PE structure parsing
@@ -47,7 +48,7 @@ arkana/
     ├── _input_helpers.py         - Hex/int parameter parsing, LRU result cache, pagination utilities
     ├── _search_helpers.py        - Regex search-with-context for decompiled code and disassembly
     ├── _rename_helpers.py        - Function/variable rename application for decompilation output
-    ├── tools_pe.py               - File management & PE data retrieval (7 tools)
+    ├── tools_pe.py               - File management, PE data retrieval & integrity (8 tools)
     ├── tools_pe_extended.py      - Extended PE analysis (14 tools)
     ├── tools_strings.py          - String analysis, capa, fuzzy search & custom YARA (13 tools)
     ├── tools_angr.py             - Core angr tools (16 tools)

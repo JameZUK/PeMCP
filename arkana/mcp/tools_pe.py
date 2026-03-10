@@ -19,11 +19,12 @@ from arkana.config import (
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp.tools_config import build_path_info
-from arkana.mcp._format_helpers import detect_format_from_magic
+from arkana.mcp._format_helpers import detect_format_from_magic, detect_format_extended, _get_filepath
 from arkana.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from arkana.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
 
-from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT
+from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT, INTEGRITY_FLAGGED_TIMEOUT_FACTOR
+from arkana.integrity import check_file_integrity as _check_integrity_fn
 from arkana.state import MAX_TOOL_HISTORY
 from arkana.parsers.floss import _parse_floss_analysis
 from arkana.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
@@ -193,6 +194,7 @@ async def open_file(
     start_angr_background: bool = True,
     use_cache: bool = True,
     auto_enrich: bool = True,
+    force: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: load] Opens and analyses a binary file, making it available for all other tools.
@@ -222,10 +224,13 @@ async def open_file(
         auto_enrich: (bool) If True (default), launch background auto-enrichment (triage, classification,
             similarity hashes, MITRE mapping, IOC collection, decompile sweep). Disable with False or
             ARKANA_AUTO_ENRICHMENT=0 env var.
+        force: (bool) If True, force loading even if the format is unrecognized or integrity checks flag issues.
+            When mode='auto' and format is unknown, force=True falls back to PE mode; otherwise falls back to
+            raw/shellcode mode for basic analysis.
 
     Returns:
-        A dictionary with status, filepath, detected format, summary of what was
-        loaded, and (if available) session_context with restored notes and history.
+        A dictionary with status, filepath, detected format, file_integrity assessment,
+        and (if available) session_context with restored notes and history.
     """
     abs_path = str(Path(file_path).resolve())
 
@@ -245,20 +250,9 @@ async def open_file(
             "Set ARKANA_MAX_FILE_SIZE_MB environment variable to change this limit."
         )
 
-    # Auto-detect format from magic bytes
-    if mode == "auto":
-        with open(abs_path, 'rb') as f:
-            magic = f.read(4)
-        mode = detect_format_from_magic(magic)
-        if mode == "unknown":
-            mode = "pe"  # fallback to PE, pefile will report errors if invalid
-            await ctx.warning(
-                f"Unrecognized file format (magic: {magic.hex()}). Falling back to PE mode. "
-                "Use mode='shellcode', 'elf', or 'macho' to specify explicitly."
-            )
-        await ctx.info(f"Auto-detected format: {mode}")
+    # Format detection is deferred until after file read (see below)
 
-    await ctx.info(f"Opening file: {abs_path} (mode: {mode})")
+    await ctx.info(f"Opening file: {abs_path}")
 
     skip_list = [s.lower() for s in (analyses_to_skip or [])]
 
@@ -302,6 +296,49 @@ async def open_file(
             return data, hashlib.sha256(data).hexdigest()
 
         _raw_file_data, _file_sha256 = await asyncio.to_thread(_read_and_hash)
+
+        # --- Format detection (uses raw bytes, no redundant file open) ---
+        if mode == "auto":
+            mode = detect_format_from_magic(_raw_file_data[:4])
+            if mode == "unknown":
+                _ext_fmt = detect_format_extended(_raw_file_data[:4])
+                if force:
+                    mode = "pe"
+                    await ctx.warning(
+                        f"Unrecognized format ({_ext_fmt['label']}). Forcing PE mode (force=True)."
+                    )
+                else:
+                    mode = "shellcode"
+                    await ctx.warning(
+                        f"File identified as {_ext_fmt['label']} (magic: {_raw_file_data[:4].hex()}). "
+                        "Opening in raw mode for basic analysis. "
+                        "Use force=True with mode='pe'/'elf'/'macho' to force binary parsing."
+                    )
+            await ctx.info(f"Auto-detected format: {mode}")
+
+        # --- Integrity check (always runs, never blocks opening) ---
+        try:
+            _integrity = await asyncio.to_thread(
+                _check_integrity_fn, _raw_file_data, mode, abs_path
+            )
+        except Exception as _int_err:
+            logger.warning("Integrity check failed: %s", _int_err)
+            _integrity = {
+                "status": "unknown", "confidence": "low",
+                "file_size": len(_raw_file_data), "detected_format": mode,
+                "format_label": mode.upper(), "entropy": -1.0, "null_ratio": -1.0,
+                "issues": [], "flags": {}, "format_details": {},
+                "recommendation": "Integrity check failed — proceeding with normal analysis.",
+            }
+
+        if _integrity["status"] in ("corrupt", "partial"):
+            issue_summary = "; ".join(
+                i["message"] for i in _integrity["issues"][:3]
+                if i["severity"] in ("critical", "high")
+            )
+            await ctx.warning(
+                f"Integrity issues detected ({_integrity['status']}): {issue_summary}"
+            )
 
         # --- Check cache (all modes) ---
         if use_cache:
@@ -498,7 +535,12 @@ async def open_file(
                         progress_callback=_progress_cb,
                     )
 
-                _PE_ANALYSIS_TIMEOUT = _safe_env_int("ARKANA_ANALYSIS_TIMEOUT", _safe_env_int("PEMCP_ANALYSIS_TIMEOUT", 600))
+                _base_timeout = _safe_env_int("ARKANA_ANALYSIS_TIMEOUT", _safe_env_int("PEMCP_ANALYSIS_TIMEOUT", 600))
+                if _integrity["status"] in ("corrupt", "partial"):
+                    _PE_ANALYSIS_TIMEOUT = max(60, int(_base_timeout * INTEGRITY_FLAGGED_TIMEOUT_FACTOR))
+                    await ctx.warning(f"Using reduced timeout ({_PE_ANALYSIS_TIMEOUT}s) for flagged file.")
+                else:
+                    _PE_ANALYSIS_TIMEOUT = _base_timeout
                 try:
                     state.pe_data = await asyncio.wait_for(
                         asyncio.to_thread(_run_analysis),
@@ -560,6 +602,7 @@ async def open_file(
                 else "skipped (cached)" if _enrichment_cached
                 else "not started"
             ),
+            "file_integrity": _integrity,
         }
         if mode in ("elf", "macho"):
             format_label = "ELF" if mode == "elf" else "Mach-O"
@@ -679,6 +722,40 @@ async def close_file(ctx: Context) -> Dict[str, str]:
         "internal_path": closed_path_info["internal_path"],
         "external_path": closed_path_info.get("external_path") or "",
     }
+
+
+@tool_decorator
+async def check_file_integrity(
+    ctx: Context,
+    file_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: load] Pre-parse integrity check on a binary file.
+    Detects truncation, null-padding, impossible sizes, and header corruption
+    for PE, ELF, and Mach-O formats. Can be called before or after open_file().
+    Does not modify state.
+
+    Args:
+        ctx: The MCP Context object.
+        file_path: (Optional[str]) Path to check. If omitted, checks the currently loaded file.
+
+    Returns:
+        A dictionary with status, confidence, file_size, detected_format,
+        entropy, null_ratio, issues list, flags, format_details, and recommendation.
+    """
+    target = _get_filepath(file_path)
+
+    def _read_and_check():
+        with open(target, 'rb') as f:
+            data = f.read()
+        fmt = detect_format_from_magic(data[:4])
+        if fmt == "unknown":
+            ext = detect_format_extended(data[:4])
+            fmt = ext["code"] if ext["code"] != "unknown" else "unknown"
+        return _check_integrity_fn(data, fmt, target)
+
+    result = await asyncio.to_thread(_read_and_check)
+    return await _check_mcp_response_size(ctx, result, "check_file_integrity")
 
 
 @dataclass

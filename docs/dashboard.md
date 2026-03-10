@@ -8,7 +8,7 @@ The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard
 
 ## Overview
 
-Binary summary with risk score, packing status, security mitigations, key findings with clickable function pivot links (`→ func_name`), recent notes with clickable addresses, and an analysis digest panel with AI-generated conclusion (synthesised from classification, triage findings, IOCs, and hypothesis notes). The FILE stat card shows the AI's hypothesis assessment when available, falling back to the generic binary classification.
+Binary summary with risk score, packing status, security mitigations, key findings with clickable function pivot links (`→ func_name`), recent notes with clickable addresses, and an analysis digest panel with AI-generated conclusion (synthesised from classification, triage findings, IOCs, and hypothesis notes). A full-width **File Identity banner** at the top shows the filename (handles long SHA256-hash filenames), format/size/language, SHA256 and MD5 hashes with copy buttons, and the AI's hypothesis assessment (falling back to generic classification). Below it, compact stat cards show RISK, PHASE, and FUNCTIONS.
 
 ![Dashboard Overview](Dashboard-Overview.png)
 

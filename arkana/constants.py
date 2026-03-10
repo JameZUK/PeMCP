@@ -30,6 +30,12 @@ __all__ = [
     "MAX_FLOSS_REFS_PER_STRING",
     "VIVISECT_BYTES_PER_SECOND_ESTIMATE", "VIVISECT_POLL_INTERVAL",
     "MAX_LIST_SAMPLES_LIMIT", "MAX_TOOL_LIMIT",
+    "INTEGRITY_NULL_RATIO_SUSPICIOUS", "INTEGRITY_NULL_RATIO_CORRUPT",
+    "INTEGRITY_MIN_FILE_SIZE", "INTEGRITY_PE_MIN_SIZE",
+    "INTEGRITY_ELF_MIN_SIZE", "INTEGRITY_MACHO_MIN_SIZE",
+    "INTEGRITY_ENTROPY_PACKED", "INTEGRITY_ENTROPY_NEAR_ZERO",
+    "INTEGRITY_MAX_SECTIONS_PE", "INTEGRITY_FLAGGED_TIMEOUT_FACTOR",
+    "INTEGRITY_SAMPLE_SIZE", "INTEGRITY_MAX_ISSUES",
     "DEPENDENCIES",
 ]
 
@@ -115,6 +121,20 @@ MAX_FLOSS_REFS_PER_STRING = 20  # Cap cross-references per string to prevent OOM
 # --- FLOSS Vivisect Progress Estimation ---
 VIVISECT_BYTES_PER_SECOND_ESTIMATE = 50_000  # ~50 KB/s for time-based progress curve
 VIVISECT_POLL_INTERVAL = 3  # seconds between function count polls during analysis
+
+# --- File Integrity Check ---
+INTEGRITY_NULL_RATIO_SUSPICIOUS = 0.95   # ratio above this → medium issue
+INTEGRITY_NULL_RATIO_CORRUPT = 0.99      # ratio above this → high issue
+INTEGRITY_MIN_FILE_SIZE = 64             # below this → medium issue
+INTEGRITY_PE_MIN_SIZE = 97               # minimum valid PE (DOS+PE sig+COFF)
+INTEGRITY_ELF_MIN_SIZE = 52              # minimum valid ELF header (32-bit)
+INTEGRITY_MACHO_MIN_SIZE = 28            # minimum valid Mach-O header
+INTEGRITY_ENTROPY_PACKED = 7.0           # entropy above this → likely packed
+INTEGRITY_ENTROPY_NEAR_ZERO = 0.5        # entropy below this → suspicious
+INTEGRITY_MAX_SECTIONS_PE = 96           # PE with more sections → suspicious
+INTEGRITY_FLAGGED_TIMEOUT_FACTOR = 0.5   # multiply timeout for flagged files
+INTEGRITY_SAMPLE_SIZE = 65536            # bytes to sample for entropy/null ratio
+INTEGRITY_MAX_ISSUES = 50                # cap issues list
 
 # --- list_samples Pagination ---
 MAX_LIST_SAMPLES_LIMIT = 500  # maximum files per page in list_samples

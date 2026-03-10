@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **209 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **210 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -51,7 +51,7 @@ Arkana automatically detects and analyses binaries across all major platforms:
 
 ### Extended Library Integrations
 
-- **LIEF**  - Multi-format binary parsing and modification (PE/ELF/Mach-O section editing).
+- **LIEF**  - Multi-format binary parsing and modification (PE/ELF/Mach-O section editing). Serves as a fallback parser when pefile cannot handle malformed or corrupt PE files.
 - **Capstone**  - Multi-architecture standalone disassembly (x86, ARM, MIPS, etc.).
 - **Keystone**  - Multi-architecture assembly (generate patches from mnemonics).
 - **Speakeasy**  - Windows API emulation for malware analysis (full PE and shellcode).
@@ -79,7 +79,8 @@ Arkana is designed for **large binary corpus analysis** where AI clients need to
 
 ### Dynamic File Loading & Caching
 
-- **Auto-Detection**  - `open_file` automatically detects PE/ELF/Mach-O from magic bytes. No need to specify the format.
+- **Auto-Detection**  - `open_file` automatically detects PE/ELF/Mach-O from magic bytes. Unknown formats (ZIP, PDF, PCAP, DEX, etc.) are identified and fall back to raw/shellcode mode instead of crashing in PE mode. Use `force=True` to override.
+- **Pre-Parse Integrity Checks**  - Every `open_file` call includes a `file_integrity` assessment in the response: status (healthy/suspicious/partial/corrupt), issues list, flags, format details, and recommendation. The standalone `check_file_integrity` tool can run before loading. Flagged files automatically use a reduced analysis timeout to prevent hangs.
 - **No Pre-loading Required**  - The MCP server starts without needing a file path. Use the `open_file` tool to load files dynamically.
 - **Analysis Caching**  - Results are cached to disk in `~/.arkana/cache/`, keyed by SHA256 hash and compressed with gzip (~12x compression). Re-opening a previously analysed file loads instantly from cache.
 - **Persistent Configuration**  - API keys are stored securely in `~/.arkana/config.json` and recalled automatically across sessions.
@@ -92,7 +93,8 @@ Arkana is designed for **large binary corpus analysis** where AI clients need to
 
 | Tool | Description |
 |---|---|
-| `open_file` | Load and analyse a binary (PE/ELF/Mach-O/shellcode). Auto-detects format. For PE files, returns `quick_indicators` (hashes, entropy, packing likelihood, import count, signature status, capa severity count). |
+| `open_file` | Load and analyse a binary (PE/ELF/Mach-O/shellcode). Auto-detects format with smart fallback (unknown formats → raw mode). Returns `file_integrity` assessment and `quick_indicators` for PE files. Use `force=True` to override format fallback. |
+| `check_file_integrity` | Pre-parse integrity check on a binary file. Detects truncation, null-padding, impossible sizes, and header corruption for PE/ELF/Mach-O. Can run before or after `open_file`. Does not modify state. |
 | `close_file` | Close the loaded file and clear analysis data from memory. |
 | `reanalyze_loaded_pe_file` | Re-run PE analysis with different options (skip/enable specific analyses). |
 | `detect_binary_format` | Auto-detect binary format and suggest appropriate analysis tools. |

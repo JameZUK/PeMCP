@@ -6,7 +6,7 @@ import pytest
 
 pytest.importorskip("pefile", reason="pefile not installed")
 
-from arkana.mcp._format_helpers import detect_format_from_magic, get_magic_hint
+from arkana.mcp._format_helpers import detect_format_from_magic, get_magic_hint, detect_format_extended
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +90,94 @@ class TestGetMagicHint:
 
     def test_nonexistent_file(self):
         assert get_magic_hint("/nonexistent/path/file.bin") == "Unreadable"
+
+
+# ---------------------------------------------------------------------------
+# detect_format_extended (extended format detection)
+# ---------------------------------------------------------------------------
+
+class TestDetectFormatExtended:
+    def test_pe(self):
+        result = detect_format_extended(b'MZ\x90\x00')
+        assert result["code"] == "pe"
+
+    def test_elf(self):
+        result = detect_format_extended(b'\x7fELF')
+        assert result["code"] == "elf"
+
+    def test_macho(self):
+        result = detect_format_extended(b'\xce\xfa\xed\xfe')
+        assert result["code"] == "macho"
+
+    def test_minidump(self):
+        result = detect_format_extended(b'MDMP')
+        assert result["code"] == "minidump"
+
+    def test_dex(self):
+        result = detect_format_extended(b'dex\n')
+        assert result["code"] == "dex"
+
+    def test_rar(self):
+        result = detect_format_extended(b'Rar!')
+        assert result["code"] == "rar"
+
+    def test_pcap(self):
+        result = detect_format_extended(b'\xa1\xb2\xc3\xd4')
+        assert result["code"] == "pcap"
+
+    def test_pcap_swapped(self):
+        result = detect_format_extended(b'\xd4\xc3\xb2\xa1')
+        assert result["code"] == "pcap"
+
+    def test_pdf(self):
+        result = detect_format_extended(b'%PDF')
+        assert result["code"] == "pdf"
+
+    def test_unknown(self):
+        result = detect_format_extended(b'\xde\xad\xbe\xef')
+        assert result["code"] == "unknown"
+        assert result["label"] == "Unknown"
+
+    def test_returns_dict(self):
+        result = detect_format_extended(b'\x00\x00\x00\x00')
+        assert "code" in result
+        assert "label" in result
+
+
+# ---------------------------------------------------------------------------
+# get_magic_hint — extended formats
+# ---------------------------------------------------------------------------
+
+class TestGetMagicHintExtended:
+    def test_minidump(self, tmp_path):
+        f = tmp_path / "test.dmp"
+        f.write_bytes(b'MDMP' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "Minidump"
+
+    def test_rar(self, tmp_path):
+        f = tmp_path / "test.rar"
+        f.write_bytes(b'Rar!' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "RAR"
+
+    def test_7z(self, tmp_path):
+        f = tmp_path / "test.7z"
+        f.write_bytes(b'7z\xbc\xaf' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "7-Zip"
+
+    def test_xz(self, tmp_path):
+        f = tmp_path / "test.xz"
+        f.write_bytes(b'\xfd7zX' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "XZ"
+
+    def test_dex(self, tmp_path):
+        f = tmp_path / "test.dex"
+        f.write_bytes(b'dex\n' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "DEX"
+
+    def test_pcap(self, tmp_path):
+        f = tmp_path / "test.pcap"
+        f.write_bytes(b'\xa1\xb2\xc3\xd4' + b'\x00' * 100)
+        assert get_magic_hint(str(f)) == "PCAP"
 
 
 class TestFormatDetectMarkers:

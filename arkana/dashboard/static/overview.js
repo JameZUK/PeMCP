@@ -57,10 +57,14 @@
                 if (data.conclusion && data.conclusion.length > 0) {
                     html += "<div class=\"digest-section\">";
                     html += "<div class=\"digest-section-title\">CONCLUSION</div>";
-                    html += "<ul class=\"digest-findings\">";
-                    data.conclusion.forEach(function (line) {
-                        html += "<li>" + escapeHtml(line) + "</li>";
-                    });
+                    html += "<ul class=\"digest-findings digest-conclusion\">";
+                    var maxConclusion = Math.min(data.conclusion.length, 8);
+                    for (var ci = 0; ci < maxConclusion; ci++) {
+                        html += "<li>" + escapeHtml(data.conclusion[ci]) + "</li>";
+                    }
+                    if (data.conclusion.length > 8) {
+                        html += "<li class=\"dim\">... and " + escapeHtml(String(data.conclusion.length - 8)) + " more</li>";
+                    }
                     html += "</ul></div>";
                 }
 
@@ -228,7 +232,16 @@
     // Event delegation
     document.addEventListener("click", function (e) {
         var action = e.target.getAttribute("data-action");
-        if (action === "refresh-digest") {
+        if (action === "copy-hash") {
+            var hash = e.target.getAttribute("data-hash");
+            if (hash && navigator.clipboard) {
+                navigator.clipboard.writeText(hash).then(function () {
+                    showToast("Hash copied", "success");
+                }).catch(function () {
+                    showToast("Copy failed", "error");
+                });
+            }
+        } else if (action === "refresh-digest") {
             loadDigest();
         } else if (action === "generate-report") {
             generateReport();

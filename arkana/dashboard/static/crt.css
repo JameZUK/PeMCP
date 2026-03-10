@@ -270,6 +270,74 @@ body {
 
 .stat-card .panel-header { margin-bottom: 0; }
 
+/* 3-card variant for RISK/PHASE/FUNCTIONS */
+.stats-grid-sm {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+/* File identity banner */
+.file-identity { padding: 12px; margin-bottom: 16px; }
+
+.file-identity-name {
+    font-size: 16px;
+    text-shadow: 0 0 4px var(--primary);
+    word-break: break-all;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+}
+
+.file-identity-detail {
+    font-size: 12px;
+    color: var(--primary-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.file-identity-hashes {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--primary-ghost);
+}
+
+.file-identity-hash-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    padding: 2px 0;
+}
+
+.file-identity-hash-label {
+    color: var(--primary-muted);
+    min-width: 48px;
+    font-size: 10px;
+    letter-spacing: 1px;
+}
+
+.file-identity-hash-value {
+    font-family: 'Courier New', Courier, monospace;
+    color: var(--primary-dim);
+    word-break: break-all;
+    flex: 1;
+    min-width: 0;
+}
+
+.file-identity-assessment {
+    margin-top: 6px;
+    font-size: 12px;
+}
+
+/* Digest conclusion scroll constraint */
+.digest-conclusion {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
 .stat-value {
     padding: 12px;
     font-size: 20px;
@@ -524,6 +592,10 @@ tr.explored.renamed > td { color: #44ddff; }
     box-shadow: 0 0 8px rgba(0, 255, 65, 0.2);
     outline: none;
 }
+
+.btn-ghost { border-color: var(--primary-ghost); color: var(--primary-muted); }
+.btn-ghost:hover { border-color: var(--primary-muted); }
+.btn-xs { padding: 1px 6px; font-size: 10px; }
 
 .btn-triage {
     background: transparent;
@@ -2067,6 +2139,8 @@ button.btn-analysis:hover {
     .summary-section + .summary-section { border-left: none; border-top: 1px solid var(--primary-ghost); }
     .nav-links { overflow-x: auto; }
     .stats-grid { grid-template-columns: 1fr; }
+    .stats-grid-sm { grid-template-columns: 1fr; }
+    .file-identity-name { flex-direction: column; gap: 4px; }
     .graph-panel { flex-direction: column; }
     .graph-panel-full { height: auto; min-height: auto; }
     .graph-panel-full .cytoscape-container { min-height: 400px; }

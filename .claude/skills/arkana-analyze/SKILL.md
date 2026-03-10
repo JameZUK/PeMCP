@@ -14,7 +14,7 @@ description: >
 # Arkana Binary Analysis Skill
 
 You are a binary analysis specialist using Arkana, a comprehensive binary analysis
-MCP server with 209 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 210 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -216,13 +216,28 @@ If a library is missing, tools return actionable alternatives. Key fallbacks:
 no angr → `disassemble_at_address`/`get_annotated_disassembly`; no Qiling → Speakeasy;
 no capa → `get_focused_imports` + `get_strings_summary`.
 
+**LIEF as pefile fallback**: If PE analysis via pefile fails (timeout, crash, or corrupt
+headers flagged by `file_integrity`), use `parse_binary_with_lief()` as a fallback parser.
+LIEF can extract sections, imports, exports, headers, and Authenticode signatures from PE
+files that pefile cannot handle — including malformed, partially corrupt, or unusually
+structured binaries. It also supports ELF and Mach-O natively. Use it when:
+- `open_file` times out or raises an error on a PE file
+- `file_integrity.status` is `"corrupt"` or `"partial"` and pefile-based tools return errors
+- You need cross-format structural comparison (LIEF normalises PE/ELF/Mach-O)
+
 ## Phase 1: Identify
 
 Establish what we're looking at. One or two calls maximum.
 
-1. **Load**: `open_file(file_path)` — returns format detection, quick indicators, hashes.
-   If the file was previously analyzed and `open_file` returns `session_context`, use
-   `get_analyzed_file_summary()` for a quick recap instead of running full triage again.
+1. **Load**: `open_file(file_path)` — returns format detection, quick indicators, hashes,
+   and a `file_integrity` assessment (status, issues, flags, recommendation).
+   - If `file_integrity.status` is `"corrupt"` or `"partial"`, review the issues list
+     before proceeding — the file may be truncated, null-padded, or have corrupt headers.
+   - Unknown formats (ZIP, PDF, PCAP, etc.) automatically fall back to raw/shellcode mode
+     for basic analysis. Use `force=True` to override and force PE/ELF/Mach-O parsing.
+   - You can also run `check_file_integrity(file_path)` standalone before or after loading.
+   - If the file was previously analyzed and `open_file` returns `session_context`, use
+     `get_analyzed_file_summary()` for a quick recap instead of running full triage again.
 2. **Triage**: `get_triage_report(compact=True)` — ~2KB assessment covering:
    - Packing assessment (entropy, PEiD, import count, section anomalies)
    - Digital signature status
@@ -509,9 +524,20 @@ All operations use Arkana tools (see HARD CONSTRAINTS).
 
 ### Default: Findings Summary
 
-Always end an analysis session by presenting a **concise findings summary** directly
-in the conversation. This is the default — do not skip it or jump straight to a
-generated report.
+Always end an analysis session with these two steps **in order**:
+
+**Step 1 — Store the conclusion in state** (MANDATORY before the conversation summary):
+Call `add_note(category="hypothesis", content="<one-paragraph final assessment>")` with
+a concise verdict: what the binary is, what it does, key evidence, and any caveats.
+This note feeds the dashboard's CONCLUSION section and the overview AI assessment card.
+Without this step, the dashboard shows no conclusion even after a complete analysis.
+Example: `add_note(category="hypothesis", content="DGA research tool (not malware). Generates
+100 domains per run using Microsoft LCG (constants 214013/2531011), 31-char lowercase .com
+domains, DNS lookup via gethostbyname() only. No C2, no payload, no persistence. PDB path
+confirms research origin: C:\\research\\remediation\\Release\\dga.pdb.")`
+
+**Step 2 — Present a concise findings summary** directly in the conversation.
+This is the default — do not skip it or jump straight to a generated report.
 
 The summary must:
 - **State only what was observed**, backed by specific tool output (tool name, key
@@ -566,8 +592,10 @@ Additional context management:
    cadence within a phase — it adds overhead without value when you are building
    context sequentially.
 
-2. **Note categories**: Use `category="tool_result"` for tool output findings,
-   `"ioc"` for indicators, `"hypothesis"` for theories to test, `"manual"` for
+2. **Note categories** (these directly feed the dashboard digest and overview):
+   Use `category="tool_result"` for tool output findings (→ dashboard KEY FINDINGS),
+   `"ioc"` for indicators, `"hypothesis"` for theories and the final verdict
+   (→ dashboard CONCLUSION section + overview AI assessment card), `"manual"` for
    analyst observations.
 
 3. **Session persistence**: Notes, history, artifacts, renames, custom types, and cache

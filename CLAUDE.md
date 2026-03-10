@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 209 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
+Arkana is a Model Context Protocol (MCP) server exposing 210 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
 
 ## Project Structure
 
@@ -15,6 +15,7 @@ arkana/                  # Main package
 ├── imports.py          # Optional library imports with *_AVAILABLE flags
 ├── cache.py            # Gzip-compressed LRU disk cache (~/.arkana/cache/)
 ├── auth.py             # Bearer token ASGI middleware
+├── integrity.py        # Pre-parse file integrity checks (PE/ELF/Mach-O)
 ├── utils.py            # ReDoS-safe regex, safe_slice, safe_env_int
 ├── parsers/            # PE/FLOSS/capa/YARA/strings parsers
 ├── dashboard/          # Web dashboard (Starlette + htmx + Jinja2)
@@ -24,7 +25,7 @@ arkana/                  # Main package
 │   ├── templates/      # Jinja2 templates (overview, functions, callgraph, sections, strings, timeline, notes)
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
-└── mcp/                # MCP tool modules (209 tools across 50 files)
+└── mcp/                # MCP tool modules (210 tools across 50 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain
@@ -58,6 +59,7 @@ ruff check arkana/ tests/ \
 
 ## Key Patterns
 
+- **File integrity checks**: `arkana/integrity.py` provides pre-parse validation of binary files using only `struct` (no library deps). `check_file_integrity(data, format, path)` returns a structured assessment (`status`, `confidence`, `issues`, `flags`, `format_details`, `recommendation`). `open_file` runs this automatically and includes `file_integrity` in every response. The standalone `check_file_integrity` MCP tool can run before or after `open_file`. The `force` parameter on `open_file` overrides smart fallback (unknown formats default to raw/shellcode mode instead of crashing in PE mode). `INTEGRITY_FLAGGED_TIMEOUT_FACTOR` (0.5) reduces the PE analysis timeout for files flagged as corrupt/partial.
 - **Optional deps**: Every library is guarded by `*_AVAILABLE` flags in `imports.py`. Tools return actionable error messages when a dep is missing — never crash.
 - **Thread safety**: All shared state uses locks. `StateProxy` + `contextvars` isolates HTTP sessions. Use `ProgressBridge` to report progress from worker threads. Sessions have a `_closing` flag to prevent reactivation during cleanup. angr objects are intentionally shared by reference across sessions (read-only, expensive to copy).
 - **`asyncio.to_thread()`**: CPU-intensive tool work runs in threads to avoid blocking the event loop. See `tools_angr.py` and `tools_triage.py` for examples.
