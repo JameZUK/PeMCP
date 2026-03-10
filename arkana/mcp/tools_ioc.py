@@ -3,6 +3,7 @@
 Aggregates IOCs from triage, string analysis, config extraction, and notes
 into structured export formats (JSON, CSV, STIX 2.1).
 """
+import asyncio
 import datetime
 import hashlib
 import json
@@ -13,6 +14,7 @@ from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 
 # ===================================================================
@@ -206,6 +208,7 @@ async def get_iocs_structured(
     ctx: Context,
     format: str = "json",
     include_file_hashes: bool = True,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: utility] Aggregates IOCs from triage, string analysis, config extraction,
@@ -220,13 +223,15 @@ async def get_iocs_structured(
         ctx: MCP Context.
         format: Output format: 'json' (default), 'csv', or 'stix' (STIX 2.1 bundle).
         include_file_hashes: Include sample file hashes as IOCs. Default True.
+        output_path: (Optional[str]) Save IOC output to this path and register as artifact.
     """
     await ctx.info(f"Aggregating IOCs (format={format})")
     _check_pe_loaded("get_iocs_structured")
 
     # Return cached result if enrichment already collected IOCs (JSON only)
+    # Skip cache when output_path is set — need to reach the write logic
     fmt = format.lower()
-    if fmt == "json" and include_file_hashes and state._cached_iocs:
+    if fmt == "json" and include_file_hashes and state._cached_iocs and not output_path:
         return state._cached_iocs
 
     fmt = format.lower()
@@ -265,5 +270,22 @@ async def get_iocs_structured(
             "  - extract_config_automated() for C2 config extraction\n"
             "  - search_floss_strings(query='http') for URL strings"
         )
+
+    if output_path:
+        if fmt == "json":
+            text_bytes = json.dumps(merged, indent=2).encode("utf-8")
+        elif fmt == "csv":
+            text_bytes = result.get("csv", "").encode("utf-8")
+        elif fmt == "stix":
+            text_bytes = json.dumps(result.get("stix_bundle", {}), indent=2).encode("utf-8")
+        else:
+            text_bytes = b""
+        if text_bytes:
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                output_path, text_bytes, "get_iocs_structured",
+                f"IOCs ({fmt}, {total} indicators)",
+            )
+            result["artifact"] = artifact_meta
 
     return await _check_mcp_response_size(ctx, result, "get_iocs_structured")

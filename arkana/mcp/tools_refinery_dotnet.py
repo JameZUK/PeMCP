@@ -7,14 +7,16 @@ and single-file app unpacking.
 """
 import asyncio
 import hashlib
+import os
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
-    _get_file_data, _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
+    _get_file_data, _write_output_and_register_artifact,
+    _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
     _MAX_OUTPUT_ITEMS,
 )
 
@@ -56,6 +58,7 @@ async def refinery_dotnet(
     operation: str,
     data_hex: Optional[str] = None,
     limit: int = 20,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Analyse .NET assemblies via Binary Refinery.
 
@@ -76,6 +79,8 @@ async def refinery_dotnet(
         operation: (str) One of the operations listed above.
         data_hex: (Optional[str]) Data as hex. If None, uses the loaded file.
         limit: (int) Max items to return (where applicable). Default 200.
+        output_path: (Optional[str]) Directory to save extracted files (resources/arrays/sfx).
+            Each file is saved with its name or file_N.bin and registered as an artifact.
 
     Returns:
         Dictionary with operation-specific results.
@@ -256,6 +261,8 @@ async def refinery_dotnet(
         }, "refinery_dotnet")
 
     # ── resources / managed_resources / arrays / sfx: binary items ──
+    save_data = bool(output_path) and op in ("resources", "arrays", "sfx")
+
     def _run_multi():
         import importlib
         mod = importlib.import_module(mod_path)
@@ -266,6 +273,7 @@ async def refinery_dotnet(
             meta_keys = ("name", "token", "type")
 
         results = []
+        raw_items: Optional[List[bytes]] = [] if save_data else None
         for chunk in data | unit_cls():
             raw = bytes(chunk)
             entry: Dict[str, Any] = {
@@ -285,11 +293,13 @@ async def refinery_dotnet(
             else:
                 entry["preview_hex"] = raw[:64].hex()
             results.append(entry)
+            if raw_items is not None:
+                raw_items.append(raw)
             if len(results) >= limit:
                 break
-        return results
+        return results, raw_items
 
-    results = await asyncio.to_thread(_run_multi)
+    results, raw_items = await asyncio.to_thread(_run_multi)
 
     count_key = {
         "resources": "resources_found",
@@ -298,9 +308,24 @@ async def refinery_dotnet(
         "sfx": "files_extracted",
     }.get(op, "items_found")
 
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "operation": op,
         "filepath": state.filepath,
         count_key: len(results),
         "results": results,
-    }, "refinery_dotnet")
+    }
+    if output_path and raw_items:
+        os.makedirs(output_path, exist_ok=True)
+        artifacts: List[Dict[str, Any]] = []
+        for i, raw in enumerate(raw_items):
+            name = results[i].get("path") or results[i].get("name") or f"file_{i}.bin"
+            name = os.path.basename(name) or f"file_{i}.bin"
+            item_path = os.path.join(output_path, name)
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                item_path, raw, "refinery_dotnet",
+                f"Extracted .NET {op}: {name} ({len(raw)} bytes)",
+            )
+            artifacts.append(artifact_meta)
+        response["artifacts"] = artifacts
+    return await _check_mcp_response_size(ctx, response, "refinery_dotnet")

@@ -30,6 +30,7 @@ async def refinery_codec(
     data_hex: str,
     encoding: str = "b64",
     direction: str = "decode",
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Encode or decode data using Binary Refinery encoding units.
 
@@ -41,6 +42,7 @@ async def refinery_codec(
         data_hex: (str) Input data as hex string (or raw text for text-based encodings).
         encoding: (str) Encoding name. Default 'b64'.
         direction: (str) 'decode' (default) or 'encode'.
+        output_path: (Optional[str]) Save output to this path and register as artifact.
 
     Returns:
         Dictionary with transformed output (hex + text preview).
@@ -97,14 +99,22 @@ async def refinery_codec(
         return input_data | unit_cls() | bytes
 
     result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "encoding": encoding,
         "direction": d,
         "input_size": len(input_data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }, "refinery_codec")
+    }
+    if output_path:
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, result, "refinery_codec",
+            f"{direction.title()} {encoding}",
+        )
+        response["artifact"] = artifact_meta
+    return await _check_mcp_response_size(ctx, response, "refinery_codec")
 
 
 # ===================================================================
@@ -119,6 +129,7 @@ async def refinery_decrypt(
     key_hex: str,
     iv_hex: Optional[str] = None,
     mode: Optional[str] = None,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Decrypt data using Binary Refinery cipher units.
 
@@ -134,6 +145,7 @@ async def refinery_decrypt(
         key_hex: (str) Key as hex.
         iv_hex: (Optional[str]) IV/nonce as hex (for CBC/CTR modes).
         mode: (Optional[str]) Block cipher mode: ECB, CBC, CTR, CFB, OFB, GCM.
+        output_path: (Optional[str]) Save decrypted output to this path and register as artifact.
 
     Returns:
         Dictionary with decrypted plaintext (hex + text preview).
@@ -213,14 +225,22 @@ async def refinery_decrypt(
         return ciphertext | unit_cls(**kwargs) | bytes
 
     result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "algorithm": algorithm,
         "mode": mode or "default",
         "input_size": len(ciphertext),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }, "refinery_decrypt")
+    }
+    if output_path:
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, result, "refinery_decrypt",
+            f"Decrypted data ({algorithm}/{mode or 'default'})",
+        )
+        response["artifact"] = artifact_meta
+    return await _check_mcp_response_size(ctx, response, "refinery_decrypt")
 
 
 # ===================================================================
@@ -422,6 +442,7 @@ async def refinery_decompress(
     ctx: Context,
     data_hex: Optional[str] = None,
     algorithm: str = "auto",
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Decompress data using Binary Refinery.
 
@@ -432,6 +453,7 @@ async def refinery_decompress(
         ctx: MCP Context.
         data_hex: (Optional[str]) Compressed data as hex. If None, uses loaded file.
         algorithm: (str) Compression algorithm or 'auto'. Default 'auto'.
+        output_path: (Optional[str]) Save decompressed output to this path and register as artifact.
 
     Returns:
         Dictionary with decompressed output (hex + text preview + size).
@@ -488,14 +510,22 @@ async def refinery_decompress(
         return data | unit_cls() | bytes
 
     result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "algorithm": algo,
         "input_size": len(data),
         "output_size": len(result),
         "compression_ratio": round(len(result) / max(len(data), 1), 2),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }, "refinery_decompress")
+    }
+    if output_path:
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, result, "refinery_decompress",
+            f"Decompressed data ({algo})",
+        )
+        response["artifact"] = artifact_meta
+    return await _check_mcp_response_size(ctx, response, "refinery_decompress")
 
 
 # ===================================================================

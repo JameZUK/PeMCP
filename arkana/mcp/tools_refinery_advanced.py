@@ -12,6 +12,7 @@ from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
     _get_file_data, _get_data_from_hex_or_file,
+    _write_output_and_register_artifact,
     _MAX_INPUT_SIZE_SMALL as _MAX_INPUT_SIZE,
     _MAX_OUTPUT_ITEMS,
 )
@@ -133,6 +134,7 @@ async def refinery_regex_replace(
 async def refinery_auto_decrypt(
     ctx: Context,
     data_hex: Optional[str] = None,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Auto-detect and decrypt XOR/SUB encrypted data via Binary Refinery.
 
@@ -142,6 +144,7 @@ async def refinery_auto_decrypt(
     Args:
         ctx: MCP Context.
         data_hex: (Optional[str]) Encrypted data as hex. If None, uses loaded file.
+        output_path: (Optional[str]) Save decrypted output to this path and register as artifact.
 
     Returns:
         Dictionary with decrypted output and detected key.
@@ -159,12 +162,20 @@ async def refinery_auto_decrypt(
         return data | autoxor() | bytes
 
     result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
-    }, "refinery_auto_decrypt")
+    }
+    if output_path:
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, result, "refinery_auto_decrypt",
+            "Auto-decrypted data",
+        )
+        response["artifact"] = artifact_meta
+    return await _check_mcp_response_size(ctx, response, "refinery_auto_decrypt")
 
 
 # ===================================================================
@@ -399,6 +410,7 @@ async def refinery_decompile(
     ctx: Context,
     language: str,
     data_hex: Optional[str] = None,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Decompile bytecode/compiled scripts via Binary Refinery.
 
@@ -410,6 +422,7 @@ async def refinery_decompile(
         ctx: MCP Context.
         language: (str) 'python' or 'autoit'.
         data_hex: (Optional[str]) Compiled data as hex. If None, uses loaded file.
+        output_path: (Optional[str]) Save decompiled source to this path and register as artifact.
 
     Returns:
         Dictionary with decompiled source code.
@@ -430,12 +443,20 @@ async def refinery_decompile(
             return data | pyc() | bytes
 
         result = await asyncio.to_thread(_run_python)
-        return await _check_mcp_response_size(ctx, {
+        response: Dict[str, Any] = {
             "language": lang,
             "input_size": len(data),
             "output_size": len(result),
             "source_code": _safe_decode(result)[:8000],
-        }, "refinery_decompile")
+        }
+        if output_path:
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                output_path, result, "refinery_decompile",
+                f"Decompiled {lang} source",
+            )
+            response["artifact"] = artifact_meta
+        return await _check_mcp_response_size(ctx, response, "refinery_decompile")
 
     # lang == "autoit"
     def _run_autoit():

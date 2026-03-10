@@ -5,16 +5,47 @@ PDF operations, and embedded file detection through a single dispatched tool.
 """
 import asyncio
 import hashlib
+import os
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _bytes_to_hex, _safe_decode,
     _get_file_data, _get_data_from_hex_or_file,
+    _write_output_and_register_artifact,
     _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
 )
+
+
+async def _write_multi_file_artifacts(
+    output_dir: str,
+    results: List[Dict[str, Any]],
+    raw_items: List[bytes],
+    tool_name: str,
+) -> List[Dict[str, Any]]:
+    """Write multiple extracted files to a directory and register as artifacts."""
+    os.makedirs(output_dir, exist_ok=True)
+    artifacts: List[Dict[str, Any]] = []
+    for i, raw in enumerate(raw_items):
+        name = (
+            results[i].get("path")
+            or results[i].get("name")
+            or f"file_{i}.bin"
+        )
+        # Sanitize: basename only, no path traversal
+        name = os.path.basename(name)
+        if not name:
+            name = f"file_{i}.bin"
+        item_path = os.path.join(output_dir, name)
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            item_path, raw, tool_name,
+            f"Extracted: {name} ({len(raw)} bytes)",
+        )
+        artifacts.append(artifact_meta)
+    return artifacts
 
 
 @tool_decorator
@@ -25,6 +56,7 @@ async def refinery_extract(
     sub_operation: Optional[str] = None,
     password: Optional[str] = None,
     limit: int = 20,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Extract files and content from containers via Binary Refinery.
 
@@ -44,6 +76,9 @@ async def refinery_extract(
         sub_operation: (Optional[str]) Sub-operation for archive/installer/office.
         password: (Optional[str]) Password for encrypted archives, Office docs, or PDFs.
         limit: (int) Max items to extract. Default 100.
+        output_path: (Optional[str]) Directory to save extracted files. Each file is saved
+            with its archive name (or file_N.bin if unnamed) and registered as an artifact.
+            For single-output operations (office_decrypt, xlm_deobfuscate), saves as a file path.
 
     Returns:
         Dictionary with extracted file metadata.
@@ -88,6 +123,8 @@ async def refinery_extract(
             return {"error": f"Unknown archive type '{sub_operation}'.", "supported": sorted(_ARCHIVE_MAP.keys())}
         mod_path, cls_name = _ARCHIVE_MAP[atype].rsplit(":", 1)
 
+        save_data = bool(output_path)
+
         def _run_archive():
             import importlib
             mod = importlib.import_module(mod_path)
@@ -96,6 +133,7 @@ async def refinery_extract(
             if password:
                 kwargs["pwd"] = password.encode("utf-8")
             results = []
+            raw_items: Optional[List[bytes]] = [] if save_data else None
             for chunk in data | unit_cls(**kwargs):
                 raw = bytes(chunk)
                 entry: Dict[str, Any] = {
@@ -110,18 +148,25 @@ async def refinery_extract(
                         entry["name"] = str(chunk.meta["name"])
                 entry["preview_hex"] = raw[:64].hex()
                 results.append(entry)
+                if raw_items is not None:
+                    raw_items.append(raw)
                 if len(results) >= limit:
                     break
-            return results
+            return results, raw_items
 
-        results = await asyncio.to_thread(_run_archive)
-        return await _check_mcp_response_size(ctx, {
+        results, raw_items = await asyncio.to_thread(_run_archive)
+        response: Dict[str, Any] = {
             "operation": op,
             "archive_type": atype,
             "files_extracted": len(results),
             "input_size": len(data),
             "results": results,
-        }, "refinery_extract")
+        }
+        if output_path and raw_items:
+            response["artifacts"] = await _write_multi_file_artifacts(
+                output_path, results, raw_items, "refinery_extract",
+            )
+        return await _check_mcp_response_size(ctx, response, "refinery_extract")
 
     # ── installer: NSIS, InnoSetup, PyInstaller, etc. ───────────────
     if op == "installer":
@@ -141,11 +186,14 @@ async def refinery_extract(
             return {"error": f"Unknown installer type '{sub_operation}'.", "supported": sorted(_INSTALLER_MAP.keys())}
         mod_path, cls_name = _INSTALLER_MAP[itype].rsplit(":", 1)
 
+        save_data = bool(output_path)
+
         def _run_installer():
             import importlib
             mod = importlib.import_module(mod_path)
             unit_cls = getattr(mod, cls_name)
             results = []
+            raw_items: Optional[List[bytes]] = [] if save_data else None
             for chunk in data | unit_cls():
                 raw = bytes(chunk)
                 entry: Dict[str, Any] = {
@@ -158,18 +206,25 @@ async def refinery_extract(
                             entry[key] = str(chunk.meta[key])
                 entry["preview_hex"] = raw[:64].hex()
                 results.append(entry)
+                if raw_items is not None:
+                    raw_items.append(raw)
                 if len(results) >= limit:
                     break
-            return results
+            return results, raw_items
 
-        results = await asyncio.to_thread(_run_installer)
-        return await _check_mcp_response_size(ctx, {
+        results, raw_items = await asyncio.to_thread(_run_installer)
+        response: Dict[str, Any] = {
             "operation": op,
             "installer_type": itype,
             "files_extracted": len(results),
             "input_size": len(data),
             "results": results,
-        }, "refinery_extract")
+        }
+        if output_path and raw_items:
+            response["artifacts"] = await _write_multi_file_artifacts(
+                output_path, results, raw_items, "refinery_extract",
+            )
+        return await _check_mcp_response_size(ctx, response, "refinery_extract")
 
     # ── office: OLE streams, VBA, metadata, etc. ────────────────────
     if op == "office":
@@ -189,11 +244,14 @@ async def refinery_extract(
             return {"error": f"Unknown office sub_operation '{sub_operation}'.", "supported": sorted(_OFFICE_MAP.keys())}
         mod_path, cls_name = _OFFICE_MAP[sop].rsplit(":", 1)
 
+        save_data = bool(output_path)
+
         def _run_office():
             import importlib
             mod = importlib.import_module(mod_path)
             unit_cls = getattr(mod, cls_name)
             results = []
+            raw_items: Optional[List[bytes]] = [] if save_data else None
             for chunk in data | unit_cls():
                 raw = bytes(chunk)
                 entry: Dict[str, Any] = {
@@ -209,18 +267,25 @@ async def refinery_extract(
                 else:
                     entry["preview_hex"] = raw[:128].hex()
                 results.append(entry)
+                if raw_items is not None:
+                    raw_items.append(raw)
                 if len(results) >= limit:
                     break
-            return results
+            return results, raw_items
 
-        results = await asyncio.to_thread(_run_office)
-        return await _check_mcp_response_size(ctx, {
+        results, raw_items = await asyncio.to_thread(_run_office)
+        response: Dict[str, Any] = {
             "operation": op,
             "sub_operation": sop,
             "items_found": len(results),
             "input_size": len(data),
             "results": results,
-        }, "refinery_extract")
+        }
+        if output_path and raw_items:
+            response["artifacts"] = await _write_multi_file_artifacts(
+                output_path, results, raw_items, "refinery_extract",
+            )
+        return await _check_mcp_response_size(ctx, response, "refinery_extract")
 
     # ── office_decrypt: decrypt password-protected Office docs ──────
     if op == "office_decrypt":
@@ -232,14 +297,22 @@ async def refinery_extract(
             return data | officecrypt(password.encode("utf-8")) | bytes
 
         result = await asyncio.to_thread(_run_office_decrypt)
-        return await _check_mcp_response_size(ctx, {
+        response: Dict[str, Any] = {
             "operation": op,
             "input_size": len(data),
             "output_size": len(result),
             "sha256": hashlib.sha256(result).hexdigest(),
             "preview_hex": result[:128].hex(),
             "status": "decrypted" if result != data else "unchanged",
-        }, "refinery_extract")
+        }
+        if output_path:
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                output_path, result, "refinery_extract",
+                "Decrypted Office document",
+            )
+            response["artifact"] = artifact_meta
+        return await _check_mcp_response_size(ctx, response, "refinery_extract")
 
     # ── xlm_deobfuscate: Excel 4.0 XLM macros ──────────────────────
     if op == "xlm_deobfuscate":
@@ -256,15 +329,25 @@ async def refinery_extract(
                 raise
 
         result = await asyncio.to_thread(_run_xlm)
-        return await _check_mcp_response_size(ctx, {
+        response: Dict[str, Any] = {
             "operation": op,
             "input_size": len(data),
             "output_size": len(result),
             "deobfuscated_text": _safe_decode(result)[:8000],
-        }, "refinery_extract")
+        }
+        if output_path:
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                output_path, result, "refinery_extract",
+                "Deobfuscated XLM macros",
+            )
+            response["artifact"] = artifact_meta
+        return await _check_mcp_response_size(ctx, response, "refinery_extract")
 
     # ── pdf: extract objects and streams ─────────────────────────────
     if op == "pdf":
+        save_data = bool(output_path)
+
         def _run_pdf():
             working_data = data
             if password:
@@ -272,6 +355,7 @@ async def refinery_extract(
                 working_data = working_data | pdfcrypt(password.encode("utf-8")) | bytes
             from refinery.units.formats.pdf import xtpdf
             results = []
+            raw_items: Optional[List[bytes]] = [] if save_data else None
             for chunk in working_data | xtpdf():
                 raw = bytes(chunk)
                 entry: Dict[str, Any] = {
@@ -288,24 +372,34 @@ async def refinery_extract(
                 else:
                     entry["preview_hex"] = raw[:128].hex()
                 results.append(entry)
+                if raw_items is not None:
+                    raw_items.append(raw)
                 if len(results) >= limit:
                     break
-            return results
+            return results, raw_items
 
-        results = await asyncio.to_thread(_run_pdf)
-        return await _check_mcp_response_size(ctx, {
+        results, raw_items = await asyncio.to_thread(_run_pdf)
+        response: Dict[str, Any] = {
             "operation": op,
             "items_extracted": len(results),
             "input_size": len(data),
             "encrypted": password is not None,
             "results": results,
-        }, "refinery_extract")
+        }
+        if output_path and raw_items:
+            response["artifacts"] = await _write_multi_file_artifacts(
+                output_path, results, raw_items, "refinery_extract",
+            )
+        return await _check_mcp_response_size(ctx, response, "refinery_extract")
 
     # ── embedded: auto-detect all embedded files ────────────────────
     # op == "embedded"
+    save_data = bool(output_path)
+
     def _run_embedded():
         from refinery.units.pattern.subfiles import subfiles
         results = []
+        raw_items: Optional[List[bytes]] = [] if save_data else None
         for chunk in data | subfiles():
             raw = bytes(chunk)
             entry: Dict[str, Any] = {
@@ -329,14 +423,21 @@ async def refinery_extract(
                 entry["detected_type"] = "OLE document"
             entry["preview_hex"] = raw[:64].hex()
             results.append(entry)
+            if raw_items is not None:
+                raw_items.append(raw)
             if len(results) >= limit:
                 break
-        return results
+        return results, raw_items
 
-    results = await asyncio.to_thread(_run_embedded)
-    return await _check_mcp_response_size(ctx, {
+    results, raw_items = await asyncio.to_thread(_run_embedded)
+    response: Dict[str, Any] = {
         "operation": op,
         "files_found": len(results),
         "input_size": len(data),
         "results": results,
-    }, "refinery_extract")
+    }
+    if output_path and raw_items:
+        response["artifacts"] = await _write_multi_file_artifacts(
+            output_path, results, raw_items, "refinery_extract",
+        )
+    return await _check_mcp_response_size(ctx, response, "refinery_extract")

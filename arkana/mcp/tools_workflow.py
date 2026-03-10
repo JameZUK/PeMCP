@@ -1,4 +1,5 @@
 """MCP tools for analysis workflow — report generation and sample naming."""
+import asyncio
 import datetime
 import os
 import re
@@ -7,6 +8,7 @@ from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 
 # ===================================================================
@@ -17,6 +19,7 @@ from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_respo
 async def generate_analysis_report(
     ctx: Context,
     format: str = "markdown",
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: utility] Generates a comprehensive analysis report from all accumulated
@@ -29,6 +32,7 @@ async def generate_analysis_report(
     Args:
         ctx: MCP Context.
         format: Output format: 'markdown' (default) or 'text'.
+        output_path: (Optional[str]) Save report to this path and register as artifact.
     """
     await ctx.info("Generating analysis report")
     _check_pe_loaded("generate_analysis_report")
@@ -185,11 +189,20 @@ async def generate_analysis_report(
                 lines.append(f"  - {f}")
         report_text = "\n".join(lines)
 
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "report": report_text,
         "format": fmt,
         "sections_count": len(sections) if fmt == "markdown" else 1,
-    }, "generate_analysis_report")
+    }
+    if output_path:
+        text_bytes = report_text.encode("utf-8")
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, text_bytes, "generate_analysis_report",
+            f"Analysis report ({fmt})",
+        )
+        response["artifact"] = artifact_meta
+    return await _check_mcp_response_size(ctx, response, "generate_analysis_report")
 
 
 # ===================================================================
@@ -266,7 +279,7 @@ async def auto_name_sample(
             for dll_entry in imports_data:
                 if isinstance(dll_entry, dict):
                     for sym in dll_entry.get("symbols", []):
-                        name = sym.get("name", "") if isinstance(sym, dict) else ""
+                        name = (sym.get("name") or "") if isinstance(sym, dict) else ""
                         if name in ("StartServiceCtrlDispatcherA", "StartServiceCtrlDispatcherW",
                                     "RegisterServiceCtrlHandlerA", "RegisterServiceCtrlHandlerW"):
                             binary_class = "service"
@@ -365,7 +378,7 @@ async def auto_name_sample(
         for dll_entry in imports_data:
             if isinstance(dll_entry, dict):
                 for sym in dll_entry.get("symbols", []):
-                    func = sym.get("name", "") if isinstance(sym, dict) else ""
+                    func = (sym.get("name") or "") if isinstance(sym, dict) else ""
                     func_lower = func.lower()
                     for pattern, label in _IMPORT_CAPABILITY_MAP.items():
                         if pattern in func_lower:

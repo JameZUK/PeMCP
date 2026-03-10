@@ -13,6 +13,7 @@ from arkana.config import state, logger, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._input_helpers import _parse_int_param
 from arkana.mcp._progress_bridge import ProgressBridge
+from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 from arkana.utils import shannon_entropy
 
 
@@ -444,6 +445,7 @@ async def brute_force_simple_crypto(
     key_hex: Optional[str] = None,
     known_plaintext: Optional[str] = None,
     limit: int = 10,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Brute-forces simple cryptographic transforms on the provided
@@ -468,6 +470,7 @@ async def brute_force_simple_crypto(
         known_plaintext: Optional known plaintext string for direct XOR key
             derivation (e.g. 'MZ' for PE headers, 'This program').
         limit: Max successful results to return. Default 10.
+        output_path: (Optional[str]) Save the best decryption result to this path and register as artifact.
     """
     if algorithms is None:
         algorithms = ["xor_single", "xor_multi", "rc4", "add", "sub", "rol", "ror"]
@@ -523,9 +526,11 @@ async def brute_force_simple_crypto(
                     score += 0.5
             return score
 
+        save_data = bool(output_path)
+
         def _add_result(algo: str, key_info: str, decrypted: bytes, score: float):
             if score >= 1.0:  # Only keep promising results
-                results.append({
+                entry = {
                     "algorithm": algo,
                     "key": key_info,
                     "score": round(score, 2),
@@ -534,7 +539,10 @@ async def brute_force_simple_crypto(
                         b if 0x20 <= b <= 0x7e else 0x2e for b in decrypted[:128]
                     ).decode("ascii"),
                     "full_size": len(decrypted),
-                })
+                }
+                if save_data:
+                    entry["_raw"] = decrypted
+                results.append(entry)
 
         # --- Known-plaintext XOR key derivation (fast path) ---
         if known_plaintext and ("xor_single" in algorithms or "xor_multi" in algorithms):
@@ -707,10 +715,29 @@ async def brute_force_simple_crypto(
 
     results = await asyncio.to_thread(_brute_force)
 
-    return await _check_mcp_response_size(ctx, {
+    # Write best result to disk if output_path is set
+    if output_path and results and "_raw" in results[0]:
+        raw = results[0]["_raw"]
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, raw, "brute_force_simple_crypto",
+            f"Decrypted data ({results[0]['algorithm']}, key={results[0]['key']})",
+        )
+    else:
+        artifact_meta = None
+
+    # Strip _raw from all results before response
+    for r in results:
+        r.pop("_raw", None)
+
+    response: Dict[str, Any] = {
         "results": results,
         "count": len(results),
         "data_size": len(data),
         "algorithms_tried": algorithms,
         "best_match": results[0] if results else None,
-    }, "brute_force_simple_crypto")
+    }
+    if artifact_meta:
+        response["artifact"] = artifact_meta
+
+    return await _check_mcp_response_size(ctx, response, "brute_force_simple_crypto")

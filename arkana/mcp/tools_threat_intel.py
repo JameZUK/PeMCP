@@ -1,12 +1,14 @@
 """MCP tools for threat intelligence — MITRE ATT&CK mapping and Sigma rule generation."""
 import asyncio
 import datetime
+import json
 import re
 
 from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 
 # ===================================================================
@@ -140,7 +142,7 @@ def _map_mitre_internal(current_state) -> Dict[str, Any]:
             if not isinstance(dll_entry, dict):
                 continue
             for sym in dll_entry.get("symbols", []):
-                func_name = sym.get("name", "") if isinstance(sym, dict) else str(sym)
+                func_name = (sym.get("name") or "") if isinstance(sym, dict) else str(sym)
                 mapping = _IMPORT_ATTACK_MAP.get(func_name)
                 if not mapping:
                     for suffix in ("A", "W", "Ex", "ExA", "ExW"):
@@ -205,6 +207,7 @@ def _map_mitre_internal(current_state) -> Dict[str, Any]:
 async def map_mitre_attack(
     ctx: Context,
     include_navigator_layer: bool = False,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: utility] Aggregates all MITRE ATT&CK-relevant findings from the
@@ -222,6 +225,8 @@ async def map_mitre_attack(
         ctx: MCP Context.
         include_navigator_layer: If True, include ATT&CK Navigator JSON layer
             in the output. Default False.
+        output_path: (Optional[str]) Save Navigator layer JSON to this path and register as artifact.
+            Requires include_navigator_layer=True.
     """
     await ctx.info("Mapping findings to MITRE ATT&CK")
     _check_pe_loaded("map_mitre_attack")
@@ -290,7 +295,7 @@ async def map_mitre_attack(
                 if not isinstance(dll_entry, dict):
                     continue
                 for sym in dll_entry.get("symbols", []):
-                    func_name = sym.get("name", "") if isinstance(sym, dict) else str(sym)
+                    func_name = (sym.get("name") or "") if isinstance(sym, dict) else str(sym)
                     # Check exact and prefix matches
                     mapping = _IMPORT_ATTACK_MAP.get(func_name)
                     if not mapping:
@@ -374,6 +379,16 @@ async def map_mitre_attack(
         return result
 
     analysis = await asyncio.to_thread(_map)
+
+    if output_path and analysis.get("navigator_layer"):
+        text_bytes = json.dumps(analysis["navigator_layer"], indent=2).encode("utf-8")
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, text_bytes, "map_mitre_attack",
+            f"ATT&CK Navigator layer ({analysis.get('technique_count', 0)} techniques)",
+        )
+        analysis["artifact"] = artifact_meta
+
     return await _check_mcp_response_size(ctx, analysis, "map_mitre_attack")
 
 
@@ -441,6 +456,7 @@ async def generate_sigma_rule(
     ctx: Context,
     rule_type: str = "process_creation",
     include_network: bool = True,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: utility] Generates draft Sigma detection rules from analysis findings:
@@ -460,6 +476,7 @@ async def generate_sigma_rule(
         rule_type: Primary rule type: 'process_creation' (default), 'file_event',
             'registry', or 'all'.
         include_network: Include network-based detection rules. Default True.
+        output_path: (Optional[str]) Save combined Sigma YAML to this path and register as artifact.
     """
     await ctx.info("Generating draft Sigma rules")
     _check_pe_loaded("generate_sigma_rule")
@@ -523,6 +540,16 @@ async def generate_sigma_rule(
         }
 
     result = await asyncio.to_thread(_generate)
+
+    if output_path and result.get("combined_yaml"):
+        text_bytes = result["combined_yaml"].encode("utf-8")
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, text_bytes, "generate_sigma_rule",
+            f"Sigma rules ({result.get('rule_count', 0)} rules)",
+        )
+        result["artifact"] = artifact_meta
+
     return await _check_mcp_response_size(ctx, result, "generate_sigma_rule")
 
 
@@ -551,7 +578,7 @@ def _generate_process_creation_rule(
             if not isinstance(dll_entry, dict):
                 continue
             for sym in dll_entry.get("symbols", []):
-                name = sym.get("name", "") if isinstance(sym, dict) else str(sym)
+                name = (sym.get("name") or "") if isinstance(sym, dict) else str(sym)
                 if name.lower().startswith(("createprocess", "winexec", "shellexecute")):
                     exec_apis.add(name)
 
@@ -670,7 +697,7 @@ def _generate_registry_rule(
             if not isinstance(dll_entry, dict):
                 continue
             for sym in dll_entry.get("symbols", []):
-                name = sym.get("name", "") if isinstance(sym, dict) else str(sym)
+                name = (sym.get("name") or "") if isinstance(sym, dict) else str(sym)
                 if name.lower().startswith(("regsetvalue", "regcreatekey")):
                     has_reg_apis = True
 

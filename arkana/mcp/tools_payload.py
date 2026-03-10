@@ -13,7 +13,10 @@ from typing import Dict, Any, List, Optional, Tuple
 from arkana.config import state, logger, Context
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._progress_bridge import ProgressBridge
-from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file, _bytes_to_hex, _safe_decode
+from arkana.mcp._refinery_helpers import (
+    _get_data_from_hex_or_file, _bytes_to_hex, _safe_decode,
+    _write_output_and_register_artifact,
+)
 
 
 def _shannon_entropy(data: bytes) -> float:
@@ -64,6 +67,7 @@ async def extract_steganography(
     ctx: Context,
     data_hex: Optional[str] = None,
     limit: int = 10,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Detects and extracts data hidden after image EOF markers
@@ -82,6 +86,8 @@ async def extract_steganography(
         ctx: MCP Context.
         data_hex: Optional hex data to scan. If None, uses loaded file.
         limit: Max hidden payloads to extract. Default 10.
+        output_path: (Optional[str]) Directory to save extracted payloads. Each payload is saved
+            with a descriptive name and registered as an artifact.
     """
     await ctx.info("Scanning for steganographic payloads (EOF marker analysis)")
 
@@ -89,8 +95,16 @@ async def extract_steganography(
     if len(data) > 100 * 1024 * 1024:
         raise ValueError("Data too large (max 100MB).")
 
+    save_data = bool(output_path)
+
     def _scan():
         findings = []
+        raw_items: Optional[List[bytes]] = [] if save_data else None
+
+        def _add_finding(entry, payload_bytes):
+            findings.append(entry)
+            if raw_items is not None:
+                raw_items.append(payload_bytes)
 
         # --- Image EOF marker detection ---
         for fmt_name, markers in _IMAGE_MARKERS.items():
@@ -123,7 +137,7 @@ async def extract_steganography(
                         trailing_entropy = _shannon_entropy(trailing[:4096])
                         trailing_preview = trailing[:64]
 
-                        findings.append({
+                        _add_finding({
                             "type": f"{fmt_name}_appended_data",
                             "image_format": fmt_name,
                             "image_offset": hex(img_start),
@@ -134,7 +148,7 @@ async def extract_steganography(
                             "payload_entropy": round(trailing_entropy, 2),
                             "payload_preview_hex": trailing_preview.hex(),
                             "payload_magic": _identify_magic(trailing[:16]),
-                        })
+                        }, trailing)
 
                 offset = payload_start if payload_start > img_start else img_start + 1
                 if len(findings) >= limit:
@@ -154,7 +168,7 @@ async def extract_steganography(
                 if 14 < declared_size < actual_available and (actual_available - declared_size) > 64:
                     hidden_start = bmp_start + declared_size
                     hidden_data = data[hidden_start:]
-                    findings.append({
+                    _add_finding({
                         "type": "BMP_size_mismatch",
                         "image_format": "BMP",
                         "image_offset": hex(bmp_start),
@@ -165,7 +179,7 @@ async def extract_steganography(
                         "payload_entropy": round(_shannon_entropy(hidden_data[:4096]), 2),
                         "payload_preview_hex": hidden_data[:64].hex(),
                         "payload_magic": _identify_magic(hidden_data[:16]),
-                    })
+                    }, hidden_data)
             bmp_offset = bmp_start + 1
             if len(findings) >= limit:
                 break
@@ -179,7 +193,7 @@ async def extract_steganography(
                     if overlay_start and overlay_start < len(data):
                         overlay = data[overlay_start:]
                         if len(overlay) > 64:
-                            findings.append({
+                            _add_finding({
                                 "type": "PE_overlay",
                                 "image_format": "PE",
                                 "payload_offset": hex(overlay_start),
@@ -187,20 +201,37 @@ async def extract_steganography(
                                 "payload_entropy": round(_shannon_entropy(overlay[:4096]), 2),
                                 "payload_preview_hex": overlay[:64].hex(),
                                 "payload_magic": _identify_magic(overlay[:16]),
-                            })
+                            }, overlay)
             except Exception:
                 pass
 
-        return findings
+        return findings, raw_items
 
-    findings = await asyncio.to_thread(_scan)
+    findings, raw_items = await asyncio.to_thread(_scan)
 
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "findings": findings,
         "count": len(findings),
         "data_size": len(data),
         "next_steps": _suggest_next_steps(findings),
-    }, "extract_steganography")
+    }
+
+    if output_path and raw_items:
+        import os
+        os.makedirs(output_path, exist_ok=True)
+        artifacts: List[Dict[str, Any]] = []
+        for i, raw in enumerate(raw_items):
+            name = f"payload_{i}_{findings[i].get('type', 'unknown')}.bin"
+            item_path = os.path.join(output_path, name)
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                item_path, raw, "extract_steganography",
+                f"Steganographic payload: {findings[i].get('type', 'unknown')} ({len(raw)} bytes)",
+            )
+            artifacts.append(artifact_meta)
+        response["artifacts"] = artifacts
+
+    return await _check_mcp_response_size(ctx, response, "extract_steganography")
 
 
 def _identify_magic(data: bytes) -> Optional[str]:
@@ -260,6 +291,7 @@ async def parse_custom_container(
     size_width: int = 4,
     size_endian: str = "little",
     limit: int = 20,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Parses binary data following common malware container patterns:
@@ -279,6 +311,8 @@ async def parse_custom_container(
         size_width: Byte width of size field (1, 2, 4, or 8). Default 4.
         size_endian: Endianness of size field: 'little' or 'big'. Default 'little'.
         limit: Max chunks to extract. Default 20.
+        output_path: (Optional[str]) Directory to save extracted chunks. Each chunk is saved
+            as chunk_N.bin and registered as an artifact.
     """
     await ctx.info(f"Parsing custom container (structure={structure})")
 
@@ -299,13 +333,22 @@ async def parse_custom_container(
         except ValueError as e:
             raise ValueError(f"Invalid delimiter hex: {e}")
 
+    save_data = bool(output_path)
+
     def _parse():
         chunks = []
+        raw_items: Optional[List[bytes]] = [] if save_data else None
         offset = 0
+
+        def _add_chunk(entry, payload_bytes):
+            chunks.append(entry)
+            if raw_items is not None:
+                raw_items.append(payload_bytes)
 
         if structure == "delimiter_size_payload":
             if delim_bytes is None:
-                return _auto_detect_delimiter(data, size_width, endian + size_fmt, limit)
+                auto_chunks = _auto_detect_delimiter(data, size_width, endian + size_fmt, limit)
+                return auto_chunks, None
 
             while offset < len(data) - len(delim_bytes) - size_width:
                 idx = data.find(delim_bytes, offset)
@@ -320,7 +363,7 @@ async def parse_custom_container(
                     offset = idx + 1
                     continue
                 payload = data[payload_start:payload_start + chunk_size]
-                chunks.append({
+                _add_chunk({
                     "index": len(chunks),
                     "delimiter_offset": hex(idx),
                     "payload_offset": hex(payload_start),
@@ -328,7 +371,7 @@ async def parse_custom_container(
                     "entropy": round(_shannon_entropy(payload), 2),
                     "preview_hex": payload[:64].hex(),
                     "magic": _identify_magic(payload[:16]),
-                })
+                }, payload)
                 offset = payload_start + chunk_size
                 if len(chunks) >= limit:
                     break
@@ -340,7 +383,7 @@ async def parse_custom_container(
                 if chunk_size == 0 or chunk_size > len(data) - payload_start:
                     break
                 payload = data[payload_start:payload_start + chunk_size]
-                chunks.append({
+                _add_chunk({
                     "index": len(chunks),
                     "size_offset": hex(offset),
                     "payload_offset": hex(payload_start),
@@ -348,7 +391,7 @@ async def parse_custom_container(
                     "entropy": round(_shannon_entropy(payload), 2),
                     "preview_hex": payload[:64].hex(),
                     "magic": _identify_magic(payload[:16]),
-                })
+                }, payload)
                 offset = payload_start + chunk_size
                 if len(chunks) >= limit:
                     break
@@ -359,26 +402,43 @@ async def parse_custom_container(
             if chunk_size:
                 for i in range(0, len(data) - chunk_size + 1, chunk_size):
                     payload = data[i:i + chunk_size]
-                    chunks.append({
+                    _add_chunk({
                         "index": len(chunks),
                         "offset": hex(i),
                         "size": chunk_size,
                         "entropy": round(_shannon_entropy(payload), 2),
                         "preview_hex": payload[:64].hex(),
-                    })
+                    }, payload)
                     if len(chunks) >= limit:
                         break
 
-        return chunks
+        return chunks, raw_items
 
-    chunks = await asyncio.to_thread(_parse)
+    chunks, raw_items = await asyncio.to_thread(_parse)
 
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "chunks": chunks,
         "count": len(chunks),
         "data_size": len(data),
         "structure": structure,
-    }, "parse_custom_container")
+    }
+
+    if output_path and raw_items:
+        import os
+        os.makedirs(output_path, exist_ok=True)
+        artifacts: List[Dict[str, Any]] = []
+        for i, raw in enumerate(raw_items):
+            name = f"chunk_{i}.bin"
+            item_path = os.path.join(output_path, name)
+            artifact_meta = await asyncio.to_thread(
+                _write_output_and_register_artifact,
+                item_path, raw, "parse_custom_container",
+                f"Container chunk {i} ({len(raw)} bytes)",
+            )
+            artifacts.append(artifact_meta)
+        response["artifacts"] = artifacts
+
+    return await _check_mcp_response_size(ctx, response, "parse_custom_container")
 
 
 def _auto_detect_delimiter(data: bytes, size_width: int, size_fmt: str, limit: int) -> list:
@@ -635,6 +695,7 @@ async def extract_config_automated(
     ctx: Context,
     data_hex: Optional[str] = None,
     limit: int = 20,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Automatically extracts potential C2 configuration data
@@ -651,6 +712,7 @@ async def extract_config_automated(
         ctx: MCP Context.
         data_hex: Optional hex data to scan. If None, uses loaded file.
         limit: Max items per category. Default 20.
+        output_path: (Optional[str]) Save extracted config as JSON to this path and register as artifact.
     """
     await ctx.info("Extracting automated config (C2, keys, domains)")
 
@@ -836,6 +898,19 @@ async def extract_config_automated(
             "sequences). Consider unpacking first with auto_unpack_pe() or "
             "try_all_unpackers()."
         )
+
+    if output_path:
+        import json
+        config_output = {"config": config, "total_indicators": total}
+        if encrypted_configs:
+            config_output["encrypted_configs"] = encrypted_configs
+        text_bytes = json.dumps(config_output, indent=2).encode("utf-8")
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, text_bytes, "extract_config_automated",
+            f"Extracted config ({total} indicators)",
+        )
+        result["artifact"] = artifact_meta
 
     return await _check_mcp_response_size(ctx, result, "extract_config_automated")
 
@@ -1130,6 +1205,7 @@ async def extract_config_for_family(
     section_hint: Optional[str] = None,
     offset_hint: Optional[str] = None,
     auto_note: bool = True,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Extracts malware configuration using family-specific
@@ -1150,6 +1226,7 @@ async def extract_config_for_family(
             If None, uses the section from the KB entry.
         offset_hint: Start scanning at this file offset (e.g. '0x1000').
         auto_note: If True, automatically save extracted IOCs as notes.
+        output_path: (Optional[str]) Save extracted config as JSON to this path and register as artifact.
     """
     await ctx.info(f"Extracting config for family: {family}")
     _check_pe_loaded("extract_config_for_family")
@@ -1283,5 +1360,15 @@ async def extract_config_for_family(
             )
         except Exception:
             pass
+
+    if output_path and result.get("status") == "extracted":
+        import json
+        text_bytes = json.dumps(result, indent=2, default=str).encode("utf-8")
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, text_bytes, "extract_config_for_family",
+            f"Config for {family}",
+        )
+        result["artifact"] = artifact_meta
 
     return await _check_mcp_response_size(ctx, result, "extract_config_for_family")

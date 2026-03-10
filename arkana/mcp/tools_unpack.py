@@ -19,6 +19,7 @@ from arkana.config import (
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._input_helpers import _parse_int_param
 from arkana.mcp._progress_bridge import ProgressBridge
+from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 
 def _shannon_entropy(data: bytes) -> float:
@@ -235,6 +236,7 @@ async def reconstruct_pe_from_dump(
     ctx: Context,
     data_hex: str,
     base_address: Optional[str] = None,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Reconstructs a valid PE from a memory dump by fixing
@@ -250,6 +252,7 @@ async def reconstruct_pe_from_dump(
         ctx: MCP Context.
         data_hex: Hex-encoded PE memory dump.
         base_address: Optional base address for relocation (e.g. '0x10000000').
+        output_path: (Optional[str]) Save reconstructed PE to this path and register as artifact.
     """
     await ctx.info("Reconstructing PE from memory dump")
 
@@ -336,7 +339,7 @@ async def reconstruct_pe_from_dump(
         bridge.report_progress(90, 100)
         bridge.info("Formatting results...")
 
-        return {
+        result_dict = {
             "fixed_pe_hex": fixed_data[:8192].hex(),
             "fixed_pe_size": len(fixed_data),
             "issues_fixed": issues_fixed,
@@ -351,14 +354,26 @@ async def reconstruct_pe_from_dump(
             ],
             "entry_point": hex(pe.optional_header.addressof_entrypoint),
         }
+        if output_path:
+            result_dict["_fixed_data"] = fixed_data
+        return result_dict
 
     result = await asyncio.to_thread(_reconstruct)
 
     if "error" in result:
         return result
 
+    fixed_data = result.pop("_fixed_data", None)
+    if output_path and fixed_data:
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, fixed_data, "reconstruct_pe_from_dump",
+            "Reconstructed PE",
+        )
+        result["artifact"] = artifact_meta
+
     result["next_steps"] = [
-        "Save the fixed PE and use open_file() for analysis",
+        "open_file() on the reconstructed PE for full analysis",
         "Check entry_point — if it looks wrong, use find_oep_heuristic()",
     ]
 

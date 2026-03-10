@@ -13,6 +13,7 @@ from arkana.config import (
     CRYPTOGRAPHY_AVAILABLE, SIGNIFY_AVAILABLE, YARA_AVAILABLE,
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 if CRYPTOGRAPHY_AVAILABLE:
     from cryptography import x509
@@ -38,6 +39,7 @@ async def generate_yara_rule(
     max_strings: int = 15,
     min_string_length: int = 6,
     scan_after_generate: bool = False,
+    output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: utility] Auto-generates a YARA rule from the loaded binary's analysis
@@ -62,6 +64,7 @@ async def generate_yara_rule(
         min_string_length: Min length for string candidates. Default 6.
         scan_after_generate: If True, immediately scan the loaded binary with
             the generated rule and include match results. Requires yara-python.
+        output_path: (Optional[str]) Save YARA rule to this path and register as artifact.
     """
     await ctx.info("Generating YARA rule")
     _check_pe_loaded("generate_yara_rule")
@@ -237,6 +240,16 @@ async def generate_yara_rule(
                 result["scan_error"] = f"YARA compilation error: {e}"
             except Exception as e:
                 result["scan_error"] = f"YARA scan error: {e}"
+
+    if output_path:
+        rule_text = result.get("rule", "")
+        text_bytes = rule_text.encode("utf-8")
+        artifact_meta = await asyncio.to_thread(
+            _write_output_and_register_artifact,
+            output_path, text_bytes, "generate_yara_rule",
+            f"YARA rule: {result.get('rule_name', 'unknown')}",
+        )
+        result["artifact"] = artifact_meta
 
     return await _check_mcp_response_size(ctx, result, "generate_yara_rule")
 

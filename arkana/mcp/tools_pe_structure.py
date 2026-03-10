@@ -301,7 +301,7 @@ async def analyze_seh_handlers(
                 if not isinstance(dll_entry, dict):
                     continue
                 for sym in dll_entry.get("symbols", []):
-                    name = sym.get("name", "") if isinstance(sym, dict) else str(sym)
+                    name = (sym.get("name") or "") if isinstance(sym, dict) else str(sym)
                     if name in seh_anti_debug_apis:
                         found_seh_apis.append(name)
 
