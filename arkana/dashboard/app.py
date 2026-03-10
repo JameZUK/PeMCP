@@ -75,6 +75,109 @@ _jinja_env = Environment(
     autoescape=True,
 )
 
+
+def _markdown_to_html(text: str) -> str:
+    """Convert a subset of markdown to HTML for dashboard display.
+
+    Supports: headings (##/###), bold (**), inline code (`), bullet lists,
+    markdown tables, and paragraph breaks. No external dependencies.
+    """
+    from markupsafe import Markup, escape
+
+    text = str(escape(text))
+    lines = text.split("\n")
+    out: list = []
+    in_ul = False
+    in_table = False
+    table_has_header = False
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+
+        # --- Table rows (| col | col |) ---
+        if stripped.startswith("|") and stripped.endswith("|"):
+            if not in_table:
+                in_table = True
+                table_has_header = False
+                if in_ul:
+                    out.append("</ul>")
+                    in_ul = False
+                out.append('<table class="md-table">')
+            # Skip separator rows (|---|---|)
+            if re.match(r"^\|[\s\-:|]+\|$", stripped):
+                table_has_header = True
+                i += 1
+                continue
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            tag = "th" if not table_has_header and (
+                i + 1 < len(lines) and re.match(
+                    r"^\|[\s\-:|]+\|$", lines[i + 1].strip()
+                )
+            ) else "td"
+            row = "".join(f"<{tag}>{_md_inline(c)}</{tag}>" for c in cells)
+            out.append(f"<tr>{row}</tr>")
+            i += 1
+            continue
+
+        if in_table:
+            out.append("</table>")
+            in_table = False
+            table_has_header = False
+
+        # --- Headings ---
+        m = re.match(r"^(#{2,4})\s+(.+)$", stripped)
+        if m:
+            if in_ul:
+                out.append("</ul>")
+                in_ul = False
+            level = min(len(m.group(1)) + 1, 6)  # ## -> h3, ### -> h4
+            out.append(f"<h{level}>{_md_inline(m.group(2))}</h{level}>")
+            i += 1
+            continue
+
+        # --- Bullet lists ---
+        m = re.match(r"^[-*]\s+(.+)$", stripped)
+        if m:
+            if not in_ul:
+                out.append("<ul>")
+                in_ul = True
+            out.append(f"<li>{_md_inline(m.group(1))}</li>")
+            i += 1
+            continue
+
+        if in_ul:
+            out.append("</ul>")
+            in_ul = False
+
+        # --- Empty line = paragraph break ---
+        if not stripped:
+            out.append("<br>")
+            i += 1
+            continue
+
+        # --- Regular text ---
+        out.append(f"<p>{_md_inline(stripped)}</p>")
+        i += 1
+
+    if in_ul:
+        out.append("</ul>")
+    if in_table:
+        out.append("</table>")
+
+    return Markup("\n".join(out))
+
+
+def _md_inline(text: str) -> str:
+    """Apply inline markdown formatting (bold, code)."""
+    text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
+    return text
+
+
+_jinja_env.filters["md"] = _markdown_to_html
+
 # Cookie name for dashboard auth
 _COOKIE_NAME = "arkana_dash"
 # Cookie max age: 30 days

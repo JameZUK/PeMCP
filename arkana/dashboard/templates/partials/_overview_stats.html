@@ -56,6 +56,12 @@
     {% elif bs.classification %}
     <div class="file-identity-assessment dim">{{ bs.classification }}</div>
     {% endif %}
+    {% if bs.ai_conclusion %}
+    <div class="file-identity-conclusion">
+        <div class="conclusion-header">FULL ANALYSIS CONCLUSION</div>
+        {{ bs.ai_conclusion|md }}
+    </div>
+    {% endif %}
 </div>
 
 <!-- Compact stat cards -->

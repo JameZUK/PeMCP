@@ -526,7 +526,7 @@ All operations use Arkana tools (see HARD CONSTRAINTS).
 
 Always end an analysis session with these two steps **in order**:
 
-**Step 1 — Store the conclusion in state** (MANDATORY before the conversation summary):
+**Step 1a — Store the condensed verdict** (MANDATORY):
 Call `add_note(category="hypothesis", content="<one-paragraph final assessment>")` with
 a concise verdict: what the binary is, what it does, key evidence, and any caveats.
 This note feeds the dashboard's CONCLUSION section and the overview AI assessment card.
@@ -535,6 +535,14 @@ Example: `add_note(category="hypothesis", content="DGA research tool (not malwar
 100 domains per run using Microsoft LCG (constants 214013/2531011), 31-char lowercase .com
 domains, DNS lookup via gethostbyname() only. No C2, no payload, no persistence. PDB path
 confirms research origin: C:\\research\\remediation\\Release\\dga.pdb.")`
+
+**Step 1b — Store the full detailed conclusion** (RECOMMENDED):
+Call `add_note(category="conclusion", content="<full markdown write-up>")` with a
+detailed analysis write-up using markdown formatting (headings, tables, bullet points).
+This is displayed on the dashboard overview below the hypothesis with markdown rendering.
+Use this for the comprehensive findings that are too long for the hypothesis note.
+The `conclusion` category supports the full write-up; `hypothesis` is for the condensed
+one-paragraph verdict.
 
 **Step 2 — Present a concise findings summary** directly in the conversation.
 This is the default — do not skip it or jump straight to a generated report.

@@ -589,6 +589,14 @@ def get_overview_data() -> Dict[str, Any]:
     if hypothesis_notes:
         binary_summary["ai_assessment"] = hypothesis_notes[-1].get("content", "")[:300]
 
+    # Full conclusion note (markdown, no truncation)
+    conclusion_notes = [
+        n for n in notes
+        if n.get("category") == "conclusion" and n.get("content")
+    ]
+    if conclusion_notes:
+        binary_summary["ai_conclusion"] = conclusion_notes[-1].get("content", "")
+
     if triage and isinstance(triage, dict):
         # Capabilities (capa matches) — top 10
         capabilities = triage.get("suspicious_capabilities", [])
@@ -3340,6 +3348,13 @@ def get_digest_data() -> Dict[str, Any]:
     if hypothesis_notes:
         for hn in hypothesis_notes[:3]:
             conclusion_parts.append(f"Hypothesis: {hn.get('content', '')[:200]}")
+
+    conclusion_notes = [
+        n for n in all_notes if n.get("category") == "conclusion"
+    ]
+    if conclusion_notes:
+        for cn in conclusion_notes[:2]:
+            conclusion_parts.append(f"Conclusion: {cn.get('content', '')[:200]}")
 
     result["conclusion"] = conclusion_parts
 

@@ -560,6 +560,36 @@ tr.explored.renamed > td { color: #44ddff; }
 .badge-cat-ioc { color: var(--danger); border-color: var(--danger); }
 .badge-cat-hypothesis { color: var(--warning); border-color: var(--warning); }
 .badge-cat-manual { color: var(--highlight); border-color: var(--highlight); }
+.badge-cat-conclusion { color: #44ddcc; border-color: #44ddcc; }
+
+/* Conclusion panel in file identity */
+.file-identity-conclusion {
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+    padding: 12px 12px 8px;
+    font-size: 12px;
+    max-height: 500px;
+    overflow-y: auto;
+}
+.file-identity-conclusion .conclusion-header {
+    font-size: 10px;
+    letter-spacing: 1px;
+    color: #44ddcc;
+    margin-bottom: 6px;
+    font-weight: bold;
+}
+.file-identity-conclusion p { margin: 4px 0; line-height: 1.5; }
+.file-identity-conclusion h3 { font-size: 13px; color: var(--primary); margin: 10px 0 4px; }
+.file-identity-conclusion h4 { font-size: 12px; color: var(--primary-dim); margin: 8px 0 4px; }
+.file-identity-conclusion h5 { font-size: 11px; color: var(--primary-dim); margin: 6px 0 2px; }
+.file-identity-conclusion ul { margin: 4px 0 4px 8px; padding-left: 20px; }
+.file-identity-conclusion li { margin: 2px 0; line-height: 1.4; }
+.file-identity-conclusion code { background: var(--bg-surface); padding: 1px 4px; border-radius: 2px; font-size: 11px; }
+.file-identity-conclusion strong { color: var(--primary); }
+.file-identity-conclusion .md-table { width: 100%; border-collapse: collapse; margin: 6px 0; font-size: 11px; }
+.file-identity-conclusion .md-table th,
+.file-identity-conclusion .md-table td { border: 1px solid var(--border); padding: 3px 6px; text-align: left; }
+.file-identity-conclusion .md-table th { background: var(--bg-surface); color: var(--primary); font-weight: bold; }
 
 /* Explored / renamed badges */
 .badge-renamed { color: #44ddff; border-color: #44ddff; }
