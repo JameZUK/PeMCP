@@ -1313,48 +1313,66 @@ async def get_focused_imports(
         A dictionary with filtered imports, category counts, and optional benign summary.
     """
     from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB, RISK_ORDER, CATEGORY_DESCRIPTIONS
+    from arkana.mcp._input_helpers import _make_cache_key
 
     _check_pe_loaded("get_focused_imports")
-    imports_data = state.pe_data.get('imports', [])
 
-    min_risk_val = RISK_ORDER.get(min_risk.upper(), 2)
-    found: List[Dict[str, str]] = []
-    total_imports = 0
-    total_dlls = 0
-    benign_dll_names: set = set()
+    # Cache the filtered+sorted import scan keyed on (category, min_risk)
+    _imports_cache_key = _make_cache_key(category=category, min_risk=min_risk.upper())
+    cached_result = state.result_cache.get("_focused_imports", _imports_cache_key)
 
-    if isinstance(imports_data, list):
-        for dll_entry in imports_data:
-            if not isinstance(dll_entry, dict):
-                continue
-            dll_name = dll_entry.get('dll_name', 'Unknown')
-            total_dlls += 1
-            dll_had_suspicious = False
-            for sym in dll_entry.get('symbols', []):
-                total_imports += 1
-                func_name = sym.get('name', '') if isinstance(sym, dict) else ''
-                if not func_name:
+    if cached_result is None:
+        imports_data = state.pe_data.get('imports', [])
+        min_risk_val = RISK_ORDER.get(min_risk.upper(), 2)
+        found: List[Dict[str, str]] = []
+        total_imports = 0
+        total_dlls = 0
+        benign_dll_names: set = set()
+
+        if isinstance(imports_data, list):
+            for dll_entry in imports_data:
+                if not isinstance(dll_entry, dict):
                     continue
-                # Check against categorized DB (substring match like triage)
-                for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
-                    if api_name in func_name:
-                        risk_val = RISK_ORDER.get(risk, 3)
-                        if risk_val <= min_risk_val:
-                            if category == "all" or cat == category:
-                                found.append({
-                                    "dll": dll_name,
-                                    "function": func_name,
-                                    "risk": risk,
-                                    "category": cat,
-                                })
-                                dll_had_suspicious = True
-                        break
-            if not dll_had_suspicious:
-                benign_dll_names.add(dll_name)
+                dll_name = dll_entry.get('dll_name', 'Unknown')
+                total_dlls += 1
+                dll_had_suspicious = False
+                for sym in dll_entry.get('symbols', []):
+                    total_imports += 1
+                    func_name = sym.get('name', '') if isinstance(sym, dict) else ''
+                    if not func_name:
+                        continue
+                    # Check against categorized DB (substring match like triage)
+                    for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
+                        if api_name in func_name:
+                            risk_val = RISK_ORDER.get(risk, 3)
+                            if risk_val <= min_risk_val:
+                                if category == "all" or cat == category:
+                                    found.append({
+                                        "dll": dll_name,
+                                        "function": func_name,
+                                        "risk": risk,
+                                        "category": cat,
+                                    })
+                                    dll_had_suspicious = True
+                            break
+                if not dll_had_suspicious:
+                    benign_dll_names.add(dll_name)
 
-    # Sort by risk severity then category
-    found.sort(key=lambda x: (RISK_ORDER.get(x['risk'], 3), x.get('category', ''), x.get('function', '')))
-    found = found[:limit]
+        # Sort by risk severity then category
+        found.sort(key=lambda x: (RISK_ORDER.get(x['risk'], 3), x.get('category', ''), x.get('function', '')))
+
+        cached_result = {
+            "found": found,
+            "total_imports": total_imports,
+            "total_dlls": total_dlls,
+            "benign_dll_names": sorted(benign_dll_names),
+        }
+        state.result_cache.set("_focused_imports", _imports_cache_key, [cached_result])
+    else:
+        cached_result = cached_result[0]
+
+    found = cached_result["found"][:limit]
+    total_imports = cached_result["total_imports"]
 
     # Build category counts
     by_category: Dict[str, int] = {}
@@ -1367,18 +1385,19 @@ async def get_focused_imports(
         "by_category": by_category,
         "total_suspicious": len(found),
         "total_imports": total_imports,
-        "total_dlls": total_dlls,
+        "total_dlls": cached_result["total_dlls"],
     }
 
     if include_benign_summary:
-        benign_count = total_imports - len(found)
-        top_benign = sorted(benign_dll_names)[:5]
+        benign_dll_names_list = cached_result["benign_dll_names"]
+        benign_count = total_imports - len(cached_result["found"])
+        top_benign = benign_dll_names_list[:5]
         benign_list = ', '.join(top_benign)
-        if len(benign_dll_names) > 5:
-            benign_list += f", ... (+{len(benign_dll_names) - 5} more)"
+        if len(benign_dll_names_list) > 5:
+            benign_list += f", ... (+{len(benign_dll_names_list) - 5} more)"
         result["benign_summary"] = (
             f"Filtered out {benign_count:,} benign imports from "
-            f"{len(benign_dll_names)} DLLs ({benign_list})"
+            f"{len(benign_dll_names_list)} DLLs ({benign_list})"
         )
 
     return await _check_mcp_response_size(ctx, result, "get_focused_imports")

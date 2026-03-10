@@ -942,7 +942,12 @@ async def get_function_map(
 
         return scored_funcs
 
-    scored = await asyncio.to_thread(_build_map)
+    # Check result cache first — _build_map is expensive (iterates all functions)
+    _fm_cache_key = ()  # no params affect core scoring
+    scored = state.result_cache.get("get_function_map", _fm_cache_key)
+    if scored is None:
+        scored = await asyncio.to_thread(_build_map)
+        state.result_cache.set("get_function_map", _fm_cache_key, scored)
 
     # Cache for use by other tools
     state._cached_function_scores = scored

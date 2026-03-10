@@ -1283,37 +1283,47 @@ async def get_function_complexity_list(
                 logger.debug("get_function_complexity_list: failed to count blocks for func at %s", hex(func.addr), exc_info=True)
                 block_count = 0
 
-            if compact:
-                funcs_data.append({
-                    "name": func.name,
-                    "addr": hex(func.addr),
-                    "blocks": block_count,
-                })
-            else:
-                # func.graph.edges usually returns a View, list() ensures it's countable
+            # Always compute full data (edge count + entry point) for caching
+            try:
                 edge_count = len(list(func.graph.edges))
+            except Exception:
+                edge_count = 0
 
-                funcs_data.append({
-                    "name": func.name,
-                    "address": hex(func.addr),
-                    "blocks": block_count,
-                    "edges": edge_count,
-                    "is_entry_point": (func.addr == state.angr_project.entry)
-                })
+            funcs_data.append({
+                "name": func.name,
+                "addr": hex(func.addr),
+                "address": hex(func.addr),
+                "blocks": block_count,
+                "edges": edge_count,
+                "is_entry_point": (func.addr == state.angr_project.entry),
+            })
 
-        # Sort
-        key = "blocks"
-        if not compact and sort_by == "edges":
-            key = "edges"
-        funcs_data.sort(key=lambda x: x.get(key, 0), reverse=True)
+        return funcs_data
 
-        return {
-            "total_functions_scanned": len(funcs_data),
-            "sort_metric": key,
-            "top_functions": funcs_data[:limit]
-        }
+    # Cache the full function list — sorting/compact/limit are presentation-only
+    _complexity_cache_key = ()
+    cached_funcs = state.result_cache.get("_complexity_list", _complexity_cache_key)
+    if cached_funcs is None:
+        cached_funcs = await asyncio.to_thread(_analyze)
+        state.result_cache.set("_complexity_list", _complexity_cache_key, cached_funcs)
 
-    result = await asyncio.to_thread(_analyze)
+    # Sort
+    sort_key = "blocks"
+    if not compact and sort_by == "edges":
+        sort_key = "edges"
+    sorted_funcs = sorted(cached_funcs, key=lambda x: x.get(sort_key, 0), reverse=True)
+
+    # Apply compact/limit as presentation
+    if compact:
+        top = [{"name": f["name"], "addr": f["addr"], "blocks": f["blocks"]} for f in sorted_funcs[:limit]]
+    else:
+        top = sorted_funcs[:limit]
+
+    result = {
+        "total_functions_scanned": len(cached_funcs),
+        "sort_metric": sort_key,
+        "top_functions": top,
+    }
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_function_complexity_list", "the 'limit' parameter")
 
@@ -1584,15 +1594,21 @@ async def get_cross_reference_map(
 
         callgraph = state.angr_cfg.functions.callgraph
 
-        # String address lookup
-        string_addrs: Dict[int, str] = {}
-        pe_data = state.pe_data or {}
-        for s_obj in (pe_data.get('basic_ascii_strings') or []):
-            if isinstance(s_obj, dict):
-                addr = s_obj.get('offset')
-                val = s_obj.get('string', '')
-                if isinstance(addr, int) and val:
-                    string_addrs[addr] = val[:80]
+        # String address lookup (cached)
+        string_addrs = state.result_cache.get("_string_addr_map", ())
+        if string_addrs is None:
+            string_addrs_build: Dict[int, str] = {}
+            pe_data = state.pe_data or {}
+            for s_obj in (pe_data.get('basic_ascii_strings') or []):
+                if isinstance(s_obj, dict):
+                    addr = s_obj.get('offset')
+                    val = s_obj.get('string', '')
+                    if isinstance(addr, int) and val:
+                        string_addrs_build[addr] = val[:80]
+            string_addrs = string_addrs_build
+            state.result_cache.set("_string_addr_map", (), [string_addrs])
+        elif isinstance(string_addrs, list) and string_addrs:
+            string_addrs = string_addrs[0]
 
         functions_result: Dict[str, Any] = {}
 

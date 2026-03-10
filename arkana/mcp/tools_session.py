@@ -279,17 +279,31 @@ async def get_analysis_digest(
         except (ValueError, TypeError):
             return True
 
-    # Key findings from notes (tool_result category)
+    # Build a notes-by-category lookup (cached for 10s via result_cache)
     all_notes = state.get_notes()
+    _notes_count = len(all_notes)
+    _digest_cache_key = ("_notes_by_cat", _notes_count)
+    notes_by_cat = state.result_cache.get("_digest_notes_by_cat", _digest_cache_key)
+    if notes_by_cat is None:
+        notes_by_cat_build: Dict[str, list] = {}
+        for note in all_notes:
+            cat = note.get("category", "general")
+            notes_by_cat_build.setdefault(cat, []).append(note)
+        notes_by_cat = notes_by_cat_build
+        state.result_cache.set("_digest_notes_by_cat", _digest_cache_key, [notes_by_cat])
+    elif isinstance(notes_by_cat, list) and notes_by_cat:
+        notes_by_cat = notes_by_cat[0]
+
+    # Key findings from notes (tool_result category)
     key_findings = []
-    for note in all_notes:
-        if note.get("category") == "tool_result" and _note_is_new(note):
+    for note in notes_by_cat.get("tool_result", []):
+        if _note_is_new(note):
             key_findings.append(note.get("content", ""))
     result["key_findings"] = key_findings[:15]
 
     # Function summaries from notes (function category)
     if include_function_summaries:
-        func_notes = [n for n in all_notes if n.get("category") == "function" and _note_is_new(n)]
+        func_notes = [n for n in notes_by_cat.get("function", []) if _note_is_new(n)]
         result["functions_explored"] = [
             {
                 "addr": n.get("address", "?"),
@@ -320,7 +334,7 @@ async def get_analysis_digest(
         except Exception:
             pass
 
-    func_note_count = len([n for n in all_notes if n.get("category") == "function"])
+    func_note_count = len(notes_by_cat.get("function", []))
     if total_functions > 0:
         pct = round(func_note_count / total_functions * 100, 1)
     else:
@@ -334,7 +348,7 @@ async def get_analysis_digest(
     # Unexplored high-priority functions (from cached function scores)
     scored = getattr(state, '_cached_function_scores', None)
     if scored:
-        explored_addrs = {n.get("address") for n in all_notes if n.get("category") == "function"}
+        explored_addrs = {n.get("address") for n in notes_by_cat.get("function", [])}
         unexplored = [
             f for f in scored
             if f.get("addr") not in explored_addrs and f.get("score", 0) > 10
@@ -346,8 +360,8 @@ async def get_analysis_digest(
 
     # Analyst notes (general category)
     general_notes = [
-        n.get("content", "") for n in all_notes
-        if n.get("category") == "general" and _note_is_new(n)
+        n.get("content", "") for n in notes_by_cat.get("general", [])
+        if _note_is_new(n)
     ]
     if general_notes:
         result["analyst_notes"] = general_notes[:10]
@@ -845,41 +859,47 @@ async def get_analysis_timeline(
         ctx: MCP Context.
         limit: Max timeline entries. Default 20.
     """
-    events: List[Dict[str, Any]] = []
-
     # Fetch once, reuse for both iteration and count
     tool_history = state.get_tool_history()
     all_notes = state.get_notes()
+    total_events = len(tool_history) + len(all_notes)
 
-    # Add tool history entries
-    for h in tool_history:
-        events.append({
-            "timestamp": h.get("timestamp", ""),
-            "type": "tool",
-            "name": h.get("tool_name", "?"),
-            "summary": h.get("result_summary", ""),
-            "duration_ms": h.get("duration_ms", 0),
-        })
+    # Cache the merged+sorted event list (keyed on event count as version)
+    _timeline_cache_key = ("_timeline", total_events)
+    events = state.result_cache.get("_timeline_events", _timeline_cache_key)
+    if events is None:
+        events = []
 
-    # Add notes as events
-    for n in all_notes:
-        events.append({
-            "timestamp": n.get("created_at", ""),
-            "type": "note",
-            "category": n.get("category", "general"),
-            "content": n.get("content", "")[:200],
-            "address": n.get("address"),
-        })
+        # Add tool history entries
+        for h in tool_history:
+            events.append({
+                "timestamp": h.get("timestamp", ""),
+                "type": "tool",
+                "name": h.get("tool_name", "?"),
+                "summary": h.get("result_summary", ""),
+                "duration_ms": h.get("duration_ms", 0),
+            })
 
-    # Sort by timestamp
-    events.sort(key=lambda e: e.get("timestamp") or "")
+        # Add notes as events
+        for n in all_notes:
+            events.append({
+                "timestamp": n.get("created_at", ""),
+                "type": "note",
+                "category": n.get("category", "general"),
+                "content": n.get("content", "")[:200],
+                "address": n.get("address"),
+            })
+
+        # Sort by timestamp
+        events.sort(key=lambda e: e.get("timestamp") or "")
+        state.result_cache.set("_timeline_events", _timeline_cache_key, events)
 
     # Take the most recent entries
-    events = events[-limit:]
+    recent = events[-limit:]
 
     return {
-        "timeline": events,
-        "total_events": len(tool_history) + len(all_notes),
-        "returned": len(events),
+        "timeline": recent,
+        "total_events": total_events,
+        "returned": len(recent),
         "phase": _detect_analysis_phase(),
     }

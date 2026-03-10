@@ -23,6 +23,7 @@ from arkana.mcp._input_helpers import _parse_int_param
 from arkana.utils import validate_regex_pattern as _validate_regex_pattern, safe_regex_search as _safe_regex_search
 
 from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT
+from arkana.mcp._input_helpers import _make_cache_key
 
 if RAPIDFUZZ_AVAILABLE:
     from rapidfuzz import fuzz
@@ -35,6 +36,82 @@ if STRINGSIFTER_AVAILABLE:
 _sifter_featurizer = None
 _sifter_ranker = None
 _sifter_lock = threading.Lock()
+
+
+def _get_cached_flat_strings(include_basic_ascii: bool = True, deduplicate: bool = True):
+    """Build and cache a flat list of strings from FLOSS + basic_ascii data.
+
+    Two cache variants via ``state.result_cache``:
+    - ``("_flat_strings", "floss_all")`` — all FLOSS strings with source_type, no dedup
+    - ``("_flat_strings", "deduped_all")`` — FLOSS + basic_ascii, deduped by value
+
+    Returns a list of string dicts (copies with source_type added for FLOSS items).
+    """
+    cache = state.result_cache
+    if deduplicate and include_basic_ascii:
+        cache_key = "deduped_all"
+    elif not deduplicate and not include_basic_ascii:
+        cache_key = "floss_all"
+    else:
+        cache_key = f"{'deduped' if deduplicate else 'all'}_{'with_basic' if include_basic_ascii else 'floss'}"
+
+    cached = cache.get("_flat_strings", cache_key)
+    if cached is not None:
+        return cached
+
+    all_strings = []
+    seen = set() if deduplicate else None
+    pe_data = state.pe_data or {}
+
+    # FLOSS strings
+    if 'floss_analysis' in pe_data and isinstance(pe_data['floss_analysis'], dict):
+        floss_strings = pe_data['floss_analysis'].get('strings', {})
+        if isinstance(floss_strings, dict):
+            for str_type, str_list in floss_strings.items():
+                if not isinstance(str_list, list):
+                    continue
+                for item in str_list:
+                    if isinstance(item, dict):
+                        val = item.get('string', '')
+                        if not val:
+                            continue
+                        if seen is not None:
+                            if val in seen:
+                                continue
+                            seen.add(val)
+                        entry = item.copy()
+                        entry['source_type'] = str_type.replace('_strings', '')
+                        all_strings.append(entry)
+                    elif isinstance(item, str) and item:
+                        if seen is not None:
+                            if item in seen:
+                                continue
+                            seen.add(item)
+                        all_strings.append({"string": item, "source_type": str_type.replace('_strings', '')})
+
+    # Basic ASCII strings
+    if include_basic_ascii and 'basic_ascii_strings' in pe_data:
+        basic = pe_data['basic_ascii_strings']
+        if isinstance(basic, list):
+            for item in basic:
+                if isinstance(item, dict):
+                    val = item.get('string', '')
+                    if not val:
+                        continue
+                    if seen is not None:
+                        if val in seen:
+                            continue
+                        seen.add(val)
+                    all_strings.append(item)
+                elif isinstance(item, str) and item:
+                    if seen is not None:
+                        if item in seen:
+                            continue
+                        seen.add(item)
+                    all_strings.append({"string": item})
+
+    cache.set("_flat_strings", cache_key, all_strings)
+    return all_strings
 
 
 def _get_sifter_models():
@@ -123,27 +200,25 @@ async def search_floss_strings(
     except re.error as e:
         raise ValueError(f"Invalid regex pattern provided in the list: {e}")
 
-    all_strings_with_context = []
-    for source_type, string_list in floss_data.get("strings", {}).items():
-        for string_item in string_list:
-            if isinstance(string_item, dict) and "string" in string_item:
-                contextual_item = string_item.copy()
-                contextual_item["source_type"] = source_type.replace("_strings", "")
-                all_strings_with_context.append(contextual_item)
+    all_strings_with_context = _get_cached_flat_strings(include_basic_ascii=False, deduplicate=False)
 
     matches = []
     for item in all_strings_with_context:
-        # Score filtering
+        # Cheap checks first: length, then score, then expensive regex
+        string_to_search = item.get("string", "")
+        if len(string_to_search) < min_length:
+            continue
+
         score = item.get('sifter_score', -999.0)
         min_ok = (min_sifter_score is None) or (score >= min_sifter_score)
+        if not min_ok:
+            continue
         max_ok = (max_sifter_score is None) or (score <= max_sifter_score)
+        if not max_ok:
+            continue
 
-        if min_ok and max_ok:
-            # Length and Regex filtering
-            string_to_search = item.get("string", "")
-            if any(_safe_regex_search(p, string_to_search) for p in compiled_patterns):
-                if len(string_to_search) >= min_length:
-                    matches.append(item)
+        if any(_safe_regex_search(p, string_to_search) for p in compiled_patterns):
+            matches.append(item)
 
     # --- Sorting Logic ---
     if sort_order:
@@ -393,32 +468,39 @@ async def get_capa_analysis_info(ctx: Context,
 
     base_pagination_info['total_capabilities_in_report'] = len(all_rules_dict_from_capa)
 
-    filtered_rule_items = []
-    for rule_id, rule_details_original in all_rules_dict_from_capa.items():
-        if not isinstance(rule_details_original, dict):
-            await ctx.warning(f"Skipping malformed rule entry for ID '{rule_id}'.")
-            continue
+    # Cache the filtered rule list keyed on filter params (pagination excluded)
+    _capa_cache_key = _make_cache_key(
+        filter_rule_name=filter_rule_name, filter_namespace=filter_namespace,
+        filter_attck_id=filter_attck_id, filter_mbc_id=filter_mbc_id,
+    )
+    filtered_rule_items = state.result_cache.get("_capa_filtered_rules", _capa_cache_key)
+    if filtered_rule_items is None:
+        filtered_rule_items = []
+        for rule_id, rule_details_original in all_rules_dict_from_capa.items():
+            if not isinstance(rule_details_original, dict):
+                continue
 
-        meta = rule_details_original.get("meta", {})
-        if not isinstance(meta, dict): meta = {}
+            meta = rule_details_original.get("meta", {})
+            if not isinstance(meta, dict): meta = {}
 
-        passes_filter = True
-        if filter_rule_name and filter_rule_name.lower() not in str(meta.get("name", rule_id)).lower(): passes_filter = False
-        if passes_filter and filter_namespace and not meta.get("namespace", "").lower().startswith(filter_namespace.lower()): passes_filter = False
+            passes_filter = True
+            if filter_rule_name and filter_rule_name.lower() not in str(meta.get("name", rule_id)).lower(): passes_filter = False
+            if passes_filter and filter_namespace and not meta.get("namespace", "").lower().startswith(filter_namespace.lower()): passes_filter = False
 
-        if passes_filter and filter_attck_id:
-            attck_values = meta.get("att&ck", [])
-            if not isinstance(attck_values, list): attck_values = [str(attck_values)]
-            if not any(filter_attck_id.lower() in (" ".join(str(v) for v in entry.values()) if isinstance(entry, dict) else str(entry)).lower() for entry in attck_values):
-                passes_filter = False
+            if passes_filter and filter_attck_id:
+                attck_values = meta.get("att&ck", [])
+                if not isinstance(attck_values, list): attck_values = [str(attck_values)]
+                if not any(filter_attck_id.lower() in (" ".join(str(v) for v in entry.values()) if isinstance(entry, dict) else str(entry)).lower() for entry in attck_values):
+                    passes_filter = False
 
-        if passes_filter and filter_mbc_id:
-            mbc_values = meta.get("mbc", [])
-            if not isinstance(mbc_values, list): mbc_values = [str(mbc_values)]
-            if not any(filter_mbc_id.lower() in (" ".join(str(v) for v in entry.values()) if isinstance(entry, dict) else str(entry)).lower() for entry in mbc_values):
-                passes_filter = False
-        if passes_filter:
-            filtered_rule_items.append((rule_id, rule_details_original))
+            if passes_filter and filter_mbc_id:
+                mbc_values = meta.get("mbc", [])
+                if not isinstance(mbc_values, list): mbc_values = [str(mbc_values)]
+                if not any(filter_mbc_id.lower() in (" ".join(str(v) for v in entry.values()) if isinstance(entry, dict) else str(entry)).lower() for entry in mbc_values):
+                    passes_filter = False
+            if passes_filter:
+                filtered_rule_items.append((rule_id, rule_details_original))
+        state.result_cache.set("_capa_filtered_rules", _capa_cache_key, filtered_rule_items)
 
     base_pagination_info['total_items_after_filtering'] = len(filtered_rule_items)
     paginated_rule_items_tuples = filtered_rule_items[current_offset : current_offset + limit]
@@ -904,32 +986,22 @@ async def get_top_sifted_strings(
         _validate_regex_pattern(filter_regex)
         _compiled_filter_regex = re.compile(filter_regex)
 
-    # --- Data Retrieval and Aggregation ---
+    # --- Data Retrieval and Aggregation (cached) ---
     _check_pe_loaded("get_top_sifted_strings")
-
-    all_strings = []
-    seen_string_values = set()
     sources_to_check = string_sources or ['floss', 'basic_ascii']
+    include_basic = 'basic_ascii' in sources_to_check
+    include_floss = 'floss' in sources_to_check
 
-    if 'floss' in sources_to_check and 'floss_analysis' in state.pe_data:
-        floss_strings = state.pe_data['floss_analysis'].get('strings', {})
-        for str_type, str_list in floss_strings.items():
-            for item in str_list:
-                if isinstance(item, dict) and 'sifter_score' in item:
-                    str_val = item.get("string")
-                    if str_val and str_val not in seen_string_values:
-                        item_with_context = item.copy()
-                        item_with_context['source_type'] = f"floss_{str_type.replace('_strings', '')}"
-                        all_strings.append(item_with_context)
-                        seen_string_values.add(str_val)
-
-    if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in state.pe_data:
-        for item in state.pe_data['basic_ascii_strings']:
-            if isinstance(item, dict) and 'sifter_score' in item:
-                str_val = item.get("string")
-                if str_val and str_val not in seen_string_values:
-                    all_strings.append(item)
-                    seen_string_values.add(str_val)
+    all_cached = _get_cached_flat_strings(include_basic_ascii=include_basic, deduplicate=True)
+    # Filter by source if only one source requested
+    if include_floss and not include_basic:
+        all_strings = all_cached
+    elif include_basic and not include_floss:
+        all_strings = [s for s in all_cached if 'source_type' not in s or not s.get('source_type', '').startswith('floss')]
+    else:
+        all_strings = all_cached
+    # Only include items with sifter_score
+    all_strings = [s for s in all_strings if isinstance(s, dict) and 'sifter_score' in s]
 
     await ctx.report_progress(30, 100)
     await ctx.info("[sifted] Filtering strings...")
@@ -1104,34 +1176,19 @@ async def fuzzy_search_strings(
     if not (isinstance(min_similarity_ratio, int) and 0 <= min_similarity_ratio <= 100):
         raise ValueError("Parameter 'min_similarity_ratio' must be an integer between 0 and 100.")
 
-    # --- Data Retrieval and Aggregation (with deduplication) ---
+    # --- Data Retrieval and Aggregation (cached, with deduplication) ---
     _check_pe_loaded("fuzzy_search_strings")
-
-    all_strings = []
-    seen_string_values = set()
     sources_to_check = string_sources or ['floss', 'basic_ascii']
+    include_basic = 'basic_ascii' in sources_to_check
+    include_floss = 'floss' in sources_to_check
 
-    # Process FLOSS first to prioritize its richer context
-    if 'floss' in sources_to_check and 'floss_analysis' in state.pe_data:
-        floss_strings = state.pe_data['floss_analysis'].get('strings', {})
-        for str_type, str_list in floss_strings.items():
-            for item in str_list:
-                if isinstance(item, dict):
-                    str_val = item.get("string")
-                    if str_val and str_val not in seen_string_values:
-                        item_with_context = item.copy()
-                        item_with_context['source_type'] = f"floss_{str_type.replace('_strings', '')}"
-                        all_strings.append(item_with_context)
-                        seen_string_values.add(str_val)
-
-    # Process Basic ASCII strings
-    if 'basic_ascii' in sources_to_check and 'basic_ascii_strings' in state.pe_data:
-        for item in state.pe_data['basic_ascii_strings']:
-            if isinstance(item, dict):
-                str_val = item.get("string")
-                if str_val and str_val not in seen_string_values:
-                    all_strings.append(item)
-                    seen_string_values.add(str_val)
+    all_cached = _get_cached_flat_strings(include_basic_ascii=include_basic, deduplicate=True)
+    if include_floss and not include_basic:
+        all_strings = all_cached
+    elif include_basic and not include_floss:
+        all_strings = [s for s in all_cached if 'source_type' not in s or not s.get('source_type', '').startswith('floss')]
+    else:
+        all_strings = all_cached
 
     if not all_strings:
         return []
@@ -1204,38 +1261,8 @@ async def get_strings_summary(
 
     _check_pe_loaded("get_strings_summary")
 
-    # Collect all string values (reuse pattern from triage)
-    all_strings: list = []
-    all_string_values: set = set()
-
-    # FLOSS strings with metadata
-    if 'floss_analysis' in state.pe_data and isinstance(state.pe_data['floss_analysis'], dict):
-        floss_strings = state.pe_data['floss_analysis'].get('strings')
-        if isinstance(floss_strings, dict):
-            for str_list in floss_strings.values():
-                if isinstance(str_list, list):
-                    for s in str_list:
-                        if isinstance(s, dict):
-                            val = s.get('string', '')
-                            if val and val not in all_string_values:
-                                all_string_values.add(val)
-                                all_strings.append(s)
-                        elif isinstance(s, str) and s not in all_string_values:
-                            all_string_values.add(s)
-                            all_strings.append({"string": s})
-
-    # Basic ASCII strings
-    basic = state.pe_data.get('basic_ascii_strings', [])
-    if isinstance(basic, list):
-        for s in basic:
-            if isinstance(s, dict):
-                val = s.get('string', '')
-                if val and val not in all_string_values:
-                    all_string_values.add(val)
-                    all_strings.append(s)
-            elif isinstance(s, str) and s not in all_string_values:
-                all_string_values.add(s)
-                all_strings.append({"string": s})
+    # Collect all string values (cached, deduped)
+    all_strings = _get_cached_flat_strings(include_basic_ascii=True, deduplicate=True)
 
     total_strings = len(all_strings)
 
