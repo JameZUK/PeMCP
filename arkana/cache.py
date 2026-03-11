@@ -425,39 +425,38 @@ class AnalysisCache:
         sha256 = _validate_sha256(sha256)
         entry_path = self._entry_path(sha256)
 
-        if not entry_path.exists():
-            return False
-
-        # Read and decompress OUTSIDE the lock to avoid blocking concurrent ops
-        try:
-            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                wrapper = json.load(f)
-        except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
-            logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
-            return False
-
-        if notes is not None:
-            wrapper["notes"] = notes
-        if tool_history is not None:
-            wrapper["tool_history"] = tool_history
-        if artifacts is not None:
-            wrapper["artifacts"] = artifacts
-        if renames is not None:
-            wrapper["renames"] = renames
-        if custom_types is not None:
-            wrapper["custom_types"] = custom_types
-        if triage_status is not None:
-            wrapper["triage_status"] = triage_status
-
-        # Compress OUTSIDE the lock
-        try:
-            compressed = gzip.compress(json.dumps(wrapper).encode("utf-8"))
-        except (TypeError, ValueError) as e:
-            logger.error("Failed to serialize session data for %s...: %s", sha256[:12], e)
-            return False
-
-        # Atomic write under lock
+        # Hold lock for entire read-modify-write to prevent TOCTOU races.
+        # Performance impact is acceptable because updates are infrequent.
         with self._lock:
+            if not entry_path.exists():
+                return False
+
+            try:
+                with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                    wrapper = json.load(f)
+            except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
+                logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
+                return False
+
+            if notes is not None:
+                wrapper["notes"] = notes
+            if tool_history is not None:
+                wrapper["tool_history"] = tool_history
+            if artifacts is not None:
+                wrapper["artifacts"] = artifacts
+            if renames is not None:
+                wrapper["renames"] = renames
+            if custom_types is not None:
+                wrapper["custom_types"] = custom_types
+            if triage_status is not None:
+                wrapper["triage_status"] = triage_status
+
+            try:
+                compressed = gzip.compress(json.dumps(wrapper).encode("utf-8"))
+            except (TypeError, ValueError) as e:
+                logger.error("Failed to serialize session data for %s...: %s", sha256[:12], e)
+                return False
+
             try:
                 tmp = entry_path.with_suffix(".tmp")
                 tmp.write_bytes(compressed)

@@ -46,7 +46,12 @@ def apply_function_renames_to_lines(lines: List[str]) -> List[str]:
 
 
 def apply_variable_renames_to_lines(lines: List[str], func_address: str) -> List[str]:
-    """Replace variable names within a function scope using user-defined renames."""
+    """Apply variable renames to decompiled code lines.
+
+    Warning: Renames are applied sequentially (regex substitution). If rename A
+    introduces text that matches rename B's pattern, B will also transform A's
+    output. Callers should avoid overlapping rename patterns.
+    """
     state = get_current_state()
     var_renames = state.renames.get("variables", {})
     addr = func_address.lower()

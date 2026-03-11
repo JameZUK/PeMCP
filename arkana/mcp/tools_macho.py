@@ -1,9 +1,11 @@
 """MCP tools for Mach-O binary analysis using LIEF."""
 import asyncio
+import os
 from typing import Dict, Any, Optional
 from arkana.config import state, logger, Context, LIEF_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._format_helpers import _check_lib, _get_filepath
+from arkana.constants import MAX_TOOL_LIMIT
 
 if LIEF_AVAILABLE:
     import lief
@@ -30,20 +32,21 @@ async def macho_analyze(
         limit: Max entries per category.
     """
     await ctx.info("Analysing Mach-O binary")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_lib("lief", LIEF_AVAILABLE, "macho_analyze")
     target = _get_filepath(file_path)
 
     def _parse():
         binary = lief.parse(target)
         if binary is None:
-            return {"error": f"LIEF could not parse {target}"}
+            return {"error": f"LIEF could not parse {os.path.basename(target)}"}
 
         # Check if it's actually Mach-O
         if binary.format != lief.Binary.FORMATS.MACHO:
             return {"error": f"Not a Mach-O binary (detected format: {str(binary.format).split('.')[-1]})"}
 
         macho = binary
-        result: Dict[str, Any] = {"file": target, "is_macho": True}
+        result: Dict[str, Any] = {"file": os.path.basename(target), "is_macho": True}
 
         # Header
         header = macho.header

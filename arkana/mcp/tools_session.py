@@ -5,6 +5,7 @@ from collections import Counter
 from typing import Dict, Any, List, Optional
 from arkana.config import state, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.state import TASK_RUNNING
 
 
@@ -20,23 +21,43 @@ _EXPLORING_TOOLS = frozenset({
 })
 
 
+_phase_cache: Dict[str, Any] = {"result": None, "version": -1, "time": 0.0}
+
+
 def _detect_analysis_phase() -> str:
-    """Determine what phase of analysis the session is in."""
+    """Determine what phase of analysis the session is in.
+
+    Uses a short TTL cache (2s) keyed on tool_history length to avoid
+    recomputing on every call (e.g. from dashboard polling).
+    """
     if not state.filepath or not state.pe_data:
         return "not_started"
 
-    current_history = state.get_tool_history()
-    ran_tools = set(h["tool_name"] for h in current_history)
+    now = time.monotonic()
+    history = state.get_tool_history()
+    history_len = len(history) if history else 0
+    if (_phase_cache["version"] == history_len
+            and now - _phase_cache["time"] < 2.0
+            and _phase_cache["result"] is not None):
+        return _phase_cache["result"]
+
+    ran_tools = set(h["tool_name"] for h in history)
     prev = getattr(state, "previous_session_history", []) or []
     ran_tools |= set(h["tool_name"] for h in prev)
 
     if ran_tools & _ADVANCED_TOOLS:
-        return "advanced"
-    if ran_tools & _EXPLORING_TOOLS:
-        return "exploring"
-    if "get_triage_report" in ran_tools:
-        return "triaged"
-    return "file_loaded"
+        result = "advanced"
+    elif ran_tools & _EXPLORING_TOOLS:
+        result = "exploring"
+    elif "get_triage_report" in ran_tools:
+        result = "triaged"
+    else:
+        result = "file_loaded"
+
+    _phase_cache["result"] = result
+    _phase_cache["version"] = history_len
+    _phase_cache["time"] = now
+    return result
 
 
 @tool_decorator
@@ -326,10 +347,11 @@ async def get_analysis_digest(
 
     # Coverage
     total_functions = 0
-    if ANGR_AVAILABLE and state.angr_cfg:
+    _, _digest_cfg = state.get_angr_snapshot()
+    if ANGR_AVAILABLE and _digest_cfg:
         try:
             total_functions = sum(
-                1 for f in state.angr_cfg.functions.values()
+                1 for f in _digest_cfg.functions.values()
                 if not f.is_simprocedure and not f.is_syscall
             )
         except Exception:
@@ -860,6 +882,7 @@ async def get_analysis_timeline(
         ctx: MCP Context.
         limit: Max timeline entries. Default 20.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     # Fetch once, reuse for both iteration and count
     tool_history = state.get_tool_history()
     all_notes = state.get_notes()

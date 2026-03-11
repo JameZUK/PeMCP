@@ -1,27 +1,11 @@
 """MCP tools for binary payload comparison and diffing."""
 import asyncio
-import math
 
 from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
-
-
-def _shannon_entropy(data: bytes) -> float:
-    """Compute Shannon entropy of a byte sequence."""
-    if not data:
-        return 0.0
-    freq = [0] * 256
-    for b in data:
-        freq[b] += 1
-    length = len(data)
-    ent = 0.0
-    for f in freq:
-        if f > 0:
-            p = f / length
-            ent -= p * math.log2(p)
-    return ent
+from arkana.utils import shannon_entropy
 
 
 @tool_decorator
@@ -155,8 +139,8 @@ async def diff_payloads(
             "identical_bytes": identical_bytes,
             "diff_regions_count": len(diff_regions),
             "similarity_pct": round(similarity, 2),
-            "entropy_a": round(_shannon_entropy(data_a), 2),
-            "entropy_b": round(_shannon_entropy(data_b), 2),
+            "entropy_a": round(shannon_entropy(data_a), 2),
+            "entropy_b": round(shannon_entropy(data_b), 2),
             "xor_relationship": xor_key_global,
             "diff_regions": regions,
             "is_pe_a": data_a[:2] == b"MZ",

@@ -780,20 +780,32 @@ def _parse_overlay_data(pe: pefile.PE) -> Optional[Dict[str, Any]]:
     return None
 
 
+_MAX_RELOC_ENTRIES = 50_000
+
 def _parse_base_relocations(pe: pefile.PE) -> List[Dict[str, Any]]:
     relocs_list = []
+    total_entries = 0
+    truncated = False
     if hasattr(pe, 'DIRECTORY_ENTRY_BASERELOC'):
         for base_reloc in pe.DIRECTORY_ENTRY_BASERELOC:
             block: Dict[str, Any] = {'struct': base_reloc.struct.dump_dict(), 'entries': []}
             if hasattr(base_reloc, 'entries'):
                 for entry in base_reloc.entries:
+                    if total_entries >= _MAX_RELOC_ENTRIES:
+                        truncated = True
+                        break
                     block['entries'].append({
                         'rva': hex(entry.rva),
                         'type': entry.type,
                         'type_str': get_relocation_type_str(entry.type),
                         'is_padding': getattr(entry, 'is_padding', False),
                     })
+                    total_entries += 1
             relocs_list.append(block)
+            if truncated:
+                break
+    if truncated:
+        relocs_list.append({"_truncated": True, "_total_cap": _MAX_RELOC_ENTRIES})
     return relocs_list
 
 
@@ -825,10 +837,16 @@ def _parse_bound_imports(pe: pefile.PE) -> List[Dict[str, Any]]:
     return bound_list
 
 
+_MAX_EXCEPTION_ENTRIES = 10_000
+
 def _parse_exception_data(pe: pefile.PE) -> List[Dict[str, Any]]:
     ex_list = []
+    truncated = False
     if hasattr(pe, 'DIRECTORY_ENTRY_EXCEPTION') and pe.DIRECTORY_ENTRY_EXCEPTION:
         for entry in pe.DIRECTORY_ENTRY_EXCEPTION:
+            if len(ex_list) >= _MAX_EXCEPTION_ENTRIES:
+                truncated = True
+                break
             if hasattr(entry, 'struct'):
                 entry_dump = entry.struct.dump_dict()
                 machine = pe.FILE_HEADER.Machine
@@ -843,6 +861,8 @@ def _parse_exception_data(pe: pefile.PE) -> List[Dict[str, Any]]:
                 ]:
                     entry_dump['note'] = "ARM/ARM64 RUNTIME_FUNCTION"
                 ex_list.append(entry_dump)
+    if truncated:
+        ex_list.append({"_truncated": True, "_total_cap": _MAX_EXCEPTION_ENTRIES})
     return ex_list
 
 
@@ -1116,7 +1136,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
     pe_info_dict['basic_ascii_strings'] = [
         {"offset": hex(offset), "string": s, "source_type": "basic_ascii"}
         for offset, s in _extract_strings_from_data(pe.__data__, 5)
-    ]
+    ][:100_000]
     _timing["basic_strings"] = round(_time.monotonic() - _t_strings, 2)
 
     pe_info_dict['pefile_warnings'] = pe.get_warnings()

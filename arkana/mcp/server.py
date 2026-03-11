@@ -1,6 +1,5 @@
 """MCP server setup, tool decorator, and validation helpers."""
 import asyncio
-import copy
 import functools
 import json
 import logging
@@ -251,9 +250,9 @@ def tool_decorator(func):
         # is already under the limit (single json.dumps + len check).
         if ctx is not None and isinstance(result, (dict, list, str)):
             try:
-                _result_len = len(json.dumps(result, ensure_ascii=False))
-                if _result_len > _SOFT_LIMIT:
-                    result = await _check_mcp_response_size(ctx, result, tool_name)
+                _result_json = json.dumps(result, ensure_ascii=False)
+                if len(_result_json) > _SOFT_LIMIT:
+                    result = await _check_mcp_response_size(ctx, result, tool_name, _preserialized=_result_json)
             except (TypeError, ValueError):
                 logger.debug("Auto-truncation skipped for %s (serialization error)", tool_name, exc_info=True)
 
@@ -283,7 +282,7 @@ def _check_pe_loaded(tool_name: str) -> None:
     a potential (though unlikely) race where one is reset between two
     separate attribute accesses through the StateProxy.
     """
-    pe_data, filepath = state.pe_data, state.filepath
+    pe_data, filepath = state.get_file_snapshot()
     if pe_data is None or filepath is None:
         raise RuntimeError(
             f"[{tool_name}] No file is currently loaded. "
@@ -428,7 +427,8 @@ async def _check_mcp_response_size(
     ctx: Context,
     data_to_return: Any,
     tool_name: str,
-    limit_param_info: Optional[str] = None
+    limit_param_info: Optional[str] = None,
+    _preserialized: Optional[str] = None,
 ) -> Any:
     """
     Smart Size Guard with dual-limit system.
@@ -444,7 +444,7 @@ async def _check_mcp_response_size(
     data_size_bytes = 0  # Safe default for error fallback
     try:
         # 1. Check initial size — measure both char count and byte length
-        serialized_data = json.dumps(data_to_return, ensure_ascii=False)
+        serialized_data = _preserialized or json.dumps(data_to_return, ensure_ascii=False)
         data_size_chars = len(serialized_data)
         data_size_bytes = len(serialized_data.encode('utf-8'))
 
@@ -468,8 +468,14 @@ async def _check_mcp_response_size(
             f"Auto-truncating."
         )
 
-        # Deep copy to avoid mutating the caller's data during truncation.
-        modified_data = copy.deepcopy(data_to_return)
+        # Shallow copy suffices — truncation only replaces top-level keys
+        # with new sliced objects, never mutates nested structures in-place.
+        if isinstance(data_to_return, dict):
+            modified_data = dict(data_to_return)
+        elif isinstance(data_to_return, list):
+            modified_data = list(data_to_return)
+        else:
+            modified_data = data_to_return
 
         # Track current char count from the initial measurement to avoid
         # re-serialising on every loop iteration (expensive for large dicts).
@@ -492,7 +498,7 @@ async def _check_mcp_response_size(
 
                 for k, v in modified_data.items():
                     try:
-                        v_len = len(json.dumps(v, ensure_ascii=False))
+                        v_len = len(repr(v))
                         if v_len > largest_len:
                             largest_len = v_len
                             largest_key = k
@@ -544,12 +550,16 @@ async def _check_mcp_response_size(
                 new_len = int(len(modified_data) * reduction_ratio)
                 modified_data = modified_data[:new_len] + "...[TRUNCATED]"
 
-            # Re-measure after this iteration's modification (char count).
-            current_chars = len(json.dumps(modified_data, ensure_ascii=False))
+            # Re-measure char count after this iteration's modification.
+            try:
+                current_chars = len(json.dumps(modified_data, ensure_ascii=False))
+            except (TypeError, ValueError):
+                break
 
-        # Byte-limit backstop: if char truncation still leaves us over 64KB bytes
+        # Single final serialization for both char and byte checks.
         final_json = json.dumps(modified_data, ensure_ascii=False)
-        final_size = len(final_json.encode('utf-8'))
+        final_bytes = final_json.encode('utf-8')
+        final_size = len(final_bytes)
         if final_size > MAX_MCP_RESPONSE_SIZE_BYTES:
             # Reserve space for the wrapper dict overhead (~200 bytes)
             max_preview = TARGET_BYTES - 300
@@ -558,10 +568,10 @@ async def _check_mcp_response_size(
                 "data_preview": truncated_str,
                 "_truncation_warning": f"Response could not be structurally reduced. Converted to truncated string preview ({final_size} bytes -> {len(truncated_str)} bytes)."
             }
-            # Final safety check — if still too large, reduce preview further
-            backstop_size = len(json.dumps(modified_data, ensure_ascii=False).encode('utf-8'))
-            if backstop_size > MAX_MCP_RESPONSE_SIZE_BYTES:
-                safe_len = max(100, max_preview - (backstop_size - MAX_MCP_RESPONSE_SIZE_BYTES))
+            # Final safety check — measure wrapper without re-serializing the preview
+            wrapper_overhead = len(json.dumps({"data_preview": "", "_truncation_warning": modified_data["_truncation_warning"]}, ensure_ascii=False).encode('utf-8'))
+            if wrapper_overhead + len(truncated_str.encode('utf-8')) > MAX_MCP_RESPONSE_SIZE_BYTES:
+                safe_len = max(100, max_preview - (wrapper_overhead + len(truncated_str.encode('utf-8')) - MAX_MCP_RESPONSE_SIZE_BYTES))
                 modified_data["data_preview"] = truncated_str[:safe_len]
 
         return modified_data

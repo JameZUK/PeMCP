@@ -1,9 +1,11 @@
 """MCP tools for Go binary analysis using pygore."""
 import asyncio
+import os
 from typing import Dict, Any, Optional
 from arkana.config import state, logger, Context, PYGORE_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._format_helpers import _check_lib, _get_filepath
+from arkana.constants import MAX_TOOL_LIMIT
 
 if PYGORE_AVAILABLE:
     import pygore
@@ -53,6 +55,7 @@ async def go_analyze(
         limit: Max packages/vendor_packages/types to return (default 20).
     """
     await ctx.info("Analysing Go binary")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_lib("pygore", PYGORE_AVAILABLE, "go_analyze")
     target = _get_filepath(file_path)
 
@@ -63,7 +66,7 @@ async def go_analyze(
             return {"error": f"Not a Go binary or pygore parsing failed: {e}"}
 
         try:
-            result: Dict[str, Any] = {"file": target}
+            result: Dict[str, Any] = {"file": os.path.basename(target)}
 
             # Scale per-package detail caps inversely with package limit to
             # keep total response size bounded (~60KB target).
@@ -194,7 +197,7 @@ async def go_analyze(
                 return {
                     "error": "Not a Go binary or pygore could not find Go metadata.",
                     "is_go_binary": False,
-                    "file": target,
+                    "file": os.path.basename(target),
                 }
 
             return result

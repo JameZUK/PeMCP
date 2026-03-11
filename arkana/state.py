@@ -219,6 +219,7 @@ class AnalyzerState:
                  address: Optional[str] = None, tool_name: Optional[str] = None) -> Dict[str, Any]:
         """Thread-safe note creation. Returns the new note dict."""
         now = datetime.datetime.now(datetime.timezone.utc)
+        epoch = time.time()
         with self._notes_lock:
             self._notes_counter += 1
             note: Dict[str, Any] = {
@@ -228,6 +229,7 @@ class AnalyzerState:
                 "tool_name": tool_name,
                 "content": content,
                 "created_at": now.isoformat(),
+                "created_at_epoch": epoch,
                 "updated_at": now.isoformat(),
             }
             self.notes.append(note)
@@ -560,6 +562,11 @@ class AnalyzerState:
             self.angr_cfg = cfg
             self.angr_loop_cache = loop_cache
             self.angr_loop_cache_config = loop_cache_config
+
+    def get_file_snapshot(self):
+        """Return (pe_data, filepath) atomically under _pe_lock."""
+        with self._pe_lock:
+            return self.pe_data, self.filepath
 
     def get_angr_snapshot(self):
         """Return a consistent snapshot of (project, cfg)."""

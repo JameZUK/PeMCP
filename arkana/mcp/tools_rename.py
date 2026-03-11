@@ -40,6 +40,8 @@ async def rename_function(
     _check_pe_loaded("rename_function")
     if not new_name or not new_name.strip():
         raise ValueError("new_name must be a non-empty string.")
+    if len(new_name) > 200:
+        raise ValueError("Name too long (max 200 chars)")
     address = normalize_address(address)
     entry = state.rename_function(address, new_name.strip())
     _persist_renames_to_cache()
@@ -74,6 +76,8 @@ async def rename_variable(
         raise ValueError("old_name must be a non-empty string.")
     if not new_name or not new_name.strip():
         raise ValueError("new_name must be a non-empty string.")
+    if len(new_name) > 200:
+        raise ValueError("Name too long (max 200 chars)")
     function_address = normalize_address(function_address)
     entry = state.rename_variable(function_address, old_name.strip(), new_name.strip())
     _persist_renames_to_cache()
@@ -109,6 +113,8 @@ async def add_label(
         raise ValueError(f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}.")
     if not label_name or not label_name.strip():
         raise ValueError("label_name must be a non-empty string.")
+    if len(label_name) > 200:
+        raise ValueError("Label name too long (max 200 chars)")
     address = normalize_address(address)
     entry = state.add_label(address, label_name.strip(), category)
     _persist_renames_to_cache()

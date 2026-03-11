@@ -1,9 +1,11 @@
 """MCP tools for .NET binary analysis using dnfile, dncil, and dotnetfile."""
 import asyncio
+import os
 from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, DNFILE_AVAILABLE, DNCIL_AVAILABLE, DOTNETFILE_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._format_helpers import _check_lib, _get_filepath
+from arkana.constants import MAX_TOOL_LIMIT
 
 if DNFILE_AVAILABLE:
     import dnfile
@@ -42,6 +44,7 @@ async def dotnet_analyze(
         limit: Max entries per category.
     """
     await ctx.info("Analysing .NET metadata")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     if not DNFILE_AVAILABLE and not DOTNETFILE_AVAILABLE:
         return {"error": "Neither dnfile nor dotnetfile is installed. Install one: pip install dnfile  OR  pip install dotnetfile"}
     target = _get_filepath(file_path)
@@ -73,7 +76,7 @@ async def dotnet_analyze(
                 dn.close()
                 return {"error": "Not a valid .NET binary or parsing failed: 'File is not a .NET assembly.'"}
 
-            result: Dict[str, Any] = {"file": target, "is_dotnet": True}
+            result: Dict[str, Any] = {"file": os.path.basename(target), "is_dotnet": True}
 
             # CLR header
             try:
@@ -216,7 +219,7 @@ def _parse_with_dotnetfile(target: str, limit: int) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Not a valid .NET binary or parsing failed: {e}"}
 
-    result: Dict[str, Any] = {"file": target, "is_dotnet": True}
+    result: Dict[str, Any] = {"file": os.path.basename(target), "is_dotnet": True}
 
     # CLR header
     try:

@@ -436,14 +436,12 @@ async def get_capa_analysis_info(ctx: Context,
     }
 
     report_meta_from_capa_original = capa_full_results.get('meta', {}) if capa_full_results else {}
-    processed_report_meta = copy.deepcopy(report_meta_from_capa_original)
-
-    if 'analysis' in processed_report_meta and isinstance(processed_report_meta['analysis'], dict):
-        analysis_section = processed_report_meta['analysis']
-        if 'layout' in analysis_section:
-            del analysis_section['layout']
-        if 'feature_counts' in analysis_section:
-            del analysis_section['feature_counts']
+    # Selective dict construction instead of deep-copy for performance
+    processed_report_meta = {
+        k: ({ak: av for ak, av in v.items() if ak not in ('layout', 'feature_counts')}
+            if k == 'analysis' and isinstance(v, dict) else v)
+        for k, v in report_meta_from_capa_original.items()
+    }
 
     if capa_status == "Skipped by user request":
         data_to_send = {"error": "Capa analysis was skipped.", "rules": {}, "pagination": base_pagination_info, "report_metadata": processed_report_meta}
@@ -517,7 +515,8 @@ async def get_capa_analysis_info(ctx: Context,
 
     final_rules_output_dict = {}
     for rule_id, rule_details_original_for_page in paginated_rule_items_tuples:
-        rule_data_to_process = copy.deepcopy(rule_details_original_for_page)
+        # Selective dict construction instead of deep-copy — only copy keys we need
+        rule_data_to_process = {k: v for k, v in rule_details_original_for_page.items()}
 
         if fields_per_rule:
             rule_data_to_process = {k: v for k, v in rule_data_to_process.items() if k in fields_per_rule}
@@ -1268,7 +1267,7 @@ async def get_strings_summary(
     Returns:
         A dictionary with categorized string counts and examples.
     """
-    from arkana.mcp._category_maps import STRING_CATEGORY_PATTERNS, BENIGN_IP_PREFIXES
+    from arkana.mcp._category_maps import STRING_CATEGORY_PATTERNS, BENIGN_IP_PREFIXES, is_benign_ip
 
     _check_pe_loaded("get_strings_summary")
 
@@ -1292,18 +1291,7 @@ async def get_strings_summary(
                 # IP validation: skip private/benign IPs
                 if cat_name == "ip_addresses":
                     ip = m.group()
-                    octets = ip.split('.')
-                    try:
-                        first = int(octets[0])
-                        if first in BENIGN_IP_PREFIXES:
-                            continue
-                        if first == 192 and int(octets[1]) == 168:
-                            continue
-                        if first == 172 and 16 <= int(octets[1]) <= 31:
-                            continue
-                        if not all(0 <= int(o) <= 255 for o in octets):
-                            continue
-                    except (ValueError, IndexError):
+                    if is_benign_ip(ip):
                         continue
                 categorized[cat_name].append(s)
 

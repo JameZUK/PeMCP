@@ -1,5 +1,6 @@
 """MCP tools for Rust binary analysis."""
 import asyncio
+import os
 import re
 from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, RUSTBININFO_AVAILABLE, RUST_DEMANGLER_AVAILABLE
@@ -113,7 +114,7 @@ async def rust_analyze(
         except Exception:
             info = None
 
-        result: Dict[str, Any] = {"file": target}
+        result: Dict[str, Any] = {"file": os.path.basename(target)}
 
         # Try various API shapes since rustbininfo evolves
         if info:

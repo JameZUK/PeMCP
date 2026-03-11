@@ -392,14 +392,24 @@ async def extract_wide_strings(
     pe = state.pe_object
     file_data = pe.__data__
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _extract():
         strings = []
         i = 0
-        while i < len(file_data) - 1:
+        data_len = len(file_data)
+        next_progress_at = 1024 * 1024  # report every 1MB
+        bridge.report_progress(5, 100)
+        bridge.info("Scanning for wide strings...")
+        while i < data_len - 1:
+            if i >= next_progress_at:
+                pct = 5 + int((i / data_len) * 85)
+                bridge.report_progress(min(pct, 90), 100)
+                next_progress_at += 1024 * 1024
             # Read UTF-16LE pairs
             current_string = ""
             start_offset = i
-            while i < len(file_data) - 1:
+            while i < data_len - 1:
                 lo = file_data[i]
                 hi = file_data[i + 1]
                 if hi == 0 and 0x20 <= lo <= 0x7e:
@@ -420,6 +430,7 @@ async def extract_wide_strings(
             if len(strings) >= limit:
                 break
 
+        bridge.report_progress(95, 100)
         return strings
 
     result_strings = await asyncio.to_thread(_extract)
@@ -457,12 +468,22 @@ async def detect_format_strings(ctx: Context, limit: int = 20) -> Dict[str, Any]
     fmt_pattern = re.compile(r'%[-+0 #]*\d*\.?\d*[diouxXeEfFgGaAcspn%]')
     dangerous_pattern = re.compile(r'%[-+0 #]*\d*\.?\d*n')
 
+    bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
+
     def _scan():
         findings = []
+        data_len = len(file_data)
+        next_progress_at = 1024 * 1024  # report every 1MB
+        bridge.report_progress(5, 100)
+        bridge.info("Scanning for format strings...")
         # Simple ASCII string extraction
         current = ""
         start = 0
         for i, b in enumerate(file_data):
+            if i >= next_progress_at:
+                pct = 5 + int((i / data_len) * 85)
+                bridge.report_progress(min(pct, 90), 100)
+                next_progress_at += 1024 * 1024
             if 0x20 <= b <= 0x7e:
                 if not current:
                     start = i
@@ -480,6 +501,7 @@ async def detect_format_strings(ctx: Context, limit: int = 20) -> Dict[str, Any]
                 current = ""
                 if len(findings) >= limit:
                     break
+        bridge.report_progress(95, 100)
         return findings
 
     findings = await asyncio.to_thread(_scan)
@@ -620,6 +642,8 @@ async def deobfuscate_xor_multi_byte(
         data_hex: Hex-encoded encrypted data.
         key_hex: Hex-encoded XOR key (e.g. 'deadbeef' for a 4-byte key).
     """
+    if len(data_hex) > 2_000_000:
+        raise ValueError("Input hex string too large (>1MB of data)")
     await ctx.info(f"Multi-byte XOR: data={len(data_hex)//2} bytes, key={key_hex}")
     try:
         data = bytes.fromhex(data_hex)

@@ -26,6 +26,8 @@ def _extract_strings_from_data(data_bytes: bytes, min_length: int = 5) -> List[T
         for m in pattern.finditer(data_bytes)
     ]
 
+_MAX_MATCHES_PER_TERM = 10_000
+
 def _search_specific_strings_in_data(data_bytes: bytes, search_terms: List[str]) -> Dict[str, List[int]]:
     results: Dict[str, List[int]] = {term: [] for term in search_terms}
     for term in search_terms:
@@ -35,6 +37,8 @@ def _search_specific_strings_in_data(data_bytes: bytes, search_terms: List[str])
             found_at = data_bytes.find(term_bytes, offset)
             if found_at == -1: break
             results[term].append(found_at)
+            if len(results[term]) >= _MAX_MATCHES_PER_TERM:
+                break
             offset = found_at + 1
     return results
 

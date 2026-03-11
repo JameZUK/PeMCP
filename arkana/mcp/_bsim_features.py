@@ -193,16 +193,19 @@ def extract_function_features(
                     # Extract constants for strings and magic numbers
                     if hasattr(expr, 'con') and hasattr(expr.con, 'value'):
                         val = expr.con.value
+                        # Pre-check address ranges before attempting memory load
+                        in_range = any(lo <= val <= hi for lo, hi in _addr_ranges)
                         # Check if constant references a printable string
-                        try:
-                            s = project.loader.memory.load(val, 64)
-                            decoded = s.split(b'\x00', 1)[0]
-                            if len(decoded) >= 4 and all(0x20 <= b < 0x7f for b in decoded):
-                                string_hashes.append(zlib.crc32(decoded) & 0xFFFFFFFF)
-                        except Exception:
-                            pass
+                        if in_range:
+                            try:
+                                s = project.loader.memory.load(val, 64)
+                                decoded = s.split(b'\x00', 1)[0]
+                                if len(decoded) >= 4 and all(0x20 <= b < 0x7f for b in decoded):
+                                    string_hashes.append(zlib.crc32(decoded) & 0xFFFFFFFF)
+                            except Exception:
+                                pass
                         # Collect interesting constants (exclude addresses)
-                        if val > 0x1000 and not any(lo <= val <= hi for lo, hi in _addr_ranges):
+                        if val > 0x1000 and not in_range:
                             constants.append(val)
         except Exception:
             continue

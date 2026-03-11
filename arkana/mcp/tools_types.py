@@ -62,27 +62,32 @@ def _compute_struct_size(fields: list) -> int:
     return size
 
 
-def _check_struct_cycles(struct_name: str, fields: list, visited: Optional[set] = None, depth: int = 0) -> None:
-    """Detect recursive struct cycles. Raises ValueError if a cycle is found."""
+def _check_struct_cycles(struct_name: str, fields: list, path: Optional[List[str]] = None, depth: int = 0) -> None:
+    """Detect recursive struct cycles. Raises ValueError if a cycle is found.
+
+    Uses a list (not a set) to preserve insertion order so the exact cycle
+    path is displayed in the error message.
+    """
+    if path is None:
+        path = []
     if depth > 20:
         raise ValueError(
             f"Struct nesting depth exceeds maximum (20) — possible cycle or excessive nesting "
-            f"(path: {' -> '.join(visited or set())} -> {struct_name})"
+            f"(path: {' -> '.join(path)} -> {struct_name})"
         )
-    if visited is None:
-        visited = set()
-    if struct_name in visited:
+    if struct_name in path:
+        cycle = [*path[path.index(struct_name):], struct_name]
         raise ValueError(
-            f"Recursive struct cycle detected: '{struct_name}' references itself "
-            f"(cycle path: {' -> '.join(visited)} -> {struct_name})"
+            f"Recursive struct reference detected: {' -> '.join(cycle)}"
         )
-    visited.add(struct_name)
+    path.append(struct_name)
     for field_def in fields:
         ftype = field_def.get("type", "")
         # Check if this field type references another custom struct
         ref_type = state.get_custom_type(ftype) if ftype else None
         if ref_type and ref_type.get("type") == "struct":
-            _check_struct_cycles(ftype, ref_type["fields"], visited.copy(), depth + 1)
+            _check_struct_cycles(ftype, ref_type["fields"], list(path), depth + 1)
+    path.pop()
 
 
 @tool_decorator
@@ -115,6 +120,8 @@ async def create_struct(
     if not name or not name.strip():
         raise ValueError("name must be a non-empty string.")
     name = name.strip()
+    if not _VALID_FIELD_NAME_RE.match(name) or len(name) > 200:
+        raise ValueError("Invalid type name: must match [a-zA-Z_][a-zA-Z0-9_]* and be ≤200 chars")
     if not fields:
         raise ValueError("fields must not be empty.")
     if len(fields) > MAX_STRUCT_FIELDS:
@@ -166,12 +173,19 @@ async def create_enum(
     if not name or not name.strip():
         raise ValueError("name must be a non-empty string.")
     name = name.strip()
+    if not _VALID_FIELD_NAME_RE.match(name) or len(name) > 200:
+        raise ValueError("Invalid type name: must match [a-zA-Z_][a-zA-Z0-9_]* and be ≤200 chars")
     if not values:
         raise ValueError("values must not be empty.")
     if len(values) > MAX_ENUM_VALUES:
         raise ValueError(f"Too many values ({len(values)}). Maximum is {MAX_ENUM_VALUES}.")
     if size not in (1, 2, 4, 8):
         raise ValueError("size must be 1, 2, 4, or 8 bytes.")
+
+    # Validate enum value names
+    for vname in values:
+        if not _VALID_FIELD_NAME_RE.match(vname):
+            raise ValueError(f"Invalid enum value name: '{vname}'. Must match [a-zA-Z_][a-zA-Z0-9_]*")
 
     # Validate all values are integers and in range
     for k, v in values.items():

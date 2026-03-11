@@ -73,7 +73,12 @@ _overview_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, data)
 _OVERVIEW_TTL = 2  # seconds
 _MAX_OVERVIEW_CACHE = 4  # max cached overview snapshots
 
-# Shared lock protecting all three module-level caches above
+# M5: Cache for get_functions_data (2s TTL)
+_functions_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, version_key, data)
+_FUNCTIONS_TTL = 2  # seconds
+_MAX_FUNCTIONS_CACHE = 4  # max cached function lists
+
+# Shared lock protecting all module-level caches above
 _cache_lock = threading.Lock()
 
 
@@ -934,6 +939,19 @@ def get_functions_data(sort_by: str = "address",
     if st.angr_project is None or st.angr_cfg is None:
         return functions
 
+    # M5: Short TTL cache keyed on parameters + state identity
+    now = time.time()
+    cache_key = st._state_uuid
+    version_key = (sort_by, filter_triage, min_score, search, sort_asc,
+                   getattr(st, 'filepath', None),
+                   len(st.get_tool_history() or []))
+    with _cache_lock:
+        cached = _functions_cache.get(cache_key)
+        if cached is not None:
+            expire_time, cached_version, cached_data = cached
+            if now < expire_time and cached_version == version_key:
+                return cached_data
+
     try:
         kb = st.angr_project.kb
         if not hasattr(kb, "functions"):
@@ -1008,6 +1026,13 @@ def get_functions_data(sort_by: str = "address",
     else:
         functions.sort(key=lambda f: int(f["address"], 16), reverse=rev)
 
+    # M5: Store in cache
+    with _cache_lock:
+        if len(_functions_cache) >= _MAX_FUNCTIONS_CACHE and cache_key not in _functions_cache:
+            oldest_k = min(_functions_cache, key=lambda k: _functions_cache[k][0])
+            _functions_cache.pop(oldest_k, None)
+        _functions_cache[cache_key] = (now + _FUNCTIONS_TTL, version_key, functions)
+
     return functions
 
 
@@ -1045,31 +1070,7 @@ def get_callgraph_data() -> Dict[str, Any]:
         func_addrs = all_func_addrs[:500]
         addr_set = set(func_addrs)
 
-        for addr in func_addrs:
-            func = kb.functions[addr]
-            addr_hex = hex(addr)
-            is_renamed = addr_hex in renames
-            name = renames.get(addr_hex, func.name)
-            complexity = 0
-            if hasattr(func, "graph") and func.graph is not None:
-                try:
-                    complexity = func.graph.number_of_nodes()
-                except (AttributeError, TypeError, RuntimeError):
-                    pass
-            explored = is_renamed or addr_hex in decompiled_addrs or addr_hex in noted_addrs
-            nodes.append({
-                "data": {
-                    "id": addr_hex,
-                    "label": name,
-                    "triage": triage.get(addr_hex, "unreviewed"),
-                    "complexity": complexity,
-                    "score": score_lookup.get(addr_hex, 0),
-                    "explored": "yes" if explored else "no",
-                    "renamed": "yes" if is_renamed else "no",
-                }
-            })
-
-        # Build edges from call graph and compute degree counts
+        # M6: Build edges first to compute degree maps, then merge into node loop
         in_deg: Dict[str, int] = {}
         out_deg: Dict[str, int] = {}
         if hasattr(kb, "callgraph"):
@@ -1085,18 +1086,34 @@ def get_callgraph_data() -> Dict[str, Any]:
                     if len(edges) >= max_edges:
                         break
 
-        # Enrich nodes with degree counts and function size
-        for node in nodes:
-            d = node["data"]
-            addr_hex = d["id"]
-            d["in_deg"] = in_deg.get(addr_hex, 0)
-            d["out_deg"] = out_deg.get(addr_hex, 0)
-            # Function byte size
-            try:
-                func = kb.functions[int(addr_hex, 16)]
-                d["size"] = func.size if hasattr(func, "size") else 0
-            except (KeyError, ValueError, TypeError):
-                d["size"] = 0
+        # Build nodes with degree counts and size in a single pass
+        for addr in func_addrs:
+            func = kb.functions[addr]
+            addr_hex = hex(addr)
+            is_renamed = addr_hex in renames
+            name = renames.get(addr_hex, func.name)
+            complexity = 0
+            if hasattr(func, "graph") and func.graph is not None:
+                try:
+                    complexity = func.graph.number_of_nodes()
+                except (AttributeError, TypeError, RuntimeError):
+                    pass
+            explored = is_renamed or addr_hex in decompiled_addrs or addr_hex in noted_addrs
+            size = func.size if hasattr(func, "size") else 0
+            nodes.append({
+                "data": {
+                    "id": addr_hex,
+                    "label": name,
+                    "triage": triage.get(addr_hex, "unreviewed"),
+                    "complexity": complexity,
+                    "score": score_lookup.get(addr_hex, 0),
+                    "explored": "yes" if explored else "no",
+                    "renamed": "yes" if is_renamed else "no",
+                    "in_deg": in_deg.get(addr_hex, 0),
+                    "out_deg": out_deg.get(addr_hex, 0),
+                    "size": size,
+                }
+            })
 
     except (AttributeError, KeyError, TypeError, RuntimeError):
         logger.debug("Error building call graph data from angr KB", exc_info=True)

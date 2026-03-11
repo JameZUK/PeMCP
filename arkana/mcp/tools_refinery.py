@@ -21,6 +21,98 @@ from arkana.mcp._refinery_helpers import (
 
 
 # ===================================================================
+#  Module-level constant maps (moved from inside tool functions for
+#  efficiency — avoids re-creating dicts on every call)
+# ===================================================================
+
+_ENCODING_MAP = {
+    "b64": "refinery.units.encoding.b64:b64",
+    "hex": "refinery.units.encoding.hex:hex",
+    "b32": "refinery.units.encoding.b32:b32",
+    "b58": "refinery.units.encoding.b58:b58",
+    "b62": "refinery.units.encoding.b62:b62",
+    "b85": "refinery.units.encoding.b85:b85",
+    "a85": "refinery.units.encoding.a85:a85",
+    "b92": "refinery.units.encoding.b92:b92",
+    "url": "refinery.units.encoding.url:url",
+    "esc": "refinery.units.encoding.esc:esc",
+    "u16": "refinery.units.encoding.u16:u16",
+    "uuenc": "refinery.units.encoding.uuenc:uuenc",
+    "netbios": "refinery.units.encoding.netbios:netbios",
+    "cp1252": "refinery.units.encoding.cp1252:cp1252",
+    "wshenc": "refinery.units.encoding.wshenc:wshenc",
+    "morse": "refinery.units.encoding.morse:morse",
+    "htmlesc": "refinery.units.encoding.htmlesc:htmlesc",
+    "z85": "refinery.units.encoding.z85:z85",
+}
+
+_CIPHER_MAP = {
+    "aes": "refinery.units.crypto.cipher.aes:aes",
+    "des": "refinery.units.crypto.cipher.des:des",
+    "des3": "refinery.units.crypto.cipher.des3:des3",
+    "rc4": "refinery.units.crypto.cipher.rc4:rc4",
+    "blowfish": "refinery.units.crypto.cipher.blowfish:blowfish",
+    "camellia": "refinery.units.crypto.cipher.camellia:camellia",
+    "cast": "refinery.units.crypto.cipher.cast:cast",
+    "chacha": "refinery.units.crypto.cipher.chacha:chacha",
+    "salsa": "refinery.units.crypto.cipher.salsa:salsa",
+    "serpent": "refinery.units.crypto.cipher.serpent:serpent",
+    "tea": "refinery.units.crypto.cipher.tea:tea",
+    "xtea": "refinery.units.crypto.cipher.xtea:xtea",
+    "xxtea": "refinery.units.crypto.cipher.xxtea:xxtea",
+    "rc2": "refinery.units.crypto.cipher.rc2:rc2",
+    "rc5": "refinery.units.crypto.cipher.rc5:rc5",
+    "rc6": "refinery.units.crypto.cipher.rc6:rc6",
+    "sm4": "refinery.units.crypto.cipher.sm4:sm4",
+    "rabbit": "refinery.units.crypto.cipher.rabbit:rabbit",
+    "seal": "refinery.units.crypto.cipher.seal:seal",
+    "gost": "refinery.units.crypto.cipher.gost:gost",
+    "fernet": "refinery.units.crypto.cipher.fernet:fernet",
+    "speck": "refinery.units.crypto.cipher.speck:speck",
+    "hc128": "refinery.units.crypto.cipher.hc128:hc128",
+    "hc256": "refinery.units.crypto.cipher.hc256:hc256",
+    "isaac": "refinery.units.crypto.cipher.isaac:isaac",
+    "sosemanuk": "refinery.units.crypto.cipher.sosemanuk:sosemanuk",
+    "vigenere": "refinery.units.crypto.cipher.vigenere:vigenere",
+    "rot": "refinery.units.crypto.cipher.rot:rot",
+    "rijndael": "refinery.units.crypto.cipher.rijndael:rijndael",
+    "chaskey": "refinery.units.crypto.cipher.chaskey:chaskey",
+    "blabla": "refinery.units.crypto.cipher.blabla:blabla",
+    "rncrypt": "refinery.units.crypto.cipher.rncrypt:rncrypt",
+    "codebook": "refinery.units.crypto.cipher.codebook:codebook",
+    "rc4mod": "refinery.units.crypto.cipher.rc4mod:rc4mod",
+    "secstr": "refinery.units.crypto.cipher.secstr:secstr",
+}
+
+_COMPRESS_MAP = {
+    "auto": "refinery.units.compression.decompress:decompress",
+    "zl": "refinery.units.compression.zl:zl",
+    "bz2": "refinery.units.compression.bz2:bz2",
+    "lz4": "refinery.units.compression.lz4:lz4",
+    "brotli": "refinery.units.compression.brotli:brotli",
+    "zstd": "refinery.units.compression.zstd:zstd",
+    "lznt1": "refinery.units.compression.lznt1:lznt1",
+    "lzo": "refinery.units.compression.lzo:lzo",
+    "ap": "refinery.units.compression.ap:ap",
+    "lzma": "refinery.units.compression.lz:lzma",
+    "blz": "refinery.units.compression.blz:blz",
+    "lzf": "refinery.units.compression.lzf:lzf",
+    "lzg": "refinery.units.compression.lzg:lzg",
+    "lzip": "refinery.units.compression.lzip:lzip",
+    "lzjb": "refinery.units.compression.lzjb:lzjb",
+    "lzw": "refinery.units.compression.lzw:lzw",
+    "lzx": "refinery.units.compression.lzx:lzx",
+    "mscf": "refinery.units.compression.mscf:mscf",
+    "nrv": "refinery.units.compression.nrv:nrv",
+    "pkw": "refinery.units.compression.pkw:pkw",
+    "qlz": "refinery.units.compression.qlz:qlz",
+    "szdd": "refinery.units.compression.szdd:szdd",
+    "flz": "refinery.units.compression.flz:flz",
+    "jcalg": "refinery.units.compression.jcalg:jcalg",
+}
+
+
+# ===================================================================
 #  1. ENCODING / DECODING (merged encode + decode)
 # ===================================================================
 
@@ -48,27 +140,6 @@ async def refinery_codec(
         Dictionary with transformed output (hex + text preview).
     """
     _require_refinery("refinery_codec")
-
-    _ENCODING_MAP = {
-        "b64": "refinery.units.encoding.b64:b64",
-        "hex": "refinery.units.encoding.hex:hex",
-        "b32": "refinery.units.encoding.b32:b32",
-        "b58": "refinery.units.encoding.b58:b58",
-        "b62": "refinery.units.encoding.b62:b62",
-        "b85": "refinery.units.encoding.b85:b85",
-        "a85": "refinery.units.encoding.a85:a85",
-        "b92": "refinery.units.encoding.b92:b92",
-        "url": "refinery.units.encoding.url:url",
-        "esc": "refinery.units.encoding.esc:esc",
-        "u16": "refinery.units.encoding.u16:u16",
-        "uuenc": "refinery.units.encoding.uuenc:uuenc",
-        "netbios": "refinery.units.encoding.netbios:netbios",
-        "cp1252": "refinery.units.encoding.cp1252:cp1252",
-        "wshenc": "refinery.units.encoding.wshenc:wshenc",
-        "morse": "refinery.units.encoding.morse:morse",
-        "htmlesc": "refinery.units.encoding.htmlesc:htmlesc",
-        "z85": "refinery.units.encoding.z85:z85",
-    }
 
     encoding_lower = encoding.lower()
     if encoding_lower not in _ENCODING_MAP:
@@ -152,44 +223,6 @@ async def refinery_decrypt(
     """
     _require_refinery("refinery_decrypt")
     await ctx.info(f"Decrypting with {algorithm}" + (f" mode={mode}" if mode else ""))
-
-    _CIPHER_MAP = {
-        "aes": "refinery.units.crypto.cipher.aes:aes",
-        "des": "refinery.units.crypto.cipher.des:des",
-        "des3": "refinery.units.crypto.cipher.des3:des3",
-        "rc4": "refinery.units.crypto.cipher.rc4:rc4",
-        "blowfish": "refinery.units.crypto.cipher.blowfish:blowfish",
-        "camellia": "refinery.units.crypto.cipher.camellia:camellia",
-        "cast": "refinery.units.crypto.cipher.cast:cast",
-        "chacha": "refinery.units.crypto.cipher.chacha:chacha",
-        "salsa": "refinery.units.crypto.cipher.salsa:salsa",
-        "serpent": "refinery.units.crypto.cipher.serpent:serpent",
-        "tea": "refinery.units.crypto.cipher.tea:tea",
-        "xtea": "refinery.units.crypto.cipher.xtea:xtea",
-        "xxtea": "refinery.units.crypto.cipher.xxtea:xxtea",
-        "rc2": "refinery.units.crypto.cipher.rc2:rc2",
-        "rc5": "refinery.units.crypto.cipher.rc5:rc5",
-        "rc6": "refinery.units.crypto.cipher.rc6:rc6",
-        "sm4": "refinery.units.crypto.cipher.sm4:sm4",
-        "rabbit": "refinery.units.crypto.cipher.rabbit:rabbit",
-        "seal": "refinery.units.crypto.cipher.seal:seal",
-        "gost": "refinery.units.crypto.cipher.gost:gost",
-        "fernet": "refinery.units.crypto.cipher.fernet:fernet",
-        "speck": "refinery.units.crypto.cipher.speck:speck",
-        "hc128": "refinery.units.crypto.cipher.hc128:hc128",
-        "hc256": "refinery.units.crypto.cipher.hc256:hc256",
-        "isaac": "refinery.units.crypto.cipher.isaac:isaac",
-        "sosemanuk": "refinery.units.crypto.cipher.sosemanuk:sosemanuk",
-        "vigenere": "refinery.units.crypto.cipher.vigenere:vigenere",
-        "rot": "refinery.units.crypto.cipher.rot:rot",
-        "rijndael": "refinery.units.crypto.cipher.rijndael:rijndael",
-        "chaskey": "refinery.units.crypto.cipher.chaskey:chaskey",
-        "blabla": "refinery.units.crypto.cipher.blabla:blabla",
-        "rncrypt": "refinery.units.crypto.cipher.rncrypt:rncrypt",
-        "codebook": "refinery.units.crypto.cipher.codebook:codebook",
-        "rc4mod": "refinery.units.crypto.cipher.rc4mod:rc4mod",
-        "secstr": "refinery.units.crypto.cipher.secstr:secstr",
-    }
 
     algo = algorithm.lower()
     if algo not in _CIPHER_MAP:
@@ -470,33 +503,6 @@ async def refinery_decompress(
 
     algo = algorithm.lower()
     await ctx.info(f"Decompressing with: {algo}")
-
-    _COMPRESS_MAP = {
-        "auto": "refinery.units.compression.decompress:decompress",
-        "zl": "refinery.units.compression.zl:zl",
-        "bz2": "refinery.units.compression.bz2:bz2",
-        "lz4": "refinery.units.compression.lz4:lz4",
-        "brotli": "refinery.units.compression.brotli:brotli",
-        "zstd": "refinery.units.compression.zstd:zstd",
-        "lznt1": "refinery.units.compression.lznt1:lznt1",
-        "lzo": "refinery.units.compression.lzo:lzo",
-        "ap": "refinery.units.compression.ap:ap",
-        "lzma": "refinery.units.compression.lz:lzma",
-        "blz": "refinery.units.compression.blz:blz",
-        "lzf": "refinery.units.compression.lzf:lzf",
-        "lzg": "refinery.units.compression.lzg:lzg",
-        "lzip": "refinery.units.compression.lzip:lzip",
-        "lzjb": "refinery.units.compression.lzjb:lzjb",
-        "lzw": "refinery.units.compression.lzw:lzw",
-        "lzx": "refinery.units.compression.lzx:lzx",
-        "mscf": "refinery.units.compression.mscf:mscf",
-        "nrv": "refinery.units.compression.nrv:nrv",
-        "pkw": "refinery.units.compression.pkw:pkw",
-        "qlz": "refinery.units.compression.qlz:qlz",
-        "szdd": "refinery.units.compression.szdd:szdd",
-        "flz": "refinery.units.compression.flz:flz",
-        "jcalg": "refinery.units.compression.jcalg:jcalg",
-    }
 
     if algo not in _COMPRESS_MAP:
         return {"error": f"Unknown algorithm '{algorithm}'.", "supported": sorted(_COMPRESS_MAP.keys())}

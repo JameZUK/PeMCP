@@ -12,6 +12,85 @@ from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 
 # ===================================================================
+#  Module-level constant maps (moved from inside auto_name_sample
+#  for efficiency — avoids re-creating dicts on every call)
+# ===================================================================
+
+_IMPORT_CAPABILITY_MAP = {
+    # Anti-debug / anti-analysis
+    "isdebuggerpresent": "antidbg",
+    "checkremotedebugger": "antidbg",
+    "ntqueryinformationprocess": "antidbg",
+    "queryperformancecounter": "antidbg",
+    "gettickcount": "antidbg",
+    # Process manipulation
+    "terminateprocess": "procmgmt",
+    "openprocess": "procmgmt",
+    "createprocess": "procmgmt",
+    # Code injection
+    "createremotethread": "inject",
+    "writeprocessmemory": "inject",
+    "virtualallocex": "inject",
+    "ntunmapviewofsection": "inject",
+    # IPC / named pipes
+    "createnamedpipe": "namedpipe",
+    "connectnamedpipe": "namedpipe",
+    "callnamedpipe": "namedpipe",
+    # Keylogging / input hooking
+    "setwindowshookex": "keylog",
+    "getasynckeystate": "keylog",
+    "getkeystate": "keylog",
+    # Crypto
+    "cryptencrypt": "crypto",
+    "cryptdecrypt": "crypto",
+    "bcryptencrypt": "crypto",
+    "bcryptdecrypt": "crypto",
+    "cryptderivekey": "crypto",
+    # Networking
+    "internetopen": "net",
+    "httpsendrequest": "net",
+    "httpopen": "net",
+    "urldownloadtofile": "net",
+    "wsastartup": "net",
+    # Persistence
+    "createservice": "persist",
+    "regsetvalue": "persist",
+    "regcreatekey": "persist",
+    # Execution
+    "winexec": "exec",
+    "shellexecute": "exec",
+    # Anti-VM / VM detection
+    "getsystemfirmwaretable": "antivm",
+    "enumservicesstatusex": "antivm",
+}
+
+_CAPA_SUB_NAMESPACE_LABELS = {
+    "anti-analysis/anti-vm": "antivm",
+    "anti-analysis/anti-debugging": "antidbg",
+    "anti-analysis/obfuscation": "obfusc",
+    "data-manipulation/encryption": "crypto",
+    "data-manipulation/hashing": "crypto",
+}
+
+_CAPA_NAMESPACE_LABELS = {
+    "anti-analysis": "antidbg",
+    "persistence": "persist",
+    "collection": "collect",
+    "credential-access": "credtheft",
+    "defense-evasion": "evasion",
+    "execution": "exec",
+    "impact": "impact",
+    "c2": "c2",
+    "exfiltration": "exfil",
+    "lateral-movement": "lateral",
+    "data-manipulation": "crypto",
+    "discovery": "recon",
+    "communication": "comms",
+    "privilege-escalation": "privesc",
+}
+
+
+# ===================================================================
 #  Tool 1: generate_analysis_report
 # ===================================================================
 
@@ -157,7 +236,7 @@ async def generate_analysis_report(
                         sections.append("")
 
         # --- Analyst Notes ---
-        general_notes = [n for n in notes if n.get("category") == "general"]
+        general_notes = [n for n in notes if n.get("category") == "general"][:50]
         if general_notes:
             sections.append("## Analyst Notes\n")
             for n in general_notes:
@@ -312,55 +391,6 @@ async def auto_name_sample(
             break
 
     # --- Behavioral capabilities from suspicious imports ---
-    # Broad mapping from import function substrings to capability labels
-    _IMPORT_CAPABILITY_MAP = {
-        # Anti-debug / anti-analysis
-        "isdebuggerpresent": "antidbg",
-        "checkremotedebugger": "antidbg",
-        "ntqueryinformationprocess": "antidbg",
-        "queryperformancecounter": "antidbg",
-        "gettickcount": "antidbg",
-        # Process manipulation
-        "terminateprocess": "procmgmt",
-        "openprocess": "procmgmt",
-        "createprocess": "procmgmt",
-        # Code injection
-        "createremotethread": "inject",
-        "writeprocessmemory": "inject",
-        "virtualallocex": "inject",
-        "ntunmapviewofsection": "inject",
-        # IPC / named pipes
-        "createnamedpipe": "namedpipe",
-        "connectnamedpipe": "namedpipe",
-        "callnamedpipe": "namedpipe",
-        # Keylogging / input hooking
-        "setwindowshookex": "keylog",
-        "getasynckeystate": "keylog",
-        "getkeystate": "keylog",
-        # Crypto
-        "cryptencrypt": "crypto",
-        "cryptdecrypt": "crypto",
-        "bcryptencrypt": "crypto",
-        "bcryptdecrypt": "crypto",
-        "cryptderivekey": "crypto",
-        # Networking
-        "internetopen": "net",
-        "httpsendrequest": "net",
-        "httpopen": "net",
-        "urldownloadtofile": "net",
-        "wsastartup": "net",
-        # Persistence
-        "createservice": "persist",
-        "regsetvalue": "persist",
-        "regcreatekey": "persist",
-        # Execution
-        "winexec": "exec",
-        "shellexecute": "exec",
-        # Anti-VM / VM detection
-        "getsystemfirmwaretable": "antivm",
-        "enumservicesstatusex": "antivm",
-    }
-
     sus_imports = triage.get("suspicious_imports", [])
     capabilities = set()
     for imp in sus_imports:
@@ -386,30 +416,6 @@ async def auto_name_sample(
                             break
 
     # Scan capa capabilities for additional labels
-    # Sub-namespace map checked first (most specific wins)
-    _CAPA_SUB_NAMESPACE_LABELS = {
-        "anti-analysis/anti-vm": "antivm",
-        "anti-analysis/anti-debugging": "antidbg",
-        "anti-analysis/obfuscation": "obfusc",
-        "data-manipulation/encryption": "crypto",
-        "data-manipulation/hashing": "crypto",
-    }
-    _CAPA_NAMESPACE_LABELS = {
-        "anti-analysis": "antidbg",
-        "persistence": "persist",
-        "collection": "collect",
-        "credential-access": "credtheft",
-        "defense-evasion": "evasion",
-        "execution": "exec",
-        "impact": "impact",
-        "c2": "c2",
-        "exfiltration": "exfil",
-        "lateral-movement": "lateral",
-        "data-manipulation": "crypto",
-        "discovery": "recon",
-        "communication": "comms",
-        "privilege-escalation": "privesc",
-    }
     sus_caps = triage.get("suspicious_capabilities", [])
     if isinstance(sus_caps, list):
         for cap in sus_caps:

@@ -2,6 +2,7 @@
 from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, analysis_cache, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.constants import MAX_TOOL_LIMIT
 
 
 def _persist_notes_to_cache() -> None:
@@ -49,6 +50,8 @@ async def add_note(
     valid_categories = ("general", "function", "tool_result", "ioc", "hypothesis", "conclusion", "manual")
     if category not in valid_categories:
         raise ValueError(f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}.")
+    if len(content) > 50_000:
+        raise ValueError("Note content exceeds 50KB limit.")
 
     note = state.add_note(content=content, category=category, address=address, tool_name=tool_name)
     _persist_notes_to_cache()
@@ -82,6 +85,7 @@ async def get_notes(
         A dictionary with notes list and count.
     """
     _check_pe_loaded("get_notes")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     notes = state.get_notes(category=category, address=address)
     total = len(notes)
     notes = notes[:limit]

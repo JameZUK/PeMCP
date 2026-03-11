@@ -1,9 +1,11 @@
 """MCP tools for ELF binary analysis using pyelftools."""
 import asyncio
+import os
 from typing import Dict, Any, Optional
 from arkana.config import state, logger, Context, PYELFTOOLS_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._format_helpers import _check_lib, _get_filepath
+from arkana.constants import MAX_TOOL_LIMIT
 
 if PYELFTOOLS_AVAILABLE:
     from elftools.elf.elffile import ELFFile
@@ -31,6 +33,7 @@ async def elf_analyze(
         limit: Max entries per category.
     """
     await ctx.info("Analysing ELF binary")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_lib("pyelftools", PYELFTOOLS_AVAILABLE, "elf_analyze", "pyelftools")
     target = _get_filepath(file_path)
 
@@ -39,7 +42,7 @@ async def elf_analyze(
             with open(target, 'rb') as f:
                 elf = ELFFile(f)
 
-                result: Dict[str, Any] = {"file": target, "is_elf": True}
+                result: Dict[str, Any] = {"file": os.path.basename(target), "is_elf": True}
 
                 # File header
                 result["header"] = {
@@ -178,7 +181,7 @@ async def elf_dwarf_info(
                     return {"note": "No DWARF debug info found in this binary."}
 
                 dwarf = elf.get_dwarf_info()
-                result: Dict[str, Any] = {"file": target, "has_dwarf": True}
+                result: Dict[str, Any] = {"file": os.path.basename(target), "has_dwarf": True}
 
                 # Compilation units
                 comp_units = []

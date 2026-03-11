@@ -364,10 +364,13 @@ async def build_function_signature_db(
 
         # Streaming inserts: register binary, then write features in batches
         # to avoid accumulating all features in memory at once.
+        # Lock is held only for DB writes, not during feature extraction.
         indexed_count = 0
         binary_basename = os.path.basename(filepath)
         _partial_build['total'] = total
         _partial_build['binary'] = binary_basename
+
+        # Hold lock only for the register_binary DB write
         with _db_write_lock:
             binary_id, conn = register_binary(
                 sha256=file_hash,
@@ -375,41 +378,43 @@ async def build_function_signature_db(
                 architecture=arch,
                 file_size=file_size,
             )
-            try:
-                batch: List[Dict[str, Any]] = []
-                for i, func in enumerate(all_funcs):
-                    try:
-                        # include_vex=False: the internal _vex_histogram key is
-                        # always populated regardless; include_vex only controls
-                        # whether the verbose histogram appears in the response dict.
-                        feat = extract_function_features(project, cfg, func, include_vex=False)
-                        batch.append(feat)
-                        indexed_count += 1
-                    except Exception as e:
-                        logger.debug("Feature extraction failed for %#x: %s", func.addr, e)
 
-                    # Flush batch to DB periodically
-                    if len(batch) >= _BATCH_SIZE:
+        try:
+            batch: List[Dict[str, Any]] = []
+            for i, func in enumerate(all_funcs):
+                try:
+                    # include_vex=False: the internal _vex_histogram key is
+                    # always populated regardless; include_vex only controls
+                    # whether the verbose histogram appears in the response dict.
+                    feat = extract_function_features(project, cfg, func, include_vex=False)
+                    batch.append(feat)
+                    indexed_count += 1
+                except Exception as e:
+                    logger.debug("Feature extraction failed for %#x: %s", func.addr, e)
+
+                # Flush batch to DB periodically — re-acquire lock for write
+                if len(batch) >= _BATCH_SIZE:
+                    with _db_write_lock:
                         store_functions_batch(conn, binary_id, batch)
-                        batch.clear()
+                    batch.clear()
 
-                    _partial_build['indexed'] = indexed_count
+                _partial_build['indexed'] = indexed_count
 
-                    if task_id_for_progress and i % 25 == 0:
-                        pct = 15 + int(75 * i / max(total, 1))
-                        _update_progress(task_id_for_progress, pct, f"Extracted {i}/{total} functions...", bridge=_progress_bridge)
+                if task_id_for_progress and i % 25 == 0:
+                    pct = 15 + int(75 * i / max(total, 1))
+                    _update_progress(task_id_for_progress, pct, f"Extracted {i}/{total} functions...", bridge=_progress_bridge)
 
-                # Flush remaining batch
+            # Flush remaining batch and update count — hold lock for final writes
+            with _db_write_lock:
                 if batch:
                     store_functions_batch(conn, binary_id, batch)
                     batch.clear()
-
                 update_binary_function_count(conn, binary_id, indexed_count)
 
-                if task_id_for_progress:
-                    _update_progress(task_id_for_progress, 95, "Finalizing...", bridge=_progress_bridge)
-            finally:
-                conn.close()
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 95, "Finalizing...", bridge=_progress_bridge)
+        finally:
+            conn.close()
 
         return {
             "status": "success",

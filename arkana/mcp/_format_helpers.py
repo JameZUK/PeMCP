@@ -20,10 +20,11 @@ def _get_filepath(file_path: Optional[str] = None) -> str:
     if not target:
         raise RuntimeError("No file specified and no file is loaded. Use open_file() first.")
     # Always validate path — even for state.filepath (defense-in-depth)
-    state.check_path_allowed(os.path.realpath(target))
-    if not os.path.isfile(target):
+    resolved = os.path.realpath(target)
+    state.check_path_allowed(resolved)
+    if not os.path.isfile(resolved):
         raise RuntimeError(f"File not found: {target}")
-    return target
+    return resolved
 
 
 # ── Magic-byte format detection ──────────────────────────────────────────

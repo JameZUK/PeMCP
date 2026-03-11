@@ -82,9 +82,15 @@ def _collect_all_string_values() -> Tuple[set, bool]:
                 if isinstance(str_list, list):
                     for s in str_list:
                         if isinstance(s, dict):
-                            all_string_values.add(s.get('string', ''))
+                            val = s.get('string', '')
                         elif isinstance(s, str):
-                            all_string_values.add(s)
+                            val = s
+                        else:
+                            continue
+                        # Skip strings too short to be network IOCs
+                        if len(val) < 8:
+                            continue
+                        all_string_values.add(val)
                         if len(all_string_values) >= _MAX_TRIAGE_STRINGS:
                             return all_string_values, True
 
@@ -92,9 +98,15 @@ def _collect_all_string_values() -> Tuple[set, bool]:
     if isinstance(basic_strings, list):
         for s in basic_strings:
             if isinstance(s, dict):
-                all_string_values.add(s.get('string', ''))
+                val = s.get('string', '')
             elif isinstance(s, str):
-                all_string_values.add(s)
+                val = s
+            else:
+                continue
+            # Skip strings too short to be network IOCs
+            if len(val) < 8:
+                continue
+            all_string_values.add(val)
             if len(all_string_values) >= _MAX_TRIAGE_STRINGS:
                 return all_string_values, True
 
@@ -547,25 +559,13 @@ def _triage_network_iocs(indicator_limit: int, all_string_values: set) -> Tuple[
     found_domains: set = set()
     found_registry: set = set()
 
+    from arkana.mcp._category_maps import is_benign_ip
+
     for s in all_string_values:
         for m in _TRIAGE_IP_RE.finditer(s):
             ip = m.group()
-            octets = ip.split('.')
-            if all(0 <= int(o) <= 255 for o in octets):
-                first = int(octets[0])
-                second = int(octets[1])
-                third = int(octets[2])
-                if (
-                    first not in (0, 10, 127, 255)
-                    and not (first == 192 and second == 168)           # private
-                    and not (first == 172 and 16 <= second <= 31)      # private
-                    and not (first == 169 and second == 254)           # link-local
-                    and not (224 <= first <= 239)                      # multicast
-                    and not (first == 192 and second == 0 and third == 2)    # TEST-NET-1
-                    and not (first == 198 and second == 51 and third == 100) # TEST-NET-2
-                    and not (first == 203 and second == 0 and third == 113)  # TEST-NET-3
-                ):
-                    found_ips.add(ip)
+            if not is_benign_ip(ip):
+                found_ips.add(ip)
         for m in _TRIAGE_URL_RE.finditer(s):
             found_urls.add(m.group())
         for m in _TRIAGE_DOMAIN_RE.finditer(s):
@@ -1270,6 +1270,9 @@ def _triage_elf_security(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
                         risk_score += 1
 
                 # Use mmap for byte-search fallback (avoids loading full file into memory)
+                if os.path.getsize(state.filepath) == 0:
+                    elf_sec["note"] = "Empty file — skipped byte-search checks"
+                    return elf_sec, risk_score
                 with open(state.filepath, 'rb') as f:
                     with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
                         elf_sec["has_stack_canary"] = mm.find(b'__stack_chk_fail') != -1

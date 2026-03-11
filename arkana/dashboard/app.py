@@ -190,8 +190,21 @@ _sse_connection_count = 0
 # increment only), so event loop blocking is negligible.
 _sse_lock = threading.Lock()
 
-# --- CSRF token (generated once per app instance) ---
-_csrf_token: str = ""
+# --- CSRF: per-session token derived via HMAC (bound to auth cookie) ---
+_csrf_secret: bytes = b""  # Random key, generated once per app instance
+_csrf_dashboard_token: str = ""  # Cached dashboard token for CSRF derivation
+
+
+def _compute_csrf_token(cookie_value: str) -> str:
+    """Derive a CSRF token from the auth cookie value using HMAC.
+
+    Binds the token to both the per-instance secret and the session credential
+    so that (a) tokens rotate on restart and (b) each auth credential yields
+    a different CSRF token.
+    """
+    if not _csrf_secret or not cookie_value:
+        return ""
+    return hmac.new(_csrf_secret, cookie_value.encode(), "sha256").hexdigest()[:32]
 
 # --- Login rate limiting ---
 _login_attempts: dict[str, list[float]] = {}
@@ -199,6 +212,11 @@ _login_lock = asyncio.Lock()
 _MAX_LOGIN_ATTEMPTS = 5
 _LOGIN_WINDOW_SECONDS = 60
 _MAX_LOGIN_IPS = 1000  # Hard cap to prevent unbounded memory growth
+
+# M7: Concurrency limiters for expensive endpoints
+_diff_semaphore = asyncio.Semaphore(2)
+_decompile_semaphore = asyncio.Semaphore(2)
+_report_semaphore = asyncio.Semaphore(2)
 
 # --- Content-Security-Policy value (single source of truth) ---
 _CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self';"
@@ -340,15 +358,28 @@ def _make_auth_response(request: Request, dashboard_token: str, response: Respon
 # ---------------------------------------------------------------------------
 
 def _validate_csrf(request: Request, form_token: str = "") -> bool:
-    """Check CSRF token from X-CSRF-Token header or form field."""
-    if not _csrf_token:
+    """Check CSRF token from X-CSRF-Token header or form field.
+
+    Recomputes the expected HMAC-based token from the request's auth cookie
+    (or the dashboard token itself as fallback) so that CSRF tokens are
+    cryptographically bound to the session credential.
+    """
+    if not _csrf_secret:
         return True  # CSRF not initialised yet
+
+    # Determine the auth credential to derive the expected CSRF token.
+    # Prefer the cookie value; fall back to the cached dashboard token.
+    cookie = request.cookies.get(_COOKIE_NAME, "")
+    expected = _compute_csrf_token(cookie) if cookie else _compute_csrf_token(_csrf_dashboard_token)
+    if not expected:
+        return True  # Cannot compute — allow (graceful degradation)
+
     # Check header first (JSON API calls)
     header_token = request.headers.get("x-csrf-token", "")
-    if header_token and hmac.compare_digest(header_token, _csrf_token):
+    if header_token and hmac.compare_digest(header_token, expected):
         return True
     # Check form field (login form)
-    if form_token and hmac.compare_digest(form_token, _csrf_token):
+    if form_token and hmac.compare_digest(form_token, expected):
         return True
     return False
 
@@ -609,22 +640,23 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "address too long"}, status_code=400)
         if not address or not re.fullmatch(r'0x[0-9a-f]+', address):
             return JSONResponse({"error": "invalid address (expected 0x hex)"}, status_code=400)
-        try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(trigger_decompile, address),
-                timeout=300,
-            )
-        except asyncio.TimeoutError:
-            return JSONResponse(
-                {"cached": False, "error": "Decompilation timed out (300s)"},
-                status_code=504,
-            )
-        except Exception as e:
-            logger.debug("Decompile endpoint error: %s", e, exc_info=True)
-            return JSONResponse(
-                {"cached": False, "error": "Decompilation failed"},
-                status_code=500,
-            )
+        async with _decompile_semaphore:
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(trigger_decompile, address),
+                    timeout=300,
+                )
+            except asyncio.TimeoutError:
+                return JSONResponse(
+                    {"cached": False, "error": "Decompilation timed out (300s)"},
+                    status_code=504,
+                )
+            except Exception as e:
+                logger.debug("Decompile endpoint error: %s", e, exc_info=True)
+                return JSONResponse(
+                    {"cached": False, "error": "Decompilation failed"},
+                    status_code=500,
+                )
         return JSONResponse(result)
 
     async def api_strings(request: Request) -> Response:
@@ -1167,16 +1199,17 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        try:
-            data = await asyncio.wait_for(
-                asyncio.to_thread(generate_report_text), timeout=60
-            )
-            return JSONResponse(data)
-        except asyncio.TimeoutError:
-            return JSONResponse({"error": "report generation timed out"}, status_code=504)
-        except Exception:
-            logger.debug("api_generate_report error", exc_info=True)
-            return JSONResponse({"error": "report generation failed"}, status_code=500)
+        async with _report_semaphore:
+            try:
+                data = await asyncio.wait_for(
+                    asyncio.to_thread(generate_report_text), timeout=60
+                )
+                return JSONResponse(data)
+            except asyncio.TimeoutError:
+                return JSONResponse({"error": "report generation timed out"}, status_code=504)
+            except Exception:
+                logger.debug("api_generate_report error", exc_info=True)
+                return JSONResponse({"error": "report generation failed"}, status_code=500)
 
     # --- Batch 4: Full-text decompiled search ---
     async def api_search_code(request: Request) -> Response:
@@ -1242,14 +1275,15 @@ def _create_routes(dashboard_token: str) -> list:
                 return {"error": "file not found or not accessible"}
             return get_diff_data(resolved)
 
-        try:
-            data = await asyncio.to_thread(_run_diff)
-            if data.get("error") == "file not found or not accessible":
-                return JSONResponse(data, status_code=400)
-            return JSONResponse(data)
-        except Exception:
-            logger.debug("api_diff error", exc_info=True)
-            return JSONResponse({"error": "diff failed"}, status_code=500)
+        async with _diff_semaphore:
+            try:
+                data = await asyncio.to_thread(_run_diff)
+                if data.get("error") == "file not found or not accessible":
+                    return JSONResponse(data, status_code=400)
+                return JSONResponse(data)
+            except Exception:
+                logger.debug("api_diff error", exc_info=True)
+                return JSONResponse({"error": "diff failed"}, status_code=500)
 
     # --- File listing for diff browser ---
     async def api_list_files(request: Request) -> Response:
@@ -1295,7 +1329,7 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/function-xrefs", endpoint=api_function_xrefs, methods=["GET"]),
         Route("/api/function-strings", endpoint=api_function_strings, methods=["GET"]),
         Route("/api/function-analysis", endpoint=api_function_analysis, methods=["GET"]),
-        Route("/api/debug", endpoint=api_debug, methods=["GET"]),
+        *([Route("/api/debug", endpoint=api_debug, methods=["GET"])] if os.environ.get("ARKANA_DEBUG") == "1" else []),
         Route("/api/events", endpoint=api_events, methods=["GET"]),
         Route("/api/floss-summary", endpoint=api_floss_summary, methods=["GET"]),
         # New API endpoints (Batch 1-3)
@@ -1348,12 +1382,13 @@ def create_dashboard_app(token: Optional[str] = None, standalone: bool = False) 
     so URLs are consistent regardless of mode.  When False (HTTP mode), the caller
     mounts the app under ``/dashboard`` via Starlette ``Mount``.
     """
-    global _csrf_token
+    global _csrf_secret, _csrf_dashboard_token
     dashboard_token = token or _ensure_token()
 
-    # Generate CSRF token for this app instance
-    _csrf_token = secrets.token_urlsafe(32)
-    _jinja_env.globals["csrf_token"] = _csrf_token
+    # Generate per-instance CSRF secret and derive token bound to dashboard credential
+    _csrf_secret = secrets.token_bytes(32)
+    _csrf_dashboard_token = dashboard_token
+    _jinja_env.globals["csrf_token"] = _compute_csrf_token(dashboard_token)
 
     # Store on default state for get_config() access
     from arkana.state import _default_state

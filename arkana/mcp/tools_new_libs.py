@@ -21,6 +21,7 @@ from arkana.config import (
     PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_angr_ready, _check_mcp_response_size
+from arkana.mcp._format_helpers import _check_lib, _get_filepath
 from arkana.mcp._progress_bridge import ProgressBridge
 
 # Conditionally import library objects for use in tool functions.
@@ -82,14 +83,6 @@ def _get_keystone_arch(architecture: str):
     return _KEYSTONE_ARCH_MAP[architecture]
 
 
-def _check_lib(lib_name: str, available: bool, tool_name: str):
-    if not available:
-        raise RuntimeError(
-            f"[{tool_name}] The '{lib_name}' library is not installed. "
-            f"Install with: pip install {lib_name}"
-        )
-
-
 from arkana.utils import _safe_slice  # noqa: E402 — canonical implementation in utils.py
 
 
@@ -128,16 +121,12 @@ async def parse_binary_with_lief(ctx: Context, file_path: Optional[str] = None) 
     await ctx.info("Parsing binary with LIEF")
     _check_lib("lief", LIEF_AVAILABLE, "parse_binary_with_lief")
 
-    target = file_path or state.filepath
-    if not target or not os.path.isfile(target):
-        raise RuntimeError("No file specified and no file is loaded.")
-    if file_path:
-        state.check_path_allowed(os.path.realpath(target))
+    target = _get_filepath(file_path)
 
     def _parse():
         binary = lief.parse(target)
         if binary is None:
-            return {"error": f"LIEF could not parse {target}"}
+            return {"error": f"LIEF could not parse {os.path.basename(target)}"}
 
         result = {
             "format": str(binary.format).split(".")[-1],
@@ -465,7 +454,7 @@ def _compute_similarity_internal(current_state) -> Dict[str, Any]:
     with open(target, 'rb') as f:
         data = f.read()
 
-    result: Dict[str, Any] = {"file": target, "size": len(data)}
+    result: Dict[str, Any] = {"file": os.path.basename(target), "size": len(data)}
 
     if PPDEEP_AVAILABLE:
         try:
@@ -508,17 +497,13 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
     if not file_path and state._cached_similarity_hashes:
         return state._cached_similarity_hashes
 
-    target = file_path or state.filepath
-    if not target or not os.path.isfile(target):
-        raise RuntimeError("No file specified and no file is loaded.")
-    if file_path:
-        state.check_path_allowed(os.path.realpath(target))
+    target = _get_filepath(file_path)
 
     def _compute():
         with open(target, 'rb') as f:
             data = f.read()
 
-        result = {"file": target, "size": len(data)}
+        result = {"file": os.path.basename(target), "size": len(data)}
 
         if PPDEEP_AVAILABLE:
             try:
@@ -564,20 +549,25 @@ async def compare_file_similarity(
     Args:
         file_path_b: Path to the second file to compare.
     """
-    await ctx.info(f"Comparing similarity with {file_path_b}")
-    if not state.filepath or not os.path.isfile(state.filepath):
-        raise RuntimeError("No file is loaded.")
-    if not os.path.isfile(file_path_b):
+    await ctx.info(f"Comparing similarity with {os.path.basename(file_path_b)}")
+    file_a = _get_filepath()  # loaded file
+    resolved_b = os.path.realpath(file_path_b)
+    state.check_path_allowed(resolved_b)
+    if not os.path.isfile(resolved_b):
         raise RuntimeError(f"File not found: {file_path_b}")
-    state.check_path_allowed(os.path.realpath(file_path_b))
+
+    _MAX_SIMILARITY_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+    for p in (file_a, resolved_b):
+        if os.path.getsize(p) > _MAX_SIMILARITY_FILE_SIZE:
+            raise ValueError(f"File too large for similarity comparison (>100MB): {os.path.basename(p)}")
 
     def _compare():
-        with open(state.filepath, 'rb') as f:
+        with open(file_a, 'rb') as f:
             data_a = f.read()
-        with open(file_path_b, 'rb') as f:
+        with open(resolved_b, 'rb') as f:
             data_b = f.read()
 
-        result = {"file_a": state.filepath, "file_b": file_path_b}
+        result = {"file_a": os.path.basename(file_a), "file_b": os.path.basename(resolved_b)}
 
         if PPDEEP_AVAILABLE:
             try:

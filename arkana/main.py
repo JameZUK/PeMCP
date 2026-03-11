@@ -486,10 +486,12 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
             state.api_key = api_key
             logger.info("API key authentication enabled for HTTP transport.")
         else:
+            import secrets
+            api_key = secrets.token_hex(16)
+            state.api_key = api_key
             logger.warning(
-                "Running HTTP transport without --api-key. Any client that can reach the "
-                "endpoint can use all tools. Set --api-key or ARKANA_API_KEY env var for "
-                "bearer token authentication. Use a TLS-terminating reverse proxy in production."
+                "No --api-key provided. Auto-generated API key for HTTP transport: %s",
+                api_key,
             )
 
     # Configure samples directory

@@ -4,6 +4,11 @@ Used by get_focused_imports, get_function_map, auto_note_function, and
 get_cross_reference_map to provide consistent semantic grouping.
 """
 
+# POSIX-standard names that are normal in ELF/Mach-O binaries but suspicious in PE.
+_POSIX_GENERIC_NAMES = frozenset({
+    "connect", "send", "recv", "socket", "bind", "listen", "accept",
+})
+
 # Risk level + category for each suspicious API.
 # Format: {api_name: (risk_level, category)}
 CATEGORIZED_IMPORTS_DB = {
@@ -23,6 +28,11 @@ CATEGORIZED_IMPORTS_DB = {
     "ZwMapViewOfSection": ("CRITICAL", "process_injection"),
     "LdrLoadDll": ("CRITICAL", "process_injection"),
 
+    # --- Process enumeration ---
+    "CreateToolhelp32Snapshot": ("MEDIUM", "process_enumeration"),
+    "Process32First": ("MEDIUM", "process_enumeration"),
+    "Process32Next": ("MEDIUM", "process_enumeration"),
+
     # --- Credential theft / privilege escalation ---
     "MiniDumpWriteDump": ("CRITICAL", "credential_theft"),
     "LsaEnumerateLogonSessions": ("CRITICAL", "credential_theft"),
@@ -39,6 +49,11 @@ CATEGORIZED_IMPORTS_DB = {
     "GetTickCount": ("HIGH", "anti_analysis"),
     "QueryPerformanceCounter": ("HIGH", "anti_analysis"),
     "NtSetInformationThread": ("HIGH", "anti_analysis"),
+    "SleepEx": ("MEDIUM", "anti_analysis"),
+
+    # --- Keylogging ---
+    "GetAsyncKeyState": ("HIGH", "keylogging"),
+    "GetKeyState": ("HIGH", "keylogging"),
 
     # --- Networking (C2 potential) ---
     "InternetOpen": ("HIGH", "networking"),
@@ -55,6 +70,8 @@ CATEGORIZED_IMPORTS_DB = {
     "TerminateProcess": ("HIGH", "process_manipulation"),
     "CreateService": ("HIGH", "persistence"),
     "StartService": ("HIGH", "persistence"),
+    "RegSetValueExA": ("HIGH", "persistence"),
+    "RegSetValueExW": ("HIGH", "persistence"),
     "ShellExecute": ("HIGH", "execution"),
     "WinExec": ("HIGH", "execution"),
     "CreateProcess": ("HIGH", "execution"),
@@ -88,7 +105,27 @@ CATEGORIZED_IMPORTS_DB = {
     "bind": ("MEDIUM", "networking"),
     "listen": ("MEDIUM", "networking"),
     "accept": ("MEDIUM", "networking"),
+
+    # --- Clipboard access ---
+    "GetClipboardData": ("MEDIUM", "clipboard_access"),
+    "SetClipboardData": ("MEDIUM", "clipboard_access"),
 }
+
+
+def get_import_risk(api_name: str, binary_format: str = "pe") -> tuple | None:
+    """Return (risk, category) with format-aware adjustment.
+
+    Generic POSIX networking names are downgraded to LOW for non-PE binaries
+    since they are standard libc calls in ELF/Mach-O contexts.
+    """
+    entry = CATEGORIZED_IMPORTS_DB.get(api_name)
+    if not entry:
+        return None
+    risk, cat = entry
+    if binary_format != "pe" and api_name in _POSIX_GENERIC_NAMES:
+        return ("LOW", cat)
+    return (risk, cat)
+
 
 # Category display names and descriptions for AI output
 CATEGORY_DESCRIPTIONS = {
@@ -104,6 +141,9 @@ CATEGORY_DESCRIPTIONS = {
     "crypto": "Cryptography — encryption/decryption operations",
     "file_io": "File I/O — file mapping, attribute manipulation",
     "memory": "Memory — virtual memory protection changes",
+    "process_enumeration": "Process Enumeration — enumerating running processes",
+    "keylogging": "Keylogging — capturing keyboard input",
+    "clipboard_access": "Clipboard Access — reading/writing clipboard data",
 }
 
 # Risk level ordering (for sorting)
@@ -129,4 +169,21 @@ STRING_CATEGORY_PATTERNS = {
 }
 
 # Well-known benign IPs to exclude from IOC extraction
-BENIGN_IP_PREFIXES = {0, 10, 127, 255}  # first octet
+BENIGN_IP_PREFIXES = {0, 10, 127, 255}  # first octet (kept for backward compat)
+
+import ipaddress as _ipaddress
+
+
+def is_benign_ip(ip_str: str) -> bool:
+    """Check if an IP address is benign (private, loopback, link-local, reserved, multicast)."""
+    try:
+        addr = _ipaddress.ip_address(ip_str)
+        return (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_link_local
+        )
+    except ValueError:
+        return False

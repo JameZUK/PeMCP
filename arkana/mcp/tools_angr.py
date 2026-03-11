@@ -44,6 +44,12 @@ def _get_cached_entry(cache_key):
     return None
 
 
+def _get_cached_meta(cache_key):
+    """Thread-safe read of decompile metadata."""
+    with _decompile_meta_lock:
+        return _decompile_meta.get(cache_key, {}).copy()
+
+
 def _set_decompile_meta(cache_key, value):
     """Thread-safe store with FIFO eviction when exceeding max size."""
     with _decompile_meta_lock:
@@ -385,7 +391,10 @@ async def decompile_function_with_angr(
         # then acquire the decompile lock to ensure mutual exclusion with
         # the background decompile sweep.
         state._decompile_on_demand_waiting = True
-        state._decompile_lock.acquire()
+        if not state._decompile_lock.acquire(timeout=60):
+            raise RuntimeError(
+                "Decompilation lock busy — background analysis in progress. Retry shortly."
+            )
         try:
             state._decompile_on_demand_waiting = False
             project, cfg = state.get_angr_snapshot()
@@ -920,8 +929,7 @@ async def analyze_binary_loops(
         # Configuration requested by the user
         req_config = {"resolve_jumps": resolve_indirect_jumps, "data_refs": scan_data_refs}
 
-        # Use _init_lock to prevent concurrent callers from duplicating
-        # expensive project/CFG/loop builds (same lock as _ensure_project_and_cfg)
+        # Acquire _init_lock to check state, but release before expensive CFGFast
         with _init_lock:
             project, cfg = state.get_angr_snapshot()
 
@@ -939,19 +947,22 @@ async def analyze_binary_loops(
                 if scan_data_refs and not current_has_data:
                     need_rebuild = True
 
-            if need_rebuild:
-                if task_id_for_progress: _update_progress(task_id_for_progress, 10, "Building/Upgrading Control Flow Graph...", bridge=_progress_bridge)
+        # Expensive CFG build runs outside _init_lock to avoid blocking other tools
+        if need_rebuild:
+            if task_id_for_progress: _update_progress(task_id_for_progress, 10, "Building/Upgrading Control Flow Graph...", bridge=_progress_bridge)
 
-                new_cfg = project.analyses.CFGFast(
-                    normalize=True,
-                    resolve_indirect_jumps=resolve_indirect_jumps,
-                    data_references=scan_data_refs,
-                    force_complete_scan=scan_data_refs
-                )
+            new_cfg = project.analyses.CFGFast(
+                normalize=True,
+                resolve_indirect_jumps=resolve_indirect_jumps,
+                data_references=scan_data_refs,
+                force_complete_scan=scan_data_refs
+            )
+            with _init_lock:
                 state.set_angr_results(project, new_cfg, None, state.angr_loop_cache_config)
                 cfg = new_cfg
 
-            # Ensure loop cache exists
+        # Loop cache build (lighter weight, OK under lock)
+        with _init_lock:
             if state.angr_loop_cache is None:
                 if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...", bridge=_progress_bridge)
 
@@ -1274,20 +1285,24 @@ async def get_function_complexity_list(
             # Filter out library/simprocedures or empty placeholders
             if func.is_simprocedure or func.is_syscall: continue
 
-            # --- FIX: Convert generator to list before len() ---
+            # Use O(1) graph methods instead of materializing lists
             try:
-                # func.blocks is often a generator in newer angr versions
-                block_count = len(list(func.blocks))
+                block_count = func.graph.number_of_nodes()
             except Exception:
-                # Fallback if access fails
-                logger.debug("get_function_complexity_list: failed to count blocks for func at %s", hex(func.addr), exc_info=True)
-                block_count = 0
+                try:
+                    block_count = len(list(func.blocks))
+                except Exception:
+                    logger.debug("get_function_complexity_list: failed to count blocks for func at %s", hex(func.addr), exc_info=True)
+                    block_count = 0
 
             # Always compute full data (edge count + entry point) for caching
             try:
-                edge_count = len(list(func.graph.edges))
+                edge_count = func.graph.number_of_edges()
             except Exception:
-                edge_count = 0
+                try:
+                    edge_count = len(list(func.graph.edges))
+                except Exception:
+                    edge_count = 0
 
             funcs_data.append({
                 "name": func.name,
@@ -1761,7 +1776,7 @@ async def batch_decompile(
         # Check per-function cache first
         cached_lines = _get_cached_lines(cache_key)
         if cached_lines is not None:
-            meta = _decompile_meta.get(cache_key, {})
+            meta = _get_cached_meta(cache_key)
             renamed_lines = apply_function_renames_to_lines(cached_lines)
             renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
             display_name = get_display_name(hex(target_addr), meta.get("function_name", "unknown"))

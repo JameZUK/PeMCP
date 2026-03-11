@@ -14,6 +14,14 @@ from arkana.parsers.strings import _decode_single_byte_xor, _format_hex_dump_lin
 if STRINGSIFTER_AVAILABLE:
     from arkana.mcp.tools_strings import _get_sifter_models
 
+_MAX_INITIAL_CANDIDATES = 10_000
+
+_BENIGN_PATTERNS = (
+    re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}'),    # date YYYY-MM-DD
+    re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}'),   # version x.y.z
+    re.compile(r'^[A-Z][a-z]+ \d{1,2},? \d{4}'), # "January 1, 2024"
+)
+
 
 @tool_decorator
 async def get_hex_dump(ctx: Context, start_offset: Union[int, str] = 0, length: Union[int, str] = 256, bytes_per_line: Optional[int]=16, limit_lines: Optional[int]=256, offset: Optional[Union[int, str]] = None) -> List[str]:
@@ -342,6 +350,10 @@ async def find_and_decode_encoded_strings(
         for match in pat.finditer(file_data):
             if len(match.group(0)) >= min_len:
                 initial_candidates.append(match)
+                if len(initial_candidates) >= _MAX_INITIAL_CANDIDATES:
+                    break
+        if len(initial_candidates) >= _MAX_INITIAL_CANDIDATES:
+            break
 
     total_candidates = len(initial_candidates)
     await ctx.report_progress(15, 100)
@@ -432,12 +444,7 @@ async def find_and_decode_encoded_strings(
                 confidence *= 0.3
 
             # Reduce confidence for common benign patterns
-            _benign_patterns = (
-                re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}'),    # date YYYY-MM-DD
-                re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}'),   # version x.y.z
-                re.compile(r'^[A-Z][a-z]+ \d{1,2},? \d{4}'), # "January 1, 2024"
-            )
-            if any(p.match(decoded_stripped) for p in _benign_patterns):
+            if any(p.match(decoded_stripped) for p in _BENIGN_PATTERNS):
                 confidence *= 0.4
 
             # Very short decoded strings are less interesting
