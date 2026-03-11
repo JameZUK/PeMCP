@@ -245,14 +245,17 @@
             loadDigest();
         } else if (action === "generate-report") {
             generateReport();
-        } else if (action === "copy-conclusion") {
+        } else if (action === "copy-conclusion" || (e.target.closest && e.target.closest("[data-action='copy-conclusion']"))) {
             var body = document.querySelector(".conclusion-body");
-            if (body && navigator.clipboard) {
-                navigator.clipboard.writeText(body.innerText).then(function () {
-                    showToast("Conclusion copied", "success");
-                }).catch(function () {
-                    showToast("Copy failed", "error");
-                });
+            if (body) {
+                var text = body.innerText || body.textContent || "";
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(function () {
+                        showToast("Conclusion copied", "success");
+                    }).catch(function () {
+                        showToast("Copy failed", "error");
+                    });
+                }
             }
         } else if (action === "copy-report") {
             copyReport();
