@@ -312,7 +312,12 @@ def _parse_floss_analysis(
         try:
             static_strings_gen = get_static_strings(sample_path, min_length)
             static_list = []
+            # M-M3: Cap static string list to prevent unbounded memory on dense binaries
+            _MAX_STATIC_STRINGS = 200_000
             for s_obj in static_strings_gen:
+                if len(static_list) >= _MAX_STATIC_STRINGS:
+                    logger.warning("FLOSS: Static string cap reached (%d), truncating.", _MAX_STATIC_STRINGS)
+                    break
                 static_list.append({"offset": hex(s_obj.offset), "string": s_obj.string})
             floss_results_dict["strings"]["static_strings"] = static_list
             logger.info("FLOSS: Found %d static strings.", len(static_list))

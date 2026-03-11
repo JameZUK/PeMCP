@@ -791,7 +791,8 @@ def _create_routes(dashboard_token: str) -> list:
             try:
                 # Seed with current state so the first tick isn't a false "file-changed"
                 try:
-                    seed = get_overview_data()
+                    # M-E4: Use to_thread to avoid blocking the event loop
+                    seed = await asyncio.to_thread(get_overview_data)
                 except Exception:
                     seed = {}
                 last_tool_count = seed.get("tool_calls", 0)
@@ -821,7 +822,7 @@ def _create_routes(dashboard_token: str) -> list:
                         logger.debug("SSE: connection token invalidated, closing")
                         return
                     try:
-                        overview = get_overview_data()
+                        overview = await asyncio.to_thread(get_overview_data)
                         current_tools = overview["tool_calls"]
                         current_notes = overview["notes_count"]
                         current_active = overview.get("active_tool")

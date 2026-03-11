@@ -71,6 +71,9 @@ class AnalysisCache:
         self._lock = threading.Lock()
         self.max_size_bytes = max_size_mb * 1024 * 1024
         self.enabled = enabled
+        # M-E1: In-memory metadata cache to avoid re-reading meta.json on every operation
+        self._meta_cache: Optional[Dict[str, Any]] = None
+        self._meta_mtime: float = 0.0
         self._ensure_cache_dir()
 
     # ------------------------------------------------------------------
@@ -93,11 +96,20 @@ class AnalysisCache:
     # ------------------------------------------------------------------
 
     def _load_meta(self) -> Dict[str, Any]:
+        # M-E1: Return in-memory cache if the file hasn't changed on disk
         if not META_FILE.exists():
+            self._meta_cache = {}
+            self._meta_mtime = 0.0
             return {}
         try:
+            disk_mtime = META_FILE.stat().st_mtime
+            if self._meta_cache is not None and disk_mtime == self._meta_mtime:
+                return self._meta_cache
             with open(META_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            self._meta_cache = data
+            self._meta_mtime = disk_mtime
+            return data
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Cache meta read error: %s", e)
             return {}
@@ -113,6 +125,9 @@ class AnalysisCache:
             # Linux/Docker deployments this is acceptable; Windows users
             # may see rare cache metadata corruption under high concurrency.
             tmp.replace(META_FILE)
+            # M-E1: Update in-memory cache after successful write
+            self._meta_cache = meta
+            self._meta_mtime = META_FILE.stat().st_mtime
         except OSError as e:
             logger.error("Cache meta write error: %s", e)
 

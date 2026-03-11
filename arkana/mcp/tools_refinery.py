@@ -155,7 +155,9 @@ async def refinery_codec(
     try:
         input_data = _hex_to_bytes(data_hex)
     except (ValueError, TypeError):
-        logger.debug("Input is not valid hex, treating as raw text (UTF-8)")
+        # M-S8: Warn instead of silently falling back — users passing malformed
+        # hex should know their input was treated as raw text.
+        logger.warning("Input is not valid hex, treating as raw text (UTF-8)")
         input_data = data_hex.encode("utf-8")
 
     if len(input_data) > _MAX_INPUT_SIZE:

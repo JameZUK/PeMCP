@@ -1056,21 +1056,25 @@ async def get_function_xrefs(
     def _get_xrefs():
 
         _ensure_project_and_cfg()
+        # H6: Use snapshot to prevent race condition with concurrent CFG invalidation
+        _, cfg_snap = state.get_angr_snapshot()
+        if cfg_snap is None:
+            return {"error": "CFG not available."}
         try:
-            func = state.angr_cfg.functions[target_addr]
+            func = cfg_snap.functions[target_addr]
         except KeyError:
             return {"error": f"No function found at {hex(target_addr)}."}
 
         callers = []
-        if target_addr in state.angr_cfg.functions.callgraph:
-             for pred in state.angr_cfg.functions.callgraph.predecessors(target_addr):
-                 try: callers.append({"name": state.angr_cfg.functions[pred].name, "address": hex(pred)})
+        if target_addr in cfg_snap.functions.callgraph:
+             for pred in cfg_snap.functions.callgraph.predecessors(target_addr):
+                 try: callers.append({"name": cfg_snap.functions[pred].name, "address": hex(pred)})
                  except Exception: callers.append({"name": "Unknown", "address": hex(pred)})
 
         callees = []
-        if target_addr in state.angr_cfg.functions.callgraph:
-            for succ in state.angr_cfg.functions.callgraph.successors(target_addr):
-                try: callees.append({"name": state.angr_cfg.functions[succ].name, "address": hex(succ)})
+        if target_addr in cfg_snap.functions.callgraph:
+            for succ in cfg_snap.functions.callgraph.successors(target_addr):
+                try: callees.append({"name": cfg_snap.functions[succ].name, "address": hex(succ)})
                 except Exception: callees.append({"name": "External", "address": hex(succ)})
 
         return {
@@ -1279,9 +1283,13 @@ async def get_function_complexity_list(
     def _analyze():
 
         _ensure_project_and_cfg()
+        # H6: Use snapshot to prevent race condition with concurrent CFG invalidation
+        _, cfg_snap = state.get_angr_snapshot()
+        if cfg_snap is None:
+            return {"error": "CFG not available."}
 
         funcs_data = []
-        for _addr, func in state.angr_cfg.functions.items():
+        for _addr, func in cfg_snap.functions.items():
             # Filter out library/simprocedures or empty placeholders
             if func.is_simprocedure or func.is_syscall: continue
 
@@ -1361,9 +1369,13 @@ async def extract_function_constants(
     def _extract():
 
         _ensure_project_and_cfg()
+        # H6: Use snapshot to prevent race condition with concurrent CFG invalidation
+        _, cfg_snap = state.get_angr_snapshot()
+        if cfg_snap is None:
+            return {"error": "CFG not available."}
 
         try:
-            func = state.angr_cfg.functions[target_addr]
+            func = cfg_snap.functions[target_addr]
         except KeyError: return {"error": f"No function found at {hex(target_addr)}."}
 
         integers = set()
@@ -1507,9 +1519,13 @@ async def scan_for_indirect_jumps(
     def _scan_jumps():
 
         _ensure_project_and_cfg()
+        # H6: Use snapshot to prevent race condition with concurrent CFG invalidation
+        _, cfg_snap = state.get_angr_snapshot()
+        if cfg_snap is None:
+            return {"error": "CFG not available."}
 
         try:
-            func = state.angr_cfg.functions[target_addr]
+            func = cfg_snap.functions[target_addr]
         except KeyError: return {"error": f"No function found at {hex(target_addr)}."}
 
         indirect_flow = []
@@ -1563,7 +1579,12 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
         _ensure_project_and_cfg()
         try:
             state.angr_project.loader.memory.store(addr, patch_data)
-            state.angr_cfg = None # Invalidate CFG
+            # H1: Invalidate CFG under lock to prevent race conditions with
+            # concurrent tools reading the CFG.
+            with state._angr_lock:
+                state.angr_cfg = None
+                state.angr_loop_cache = None
+                state.angr_loop_cache_config = None
             return {"status": "success", "message": f"Patched {len(patch_data)} bytes. CFG cache cleared."}
         except Exception as e: return {"error": f"Patching failed: {e}"}
 

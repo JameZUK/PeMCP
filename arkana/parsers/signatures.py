@@ -157,18 +157,22 @@ def _get_compiled_rules(yara_rules_path: str, verbose: bool = False) -> Optional
     Failed compilations are *not* cached so they can be retried.
     """
     resolved = os.path.realpath(yara_rules_path)
+    # M-E8: Check cache under lock, but compile outside to avoid blocking all threads
     with _compiled_rules_lock:
         cached = _compiled_rules_cache.get(resolved)
         if cached is not None:
             _compiled_rules_cache.move_to_end(resolved)
             return cached
-        compiled = _compile_yara_rules(resolved, verbose)
-        if compiled is not None:
-            # LRU eviction: remove least-recently-used entries
-            while len(_compiled_rules_cache) >= _MAX_RULES_CACHE:
-                _compiled_rules_cache.popitem(last=False)  # LRU: evict least-recently-used
+    # Compile without holding the lock (can take seconds for large rule sets)
+    compiled = _compile_yara_rules(resolved, verbose)
+    if compiled is not None:
+        with _compiled_rules_lock:
+            # Re-check in case another thread compiled the same path concurrently
+            if resolved not in _compiled_rules_cache:
+                while len(_compiled_rules_cache) >= _MAX_RULES_CACHE:
+                    _compiled_rules_cache.popitem(last=False)
             _compiled_rules_cache[resolved] = compiled
-        return compiled
+    return compiled
 
 
 def _decode_yara_string(data_bytes: bytes, max_len: int = 80) -> str:

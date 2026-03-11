@@ -5,8 +5,8 @@ into structured export formats (JSON, CSV, STIX 2.1).
 """
 import asyncio
 import datetime
-import hashlib
 import json
+import os
 import re
 import uuid
 
@@ -23,7 +23,14 @@ from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 _IP_RE = re.compile(r"(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)")
 _URL_RE = re.compile(r"https?://[^\s\"'<>]{4,200}")
-_DOMAIN_RE = re.compile(r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:com|net|org|io|ru|cn|tk|xyz|info|biz|cc|pw|top|onion|bit)\b")
+# L: Expanded from 13 TLDs to match any 2-16 char TLD, with exclusions for
+# common false positives (file extensions, code artifacts).
+_DOMAIN_RE = re.compile(r"(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,16}\b")
+_DOMAIN_FALSE_POSITIVE_TLDS = frozenset({
+    "dll", "exe", "sys", "drv", "ocx", "cpl", "scr", "tmp", "log", "bak",
+    "obj", "lib", "pdb", "ini", "cfg", "xml", "json", "txt", "csv", "html",
+    "png", "jpg", "gif", "bmp", "ico", "cur", "ttf", "otf", "woff",
+})
 _HASH_MD5_RE = re.compile(r"\b[a-fA-F0-9]{32}\b")
 _HASH_SHA256_RE = re.compile(r"\b[a-fA-F0-9]{64}\b")
 _REGISTRY_RE = re.compile(r"(?:HKEY_[A-Z_]+|HKLM|HKCU|HKCR)\\[^\s\"]{4,200}")
@@ -89,7 +96,8 @@ def _collect_iocs_from_notes() -> Dict[str, set]:
         for url in _URL_RE.findall(content):
             iocs["urls"].add(url)
         for domain in _DOMAIN_RE.findall(content):
-            if not re.match(r"^\d+\.\d+\.\d+", domain):
+            tld = domain.rsplit(".", 1)[-1].lower()
+            if tld not in _DOMAIN_FALSE_POSITIVE_TLDS and not re.match(r"^\d+\.\d+\.\d+", domain):
                 iocs["domains"].add(domain)
         for key in _REGISTRY_RE.findall(content):
             iocs["registry_keys"].add(key)
@@ -116,21 +124,24 @@ def _merge_iocs(*ioc_dicts: Dict[str, set]) -> Dict[str, List[str]]:
 
 def _ioc_to_stix_pattern(category: str, value: str) -> Optional[str]:
     """Convert an IOC to a STIX 2.1 indicator pattern."""
+    # M-S3: Escape single quotes in values to prevent STIX pattern injection
+    safe = value.replace("\\", "\\\\").replace("'", "\\'")
     if category == "ipv4":
-        return f"[ipv4-addr:value = '{value}']"
+        return f"[ipv4-addr:value = '{safe}']"
     if category == "urls":
-        return f"[url:value = '{value}']"
+        return f"[url:value = '{safe}']"
     if category == "domains":
-        return f"[domain-name:value = '{value}']"
+        return f"[domain-name:value = '{safe}']"
     if category == "file_hashes":
         parts = value.split(":", 1)
         if len(parts) == 2:
             algo, h = parts
-            return f"[file:hashes.'{algo.upper()}' = '{h}']"
+            safe_h = h.replace("\\", "\\\\").replace("'", "\\'")
+            return f"[file:hashes.'{algo.upper()}' = '{safe_h}']"
     if category == "registry_keys":
-        return f"[windows-registry-key:key = '{value}']"
+        return f"[windows-registry-key:key = '{safe}']"
     if category == "emails":
-        return f"[email-addr:value = '{value}']"
+        return f"[email-addr:value = '{safe}']"
     return None
 
 
@@ -167,10 +178,15 @@ def _build_stix_bundle(iocs: Dict[str, List[str]], sample_name: str) -> Dict[str
 
 def _build_csv(iocs: Dict[str, List[str]]) -> str:
     """Build CSV string from IOCs."""
+    # M-S2: Guard against CSV injection — prefix values starting with formula
+    # trigger characters to prevent formula injection in spreadsheet apps.
+    _DANGEROUS_CSV_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
     lines = ["type,value"]
     for category, values in iocs.items():
         for value in values:
             escaped = value.replace('"', '""')
+            if escaped and escaped[0] in _DANGEROUS_CSV_PREFIXES:
+                escaped = "'" + escaped
             lines.append(f'{category},"{escaped}"')
     return "\n".join(lines)
 
@@ -188,7 +204,7 @@ def _collect_iocs_internal(current_state) -> Dict[str, Any]:
     notes_iocs = _collect_iocs_from_notes()
     merged = _merge_iocs(triage_iocs, notes_iocs)
     total = sum(len(v) for v in merged.values())
-    sample_name = current_state.filepath.split("/")[-1] if current_state.filepath else "unknown"
+    sample_name = os.path.basename(current_state.filepath) if current_state.filepath else "unknown"
 
     return {
         "format": "json",

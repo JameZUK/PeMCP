@@ -915,7 +915,8 @@ def get_overview_data() -> Dict[str, Any]:
         "active_tool_total": active_tool_total,
     }
 
-    # M19: Cache the result (deep copy to prevent mutation of cached data)
+    # M-E5: Cache the result — deep copy only on write (callers get deep copy on read).
+    # This avoids the previous double-copy pattern where both write and read did deepcopy.
     with _cache_lock:
         _overview_cache[cache_key] = (time.time() + _OVERVIEW_TTL, copy.deepcopy(result))
         # Evict stale entries
@@ -924,6 +925,8 @@ def get_overview_data() -> Dict[str, Any]:
             for k in stale:
                 _overview_cache.pop(k, None)
 
+    # Return the original (not-yet-shared) result directly — it was just built
+    # and hasn't been exposed to any other code path yet.
     return result
 
 
@@ -1632,8 +1635,24 @@ def get_strings_data(
     type_counts: Dict[str, int] = {}
     category_counts: Dict[str, int] = {}
 
+    # M-E6: Pre-compute filters so we can apply them during iteration
+    # instead of building the full list first, reducing memory pressure.
+    search_lower = search[:500].lower().strip() if search else ""
+    type_lower = string_type.lower().strip() if string_type else "all"
+    cat_lower = category.lower().strip() if category else ""
+
     for items, type_label in _iter_string_sources(pe_data):
         count = 0
+        # M-E6: Skip entire source if type filter doesn't match
+        if type_lower and type_lower != "all" and type_label.lower() != type_lower:
+            # Still need to count items for type_counts
+            for item in items:
+                if isinstance(item, dict) and "error" not in item:
+                    count += 1
+                elif isinstance(item, str):
+                    count += 1
+            type_counts[type_label] = count
+            continue
         for item in items:
             if isinstance(item, str):
                 # basic_ascii_strings can be plain strings
@@ -1680,11 +1699,21 @@ def get_strings_data(
             if cat:
                 category_counts[cat] = category_counts.get(cat, 0) + 1
 
+            score_val = sifter_score if isinstance(sifter_score, (int, float)) else 0
+
+            # M-E6: Apply filters during iteration to avoid building the full list
+            if search_lower and search_lower not in s.lower():
+                continue
+            if cat_lower and cat.lower() != cat_lower:
+                continue
+            if min_score > 0 and score_val < min_score:
+                continue
+
             all_strings.append({
                 "string": s,
                 "type": type_label,
                 "address": address,
-                "sifter_score": sifter_score if isinstance(sifter_score, (int, float)) else 0,
+                "sifter_score": score_val,
                 "category": cat,
                 "function_va": function_va,
                 "extra": extra,
@@ -1692,21 +1721,7 @@ def get_strings_data(
 
         type_counts[type_label] = count
 
-    total_unfiltered = len(all_strings)
-
-    # Filter BEFORE enrichment to avoid unnecessary function lookups
-    search_lower = search[:500].lower().strip() if search else ""
-    type_lower = string_type.lower().strip() if string_type else "all"
-
-    if search_lower:
-        all_strings = [s for s in all_strings if search_lower in s["string"].lower()]
-    if type_lower and type_lower != "all":
-        all_strings = [s for s in all_strings if s["type"].lower() == type_lower]
-    if category:
-        cat_lower = category.lower().strip()
-        all_strings = [s for s in all_strings if s["category"].lower() == cat_lower]
-    if min_score > 0:
-        all_strings = [s for s in all_strings if s["sifter_score"] >= min_score]
+    total_unfiltered = sum(type_counts.values())
 
     # Enrich filtered strings with func_addr/func_name (post-filter for performance)
     func_lookup = _build_function_lookup(st)
@@ -3039,11 +3054,17 @@ def get_diff_data(file_path_b: str, limit: int = 50) -> Dict[str, Any]:
     file_path_b = os.path.realpath(file_path_b)
     if not os.path.isfile(file_path_b):
         return {"error": "File not found: " + os.path.basename(file_path_b)}
+    # M-S7: Also validate via state.check_path_allowed() as defense-in-depth,
+    # even when ARKANA_SAMPLES_DIR is not set.
     samples_dir = os.environ.get("ARKANA_SAMPLES_DIR", "")
     if samples_dir:
         samples_real = os.path.realpath(samples_dir)
         if not file_path_b.startswith(samples_real + os.sep) and file_path_b != samples_real:
             return {"error": "File must be within the samples directory"}
+    try:
+        st.check_path_allowed(file_path_b)
+    except RuntimeError:
+        return {"error": "File path is outside the allowed directories"}
 
     proj_a = st.angr_project
     cfg_a = st.angr_cfg
@@ -3147,6 +3168,9 @@ def get_diff_data(file_path_b: str, limit: int = 50) -> Dict[str, Any]:
 
 _MAX_LIST_FILES = 10000  # hard cap to prevent DoS on large/misconfigured directories
 _MAX_LIST_DEPTH = 10     # maximum directory recursion depth
+# M-E7: Cache file listings to avoid repeated filesystem walks + magic byte reads
+_list_files_cache: Dict[str, tuple] = {}  # samples_path -> (expire_time, result)
+_LIST_FILES_TTL = 10.0  # seconds
 
 
 def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, Any]:
@@ -3162,6 +3186,17 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
 
     # Resolve to real path once to prevent symlink traversal
     resolved_samples = os.path.realpath(samples_path)
+
+    # M-E7: Check cache before filesystem walk (search/sort applied post-cache)
+    now = time.time()
+    cached_entry = _list_files_cache.get(resolved_samples)
+    if cached_entry is not None:
+        expire_time, cached_files, cached_truncated = cached_entry
+        if now < expire_time:
+            files = cached_files
+            truncated = cached_truncated
+            # Skip filesystem walk — jump to search/sort below
+            return _apply_list_files_filters(files, truncated, search, sort_by)
 
     from arkana.mcp._format_helpers import get_magic_hint
 
@@ -3211,12 +3246,18 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
     except OSError:
         return {"files": [], "error": "Failed to read samples directory"}
 
-    # Search filter
+    # M-E7: Cache the raw file list (before search/sort) for reuse
+    _list_files_cache[resolved_samples] = (time.time() + _LIST_FILES_TTL, files, truncated)
+
+    return _apply_list_files_filters(files, truncated, search, sort_by)
+
+
+def _apply_list_files_filters(files: list, truncated: bool, search: str, sort_by: str) -> Dict[str, Any]:
+    """Apply search and sort to a file listing."""
     if search:
         search_lower = search.lower()
         files = [f for f in files if search_lower in f["name"].lower()]
 
-    # Sort
     sort_lower = sort_by.lower()
     if sort_lower == "size":
         files.sort(key=lambda f: f.get("size_bytes", 0), reverse=True)

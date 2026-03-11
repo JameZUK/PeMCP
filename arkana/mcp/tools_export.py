@@ -1,4 +1,5 @@
 """MCP tools for exporting and importing Arkana project archives."""
+import datetime
 import gzip
 import io
 import json
@@ -85,9 +86,7 @@ async def export_project(
     manifest = {
         "arkana_version": ARKANA_VERSION,
         "export_version": 1,
-        "created_at": __import__("datetime").datetime.now(
-            __import__("datetime").timezone.utc
-        ).isoformat(),
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "sha256": sha256,
         "original_filename": original_filename,
         "mode": state.pe_data.get("mode", "unknown"),
@@ -231,10 +230,12 @@ async def import_project(
     with tarfile.open(abs_path, "r:gz") as tar:
         # Security: validate member names to prevent path traversal
         for member in tar.getmembers():
-            # C1: Reject symlinks and hardlinks to prevent traversal attacks
-            if member.issym() or member.islnk():
+            # C1: Reject symlinks, hardlinks, and device/FIFO entries to prevent
+            # traversal attacks and host-level side effects (H4).
+            if member.issym() or member.islnk() or member.isblk() or member.ischr() or member.isfifo():
                 raise RuntimeError(
-                    f"[import_project] Archive contains symlink/hardlink: '{member.name}'. "
+                    f"[import_project] Archive contains unsafe entry: '{member.name}' "
+                    f"(type: {'symlink' if member.issym() else 'hardlink' if member.islnk() else 'device/fifo'}). "
                     "Archive may have been tampered with."
                 )
             norm = os.path.normpath(member.name)
@@ -268,7 +269,12 @@ async def import_project(
             analysis_file = tar.extractfile("analysis.json.gz")
             if analysis_file:
                 analysis_gz = analysis_file.read()
-                decompressed = gzip.decompress(analysis_gz)
+                # H3: Use streaming decompression to prevent decompression bombs.
+                # Read only up to the limit + 1 byte to detect oversize without
+                # decompressing the entire payload into memory.
+                import io as _io
+                with gzip.open(_io.BytesIO(analysis_gz), "rb") as _gz:
+                    decompressed = _gz.read(_MAX_ANALYSIS_DECOMPRESSED_SIZE + 1)
                 if len(decompressed) > _MAX_ANALYSIS_DECOMPRESSED_SIZE:
                     raise RuntimeError(
                         f"[import_project] analysis.json.gz decompresses to "

@@ -262,8 +262,10 @@ async def open_file(
         state._enrichment_cancel.set()
         state.close_pe()
         state.reset_angr()
-        state.pe_data = None
-        state.filepath = None
+        # M-ST1: Batch state reset under pe_lock to prevent dashboard seeing partial state
+        with state._pe_lock:
+            state.pe_data = None
+            state.filepath = None
         # Clear cached dashboard data from previous file
         state._cached_triage = None
         state._cached_function_scores = None
@@ -271,8 +273,9 @@ async def open_file(
         state._cached_similarity_hashes = None
         state._cached_mitre_mapping = None
         state._cached_iocs = None
-        state.notes = []
-        state._notes_counter = 0
+        with state._notes_lock:
+            state.notes = []
+            state._notes_counter = 0
         state.tool_history = deque(maxlen=MAX_TOOL_HISTORY)
         state.artifacts = []
         state._artifacts_counter = 0
@@ -285,7 +288,14 @@ async def open_file(
 
     acquired = False
     try:
-        await _analysis_semaphore.acquire()
+        # M-ST2: Add timeout to prevent indefinite hang when all semaphore slots are occupied
+        try:
+            await asyncio.wait_for(_analysis_semaphore.acquire(), timeout=120)
+        except asyncio.TimeoutError:
+            raise RuntimeError(
+                "[open_file] Server is busy — too many concurrent analyses. "
+                "Please try again shortly."
+            )
         acquired = True
         # --- Early hash for cache lookup ---
         await ctx.report_progress(2, 100)
@@ -504,6 +514,8 @@ async def open_file(
                     return pefile.PE(data=_raw_file_data, fast_load=False)
 
                 pe_obj = await asyncio.to_thread(_load_pe)
+                # M-M2: Free raw file data after PE object creation to halve peak memory
+                del _raw_file_data
                 state.filepath = abs_path
                 state.pe_object = pe_obj
 
@@ -1005,8 +1017,8 @@ async def reanalyze_loaded_pe_file(
         state.pe_object = new_pe_obj_from_thread
         state.pe_data = new_parsed_data_from_thread
 
-        # Rank strings with StringSifter
-        _perform_unified_string_sifting(state.pe_data)
+        # M-E3: Rank strings with StringSifter via to_thread to avoid blocking event loop
+        await asyncio.to_thread(_perform_unified_string_sifting, state.pe_data)
 
         # Update cache with fresh results
         sha256 = state.pe_data.get("file_hashes", {}).get("sha256")

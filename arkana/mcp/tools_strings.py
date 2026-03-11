@@ -478,10 +478,12 @@ async def get_capa_analysis_info(ctx: Context,
         filter_rule_name=filter_rule_name, filter_namespace=filter_namespace,
         filter_attck_id=filter_attck_id, filter_mbc_id=filter_mbc_id,
     )
+    # H2: Initialize skipped_rules before cache check to prevent NameError
+    # when serving from cache (the variable was only set inside the if-block).
+    skipped_rules = 0
     filtered_rule_items = state.result_cache.get("_capa_filtered_rules", _capa_cache_key)
     if filtered_rule_items is None:
         filtered_rule_items = []
-        skipped_rules = 0
         for rule_id, rule_details_original in all_rules_dict_from_capa.items():
             if not isinstance(rule_details_original, dict):
                 skipped_rules += 1

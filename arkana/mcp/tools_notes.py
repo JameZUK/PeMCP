@@ -130,6 +130,9 @@ async def update_note(
     valid_categories = ("general", "function", "tool_result", "ioc", "hypothesis", "conclusion", "manual")
     if category is not None and category not in valid_categories:
         raise ValueError(f"Invalid category '{category}'. Must be one of: {', '.join(valid_categories)}.")
+    # L: Enforce same 50KB content limit as add_note (was missing, allowing bypass via update)
+    if content is not None and len(content) > 50_000:
+        raise ValueError("Note content exceeds 50KB limit.")
 
     updated = state.update_note(
         note_id, content=content, category=category,

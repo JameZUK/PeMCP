@@ -4,7 +4,6 @@ Orchestrates available unpacking methods (Unipacker, Binary Refinery, Speakeasy)
 and provides PE header reconstruction and Original Entry Point heuristics.
 """
 import asyncio
-import math
 import os
 import struct
 
@@ -22,20 +21,8 @@ from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 
-def _shannon_entropy(data: bytes) -> float:
-    """Compute Shannon entropy of a byte sequence."""
-    if not data:
-        return 0.0
-    freq = [0] * 256
-    for b in data:
-        freq[b] += 1
-    length = len(data)
-    ent = 0.0
-    for f in freq:
-        if f > 0:
-            p = f / length
-            ent -= p * math.log2(p)
-    return ent
+# L: Use shared implementation from arkana.utils instead of duplicate
+from arkana.utils import shannon_entropy as _shannon_entropy
 
 
 # ===================================================================
@@ -131,7 +118,9 @@ async def try_all_unpackers(
         await ctx.info("Trying Binary Refinery PE reconstruction...")
         try:
             def _try_refinery_pe():
-                raw = state.pe_object.__data__
+                raw = getattr(state.pe_object, '__data__', None)
+                if raw is None:
+                    return {"status": "skipped", "reason": "No PE data available (non-PE mode)"}
 
                 # Try pefix (PE repair/reconstruction) — available in binary-refinery
                 try:

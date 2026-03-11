@@ -352,10 +352,12 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
                 magic = f.read(4)
             effective_mode = detect_format_from_magic(magic)
             if effective_mode == "unknown":
-                effective_mode = 'pe'
+                # M-ST6: Fall back to shellcode mode (consistent with open_file MCP tool)
+                # rather than PE mode which can crash on non-PE files.
+                effective_mode = 'shellcode'
                 logger.warning(
                     "Unrecognized file format (magic: %s). "
-                    "Falling back to PE mode. Use --mode to specify the format explicitly.",
+                    "Falling back to raw/shellcode mode. Use --mode to specify the format explicitly.",
                     magic.hex(),
                 )
             logger.info("Auto-detected format: %s", effective_mode)
@@ -489,10 +491,13 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
             import secrets
             api_key = secrets.token_hex(16)
             state.api_key = api_key
+            # M-S1: Only log truncated key to prevent plaintext credential in logs
             logger.warning(
-                "No --api-key provided. Auto-generated API key for HTTP transport: %s",
-                api_key,
+                "No --api-key provided. Auto-generated API key for HTTP transport: %s...",
+                api_key[:8],
             )
+            # Print full key once to stderr for operator use
+            print(f"Auto-generated API key: {api_key}", file=sys.stderr)
 
     # Configure samples directory
     samples_path = args.samples_path or os.environ.get("ARKANA_SAMPLES") or os.environ.get("PEMCP_SAMPLES")

@@ -183,8 +183,9 @@ class AnalyzerState:
             # Allow if the file is exactly the allowed path or inside it
             if resolved == allowed_resolved or resolved.is_relative_to(allowed_resolved):
                 return
+        # M-S6: Don't disclose the attempted path — it confirms path existence
         raise RuntimeError(
-            f"Access denied: '{file_path}' is outside the allowed paths. "
+            "Access denied: the requested path is outside the allowed directories. "
             "Configure with --allowed-paths at server startup."
         )
 
@@ -707,6 +708,44 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
     return result
 
 
+def _session_reaper_loop() -> None:
+    """M-M1: Background thread that periodically evicts stale sessions.
+
+    Runs every 60 seconds to clean up sessions that have been idle longer
+    than SESSION_TTL_SECONDS, preventing unbounded memory growth.
+    """
+    while True:
+        time.sleep(60)
+        stale_to_cleanup = []
+        try:
+            with _registry_lock:
+                now = time.time()
+                stale_keys = [
+                    key for key, st in _session_registry.items()
+                    if (now - st.last_active) > SESSION_TTL_SECONDS
+                ]
+                for key in stale_keys:
+                    stale_session = _session_registry.pop(key)
+                    stale_session._closing = True
+                    stale_to_cleanup.append(stale_session)
+            for stale in stale_to_cleanup:
+                try:
+                    if stale.pe_object is not None:
+                        stale.close_pe()
+                    if stale.angr_project is not None and stale.angr_project is not _default_state.angr_project:
+                        stale.reset_angr()
+                except Exception:
+                    pass
+            if stale_to_cleanup:
+                logger.debug("Session reaper cleaned up %d stale sessions", len(stale_to_cleanup))
+        except Exception:
+            pass  # Never crash the reaper thread
+
+
+_reaper_thread = threading.Thread(target=_session_reaper_loop, daemon=True, name="session-reaper")
+_reaper_thread.start()
+
+
 def get_all_session_states() -> list:
     """Return a snapshot of all active session states (for heartbeat monitoring)."""
     with _registry_lock:
@@ -751,7 +790,9 @@ def get_session_key_from_context(ctx) -> str:
                     sid = _session_id_map[session]
             return sid
     except Exception:
-        logger.debug("Could not extract session key from context, using default", exc_info=True)
+        # L: Elevated to WARNING — falling back to "default" in HTTP mode causes
+        # all clients to share state, which is a session isolation failure.
+        logger.warning("Could not extract session key from context, using default", exc_info=True)
     return "default"
 
 

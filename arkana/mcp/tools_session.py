@@ -467,11 +467,13 @@ async def get_progress_overview(
     result["tool_calls"] = len(current_history)
 
     # Function coverage
+    # H6: Use snapshot to prevent race condition with concurrent CFG invalidation
     total_functions = 0
-    if ANGR_AVAILABLE and state.angr_cfg:
+    _, progress_cfg = state.get_angr_snapshot()
+    if ANGR_AVAILABLE and progress_cfg:
         try:
             total_functions = sum(
-                1 for f in state.angr_cfg.functions.values()
+                1 for f in progress_cfg.functions.values()
                 if not f.is_simprocedure and not f.is_syscall
             )
         except Exception:
@@ -490,7 +492,7 @@ async def get_progress_overview(
         angr_task = state.get_task("startup-angr")
         if angr_task and angr_task.get("status") == TASK_RUNNING:
             result["angr"] = f"loading ({angr_task.get('progress_percent', 0)}%)"
-        elif state.angr_cfg is not None:
+        elif progress_cfg is not None:
             result["angr"] = "ready"
         else:
             result["angr"] = "not_initialized"

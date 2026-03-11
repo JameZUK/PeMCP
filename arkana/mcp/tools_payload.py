@@ -4,7 +4,6 @@ Detects data hidden after image EOF markers, parses common malware container
 formats, and automatically extracts C2 configurations using heuristics.
 """
 import asyncio
-import math
 import re
 import struct
 
@@ -19,20 +18,8 @@ from arkana.mcp._refinery_helpers import (
 )
 
 
-def _shannon_entropy(data: bytes) -> float:
-    """Compute Shannon entropy of a byte sequence."""
-    if not data:
-        return 0.0
-    freq = [0] * 256
-    for b in data:
-        freq[b] += 1
-    length = len(data)
-    ent = 0.0
-    for f in freq:
-        if f > 0:
-            p = f / length
-            ent -= p * math.log2(p)
-    return ent
+# L: Use shared implementation from arkana.utils instead of duplicate
+from arkana.utils import shannon_entropy as _shannon_entropy
 
 
 # ===================================================================

@@ -30,7 +30,7 @@ from arkana.migration import migrate_data_dir  # noqa: E402
 try:
     migrate_data_dir()
 except Exception:
-    logging.getLogger("Arkana").debug("migrate_data_dir() failed at import time", exc_info=True)
+    logging.getLogger("Arkana").warning("migrate_data_dir() failed at import time", exc_info=True)
 
 from arkana.user_config import get_config_value
 

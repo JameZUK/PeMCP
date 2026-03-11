@@ -123,7 +123,13 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
     except concurrent.futures.TimeoutError:
         future.cancel()
         pattern_preview = str(compiled_re.pattern)[:80]
-        logger.warning("Regex timed out after %ss — pattern: %s", timeout, pattern_preview)
+        # M-S5: Log pool utilisation to help detect pool exhaustion from stuck threads
+        active = getattr(_regex_executor, '_threads', set())
+        active_count = len([t for t in active if t.is_alive()]) if active else -1
+        logger.warning(
+            "Regex timed out after %ss — pattern: %s (active pool threads: %d/%d)",
+            timeout, pattern_preview, active_count, _regex_executor._max_workers,
+        )
         raise ValueError(
             f"Regex execution timed out after {timeout}s. "
             "The pattern may cause catastrophic backtracking. "

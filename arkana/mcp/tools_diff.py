@@ -39,7 +39,7 @@ async def diff_payloads(
 
     # Check hex string length BEFORE decoding to avoid allocating huge intermediates.
     # 2 hex chars = 1 byte, so 2MB hex string = 1MB decoded.
-    _MAX_HEX_LEN = 2 * 1024 * 1024  # 1 MB decoded
+    _MAX_HEX_LEN = 2 * 1024 * 1024  # 2MB hex chars = 1MB decoded bytes
     clean_a = data_a_hex.replace(" ", "").replace("0x", "")
     clean_b = data_b_hex.replace(" ", "").replace("0x", "")
     if len(clean_a) > _MAX_HEX_LEN * 2 or len(clean_b) > _MAX_HEX_LEN * 2:

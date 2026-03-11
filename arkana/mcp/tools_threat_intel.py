@@ -2,6 +2,7 @@
 import asyncio
 import datetime
 import json
+import os
 import re
 
 from typing import Dict, Any, List, Optional
@@ -501,7 +502,7 @@ async def generate_sigma_rule(
             return {"error": f"Invalid rule_type. Options: {', '.join(sorted(valid_types))}"}
 
         sha256 = hashes.get("sha256", "unknown")
-        filename = state.filepath.split("/")[-1] if state.filepath else "unknown"
+        filename = os.path.basename(state.filepath) if state.filepath else "unknown"
         date_str = datetime.date.today().isoformat()
 
         # --- Process creation rule ---
@@ -654,7 +655,8 @@ def _generate_file_event_rule(
     if filename and filename != "unknown":
         detection_items.append(f"        TargetFilename|endswith: '\\\\{filename}'")
     for path in file_paths[:3]:
-        escaped = path.replace("\\", "\\\\")
+        # H5: Escape YAML special chars to prevent injection
+        escaped = path.replace("\\", "\\\\").replace("'", "''")
         detection_items.append(f"        TargetFilename|contains: '{escaped}'")
 
     if not detection_items:
@@ -775,12 +777,12 @@ def _generate_network_rule(
         detection_items.append("        DestinationIp:")
         for ip in ips[:5]:
             if isinstance(ip, str):
-                detection_items.append(f"            - '{ip}'")
+                detection_items.append(f"            - '{ip.replace(chr(39), chr(39)*2)}'")
     if domains:
         detection_items.append("        DestinationHostname|contains:")
         for domain in domains[:5]:
             if isinstance(domain, str):
-                detection_items.append(f"            - '{domain}'")
+                detection_items.append(f"            - '{domain.replace(chr(39), chr(39)*2)}'")
 
     if not detection_items:
         return None
