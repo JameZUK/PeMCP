@@ -131,6 +131,11 @@ async def diff_binaries(
 
         # Explicitly delete angr objects to release CFFI references
         # before this dict crosses the thread boundary.
+        try:
+            if hasattr(proj_b, 'close'):
+                proj_b.close()
+        except Exception:
+            pass
         del diff, cfg_b, proj_b
 
         return result
@@ -853,6 +858,7 @@ async def emulate_with_watchpoints(
         proj = state.angr_project
 
         events = []  # Collected watchpoint hits
+        _MAX_WATCHPOINT_EVENTS = 50_000  # OOM safety cap
         _partial_wp['events'] = events  # reference to the live list
 
         add_options = {
@@ -869,6 +875,8 @@ async def emulate_with_watchpoints(
 
             def _on_mem_write(sim_state):
                 try:
+                    if len(events) >= _MAX_WATCHPOINT_EVENTS:
+                        return
                     write_addr = sim_state.solver.eval(sim_state.inspect.mem_write_address)
                     if not watch_write_addrs or write_addr in watch_write_addrs:
                         length = sim_state.inspect.mem_write_length
@@ -895,6 +903,8 @@ async def emulate_with_watchpoints(
 
             def _on_mem_read(sim_state):
                 try:
+                    if len(events) >= _MAX_WATCHPOINT_EVENTS:
+                        return
                     read_addr = sim_state.solver.eval(sim_state.inspect.mem_read_address)
                     if not watch_read_addrs or read_addr in watch_read_addrs:
                         events.append({
@@ -923,6 +933,8 @@ async def emulate_with_watchpoints(
 
             def _on_reg_write(sim_state):
                 try:
+                    if len(events) >= _MAX_WATCHPOINT_EVENTS:
+                        return
                     offset = sim_state.inspect.reg_write_offset
                     if hasattr(offset, 'ast'):
                         offset = sim_state.solver.eval(offset)

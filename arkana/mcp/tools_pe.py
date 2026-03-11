@@ -390,12 +390,12 @@ async def open_file(
                         ('_cached_function_scores', '_cached_function_scores'),
                     ]
                     for pe_key, state_attr in _enrichment_keys:
-                        val = cached.pop(pe_key, None)
+                        val = cached.get(pe_key)
                         if val:
                             setattr(state, state_attr, val)
 
                     # Restore decompiled functions (metadata + code lines)
-                    cached_decompiled = cached.pop('_decompiled_functions', None)
+                    cached_decompiled = cached.get('_decompiled_functions')
                     if cached_decompiled:
                         try:
                             from arkana.mcp.tools_angr import _set_decompile_meta, _get_cached_lines

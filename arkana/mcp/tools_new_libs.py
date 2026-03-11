@@ -656,6 +656,8 @@ async def emulate_pe_with_windows_apis(
     await ctx.info("Emulating PE with Speakeasy Windows API emulation")
     _check_lib("speakeasy", _check_speakeasy_available(), "emulate_pe_with_windows_apis")
     _check_pe_loaded("emulate_pe_with_windows_apis")
+    if timeout_seconds < 1 or timeout_seconds > 600:
+        raise ValueError(f"timeout_seconds must be 1-600, got {timeout_seconds}")
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_pe_with_windows_apis", timeout_seconds)
@@ -719,6 +721,8 @@ async def emulate_shellcode_with_speakeasy(
     """
     await ctx.info("Emulating shellcode with Speakeasy")
     _check_lib("speakeasy", _check_speakeasy_available(), "emulate_shellcode_with_speakeasy")
+    if timeout_seconds < 1 or timeout_seconds > 600:
+        raise ValueError(f"timeout_seconds must be 1-600, got {timeout_seconds}")
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_shellcode_with_speakeasy", timeout_seconds)
@@ -796,6 +800,8 @@ async def auto_unpack_pe(
     await ctx.info("Auto-unpacking PE")
     _check_lib("unipacker", _check_unipacker_available(), "auto_unpack_pe")
     _check_pe_loaded("auto_unpack_pe")
+    if timeout_seconds < 1 or timeout_seconds > 600:
+        raise ValueError(f"timeout_seconds must be 1-600, got {timeout_seconds}")
 
     if not output_path:
         base, ext = os.path.splitext(state.filepath)

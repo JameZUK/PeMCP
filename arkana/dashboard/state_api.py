@@ -953,7 +953,7 @@ def get_functions_data(sort_by: str = "address",
         if cached is not None:
             expire_time, cached_version, cached_data = cached
             if now < expire_time and cached_version == version_key:
-                return cached_data
+                return list(cached_data)  # shallow copy to prevent caller mutation
 
     try:
         kb = st.angr_project.kb
@@ -2225,7 +2225,7 @@ def get_mitre_data() -> Dict[str, Any]:
     iocs = {}
 
     # MITRE from enrichment cache
-    cached_mitre = getattr(st, "_cached_mitre", None)
+    cached_mitre = getattr(st, "_cached_mitre_mapping", None)
     if cached_mitre and isinstance(cached_mitre, dict):
         raw_techniques = cached_mitre.get("techniques", [])
         if isinstance(raw_techniques, list):
@@ -2768,7 +2768,7 @@ def get_packing_data() -> Dict[str, Any]:
 def get_similarity_data() -> Dict[str, Any]:
     """Return similarity hashes from enrichment cache."""
     st = _get_state()
-    cached = getattr(st, "_cached_similarity", None)
+    cached = getattr(st, "_cached_similarity_hashes", None)
     if cached and isinstance(cached, dict):
         return {
             "available": True,

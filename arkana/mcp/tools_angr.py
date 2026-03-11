@@ -712,6 +712,10 @@ async def find_path_to_address(
                 # Pruning logic to keep memory low
                 if len(simgr.active) > 30:
                     simgr.split(from_stash='active', to_stash='deferred', limit=30)
+                # Cap deferred stash to prevent unbounded state accumulation
+                deferred = getattr(simgr, 'deferred', None)
+                if deferred is not None and len(deferred) > 500:
+                    simgr.drop(stash='deferred', filter_func=lambda s: True)
 
                 simgr.step()
                 steps += 1
@@ -1106,24 +1110,27 @@ async def get_backward_slice(
 
     def _slice():
         _ensure_project_and_cfg()
+        project_snap, cfg_snap = state.get_angr_snapshot()
+        if cfg_snap is None:
+            return {"error": "CFG not available."}
 
         try:
             # Get the node. If exact match fails, try to find the block containing this addr
-            target_node = state.angr_cfg.model.get_any_node(target_addr)
+            target_node = cfg_snap.model.get_any_node(target_addr)
             if not target_node:
-                block = state.angr_project.factory.block(target_addr)
-                target_node = state.angr_cfg.model.get_any_node(block.addr)
+                block = project_snap.factory.block(target_addr)
+                target_node = cfg_snap.model.get_any_node(block.addr)
 
             if not target_node: return {"error": f"Address {hex(target_addr)} not found in CFG."}
 
             # Use NetworkX to find ancestors
-            ancestors = nx.ancestors(state.angr_cfg.graph, target_node)
+            ancestors = nx.ancestors(cfg_snap.graph, target_node)
 
             slice_nodes = []
             for n in ancestors:
                 func_name = "Unknown"
-                if n.function_address and n.function_address in state.angr_cfg.functions:
-                    func_name = state.angr_cfg.functions[n.function_address].name
+                if n.function_address and n.function_address in cfg_snap.functions:
+                    func_name = cfg_snap.functions[n.function_address].name
                 slice_nodes.append({"address": hex(n.addr), "function": func_name})
 
             # Sort by address for readability
@@ -1157,23 +1164,26 @@ async def get_forward_slice(
 
     def _slice():
         _ensure_project_and_cfg()
+        project_snap, cfg_snap = state.get_angr_snapshot()
+        if cfg_snap is None:
+            return {"error": "CFG not available."}
 
         try:
-            source_node = state.angr_cfg.model.get_any_node(source_addr)
+            source_node = cfg_snap.model.get_any_node(source_addr)
             if not source_node:
-                block = state.angr_project.factory.block(source_addr)
-                source_node = state.angr_cfg.model.get_any_node(block.addr)
+                block = project_snap.factory.block(source_addr)
+                source_node = cfg_snap.model.get_any_node(block.addr)
 
             if not source_node: return {"error": f"Address {hex(source_addr)} not found in CFG."}
 
             # Use NetworkX to find descendants
-            descendants = nx.descendants(state.angr_cfg.graph, source_node)
+            descendants = nx.descendants(cfg_snap.graph, source_node)
 
             slice_nodes = []
             for n in descendants:
                 func_name = "Unknown"
-                if n.function_address and n.function_address in state.angr_cfg.functions:
-                    func_name = state.angr_cfg.functions[n.function_address].name
+                if n.function_address and n.function_address in cfg_snap.functions:
+                    func_name = cfg_snap.functions[n.function_address].name
                 slice_nodes.append({"address": hex(n.addr), "function": func_name})
 
             sorted_nodes = sorted(slice_nodes, key=lambda x: int(x['address'], 16))
@@ -1788,6 +1798,15 @@ async def batch_decompile(
     failed = 0
     total_search_matches = 0
 
+    # Acquire decompile lock to prevent races with enrichment sweep
+    state._decompile_on_demand_waiting = True
+    if not state._decompile_lock.acquire(timeout=60):
+        raise RuntimeError(
+            "Decompilation lock busy — background analysis in progress. Retry shortly."
+        )
+    state._decompile_on_demand_waiting = False
+    _batch_lock_held = True
+
     for i, addr_str in enumerate(addresses):
         await ctx.report_progress(i, len(addresses))
         target_addr = _parse_addr(addr_str)
@@ -1894,6 +1913,11 @@ async def batch_decompile(
             func_result["from_cache"] = False
         results.append(func_result)
         succeeded += 1
+
+    # Release decompile lock before response formatting
+    if _batch_lock_held:
+        state._decompile_lock.release()
+        _batch_lock_held = False
 
     await ctx.report_progress(len(addresses), len(addresses))
     output = {

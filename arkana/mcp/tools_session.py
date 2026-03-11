@@ -21,7 +21,7 @@ _EXPLORING_TOOLS = frozenset({
 })
 
 
-_phase_cache: Dict[str, Any] = {"result": None, "version": -1, "time": 0.0}
+_phase_caches: Dict[int, Dict[str, Any]] = {}  # keyed by id(state) for session isolation
 
 
 def _detect_analysis_phase() -> str:
@@ -36,10 +36,13 @@ def _detect_analysis_phase() -> str:
     now = time.monotonic()
     history = state.get_tool_history()
     history_len = len(history) if history else 0
-    if (_phase_cache["version"] == history_len
-            and now - _phase_cache["time"] < 2.0
-            and _phase_cache["result"] is not None):
-        return _phase_cache["result"]
+    sid = id(state)
+    _pc = _phase_caches.get(sid)
+    if (_pc is not None
+            and _pc["version"] == history_len
+            and now - _pc["time"] < 2.0
+            and _pc["result"] is not None):
+        return _pc["result"]
 
     ran_tools = set(h["tool_name"] for h in history)
     prev = getattr(state, "previous_session_history", []) or []
@@ -54,9 +57,7 @@ def _detect_analysis_phase() -> str:
     else:
         result = "file_loaded"
 
-    _phase_cache["result"] = result
-    _phase_cache["version"] = history_len
-    _phase_cache["time"] = now
+    _phase_caches[sid] = {"result": result, "version": history_len, "time": now}
     return result
 
 

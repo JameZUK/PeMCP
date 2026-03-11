@@ -30,6 +30,18 @@ def _validate_max_instructions(max_instructions: int) -> int:
     return max_instructions
 
 
+_MAX_TIMEOUT_SECONDS = 600  # 10 minutes
+
+
+def _validate_timeout(timeout_seconds: int) -> int:
+    """Validate timeout_seconds parameter."""
+    if timeout_seconds < 1:
+        raise ValueError(f"timeout_seconds must be positive, got {timeout_seconds}")
+    if timeout_seconds > _MAX_TIMEOUT_SECONDS:
+        raise ValueError(f"timeout_seconds too large (max {_MAX_TIMEOUT_SECONDS}), got {timeout_seconds}")
+    return timeout_seconds
+
+
 async def _subprocess_progress_reporter(ctx: Context, tool_name: str, timeout_seconds: int):
     """Report estimated progress for opaque subprocess operations."""
     start = asyncio.get_event_loop().time()
@@ -215,6 +227,7 @@ async def emulate_binary_with_qiling(
     _check_qiling("emulate_binary_with_qiling")
     _check_pe_loaded("emulate_binary_with_qiling")
     _validate_max_instructions(max_instructions)
+    _validate_timeout(timeout_seconds)
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_binary_with_qiling", timeout_seconds))
@@ -281,6 +294,7 @@ async def emulate_shellcode_with_qiling(
     await ctx.info(f"Emulating shellcode with Qiling ({os_type}/{architecture})")
     _check_qiling("emulate_shellcode_with_qiling")
     _validate_max_instructions(max_instructions)
+    _validate_timeout(timeout_seconds)
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_shellcode_with_qiling", timeout_seconds))
@@ -340,6 +354,7 @@ async def qiling_trace_execution(
     _check_qiling("qiling_trace_execution")
     _check_pe_loaded("qiling_trace_execution")
     _validate_max_instructions(max_instructions)
+    _validate_timeout(timeout_seconds)
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "qiling_trace_execution", timeout_seconds))
@@ -401,6 +416,7 @@ async def qiling_hook_api_calls(
     _check_qiling("qiling_hook_api_calls")
     _check_pe_loaded("qiling_hook_api_calls")
     _validate_max_instructions(max_instructions)
+    _validate_timeout(timeout_seconds)
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "qiling_hook_api_calls", timeout_seconds))
@@ -462,6 +478,7 @@ async def qiling_dump_unpacked_binary(
     _check_qiling("qiling_dump_unpacked_binary")
     _check_pe_loaded("qiling_dump_unpacked_binary")
     _validate_max_instructions(max_instructions)
+    _validate_timeout(timeout_seconds)
 
     if not output_path:
         base, ext = os.path.splitext(state.filepath)
@@ -688,6 +705,7 @@ async def qiling_memory_search(
     _check_qiling("qiling_memory_search")
     _check_pe_loaded("qiling_memory_search")
     _validate_max_instructions(max_instructions)
+    _validate_timeout(timeout_seconds)
 
     if not search_patterns and not search_hex:
         return {"error": "No search criteria provided. Specify search_patterns (strings) and/or search_hex (bytes)."}

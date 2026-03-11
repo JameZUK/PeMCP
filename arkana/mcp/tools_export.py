@@ -349,6 +349,11 @@ async def import_project(
 
     sha256 = manifest.get("sha256", "").lower()
 
+    # Validate sha256 is a valid hex string to prevent path injection
+    import re as _re
+    if sha256 and not _re.fullmatch(r"[0-9a-f]{64}", sha256):
+        sha256 = ""
+
     # Store the analysis data in the cache
     if sha256 and len(sha256) == 64:
         cache_entry_dir = CACHE_DIR / sha256[:2]

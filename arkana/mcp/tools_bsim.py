@@ -248,6 +248,11 @@ async def find_similar_functions(
             return result
         finally:
             # CFFI cleanup — ensure angr Project is freed even on timeout/exception
+            try:
+                if proj_b is not None and hasattr(proj_b, 'close'):
+                    proj_b.close()
+            except Exception:
+                pass
             del cfg_b, proj_b
 
     def _on_timeout_compare():

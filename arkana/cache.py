@@ -112,6 +112,8 @@ class AnalysisCache:
             return data
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Cache meta read error: %s", e)
+            self._meta_cache = None
+            self._meta_mtime = 0.0
             return {}
 
     def _save_meta(self, meta: Dict[str, Any]) -> None:
@@ -499,6 +501,8 @@ class AnalysisCache:
                 META_FILE.unlink(missing_ok=True)
             except OSError:
                 pass
+            self._meta_cache = None
+            self._meta_mtime = 0.0
 
             if CACHE_DIR.exists():
                 for subdir in CACHE_DIR.iterdir():

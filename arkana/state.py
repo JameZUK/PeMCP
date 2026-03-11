@@ -676,6 +676,8 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             # Inherit server-level config from the default state
             new_state.allowed_paths = _default_state.allowed_paths
             new_state.samples_path = _default_state.samples_path
+            new_state.api_key = _default_state.api_key
+            new_state.dashboard_token = _default_state.dashboard_token
             # Inherit any pre-loaded file data so HTTP clients can
             # immediately access files loaded at startup via --input-file.
             # Each session gets a shared reference; calling open_file

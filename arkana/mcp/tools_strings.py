@@ -1375,6 +1375,9 @@ async def search_yara_custom(
         )
     if not rules_string.strip():
         raise ValueError("rules_string is required. Provide YARA rules as a string.")
+    _MAX_YARA_RULE_SIZE = 256 * 1024  # 256KB
+    if len(rules_string) > _MAX_YARA_RULE_SIZE:
+        raise ValueError(f"YARA rules too large ({len(rules_string)} bytes, max {_MAX_YARA_RULE_SIZE}).")
 
     import yara
 

@@ -596,7 +596,8 @@ def _generate_process_creation_rule(
         return None
 
     selection = "\n".join(detection_items)
-    yaml = f"""title: 'Suspicious Process - {filename} (DRAFT)'
+    safe_filename = filename.replace("'", "''").replace("\\", "\\\\")[:80]
+    yaml = f"""title: 'Suspicious Process - {safe_filename} (DRAFT)'
 id: arkana-proc-{sha256[:8]}
 status: experimental
 description: >
@@ -722,14 +723,15 @@ def _generate_registry_rule(
         detection_items.append("            - '\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run'")
         detection_items.append("            - '\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\RunOnce'")
     for key in reg_keys[:3]:
-        escaped = key.replace("\\", "\\\\")
+        escaped = key.replace("\\", "\\\\").replace("'", "''")
         detection_items.append(f"        TargetObject|contains: '{escaped}'")
 
     if not detection_items:
         return None
 
     selection = "\n".join(detection_items)
-    yaml = f"""title: 'Suspicious Registry Modification - {filename} (DRAFT)'
+    safe_filename_reg = filename.replace("'", "''").replace("\\", "\\\\")[:80]
+    yaml = f"""title: 'Suspicious Registry Modification - {safe_filename_reg} (DRAFT)'
 id: arkana-reg-{sha256[:8]}
 status: experimental
 description: >

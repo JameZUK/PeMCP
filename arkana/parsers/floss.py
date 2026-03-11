@@ -473,8 +473,12 @@ def _parse_floss_analysis(
                     verbosity=floss_verbose_level,
                     disable_progress=quiet_mode_for_floss_progress
                 )
+                _MAX_DYNAMIC_STRINGS = 50_000
                 stack_list = []
                 for s_obj in stack_strings_gen:
+                    if len(stack_list) >= _MAX_DYNAMIC_STRINGS:
+                        logger.warning("FLOSS: Stack strings capped at %d", _MAX_DYNAMIC_STRINGS)
+                        break
                     stack_list.append({
                         "function_va": hex(s_obj.function),
                         "string_va": hex(s_obj.offset),
@@ -507,6 +511,9 @@ def _parse_floss_analysis(
                         )
                         tight_list = []
                         for s_obj in tight_strings_gen:
+                            if len(tight_list) >= _MAX_DYNAMIC_STRINGS:
+                                logger.warning("FLOSS: Tight strings capped at %d", _MAX_DYNAMIC_STRINGS)
+                                break
                             tight_list.append({
                                 # FIX: Changed s_obj.function_address to s_obj.function
                                 "function_va": hex(s_obj.function),
@@ -542,6 +549,9 @@ def _parse_floss_analysis(
                         )
                         decoded_list = []
                         for s_obj in decoded_strings_gen:
+                            if len(decoded_list) >= _MAX_DYNAMIC_STRINGS:
+                                logger.warning("FLOSS: Decoded strings capped at %d", _MAX_DYNAMIC_STRINGS)
+                                break
                             decoded_list.append({
                                 "string_va": hex(s_obj.address),
                                 "string": s_obj.string,

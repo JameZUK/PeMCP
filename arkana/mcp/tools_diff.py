@@ -38,12 +38,12 @@ async def diff_payloads(
     await ctx.info("Comparing two binary payloads")
 
     # Check hex string length BEFORE decoding to avoid allocating huge intermediates.
-    # 2 hex chars = 1 byte, so 2MB hex string = 1MB decoded.
+    # 2 hex chars = 1 byte, so _MAX_HEX_LEN hex chars = _MAX_HEX_LEN/2 decoded bytes.
     _MAX_HEX_LEN = 2 * 1024 * 1024  # 2MB hex chars = 1MB decoded bytes
     clean_a = data_a_hex.replace(" ", "").replace("0x", "")
     clean_b = data_b_hex.replace(" ", "").replace("0x", "")
-    if len(clean_a) > _MAX_HEX_LEN * 2 or len(clean_b) > _MAX_HEX_LEN * 2:
-        raise ValueError(f"Payloads too large (max {_MAX_HEX_LEN // 1024}KB decoded each).")
+    if len(clean_a) > _MAX_HEX_LEN or len(clean_b) > _MAX_HEX_LEN:
+        raise ValueError(f"Payloads too large (max {_MAX_HEX_LEN // 2 // 1024}KB decoded each).")
 
     try:
         data_a = bytes.fromhex(clean_a)

@@ -54,6 +54,8 @@ async def try_all_unpackers(
     """
     await ctx.info("Trying all available unpacking methods")
     _check_pe_loaded("try_all_unpackers")
+    if timeout_seconds < 1 or timeout_seconds > 600:
+        raise ValueError(f"timeout_seconds must be 1-600, got {timeout_seconds}")
 
     results = []
     best_result = None

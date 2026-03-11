@@ -254,8 +254,9 @@ async def get_iocs_structured(
     if fmt not in ("json", "csv", "stix"):
         return {"error": f"Unsupported format '{format}'. Use 'json', 'csv', or 'stix'."}
 
-    triage_iocs = _collect_iocs_from_triage()
-    notes_iocs = _collect_iocs_from_notes()
+    triage_iocs, notes_iocs = await asyncio.to_thread(
+        lambda: (_collect_iocs_from_triage(), _collect_iocs_from_notes())
+    )
 
     if not include_file_hashes:
         triage_iocs.pop("file_hashes", None)
