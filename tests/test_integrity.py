@@ -15,6 +15,7 @@ from arkana.integrity import (
 from arkana.constants import (
     INTEGRITY_MAX_ISSUES,
     INTEGRITY_MAX_SECTIONS_PE,
+    INTEGRITY_SAMPLE_SIZE,
 )
 
 
@@ -449,3 +450,85 @@ class TestCheckFileIntegrity:
         result = check_file_integrity(b"\x00" * 100, "pe")
         assert result["status"] in ("corrupt", "partial", "suspicious")
         assert len(result["recommendation"]) > 0
+
+
+# ── TestFullFileSampling ──────────────────────────────────────────────────
+
+class TestFullFileSampling:
+    """Tests for full-file null ratio and multi-region entropy sampling."""
+
+    def test_full_file_null_ratio(self):
+        """200KB buffer: non-null first 64KB, rest all null (~68% null).
+        With start-only sampling the null ratio would be ~0%, but full-file
+        should reflect the true ~68% ratio."""
+        head = b"\xCC" * INTEGRITY_SAMPLE_SIZE  # 64KB non-null
+        tail = b"\x00" * (INTEGRITY_SAMPLE_SIZE * 2)  # 128KB null
+        data = head + tail
+        issues, flags, ent, null_ratio = _check_generic(data)
+        # Full-file ratio should be ~0.667
+        assert null_ratio > 0.6, f"Expected >0.6 null ratio (full-file), got {null_ratio}"
+
+    def test_null_ratio_memory_dump_pattern(self):
+        """Buffer with valid-looking first 512 bytes, rest null (>99% null).
+        NULL_NEAR_TOTAL should fire — would have been missed with
+        start-only sampling if header region looked clean."""
+        head = b"\xCC" * 512  # 512B non-null "header"
+        tail = b"\x00" * (200 * 1024)  # ~200KB null
+        data = head + tail
+        issues, flags, ent, null_ratio = _check_generic(data)
+        assert _has_code(issues, "NULL_NEAR_TOTAL"), (
+            f"Expected NULL_NEAR_TOTAL for >99% null file, got codes: "
+            f"{[i['code'] for i in issues]}"
+        )
+        assert flags["null_padded"]
+
+    def test_entropy_multi_region(self):
+        """Buffer with random start, zero middle and end.  Multi-region
+        entropy should be lower than a start-only sample would report."""
+        import os
+        random_block = os.urandom(INTEGRITY_SAMPLE_SIZE)
+        zero_block = b"\x00" * (INTEGRITY_SAMPLE_SIZE * 3)
+        data = random_block + zero_block
+        issues, flags, ent, null_ratio = _check_generic(data)
+        # Pure random is ~8.0; with 2/3 zero regions mixed in, entropy
+        # of the combined sample should be noticeably lower
+        from arkana.utils import shannon_entropy
+        start_only_ent = shannon_entropy(random_block)
+        assert ent < start_only_ent - 0.5, (
+            f"Multi-region entropy ({ent:.2f}) should be much lower than "
+            f"start-only ({start_only_ent:.2f})"
+        )
+
+
+# ── TestPESizeOfImageRatio ────────────────────────────────────────────────
+
+class TestPESizeOfImageRatio:
+    """Tests for the PE file-size vs SizeOfImage ratio check."""
+
+    def test_pe_file_much_larger_than_image(self):
+        """Minimal PE with image_size=0x1000 padded to 64KB (16x ratio).
+        Should fire PE_FILE_MUCH_LARGER_THAN_IMAGE."""
+        pe = _build_minimal_pe(image_size=0x1000)
+        # Pad to 64KB total
+        pe.extend(b"\x00" * (65536 - len(pe)))
+        result = check_file_integrity(bytes(pe), "pe")
+        assert any(
+            i["code"] == "PE_FILE_MUCH_LARGER_THAN_IMAGE" for i in result["issues"]
+        ), (
+            f"Expected PE_FILE_MUCH_LARGER_THAN_IMAGE, got: "
+            f"{[i['code'] for i in result['issues']]}"
+        )
+
+    def test_pe_normal_overlay_no_false_positive(self):
+        """PE where file size is ~2x image_size (under 4x threshold).
+        Should NOT fire PE_FILE_MUCH_LARGER_THAN_IMAGE."""
+        image_size = 0x4000  # 16KB
+        pe = _build_minimal_pe(image_size=image_size)
+        # Pad to ~2x image_size
+        target = image_size * 2
+        if len(pe) < target:
+            pe.extend(b"\xCC" * (target - len(pe)))
+        result = check_file_integrity(bytes(pe), "pe")
+        assert not any(
+            i["code"] == "PE_FILE_MUCH_LARGER_THAN_IMAGE" for i in result["issues"]
+        ), "Should not trigger at 2x ratio (under 4x threshold)"

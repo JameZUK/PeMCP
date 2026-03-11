@@ -7,9 +7,12 @@ Runs on raw bytes before handing data to pefile / pyelftools / LIEF, so it
 can detect truncation, null-padding, impossible sizes, and header corruption
 without risking hangs or crashes in those parsers.
 
-Performance target: sub-100ms on 256 MB files.  Entropy and null-ratio are
-computed on the first INTEGRITY_SAMPLE_SIZE bytes only.  All header checks
-are O(1) struct unpacks.  Section iteration is bounded by constant caps.
+Performance target: sub-100ms on 256 MB files.  Null-ratio is computed on
+the full file (data.count(0) is a C-level scan, ~50-100ms on 256 MB).
+Entropy uses multi-region sampling (start + middle + end, each
+INTEGRITY_SAMPLE_SIZE bytes) for a representative value that detects
+zero-entropy tails.  All header checks are O(1) struct unpacks.  Section
+iteration is bounded by constant caps.
 """
 import logging
 import struct
@@ -84,11 +87,19 @@ def _check_generic(
         issues.append(_issue("critical", "FILE_EMPTY", "File is empty (0 bytes)."))
         return issues, flags, 0.0, 1.0
 
-    # Sample first N bytes for entropy / null-ratio (fast on huge files)
-    sample = data[: INTEGRITY_SAMPLE_SIZE]
+    # Null ratio: full file (C-level count, fast even on 256 MB)
+    null_count = data.count(0)
+    null_ratio = null_count / length
+
+    # Entropy: multi-region sample for representative value
+    if length > INTEGRITY_SAMPLE_SIZE * 3:
+        mid = length // 2
+        sample = (data[:INTEGRITY_SAMPLE_SIZE]
+                  + data[mid:mid + INTEGRITY_SAMPLE_SIZE]
+                  + data[-INTEGRITY_SAMPLE_SIZE:])
+    else:
+        sample = data[:INTEGRITY_SAMPLE_SIZE]
     ent = shannon_entropy(sample)
-    null_count = sample.count(b'\x00'[0])
-    null_ratio = null_count / len(sample)
 
     if length < INTEGRITY_MIN_FILE_SIZE:
         issues.append(
@@ -342,6 +353,19 @@ def _check_pe_integrity(
                 )
             )
             flags["sections_oob"] = True
+
+    # SizeOfImage vs file size ratio — detect raw memory dumps with null padding
+    image_size = details.get("image_size", 0)
+    if image_size > 0 and length > image_size * 4:
+        issues.append(
+            _issue(
+                "medium",
+                "PE_FILE_MUCH_LARGER_THAN_IMAGE",
+                f"File ({length} bytes) is {length // image_size}x larger than "
+                f"SizeOfImage ({image_size:#x}) — likely a raw memory dump with null padding.",
+            )
+        )
+        flags["null_padded"] = True
 
     return issues, flags, details
 
