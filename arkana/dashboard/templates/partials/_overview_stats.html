@@ -58,8 +58,8 @@
     {% endif %}
     {% if bs.ai_conclusion %}
     <div class="file-identity-conclusion">
-        <div class="conclusion-header">FULL ANALYSIS CONCLUSION</div>
-        {{ bs.ai_conclusion|md }}
+        <div class="conclusion-header">FULL ANALYSIS CONCLUSION <button class="btn btn-ghost btn-xs" data-action="copy-conclusion" title="Copy Conclusion">COPY</button></div>
+        <div class="conclusion-body">{{ bs.ai_conclusion|md }}</div>
     </div>
     {% endif %}
 </div>

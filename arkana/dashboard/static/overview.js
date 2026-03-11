@@ -245,6 +245,15 @@
             loadDigest();
         } else if (action === "generate-report") {
             generateReport();
+        } else if (action === "copy-conclusion") {
+            var body = document.querySelector(".conclusion-body");
+            if (body && navigator.clipboard) {
+                navigator.clipboard.writeText(body.innerText).then(function () {
+                    showToast("Conclusion copied", "success");
+                }).catch(function () {
+                    showToast("Copy failed", "error");
+                });
+            }
         } else if (action === "copy-report") {
             copyReport();
         } else if (action === "download-report") {
