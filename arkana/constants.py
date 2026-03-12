@@ -36,6 +36,7 @@ __all__ = [
     "INTEGRITY_ENTROPY_PACKED", "INTEGRITY_ENTROPY_NEAR_ZERO",
     "INTEGRITY_MAX_SECTIONS_PE", "INTEGRITY_FLAGGED_TIMEOUT_FACTOR",
     "INTEGRITY_SAMPLE_SIZE", "INTEGRITY_MAX_ISSUES",
+    "MAX_ANALYSIS_WARNINGS",
     "DEPENDENCIES",
 ]
 
@@ -141,6 +142,9 @@ MAX_LIST_SAMPLES_LIMIT = 500  # maximum files per page in list_samples
 
 # Upper bound on generic 'limit' parameters to prevent excessive memory allocation
 MAX_TOOL_LIMIT = 100_000
+
+# --- Analysis Warning Capture ---
+MAX_ANALYSIS_WARNINGS = 500  # max unique warnings retained per session
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

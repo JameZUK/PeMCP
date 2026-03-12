@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 210 MCP tools organized by use case.
+Complete catalog of all 212 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -15,6 +15,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `extract_strings_from_binary()` | `get_strings_summary()` | Raw dumps are noisy; summary categorizes by type (URLs, IPs, paths) |
 | `get_pe_data(key='imports')` for security | `get_focused_imports()` | Focused imports categorizes by threat behavior |
 | `get_function_map(limit=100)` | `get_function_map(limit=15)` | Too many functions overwhelms context; start small, expand if needed |
+| Ignoring `has_more` in pagination | Check `_pagination` / `{field}_pagination` dicts | Many tools paginate lists — `has_more: true` means data was dropped; request more with offset/limit |
 | Calling `get_analysis_digest()` repeatedly | Call at phase transitions | Digest has overhead; use it strategically |
 | `get_notes()` to check findings | `get_analysis_digest()` | Digest aggregates notes with triage data and coverage |
 | `get_hex_dump()` + `refinery_xor(data_hex=...)` | `refinery_xor(file_offset=..., length=...)` | Single step; avoids hex-encoding large blobs |
@@ -52,7 +53,7 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `get_triage_report` | **Second call** — comprehensive automated triage | `compact=True` (default) |
+| `get_triage_report` | **Second call** — comprehensive automated triage | `compact=True`, `indicator_limit` (default 50), `indicator_offset` (default 0) |
 | `classify_binary_purpose` | Determine binary type (GUI, DLL, driver, service) | — |
 | `get_virustotal_report_for_loaded_file` | Check community reputation | — |
 | `get_analyzed_file_summary` | Quick summary without full triage | — |
@@ -118,7 +119,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `get_annotated_disassembly` | Disassembly with variable names and xrefs; supports regex grep via `search` | `address`, `limit` (default 50), `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
 | `disassemble_at_address` | Raw disassembly at arbitrary address; works without full CFG | `address`, `count` |
 | `disassemble_raw_bytes` | Disassemble arbitrary byte sequences | `bytes`, `arch` |
-| `get_function_map` | List functions ranked by interestingness | `limit` (default 15) |
+| `get_function_map` | List functions ranked by interestingness | `offset` (default 0), `limit` (default 30) |
 | `get_function_complexity_list` | Functions sorted by cyclomatic complexity | — |
 | `get_function_cfg` | Control flow graph for a function | `address`, `node_limit` (default 50), `edge_limit` (default 100) |
 | `get_function_xrefs` | Cross-references (callers + callees) | `address` |
@@ -129,7 +130,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `extract_function_constants` | Constant values used in a function | `address` |
 | `get_global_data_refs` | Global data references across binary | — |
 | `scan_for_indirect_jumps` | Find jump tables, vtables, indirect calls | — |
-| `identify_cpp_classes` | C++ class structure identification (background, timeout 300s) | — |
+| `identify_cpp_classes` | C++ class structure identification (background, timeout 300s) | `method_limit` (default 20) |
 | `get_call_graph` | Inter-procedural call graph from a function | `address`, `limit` (default 20) |
 
 **Search workflow**: Use `search` to test hypotheses before committing to full output.
@@ -315,7 +316,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `find_anti_debug_comprehensive` | Comprehensive anti-debug + anti-VM + instruction scan | `compact` |
+| `find_anti_debug_comprehensive` | Comprehensive anti-debug + anti-VM + instruction scan | `compact`, `limit` (default 60) |
 | `detect_self_modifying_code` | Detect self-modifying code patterns | — |
 | `find_code_caves` | Find executable gaps in code sections | — |
 
@@ -335,9 +336,9 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `detect_dga_indicators` | Scan for DGA capability indicators | `confidence_threshold` |
-| `match_c2_indicators` | Match against C2 framework profiles | `frameworks`, `scan_depth` |
-| `analyze_kernel_driver` | Analyze kernel driver (.sys) characteristics | — |
+| `detect_dga_indicators` | Scan for DGA capability indicators | `confidence_threshold`, `limit` (default 20) |
+| `match_c2_indicators` | Match against C2 framework profiles | `frameworks`, `scan_depth`, `limit` (default 20) |
+| `analyze_kernel_driver` | Analyze kernel driver (.sys) characteristics | `limit` (default 30) |
 | `map_mitre_attack` | Map findings to MITRE ATT&CK techniques | `include_navigator_layer` |
 | `analyze_batch` | Multi-file comparison and clustering | `directory` or `file_paths`, `include_similarity` |
 
@@ -361,16 +362,18 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `auto_note_function` | Auto-generate behavioral summary for function | `address` |
 | `get_tool_history` | Review tools run during session | — |
 | `clear_tool_history` | Clear tool history | — |
-| `get_analysis_timeline` | Timeline of analysis activities | — |
-| `get_session_summary` | Comprehensive session summary | — |
+| `get_analysis_timeline` | Timeline of analysis activities | `offset` (default -1, most recent), `limit` (default 50) |
+| `get_session_summary` | Comprehensive session summary; includes `analysis_warnings` count when library warnings present | `notes_offset` (default 0), `notes_limit` (default 50), `history_limit` (default 30) |
+| `get_analysis_warnings` | View library warnings (angr, cle, capa, FLOSS, etc.) captured during analysis — explains failures/incomplete results | `logger_name`, `level`, `tool_name`, `offset`, `limit` |
+| `clear_analysis_warnings` | Clear captured warnings buffer | — |
 
 ## Analysis Progress & Guidance
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `get_analysis_digest` | Aggregated findings summary (call at phase transitions); includes `user_flagged_functions` from dashboard triage | — |
+| `get_analysis_digest` | Aggregated findings summary (call at phase transitions); includes `user_flagged_functions` from dashboard triage | `findings_offset/limit`, `functions_offset/limit`, `ioc_offset/limit`, `unexplored_offset/limit`, `notes_offset/limit` |
 | `get_progress_overview` | Analysis coverage and gaps | — |
-| `suggest_next_action` | AI-suggested next analysis steps; prioritises dashboard-flagged functions | — |
+| `suggest_next_action` | AI-suggested next analysis steps; prioritises dashboard-flagged functions | `max_suggestions` (default 5) |
 | `list_tools_by_phase` | Tools organized by workflow phase | — |
 
 > **Dashboard triage integration:** The web dashboard (port 8082) allows the analyst to flag functions as FLAG/SUS/CLN via the Functions page. These triage flags are surfaced in `get_session_summary()` (`user_triage_flags`), `get_analysis_digest()` (`user_flagged_functions`), and `suggest_next_action()` (flagged functions inserted at top priority). Always check these tools for analyst-flagged targets before selecting your own.

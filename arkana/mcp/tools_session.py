@@ -7,6 +7,7 @@ from arkana.config import state, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.constants import MAX_TOOL_LIMIT
 from arkana.state import TASK_RUNNING
+from arkana.mcp._input_helpers import _paginate_field
 
 
 _ADVANCED_TOOLS = frozenset({
@@ -57,6 +58,11 @@ def _detect_analysis_phase() -> str:
     else:
         result = "file_loaded"
 
+    # Evict stale entries to prevent unbounded growth
+    if len(_phase_caches) > 100:
+        oldest = sorted(_phase_caches, key=lambda k: _phase_caches[k]["time"])
+        for k in oldest[:len(_phase_caches) - 50]:
+            del _phase_caches[k]
     _phase_caches[sid] = {"result": result, "version": history_len, "time": now}
     return result
 
@@ -65,6 +71,9 @@ def _detect_analysis_phase() -> str:
 async def get_session_summary(
     ctx: Context,
     compact: bool = False,
+    notes_offset: int = 0,
+    notes_limit: int = 50,
+    history_limit: int = 30,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Returns a comprehensive summary of the current session and any
@@ -83,10 +92,15 @@ async def get_session_summary(
 
     Args:
         ctx: The MCP Context object.
+        notes_offset: Start index for notes list (default 0).
+        notes_limit: Max notes to return (default 50).
+        history_limit: Max tool history entries to return (default 30).
 
     Returns:
         A dictionary with session summary sections.
     """
+    history_limit = max(1, min(history_limit, MAX_TOOL_LIMIT))
+    notes_limit = max(1, min(notes_limit, MAX_TOOL_LIMIT))
     result: Dict[str, Any] = {"status": "success"}
 
     # Analysis phase — where are we in the workflow?
@@ -130,16 +144,22 @@ async def get_session_summary(
             result["angr"] = "unavailable"
         return result
 
+    notes_page, notes_pag = _paginate_field(notes, notes_offset, notes_limit)
     result["notes"] = {
         "count": len(notes),
-        "notes": notes[:50],
+        "notes": notes_page,
+        "notes_pagination": notes_pag,
         "by_category": dict(Counter(n.get("category", "general") for n in notes)),
     }
 
     tool_counts = Counter(h["tool_name"] for h in current_history)
+    # Default: show the most recent entries
+    hist_offset = max(0, len(current_history) - history_limit)
+    hist_page, hist_pag = _paginate_field(current_history, hist_offset, history_limit)
     result["current_session"] = {
         "tools_run_count": len(current_history),
-        "tools_run": current_history[-30:],
+        "tools_run": hist_page,
+        "tools_run_pagination": hist_pag,
         "tool_counts": dict(tool_counts),
     }
 
@@ -147,9 +167,12 @@ async def get_session_summary(
     prev = getattr(state, "previous_session_history", []) or []
     if prev:
         prev_counts = Counter(h["tool_name"] for h in prev)
+        prev_offset = max(0, len(prev) - history_limit)
+        prev_page, prev_pag = _paginate_field(prev, prev_offset, history_limit)
         result["previous_session"] = {
             "tools_run_count": len(prev),
-            "tools_run": prev[-30:],
+            "tools_run": prev_page,
+            "tools_run_pagination": prev_pag,
             "tool_counts": dict(prev_counts),
             "last_activity": prev[-1].get("timestamp") if prev else None,
         }
@@ -219,6 +242,14 @@ async def get_session_summary(
     if suggested:
         result["suggested_next_tools"] = suggested
 
+    # Surface library warning count if any exist
+    warning_count = state.get_warning_count()
+    if warning_count > 0:
+        result["analysis_warnings"] = {
+            "count": warning_count,
+            "hint": "Library warnings were captured during analysis. Call get_analysis_warnings() to review them.",
+        }
+
     return await _check_mcp_response_size(ctx, result, "get_session_summary")
 
 
@@ -228,6 +259,16 @@ async def get_analysis_digest(
     include_function_summaries: bool = True,
     include_iocs: bool = True,
     since_last_digest: bool = False,
+    findings_offset: int = 0,
+    findings_limit: int = 15,
+    functions_offset: int = 0,
+    functions_limit: int = 30,
+    ioc_offset: int = 0,
+    ioc_limit: int = 10,
+    unexplored_offset: int = 0,
+    unexplored_limit: int = 10,
+    notes_offset: int = 0,
+    notes_limit: int = 10,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Returns a structured digest of what has been LEARNED about
@@ -250,6 +291,16 @@ async def get_analysis_digest(
         include_iocs: (bool) Include extracted IOCs. Default True.
         since_last_digest: (bool) If True, only show findings since the last
             time this tool was called. Default False.
+        findings_offset: Start index for key_findings list (default 0).
+        findings_limit: Max key findings to return (default 15).
+        functions_offset: Start index for functions_explored list (default 0).
+        functions_limit: Max explored functions to return (default 30).
+        ioc_offset: Start index for each IOC category (default 0).
+        ioc_limit: Max IOCs per category to return (default 10).
+        unexplored_offset: Start index for unexplored_high_priority (default 0).
+        unexplored_limit: Max unexplored functions to return (default 10).
+        notes_offset: Start index for analyst_notes (default 0).
+        notes_limit: Max analyst notes to return (default 10).
 
     Returns:
         A dictionary with binary profile, key findings, explored functions,
@@ -322,28 +373,37 @@ async def get_analysis_digest(
     for note in notes_by_cat.get("tool_result", []):
         if _note_is_new(note):
             key_findings.append(note.get("content", ""))
-    result["key_findings"] = key_findings[:15]
+    kf_page, kf_pag = _paginate_field(key_findings, findings_offset, findings_limit)
+    result["key_findings"] = kf_page
+    result["key_findings_pagination"] = kf_pag
 
     # Function summaries from notes (function category)
     if include_function_summaries:
         func_notes = [n for n in notes_by_cat.get("function", []) if _note_is_new(n)]
-        result["functions_explored"] = [
+        func_entries = [
             {
                 "addr": n.get("address", "?"),
                 "one_liner": n.get("content", ""),
             }
-            for n in func_notes[:30]
+            for n in func_notes
         ]
+        fe_page, fe_pag = _paginate_field(func_entries, functions_offset, functions_limit)
+        result["functions_explored"] = fe_page
+        result["functions_explored_pagination"] = fe_pag
 
     # IOCs from cached triage (always included — small and context-critical)
     if include_iocs and triage:
         net_iocs = triage.get("network_iocs", {})
         if isinstance(net_iocs, dict):
+            ips_page, ips_pag = _paginate_field(net_iocs.get("ip_addresses", []), ioc_offset, ioc_limit)
+            urls_page, urls_pag = _paginate_field(net_iocs.get("urls", []), ioc_offset, ioc_limit)
+            doms_page, doms_pag = _paginate_field(net_iocs.get("domains", []), ioc_offset, ioc_limit)
+            regs_page, regs_pag = _paginate_field(net_iocs.get("registry_keys", []), ioc_offset, ioc_limit)
             result["iocs_collected"] = {
-                "ips": net_iocs.get("ip_addresses", [])[:10],
-                "urls": net_iocs.get("urls", [])[:10],
-                "domains": net_iocs.get("domains", [])[:10],
-                "registry_keys": net_iocs.get("registry_keys", [])[:10],
+                "ips": ips_page, "ips_pagination": ips_pag,
+                "urls": urls_page, "urls_pagination": urls_pag,
+                "domains": doms_page, "domains_pagination": doms_pag,
+                "registry_keys": regs_page, "registry_keys_pagination": regs_pag,
             }
 
     # Coverage
@@ -374,13 +434,13 @@ async def get_analysis_digest(
     if scored:
         explored_addrs = {n.get("address") for n in notes_by_cat.get("function", [])}
         unexplored = [
-            f for f in scored
+            f"{f['addr']} ({f['name']}) — score {f['score']}, {f.get('reason', '')}"
+            for f in scored
             if f.get("addr") not in explored_addrs and f.get("score", 0) > 10
         ]
-        result["unexplored_high_priority"] = [
-            f"{f['addr']} ({f['name']}) — score {f['score']}, {f.get('reason', '')}"
-            for f in unexplored[:10]
-        ]
+        ue_page, ue_pag = _paginate_field(unexplored, unexplored_offset, unexplored_limit)
+        result["unexplored_high_priority"] = ue_page
+        result["unexplored_high_priority_pagination"] = ue_pag
 
     # Analyst notes (general category)
     general_notes = [
@@ -388,7 +448,9 @@ async def get_analysis_digest(
         if _note_is_new(n)
     ]
     if general_notes:
-        result["analyst_notes"] = general_notes[:10]
+        an_page, an_pag = _paginate_field(general_notes, notes_offset, notes_limit)
+        result["analyst_notes"] = an_page
+        result["analyst_notes_pagination"] = an_pag
 
     # Dashboard triage flags (user-tagged functions)
     triage_snapshot = state.get_all_triage_snapshot()
@@ -408,6 +470,17 @@ async def get_analysis_digest(
 
     # Analysis phase
     result["analysis_phase"] = _detect_analysis_phase()
+
+    # Surface library warning counts if any exist
+    warning_count = state.get_warning_count()
+    if warning_count > 0:
+        warnings = state.get_warnings()
+        error_count = sum(1 for w in warnings if w.get("level") in ("ERROR", "CRITICAL"))
+        result["library_warnings"] = {
+            "unique_warnings": warning_count,
+            "errors": error_count,
+            "hint": "Call get_analysis_warnings() to review library warnings that may explain incomplete results.",
+        }
 
     # Update timestamp for since_last_digest
     state.last_digest_timestamp = now
@@ -835,6 +908,7 @@ def _build_suggestions(max_suggestions: int = 5) -> List[Dict[str, str]]:
 @tool_decorator
 async def suggest_next_action(
     ctx: Context,
+    max_suggestions: int = 5,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Analyzes current session state — triage results, notes,
@@ -847,9 +921,11 @@ async def suggest_next_action(
 
     Args:
         ctx: MCP Context.
+        max_suggestions: Max suggestions to return (default 5).
     """
+    max_suggestions = max(1, min(max_suggestions, 20))
     phase = _detect_analysis_phase()
-    suggestions = _build_suggestions(max_suggestions=5)
+    suggestions = _build_suggestions(max_suggestions=max_suggestions)
 
     notes = state.get_notes() if state.filepath else []
     history = state.get_tool_history()
@@ -872,6 +948,7 @@ async def suggest_next_action(
 @tool_decorator
 async def get_analysis_timeline(
     ctx: Context,
+    offset: int = -1,
     limit: int = 20,
 ) -> Dict[str, Any]:
     """
@@ -883,6 +960,8 @@ async def get_analysis_timeline(
 
     Args:
         ctx: MCP Context.
+        offset: Start index into the timeline. Default -1 means "most recent entries"
+            (i.e. offset = total - limit). Pass 0 to start from the beginning.
         limit: Max timeline entries. Default 20.
     """
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
@@ -922,12 +1001,18 @@ async def get_analysis_timeline(
         events.sort(key=lambda e: e.get("timestamp") or "")
         state.result_cache.set("_timeline_events", _timeline_cache_key, events)
 
-    # Take the most recent entries
-    recent = events[-limit:]
+    # Resolve default offset (most recent entries)
+    if offset < 0:
+        real_offset = max(0, len(events) - limit)
+    else:
+        real_offset = offset
+
+    recent, pag = _paginate_field(events, real_offset, limit)
 
     return {
         "timeline": recent,
         "total_events": total_events,
         "returned": len(recent),
+        "_pagination": pag,
         "phase": _detect_analysis_phase(),
     }

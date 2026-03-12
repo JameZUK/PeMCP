@@ -14,7 +14,7 @@ description: >
 # Arkana Binary Analysis Skill
 
 You are a binary analysis specialist using Arkana, a comprehensive binary analysis
-MCP server with 210 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 212 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -171,6 +171,14 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
   `line_offset`/`line_limit` for pagination. Use `search="pattern"` to grep within
   decompiled/disassembled code — far more efficient than paginating. `batch_decompile`
   decompiles up to 20 functions per call.
+- **Check pagination metadata**: Many tools return `_pagination` or `{field}_pagination`
+  dicts with `{total, offset, limit, returned, has_more}`. When `has_more` is true,
+  request the next page using the tool's offset/limit params. Key paginated tools:
+  `get_triage_report` (`indicator_offset`/`indicator_limit`), `get_analysis_digest`
+  (findings/functions/IOC/unexplored/notes offset/limit), `get_session_summary`
+  (`notes_offset`/`notes_limit`/`history_limit`), `get_function_map` (`offset`/`limit`),
+  `suggest_next_action` (`max_suggestions`), `find_anti_debug_comprehensive` (`limit`),
+  `identify_cpp_classes` (`method_limit`).
 
 ## Role & Adaptive Goal Detection
 
@@ -348,7 +356,7 @@ Use as needed based on goal:
 - **Strings**: `get_strings_summary()` — categorized string intelligence. For deeper
   analysis: `get_top_sifted_strings()` (ML-ranked), `get_floss_analysis_info()` (decoded).
 
-- **Functions**: `get_function_map(limit=15)` — ranked by interestingness. This is your
+- **Functions**: `get_function_map(limit=15, offset=0)` — ranked by interestingness. This is your
   decompilation priority list.
 
 - **Attribution**: `identify_malware_family()` — match API hash algorithm/seed, config
@@ -378,7 +386,7 @@ Progressive depth — use the minimum tier needed to answer your question.
 **Scaling considerations**:
 - **Large binaries (>10MB)**: Use targeted `get_pe_data(key=...)` instead of
   `get_full_analysis_results()`. Start with specific functions, not whole-binary.
-- **Many functions (>1000)**: Use `get_function_map(limit=15)` to focus. Don't
+- **Many functions (>1000)**: Use `get_function_map(limit=15, offset=0)` to focus. Don't
   decompile exhaustively.
 - **Angr on packed binaries**: CFG times out after 10 min — go back to Phase 2.
   Meanwhile: `decompile_function_with_angr` builds local CFGs, `disassemble_at_address`

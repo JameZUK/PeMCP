@@ -161,6 +161,41 @@ The hard upper bound on `limit` is **100,000** (enforced in `get_pe_data` and st
 
 Three tools support an optional `search` parameter for regex grep within their output: `decompile_function_with_angr`, `batch_decompile`, and `get_annotated_disassembly`. When `search` is provided, only matching lines/instructions with surrounding context are returned instead of full paginated output. The `context_lines` parameter (default 2, max 20) controls how many lines of context surround each match, and `case_sensitive` (default False) controls case sensitivity. Search is a view/filter on cached results — it does not affect cache keys, so the same cached decompilation serves both paginated browsing and search queries. `batch_decompile` with `search` excludes functions that have no matches.
 
+### Field-Level Pagination
+
+Tools that return dicts with multiple list fields use `_paginate_field()` for inline pagination. Each paginated field gets a sibling `{field}_pagination` dict:
+
+```json
+{
+  "suspicious_imports": [ ... ],
+  "suspicious_imports_pagination": {
+    "total": 85,
+    "offset": 0,
+    "limit": 50,
+    "returned": 50,
+    "has_more": true
+  }
+}
+```
+
+Key tools with field-level pagination:
+
+| Tool | Pagination Parameters |
+|---|---|
+| `get_triage_report` | `indicator_offset` (default 0), `indicator_limit` (default 50) — applies to all list fields |
+| `get_analysis_digest` | `findings_offset/limit`, `functions_offset/limit`, `ioc_offset/limit`, `unexplored_offset/limit`, `notes_offset/limit` |
+| `get_session_summary` | `notes_offset/limit` (default 0/50), `history_limit` (default 30) |
+| `get_analysis_timeline` | `offset` (default -1 = most recent), `limit` (default 50) |
+| `get_function_map` | `offset` (default 0), `limit` (default 30) |
+| `suggest_next_action` | `max_suggestions` (default 5) |
+| `find_anti_debug_comprehensive` | `limit` (default 60) |
+| `identify_cpp_classes` | `method_limit` (default 20) |
+| `detect_dga_indicators` | `limit` (default 20) |
+| `match_c2_indicators` | `limit` (default 20) |
+| `analyze_kernel_driver` | `limit` (default 30) |
+
+All field-level pagination parameters are included in the `_SKIP` set so they don't affect cache keys.
+
 ### Result Caching (LRU)
 
 Paginated results are cached in an **LRU cache** (5 slots per tool) so that paging through results doesn't re-compute the full dataset on each call. The cache is keyed by tool name and non-pagination parameters  - changing `offset`, `limit`, `search`, `context_lines`, or `case_sensitive` hits the same cache entry. The internal maximum cached items per result set is **5,000**.
@@ -174,3 +209,4 @@ Paginated results are cached in an **LRU cache** (5 slots per tool) so that pagi
 | `SESSION_TTL_SECONDS` | 3600 | Session lifetime before cleanup (1 hour) |
 | `MAX_MCP_RESPONSE_SIZE_KB` | 64 | MCP response size limit per the protocol specification |
 | `ARKANA_MAX_CONCURRENT_ANALYSES` | 3 | Concurrent heavy analysis semaphore (configurable via environment variable) |
+| `MAX_ANALYSIS_WARNINGS` | 500 | Maximum unique library warnings captured per session (deduplicated) |

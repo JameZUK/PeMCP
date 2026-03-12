@@ -15,6 +15,7 @@ from arkana.state import (
     get_current_state, set_current_state, get_all_session_states,
     TASK_RUNNING, TASK_COMPLETED, TASK_FAILED,
 )
+from arkana.warning_handler import _current_task_var
 
 # Global lock and flag for the heartbeat monitor thread (shared across sessions)
 _monitor_lock = threading.Lock()
@@ -131,8 +132,9 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
             logger.debug("Could not create ProgressBridge for background task %s", task_id, exc_info=True)
 
     def _thread_wrapper():
-        # Propagate session state into this worker thread
+        # Propagate session state and task context into this worker thread
         set_current_state(_session_state)
+        _current_task_var.set(task_id)
         return func(*args, **kwargs)
 
     try:
@@ -240,6 +242,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
     # correct AnalyzerState inside this thread.
     if _session_state is not None:
         set_current_state(_session_state)
+    _current_task_var.set(task_id)
 
     import angr  # imported here since this only runs when ANGR_AVAILABLE is True
 

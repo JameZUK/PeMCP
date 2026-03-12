@@ -26,6 +26,8 @@ MAX_COMPLETED_TASKS = 50
 
 # Maximum number of tool history entries to retain per session.
 MAX_TOOL_HISTORY = 500
+MAX_NOTES = 10_000
+MAX_ARTIFACTS = 1_000
 
 # Stale session TTL in seconds (1 hour).
 SESSION_TTL_SECONDS = 3600
@@ -144,6 +146,11 @@ class AnalyzerState:
         from arkana.mcp._input_helpers import _ToolResultCache
         self.result_cache = _ToolResultCache()
 
+        # Analysis warnings (captured from library loggers, session-scoped)
+        self._warnings_lock = threading.Lock()
+        self.analysis_warnings: List[Dict[str, Any]] = []
+        self._warning_dedup: Dict[tuple, Dict[str, Any]] = {}  # (logger, level, msg[:100]) -> entry
+
         # Timestamp of last activity (for session TTL cleanup)
         self.last_active: float = time.time()
         self._closing: bool = False  # True when session is being cleaned up
@@ -222,6 +229,8 @@ class AnalyzerState:
         now = datetime.datetime.now(datetime.timezone.utc)
         epoch = time.time()
         with self._notes_lock:
+            if len(self.notes) >= MAX_NOTES:
+                raise RuntimeError(f"Notes limit reached ({MAX_NOTES}). Delete old notes before adding new ones.")
             self._notes_counter += 1
             note: Dict[str, Any] = {
                 "id": f"n_{int(now.timestamp() * 1000000)}_{self._notes_counter}",
@@ -330,6 +339,8 @@ class AnalyzerState:
         """Thread-safe artifact registration. Returns the new artifact dict."""
         now = datetime.datetime.now(datetime.timezone.utc)
         with self._artifacts_lock:
+            if len(self.artifacts) >= MAX_ARTIFACTS:
+                raise RuntimeError(f"Artifacts limit reached ({MAX_ARTIFACTS}). Clear old artifacts before registering new ones.")
             self._artifacts_counter += 1
             artifact: Dict[str, Any] = {
                 "id": f"art_{int(now.timestamp() * 1000000)}_{self._artifacts_counter}",
@@ -553,6 +564,77 @@ class AnalyzerState:
             return count
 
     # ------------------------------------------------------------------
+    #  Analysis warning accessors
+    # ------------------------------------------------------------------
+
+    def add_warning(self, logger_name: str, level: str, message: str,
+                    tool_name: Optional[str] = None,
+                    task_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """Thread-safe warning capture with deduplication.
+
+        Returns the new entry dict, or None if deduplicated (count incremented).
+        """
+        from arkana.constants import MAX_ANALYSIS_WARNINGS
+        # Truncate message to prevent unbounded growth
+        msg = message[:500] if len(message) > 500 else message
+        dedup_key = (logger_name, level, msg[:100])
+        now = time.time()
+
+        with self._warnings_lock:
+            existing = self._warning_dedup.get(dedup_key)
+            if existing is not None:
+                existing["count"] += 1
+                existing["last_seen"] = now
+                return None
+
+            # Evict oldest if at capacity
+            if len(self.analysis_warnings) >= MAX_ANALYSIS_WARNINGS:
+                oldest = self.analysis_warnings.pop(0)
+                oldest_key = (oldest["logger"], oldest["level"], oldest["message"][:100])
+                self._warning_dedup.pop(oldest_key, None)
+
+            entry: Dict[str, Any] = {
+                "logger": logger_name,
+                "level": level,
+                "message": msg,
+                "tool_name": tool_name,
+                "task_id": task_id,
+                "count": 1,
+                "first_seen": now,
+                "last_seen": now,
+            }
+            self.analysis_warnings.append(entry)
+            self._warning_dedup[dedup_key] = entry
+            return dict(entry)
+
+    def get_warnings(self, logger_name: Optional[str] = None,
+                     level: Optional[str] = None,
+                     tool_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Thread-safe filtered read of warnings. Returns copies."""
+        with self._warnings_lock:
+            result = [dict(w) for w in self.analysis_warnings]
+        if logger_name:
+            result = [w for w in result if w["logger"] == logger_name]
+        if level:
+            result = [w for w in result if w["level"] == level]
+        if tool_name:
+            result = [w for w in result if w.get("tool_name") == tool_name]
+        return result
+
+    def get_warning_count(self) -> int:
+        """Quick count of unique warnings."""
+        with self._warnings_lock:
+            return len(self.analysis_warnings)
+
+    def clear_warnings(self) -> int:
+        """Clear all warnings. Returns count removed."""
+        with self._warnings_lock:
+            count = len(self.analysis_warnings)
+            self.analysis_warnings = []
+            self._warning_dedup = {}
+            return count
+
+    # ------------------------------------------------------------------
     #  Angr state
     # ------------------------------------------------------------------
 
@@ -737,11 +819,11 @@ def _session_reaper_loop() -> None:
                     if stale.angr_project is not None and stale.angr_project is not _default_state.angr_project:
                         stale.reset_angr()
                 except Exception:
-                    pass
+                    logger.warning("Session reaper: cleanup error for session", exc_info=True)
             if stale_to_cleanup:
                 logger.debug("Session reaper cleaned up %d stale sessions", len(stale_to_cleanup))
         except Exception:
-            pass  # Never crash the reaper thread
+            logger.warning("Session reaper: iteration error", exc_info=True)
 
 
 _reaper_thread = threading.Thread(target=_session_reaper_loop, daemon=True, name="session-reaper")

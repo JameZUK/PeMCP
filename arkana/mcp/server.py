@@ -14,6 +14,7 @@ from arkana.config import (
 )
 from arkana.state import get_session_key_from_context, activate_session_state, get_current_state, TASK_RUNNING
 from arkana.utils import _safe_env_int
+from arkana.warning_handler import _current_tool_var
 
 # Soft character limit — primary truncation threshold.
 # Claude Code CLI truncates MCP responses at character thresholds far below 64KB,
@@ -35,6 +36,8 @@ _SKIP_HISTORY_TOOLS = frozenset({
     # Learning tools — meta/progress, not analysis steps
     "get_learner_profile", "update_concept_mastery",
     "get_learning_suggestions", "reset_learner_profile",
+    # Warning tools — diagnostic, not analysis steps
+    "get_analysis_warnings", "clear_analysis_warnings",
 })
 
 # --- Heartbeat configuration ---
@@ -223,6 +226,7 @@ def tool_decorator(func):
             heartbeat_task = asyncio.create_task(_heartbeat())
 
         start_time = time.time()
+        _tool_token = _current_tool_var.set(tool_name)
         try:
             result = await func(*args, **kwargs)
         except (RuntimeError, ValueError) as exc:
@@ -232,6 +236,7 @@ def tool_decorator(func):
                 raise type(exc)(enriched) from exc
             raise
         finally:
+            _current_tool_var.reset(_tool_token)
             # Always cancel the heartbeat when the tool finishes
             if heartbeat_task is not None:
                 heartbeat_task.cancel()

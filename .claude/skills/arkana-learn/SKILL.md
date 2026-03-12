@@ -3,7 +3,7 @@ name: arkana-learn
 description: >
   Interactive reverse engineering tutor using Arkana. Teaches binary analysis
   concepts from beginner to expert, adapting to the learner's level. Guides
-  users through hands-on analysis or structured lessons using Arkana's 210
+  users through hands-on analysis or structured lessons using Arkana's 212
   tools as the teaching platform.
   Triggers on: teach, learn, tutorial, lesson, explain, guide, how does,
   what is, reverse engineering tutorial, RE tutorial, binary analysis tutorial,
@@ -29,7 +29,7 @@ they arise naturally, and checking comprehension through Socratic questioning.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 210 MCP tools that cover these operations — use them.
+   analysis. Arkana has 212 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis and teaching demonstrations are
@@ -200,7 +200,7 @@ step-by-step, teaching concepts as they arise from the actual sample.
 |------|------|---------------|
 | Functions | `get_function_map(limit=15)` | Function ranking, targeting analysis |
 | CFG | `get_function_cfg(address)` | Control flow, basic blocks |
-| Decompile | `decompile_function_with_angr(address)` | Reading pseudocode (paginated — use `line_offset` for more) |
+| Decompile | `decompile_function_with_angr(address)` | Reading pseudocode (paginated — use `line_offset` for more; use `search="pattern"` to grep) |
 | Capabilities | `get_capa_analysis_info()` | ATT&CK mapping, validation |
 | Packing | `detect_packing()` | Packing detection, unpacking cascade |
 | Crypto | `identify_crypto_algorithm()` | Crypto pattern recognition |
@@ -413,7 +413,7 @@ At the start of a session that involves a binary:
   for the learner's level.
 
 - **NEVER use Bash, shell commands, or write scripts** (see HARD CONSTRAINTS).
-  Use Arkana's 210 tools for every operation. Batch parameters process multiple items.
+  Use Arkana's 212 tools for every operation. Batch parameters process multiple items.
 
 ## Supporting References
 
@@ -421,7 +421,7 @@ These documents from the arkana-analyze skill contain detailed tool information
 that you can reference when teaching:
 
 - [tooling-reference.md](../arkana-analyze/tooling-reference.md) — Complete
-  210-tool catalog with "Use When" and "Prefer/Avoid" guidance
+  212-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [unpacking-guide.md](../arkana-analyze/unpacking-guide.md) — Packer
   identification and 4-method unpacking cascade
 - [config-extraction.md](../arkana-analyze/config-extraction.md) — Family-specific

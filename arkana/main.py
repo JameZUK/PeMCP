@@ -76,6 +76,7 @@ import arkana.mcp.tools_struct
 import arkana.mcp.tools_rename
 import arkana.mcp.tools_types
 import arkana.mcp.tools_bsim
+import arkana.mcp.tools_warnings
 # Only register refinery tools when binary-refinery is installed.
 # When absent this saves ~20 tool definitions from the MCP catalog,
 # avoiding wasted context tokens for tools that would fail at runtime.
@@ -216,6 +217,10 @@ def _configure_logging(args: argparse.Namespace) -> int:
 
     if args.mcp_transport == 'sse':
         logger.warning("SSE transport is deprecated. Please use 'streamable-http' or 'stdio' instead.")
+
+    # Capture WARNING+ from library loggers (angr, cle, capa, etc.)
+    from arkana.warning_handler import install_warning_handler
+    install_warning_handler()
 
     return log_level
 
