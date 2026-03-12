@@ -366,6 +366,10 @@ async def auto_extract_crypto_keys(
                                 "section": sec_name,
                                 "confidence": round(min(1.0, confidence), 2),
                             })
+                            if len(candidates) >= 10_000:
+                                break
+                        if len(candidates) >= 10_000:
+                            break
 
                 idx = file_data.find(sig, idx + 1)
 

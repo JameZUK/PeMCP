@@ -82,11 +82,18 @@ def _start_floss_background_task(current_state, floss_args: tuple):
             last_progress_epoch=_time.time(),
         )
 
+    _FLOSS_THREAD_TIMEOUT = 1800  # 30 min hard cap for background FLOSS
+
     def _worker():
         set_current_state(current_state)
+        _start = _time.monotonic()
         try:
             _update(5, "Starting FLOSS deep analysis...")
             result = _parse_floss_analysis(*floss_args, progress_callback=_update)
+
+            elapsed = _time.monotonic() - _start
+            if elapsed > _FLOSS_THREAD_TIMEOUT:
+                logger.warning("FLOSS deep analysis exceeded %ds timeout (%ds elapsed)", _FLOSS_THREAD_TIMEOUT, int(elapsed))
 
             # Merge into pe_data in place — preserve static strings if deep failed
             if current_state.pe_data:
@@ -159,6 +166,8 @@ def _build_quick_indicators(pe_data: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(m, (dict, str))
     ]
     indicators["peid_detections"] = packer_names[:3] if packer_names else []
+    if len(packer_names) > 3:
+        indicators["peid_detections_pagination"] = {"total": len(packer_names), "returned": 3, "has_more": True}
 
     # Digital signature
     sig_data = pe_data.get('digital_signature', {})
@@ -726,6 +735,13 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     state.clear_custom_types()
     state.clear_triage()
     state.previous_session_history = []
+
+    # L2: Clean up session-specific phase cache entry
+    try:
+        from arkana.mcp.tools_session import _phase_caches
+        _phase_caches.pop(id(state), None)
+    except ImportError:
+        pass
 
     await ctx.info(f"Closed file: {closed_path}")
     return {

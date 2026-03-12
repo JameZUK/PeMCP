@@ -388,6 +388,7 @@ async def extract_wide_strings(
     """
     await ctx.info(f"Extracting wide (UTF-16LE) strings, min_length={min_length}")
     _check_pe_loaded("extract_wide_strings")
+    min_length = max(1, min(min_length, 1000))
 
     pe = state.pe_object
     file_data = pe.__data__

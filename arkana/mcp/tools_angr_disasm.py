@@ -9,6 +9,7 @@ from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_resp
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _format_cc_info, _raise_on_error_dict
 from arkana.mcp._rename_helpers import get_display_name
 from arkana.mcp._search_helpers import search_instructions_with_context
+from arkana.mcp._input_helpers import _paginate_field
 
 if ANGR_AVAILABLE:
     import angr
@@ -730,9 +731,13 @@ def _build_scored_functions(current_state, include_details: bool = False) -> Lis
         }
         if include_details:
             entry["callees"] = callee_names[:15]
+            if len(callee_names) > 15:
+                entry["_callees_truncated"] = len(callee_names)
             entry["suspicious_apis"] = suspicious_callees
             entry["string_refs"] = string_refs[:10]
             entry["callers"] = [hex(c) for c in callers[:10]]
+            if len(callers) > 10:
+                entry["_callers_truncated"] = len(callers)
         scored_funcs.append(entry)
 
     scored_funcs.sort(key=lambda x: x['score'], reverse=True)
@@ -759,7 +764,8 @@ def _build_scored_functions(current_state, include_details: bool = False) -> Lis
 @tool_decorator
 async def get_function_map(
     ctx: Context,
-    limit: int = 15,
+    offset: int = 0,
+    limit: int = 30,
     group_by: str = "category",
     include_details: bool = False,
     compact: bool = False,
@@ -782,7 +788,8 @@ async def get_function_map(
 
     Args:
         ctx: The MCP Context object.
-        limit: (int) Max number of top functions to return. Default 15.
+        offset: (int) Start index for pagination (default 0).
+        limit: (int) Max number of top functions to return. Default 30.
         group_by: (str) 'category' for semantic grouping, 'score' for flat ranked list.
         include_details: (bool) If True, include callee names and string refs per function.
 
@@ -953,7 +960,7 @@ async def get_function_map(
     state._cached_function_scores = scored
 
     total_functions = len(scored)
-    top = scored[:limit]
+    top, pag = _paginate_field(scored, offset, limit)
 
     # Compact mode: return only name, addr, score — no grouping or details
     if compact:
@@ -965,9 +972,10 @@ async def get_function_map(
             "total_functions": total_functions,
             "returned": len(compact_funcs),
             "functions": compact_funcs,
+            "_pagination": pag,
         }
-        if top:
-            best = top[0]
+        if scored:
+            best = scored[0]
             result["suggested_start"] = (
                 f"{best['addr']} ({best['name']}) — score {best['score']}, {best['reason']}"
             )
@@ -982,17 +990,19 @@ async def get_function_map(
             "total_functions": total_functions,
             "returned": len(top),
             "groups": groups,
+            "_pagination": pag,
         }
     else:
         result = {
             "total_functions": total_functions,
             "returned": len(top),
             "functions": top,
+            "_pagination": pag,
         }
 
     # Suggested starting point
-    if top:
-        best = top[0]
+    if scored:
+        best = scored[0]
         result["suggested_start"] = (
             f"{best['addr']} ({best['name']}) — score {best['score']}, {best['reason']}"
         )

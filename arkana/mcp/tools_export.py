@@ -7,7 +7,6 @@ import os
 import re
 import shutil
 import tarfile
-import tempfile
 
 from pathlib import Path
 from typing import Dict, Any, Optional

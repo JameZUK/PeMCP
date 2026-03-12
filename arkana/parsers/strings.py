@@ -20,7 +20,7 @@ def _extract_strings_from_data(data_bytes: bytes, min_length: int = 5) -> List[T
         data_bytes = bytes(data_bytes)
     # Use regex to find runs of printable ASCII — orders of magnitude faster
     # than byte-by-byte Python iteration on large binaries.
-    pattern = re.compile(b'[ -~]{' + str(min_length).encode() + b',}')
+    pattern = re.compile(b'[ -~]{' + str(min_length).encode() + b',65536}')
     return [
         (m.start(), m.group().decode('ascii'))
         for m in pattern.finditer(data_bytes)

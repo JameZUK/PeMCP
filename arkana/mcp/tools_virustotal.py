@@ -129,7 +129,8 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
                 "suggested_threat_label": vt_attributes.get("popular_threat_classification", {}).get("suggested_threat_label"),
                 "trid": vt_attributes.get("trid", []),
                 "meaningful_name": vt_attributes.get("meaningful_name"),
-                "names": list(set(vt_attributes.get("names", [])))[:10],
+                "names": (all_names := list(set(vt_attributes.get("names", []))))[:10],
+                "names_total": len(all_names),
                 "size": vt_attributes.get("size"),
             }
             response_payload["status"] = "success"

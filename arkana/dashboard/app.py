@@ -365,14 +365,16 @@ def _validate_csrf(request: Request, form_token: str = "") -> bool:
     cryptographically bound to the session credential.
     """
     if not _csrf_secret:
-        return True  # CSRF not initialised yet
+        logger.warning("CSRF validation called before secret initialised — denying")
+        return False  # Fail-closed: deny until CSRF is ready
 
     # Determine the auth credential to derive the expected CSRF token.
     # Prefer the cookie value; fall back to the cached dashboard token.
     cookie = request.cookies.get(_COOKIE_NAME, "")
     expected = _compute_csrf_token(cookie) if cookie else _compute_csrf_token(_csrf_dashboard_token)
     if not expected:
-        return True  # Cannot compute — allow (graceful degradation)
+        logger.warning("CSRF expected token could not be computed — denying")
+        return False  # Fail-closed: deny if token computation fails
 
     # Check header first (JSON API calls)
     header_token = request.headers.get("x-csrf-token", "")

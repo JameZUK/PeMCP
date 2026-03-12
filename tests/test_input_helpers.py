@@ -7,6 +7,7 @@ from arkana.mcp._input_helpers import (
     _make_cache_key,
     _paginated_response,
     _cached_paginated_response,
+    _paginate_field,
 )
 
 
@@ -123,6 +124,20 @@ class TestMakeCacheKey:
         key = _make_cache_key(a=1, offset=0, limit=10, compact=True, ctx=None)
         assert key == (("a", 1),)
 
+    def test_skips_new_pagination_params(self):
+        """All pagination params added for _paginate_field are skipped."""
+        key = _make_cache_key(
+            a=1,
+            notes_offset=0, notes_limit=50, history_limit=30,
+            findings_offset=0, findings_limit=15,
+            functions_offset=0, functions_limit=30,
+            ioc_offset=0, ioc_limit=10,
+            unexplored_offset=0, unexplored_limit=10,
+            indicator_offset=0, indicator_limit=50,
+            method_limit=20, max_suggestions=5,
+        )
+        assert key == (("a", 1),)
+
     def test_list_converted_to_tuple(self):
         key = _make_cache_key(tags=[1, 2, 3])
         assert key == (("tags", (1, 2, 3)),)
@@ -212,3 +227,84 @@ class TestCachedPaginatedResponse:
             cache, "tool", ("key",), compute, offset=0, limit=10, internal_max=100
         )
         assert result["_pagination"]["total"] == 100
+
+
+class TestPaginateField:
+    """Test _paginate_field helper for inline list pagination."""
+
+    def test_basic_slice(self):
+        items = list(range(100))
+        page, pag = _paginate_field(items, offset=0, limit=10)
+        assert page == list(range(10))
+        assert pag["total"] == 100
+        assert pag["offset"] == 0
+        assert pag["limit"] == 10
+        assert pag["returned"] == 10
+        assert pag["has_more"] is True
+
+    def test_middle_page(self):
+        items = list(range(50))
+        page, pag = _paginate_field(items, offset=20, limit=10)
+        assert page == list(range(20, 30))
+        assert pag["total"] == 50
+        assert pag["offset"] == 20
+        assert pag["returned"] == 10
+        assert pag["has_more"] is True
+
+    def test_last_page(self):
+        items = list(range(25))
+        page, pag = _paginate_field(items, offset=20, limit=10)
+        assert page == list(range(20, 25))
+        assert pag["total"] == 25
+        assert pag["offset"] == 20
+        assert pag["returned"] == 5
+        assert pag["has_more"] is False
+
+    def test_exact_boundary(self):
+        items = list(range(10))
+        page, pag = _paginate_field(items, offset=0, limit=10)
+        assert page == list(range(10))
+        assert pag["has_more"] is False
+        assert pag["returned"] == 10
+
+    def test_offset_beyond(self):
+        items = list(range(5))
+        page, pag = _paginate_field(items, offset=10, limit=5)
+        assert page == []
+        assert pag["total"] == 5
+        assert pag["offset"] == 5  # clamped to total
+        assert pag["returned"] == 0
+        assert pag["has_more"] is False
+
+    def test_empty_list(self):
+        page, pag = _paginate_field([], offset=0, limit=10)
+        assert page == []
+        assert pag["total"] == 0
+        assert pag["returned"] == 0
+        assert pag["has_more"] is False
+
+    def test_non_list_input(self):
+        """Sets and generators are converted to lists."""
+        page, pag = _paginate_field({1, 2, 3}, offset=0, limit=10)
+        assert len(page) == 3
+        assert pag["total"] == 3
+        assert pag["has_more"] is False
+
+    def test_none_input(self):
+        page, pag = _paginate_field(None, offset=0, limit=10)
+        assert page == []
+        assert pag["total"] == 0
+
+    def test_default_params(self):
+        items = list(range(100))
+        page, pag = _paginate_field(items)
+        assert pag["offset"] == 0
+        assert pag["limit"] == 50
+        assert pag["returned"] == 50
+        assert pag["has_more"] is True
+
+    def test_negative_offset_clamped(self):
+        items = list(range(10))
+        page, pag = _paginate_field(items, offset=-5, limit=3)
+        assert pag["offset"] == 0
+        assert page == [0, 1, 2]

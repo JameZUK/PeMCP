@@ -16,6 +16,7 @@ from arkana.config import (
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._progress_bridge import ProgressBridge
+from arkana.mcp._input_helpers import _paginate_field
 
 if PYELFTOOLS_AVAILABLE:
     from elftools.elf.elffile import ELFFile
@@ -328,8 +329,8 @@ def _triage_packing_assessment(indicator_limit: int) -> Tuple[Dict[str, Any], in
         "likely_packed": is_likely_packed,
         "max_section_entropy": round(max_entropy, 3),
         "high_entropy_executable_sections": high_entropy_sections,
-        "peid_matches": [m["match"] for m in ranked_matches[:5]],
-        "peid_ranked": ranked_matches[:8],
+        "peid_matches": [m["match"] for m in ranked_matches],
+        "peid_ranked": ranked_matches,
         "total_import_functions": total_import_funcs,
         "minimal_imports": total_import_funcs < 10,
         "packer_section_names": suspicious_section_names,
@@ -466,7 +467,7 @@ def _triage_suspicious_imports(indicator_limit: int) -> Tuple[Dict[str, Any], in
     found_imports.sort(key=lambda x: (severity_order.get(x['risk'], 3), x.get('dll', ''), x.get('function', '')))
 
     return {
-        "suspicious_imports": found_imports[:indicator_limit],
+        "suspicious_imports": found_imports,
         "suspicious_import_summary": {
             "critical": sum(1 for i in found_imports if i['risk'] == 'CRITICAL'),
             "high": sum(1 for i in found_imports if i['risk'] == 'HIGH'),
@@ -521,7 +522,6 @@ def _triage_capa_capabilities(indicator_limit: int) -> Tuple[List[Dict[str, Any]
                         risk_score += 1
 
             capabilities.sort(key=lambda x: (x['severity'], x.get('capability', '')))
-            capabilities = capabilities[:indicator_limit]
         else:
             # capa ran but failed — surface diagnostics
             capa_status_info = {
@@ -577,10 +577,10 @@ def _triage_network_iocs(indicator_limit: int, all_string_values: set) -> Tuple[
         risk_score += 3
 
     return {
-        "ip_addresses": sorted(found_ips)[:indicator_limit],
-        "urls": sorted(found_urls)[:indicator_limit],
-        "domains": sorted(found_domains)[:indicator_limit],
-        "registry_paths": sorted(found_registry)[:indicator_limit],
+        "ip_addresses": sorted(found_ips),
+        "urls": sorted(found_urls),
+        "domains": sorted(found_domains),
+        "registry_paths": sorted(found_registry),
     }, risk_score
 
 
@@ -612,7 +612,7 @@ def _triage_section_anomalies(indicator_limit: int) -> Tuple[List[Dict[str, Any]
             anomalies.append({"section": name, "issue": f"Virtual size ({vsize}) >> raw size ({rsize})", "severity": "MEDIUM"})
             risk_score += 1
 
-    return anomalies[:indicator_limit], risk_score
+    return anomalies, risk_score
 
 
 # ===================================================================
@@ -717,12 +717,12 @@ def _triage_import_anomalies(indicator_limit: int) -> Tuple[Dict[str, Any], int]
 
         import_anom: Dict[str, Any] = {}
         if ordinal_only_imports:
-            import_anom["ordinal_only_imports"] = ordinal_only_imports[:indicator_limit]
+            import_anom["ordinal_only_imports"] = ordinal_only_imports
             import_anom["ordinal_only_count"] = len(ordinal_only_imports)
             if len(ordinal_only_imports) > 5:
                 risk_score += 1  # Many ordinal-only imports can indicate evasion
         if unusual_dll_imports:
-            import_anom["non_standard_dlls"] = sorted(set(unusual_dll_imports))[:indicator_limit]
+            import_anom["non_standard_dlls"] = sorted(set(unusual_dll_imports))
         return import_anom, risk_score
     else:
         note = f"Not applicable for {analysis_mode} mode" if analysis_mode != 'pe' else "No imports data"
@@ -793,7 +793,7 @@ def _triage_resource_anomalies(indicator_limit: int) -> Tuple[List[Dict[str, Any
             except Exception:
                 pass
 
-        return res_anomalies[:indicator_limit], risk_score
+        return res_anomalies, risk_score
     else:
         return [], 0
 
@@ -820,7 +820,7 @@ def _triage_yara_matches(indicator_limit: int) -> Tuple[List[Dict[str, Any]], in
             elif isinstance(match, str):
                 yara_summary.append({"rule": match})
                 risk_score += 2
-        return yara_summary[:indicator_limit], risk_score
+        return yara_summary, risk_score
     else:
         return [], 0
 
@@ -841,7 +841,7 @@ def _triage_header_anomalies(indicator_limit: int) -> Tuple[List[Dict[str, Any]]
         # Check pefile warnings for corruption indicators
         pefile_warnings = state.pe_data.get('pefile_warnings', [])
         if isinstance(pefile_warnings, list) and pefile_warnings:
-            for warn in pefile_warnings[:10]:
+            for warn in pefile_warnings:
                 header_anomalies.append({
                     "issue": str(warn),
                     "severity": "MEDIUM",
@@ -908,7 +908,7 @@ def _triage_header_anomalies(indicator_limit: int) -> Tuple[List[Dict[str, Any]]
                     risk_score += 1
                     break  # Only report once
 
-    return header_anomalies[:indicator_limit], risk_score
+    return header_anomalies, risk_score
 
 
 # ===================================================================
@@ -928,7 +928,7 @@ def _triage_tls_callbacks(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
                 result = {
                     "present": True,
                     "callback_count": len(callbacks),
-                    "callback_addresses": [cb.get('va', cb.get('rva', '?')) for cb in callbacks[:10]],
+                    "callback_addresses": [cb.get('va', cb.get('rva', '?')) for cb in callbacks],
                     "warning": "TLS callbacks execute BEFORE the entry point — classic anti-debugging / unpacking technique",
                 }
                 risk_score += 5  # TLS callbacks are a strong malware/packer indicator
@@ -1029,7 +1029,7 @@ def _triage_delay_load_evasion(indicator_limit: int) -> Tuple[Dict[str, Any], in
             return {
                 "delay_load_dll_count": len(delay_imports),
                 "delay_load_function_count": delay_total_funcs,
-                "suspicious_delay_loaded_apis": delay_suspicious[:indicator_limit],
+                "suspicious_delay_loaded_apis": delay_suspicious,
             }, risk_score
         else:
             return {"delay_load_dll_count": 0}, 0
@@ -1163,12 +1163,12 @@ def _triage_export_anomalies(indicator_limit: int) -> Tuple[Dict[str, Any], int]
             }
             if ordinal_only_exports:
                 export_anom["ordinal_only_count"] = len(ordinal_only_exports)
-                export_anom["ordinal_only_values"] = ordinal_only_exports[:indicator_limit]
+                export_anom["ordinal_only_values"] = ordinal_only_exports
                 if len(ordinal_only_exports) > total_exports * 0.5 and total_exports > 5:
                     risk_score += 1  # Majority ordinal-only exports suggest intentional obfuscation
             if forwarded_exports:
                 export_anom["forwarded_count"] = len(forwarded_exports)
-                export_anom["forwarded_exports"] = forwarded_exports[:indicator_limit]
+                export_anom["forwarded_exports"] = forwarded_exports
             return export_anom, risk_score
         else:
             return {"total_exports": 0}, 0
@@ -1390,7 +1390,7 @@ def _triage_high_value_strings(sifter_score_threshold: float, indicator_limit: i
     elif indicator_count >= 1:
         risk_score += 1
 
-    return sorted_indicators[:indicator_limit], risk_score
+    return sorted_indicators, risk_score
 
 
 # ===================================================================
@@ -1430,7 +1430,7 @@ def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], i
             break  # one string match is enough
     if go_evidence:
         detected["detected_languages"].append("Go")
-        detected["go_indicators"] = go_evidence[:5]
+        detected["go_indicators"] = go_evidence
 
     # --- Rust detection ---
     rust_evidence: List[str] = []
@@ -1443,7 +1443,7 @@ def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], i
             break
     if rust_evidence:
         detected["detected_languages"].append("Rust")
-        detected["rust_indicators"] = rust_evidence[:5]
+        detected["rust_indicators"] = rust_evidence
 
     # --- .NET is already detected in dotnet_indicators, just cross-reference ---
     if state.pe_data.get('com_descriptor'):
@@ -1555,7 +1555,7 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
     if risk_score >= 8:
         suggested.append("get_virustotal_report_for_loaded_file — check community reputation")
     suggested.append("compute_similarity_hashes — compute ssdeep/TLSH for sample clustering")
-    result["suggested_next_tools"] = suggested[:8]
+    result["suggested_next_tools"] = suggested
 
     return result
 
@@ -1642,8 +1642,9 @@ def _auto_save_triage_notes(triage_report: Dict[str, Any]) -> None:
 def _run_triage_internal(
     current_state,
     sifter_score_threshold: float = 8.0,
-    indicator_limit: int = 20,
+    indicator_limit: int = 50,
     progress_cb=None,
+    indicator_offset: int = 0,
 ) -> Dict[str, Any]:
     """Run triage synchronously on the given state. No MCP/async overhead.
 
@@ -1694,15 +1695,23 @@ def _run_triage_internal(
     triage_report["rich_header_summary"] = data
     risk_score += delta
 
+    # Helper to paginate a list field and add pagination metadata
+    def _pf(items):
+        return _paginate_field(items, indicator_offset, indicator_limit)
+
     _report(20, "Analyzing imports...")
     imports_result, delta = _triage_suspicious_imports(indicator_limit)
-    triage_report["suspicious_imports"] = imports_result["suspicious_imports"]
+    page, pag = _pf(imports_result["suspicious_imports"])
+    triage_report["suspicious_imports"] = page
+    triage_report["suspicious_imports_pagination"] = pag
     triage_report["suspicious_import_summary"] = imports_result["suspicious_import_summary"]
     risk_score += delta
 
     _report(28, "Checking capa capabilities...")
     capa_data, delta, capa_status_info = _triage_capa_capabilities(indicator_limit)
-    triage_report["suspicious_capabilities"] = capa_data
+    page, pag = _pf(capa_data)
+    triage_report["suspicious_capabilities"] = page
+    triage_report["suspicious_capabilities_pagination"] = pag
     risk_score += delta
     if capa_status_info is not None:
         triage_report["capa_status"] = capa_status_info
@@ -1710,12 +1719,19 @@ def _run_triage_internal(
     _report(35, "Extracting network IOCs...")
     all_string_values, strings_truncated = _collect_all_string_values()
     data, delta = _triage_network_iocs(indicator_limit, all_string_values)
-    triage_report["network_iocs"] = data
+    net_iocs: Dict[str, Any] = {}
+    for key in ("ip_addresses", "urls", "domains", "registry_paths"):
+        p, pg = _pf(data.get(key, []))
+        net_iocs[key] = p
+        net_iocs[f"{key}_pagination"] = pg
+    triage_report["network_iocs"] = net_iocs
     risk_score += delta
 
     _report(42, "Checking sections & overlays...")
     sec_data, delta = _triage_section_anomalies(indicator_limit)
-    triage_report["section_anomalies"] = sec_data
+    page, pag = _pf(sec_data)
+    triage_report["section_anomalies"] = page
+    triage_report["section_anomalies_pagination"] = pag
     risk_score += delta
 
     data, delta = _triage_overlay_analysis(indicator_limit, file_size)
@@ -1723,20 +1739,35 @@ def _run_triage_internal(
     risk_score += delta
 
     data, delta = _triage_import_anomalies(indicator_limit)
+    # Paginate internal lists
+    if "ordinal_only_imports" in data:
+        p, pg = _pf(data["ordinal_only_imports"])
+        data["ordinal_only_imports"] = p
+        data["ordinal_only_imports_pagination"] = pg
+    if "non_standard_dlls" in data:
+        p, pg = _pf(data["non_standard_dlls"])
+        data["non_standard_dlls"] = p
+        data["non_standard_dlls_pagination"] = pg
     triage_report["import_anomalies"] = data
     risk_score += delta
 
     res_data, delta = _triage_resource_anomalies(indicator_limit)
-    triage_report["resource_anomalies"] = res_data
+    page, pag = _pf(res_data)
+    triage_report["resource_anomalies"] = page
+    triage_report["resource_anomalies_pagination"] = pag
     risk_score += delta
 
     _report(55, "Running YARA rules...")
     yara_data, delta = _triage_yara_matches(indicator_limit)
-    triage_report["yara_matches"] = yara_data
+    page, pag = _pf(yara_data)
+    triage_report["yara_matches"] = page
+    triage_report["yara_matches_pagination"] = pag
     risk_score += delta
 
     hdr_data, delta = _triage_header_anomalies(indicator_limit)
-    triage_report["header_anomalies"] = hdr_data
+    page, pag = _pf(hdr_data)
+    triage_report["header_anomalies"] = page
+    triage_report["header_anomalies_pagination"] = pag
     risk_score += delta
 
     _report(62, "Checking TLS & security mitigations...")
@@ -1749,6 +1780,10 @@ def _run_triage_internal(
     risk_score += delta
 
     data, delta = _triage_delay_load_evasion(indicator_limit)
+    if "suspicious_delay_loaded_apis" in data:
+        p, pg = _pf(data["suspicious_delay_loaded_apis"])
+        data["suspicious_delay_loaded_apis"] = p
+        data["suspicious_delay_loaded_apis_pagination"] = pg
     triage_report["delay_load_risks"] = data
     risk_score += delta
 
@@ -1762,6 +1797,14 @@ def _run_triage_internal(
     risk_score += delta
 
     data, delta = _triage_export_anomalies(indicator_limit)
+    if "ordinal_only_values" in data:
+        p, pg = _pf(data["ordinal_only_values"])
+        data["ordinal_only_values"] = p
+        data["ordinal_only_values_pagination"] = pg
+    if "forwarded_exports" in data:
+        p, pg = _pf(data["forwarded_exports"])
+        data["forwarded_exports"] = p
+        data["forwarded_exports_pagination"] = pg
     triage_report["export_anomalies"] = data
     risk_score += delta
 
@@ -1775,7 +1818,9 @@ def _run_triage_internal(
 
     _report(82, "Ranking high-value strings...")
     hvs_data, delta = _triage_high_value_strings(sifter_score_threshold, indicator_limit, all_string_values)
-    triage_report["high_value_strings"] = hvs_data
+    page, pag = _pf(hvs_data)
+    triage_report["high_value_strings"] = page
+    triage_report["high_value_strings_pagination"] = pag
     risk_score += delta
 
     lang_data, delta = _triage_compiler_language(all_string_values)
@@ -1790,7 +1835,21 @@ def _run_triage_internal(
     risk_data = _triage_risk_and_suggestions(risk_score, analysis_mode, triage_report)
     triage_report["risk_score"] = risk_data["risk_score"]
     triage_report["risk_level"] = risk_data["risk_level"]
-    triage_report["suggested_next_tools"] = risk_data["suggested_next_tools"]
+    page, pag = _pf(risk_data["suggested_next_tools"])
+    triage_report["suggested_next_tools"] = page
+    triage_report["suggested_next_tools_pagination"] = pag
+
+    # Packing assessment pagination
+    packing = triage_report.get("packing_assessment", {})
+    if isinstance(packing, dict):
+        if "peid_matches" in packing:
+            p, pg = _pf(packing["peid_matches"])
+            packing["peid_matches"] = p
+            packing["peid_matches_pagination"] = pg
+        if "peid_ranked" in packing:
+            p, pg = _pf(packing["peid_ranked"])
+            packing["peid_ranked"] = p
+            packing["peid_ranked_pagination"] = pg
 
     # Cache on state (pe_data persistence handled by _save_enrichment_cache)
     current_state._cached_triage = triage_report
@@ -1807,7 +1866,8 @@ def _run_triage_internal(
 async def get_triage_report(
     ctx: Context,
     sifter_score_threshold: float = 8.0,
-    indicator_limit: int = 20,
+    indicator_limit: int = 50,
+    indicator_offset: int = 0,
     compact: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -1828,7 +1888,8 @@ async def get_triage_report(
     Args:
         ctx: The MCP Context object.
         sifter_score_threshold: (float) Min sifter score for high-value string indicators.
-        indicator_limit: (int) Max items per category in the report.
+        indicator_limit: (int) Max items per category in the report (default 50).
+        indicator_offset: (int) Start index for paginated lists (default 0).
         compact: (bool) If True, return only risk level, risk score, top findings,
             and suggested next tools (~2KB instead of ~20KB). Default False.
 
@@ -1884,6 +1945,7 @@ async def get_triage_report(
     triage_report = await asyncio.to_thread(
         _run_triage_internal, _current,
         sifter_score_threshold, indicator_limit, _bridge_progress,
+        indicator_offset,
     )
 
     if compact:

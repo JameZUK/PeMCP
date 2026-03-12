@@ -38,7 +38,7 @@ def _is_binary_file(filepath):
             if magic[:len(sig)] == sig:
                 return True
     except Exception:
-        pass
+        logger.debug("_is_binary_file: cannot read %s", filepath)
     return False
 
 
@@ -72,13 +72,13 @@ def _parse_single_file(filepath):
         try:
             entry["ssdeep"] = ppdeep.hash(data)
         except Exception:
-            pass
+            logger.debug("ssdeep hash failed for %s", filepath)
     if TLSH_AVAILABLE:
         try:
             h = tlsh.hash(data)
             entry["tlsh"] = h if h else None
         except Exception:
-            pass
+            logger.debug("TLSH hash failed for %s", filepath)
 
     # PE parsing
     try:
@@ -130,6 +130,8 @@ def _parse_single_file(filepath):
                 if exp.name:
                     exports.append(exp.name.decode('ascii', 'replace'))
             entry["exports"] = exports[:50]
+            if len(exports) > 50:
+                entry["exports_pagination"] = {"total": len(exports), "returned": 50, "has_more": True}
 
         pe.close()
     except Exception as e:
@@ -137,7 +139,7 @@ def _parse_single_file(filepath):
         try:
             pe.close()
         except Exception:
-            pass
+            logger.debug("pe.close() failed for %s", filepath)
 
     return entry
 
@@ -177,6 +179,8 @@ def _compare_files(results, include_similarity):
     shared_funcs = sorted(k for k, v in func_counts.items() if v == n_files)
     unique_funcs_count = sum(1 for v in func_counts.values() if v == 1)
     comparison["shared_imports"] = shared_funcs[:30]
+    if len(shared_funcs) > 30:
+        comparison["shared_imports_pagination"] = {"total": len(shared_funcs), "returned": 30, "has_more": True}
     comparison["unique_imports_count"] = unique_funcs_count
 
     # ---- Timestamp analysis ----
@@ -214,6 +218,8 @@ def _compare_files(results, include_similarity):
                 })
     if high_entropy:
         comparison["high_entropy_sections"] = high_entropy[:20]
+        if len(high_entropy) > 20:
+            comparison["high_entropy_sections_pagination"] = {"total": len(high_entropy), "returned": 20, "has_more": True}
 
     # ---- Similarity clustering ----
     if include_similarity and len(valid) >= 2:
@@ -244,10 +250,12 @@ def _compare_files(results, include_similarity):
                                     "score": score,
                                 })
                         except Exception:
-                            pass
+                            logger.debug("ssdeep compare failed: %s vs %s", a["filename"], b["filename"])
             ssdeep_pairs.sort(key=lambda x: -x["score"])
             if ssdeep_pairs:
                 similarity["ssdeep_pairs"] = ssdeep_pairs[:20]
+                if len(ssdeep_pairs) > 20:
+                    similarity["ssdeep_pairs_pagination"] = {"total": len(ssdeep_pairs), "returned": 20, "has_more": True}
 
         # TLSH pairwise
         if TLSH_AVAILABLE:
@@ -266,10 +274,12 @@ def _compare_files(results, include_similarity):
                                             else "different"),
                             })
                         except Exception:
-                            pass
+                            logger.debug("TLSH diff failed: %s vs %s", a["filename"], b["filename"])
             tlsh_pairs.sort(key=lambda x: x["distance"])
             if tlsh_pairs:
                 similarity["tlsh_pairs"] = tlsh_pairs[:20]
+                if len(tlsh_pairs) > 20:
+                    similarity["tlsh_pairs_pagination"] = {"total": len(tlsh_pairs), "returned": 20, "has_more": True}
 
         if similarity:
             comparison["similarity"] = similarity

@@ -23,7 +23,7 @@ from arkana.mcp._search_helpers import search_lines_with_context
 # C5: Bounded with FIFO eviction and protected by lock.
 _decompile_meta: dict = {}  # cache_key -> {function_name, address, lines}
 _decompile_meta_lock = threading.Lock()
-_MAX_DECOMPILE_META = 500
+_MAX_DECOMPILE_META = 2000
 
 
 def _get_cached_lines(cache_key):
@@ -800,6 +800,9 @@ async def emulate_function_execution(
 
     if args_hex is None:
         args_hex = []
+    _MAX_EMU_STEPS = 10_000_000
+    if max_steps < 1 or max_steps > _MAX_EMU_STEPS:
+        raise ValueError(f"max_steps must be 1-{_MAX_EMU_STEPS}, got {max_steps}")
     _check_angr_ready("emulate_function_execution")
     target = _parse_addr(function_address)
     try:
@@ -1212,13 +1215,16 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
 
     def _find_dominators():
         _ensure_project_and_cfg()
+        project_snap, cfg_snap = state.get_angr_snapshot()
+        if cfg_snap is None:
+            return {"error": "CFG not available."}
 
         try:
-            target_node = state.angr_cfg.model.get_any_node(target_addr)
+            target_node = cfg_snap.model.get_any_node(target_addr)
             if not target_node:
                 # Fallback to block start
-                block = state.angr_project.factory.block(target_addr)
-                target_node = state.angr_cfg.model.get_any_node(block.addr)
+                block = project_snap.factory.block(target_addr)
+                target_node = cfg_snap.model.get_any_node(block.addr)
 
             if not target_node: return {"error": "Node not found in CFG."}
 
@@ -1226,7 +1232,7 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
             if not target_node.function_address:
                 return {"error": "Target node does not belong to a known function, cannot calculate dominators."}
 
-            func = state.angr_cfg.functions.get(target_node.function_address)
+            func = cfg_snap.functions.get(target_node.function_address)
             if not func: return {"error": "Function object not found."}
 
             # Identify the entry node of the function graph
@@ -1633,12 +1639,17 @@ async def get_cross_reference_map(
     if not function_addresses:
         raise ValueError("function_addresses must contain at least one address.")
 
-    parsed_addrs = [_parse_addr(a) for a in function_addresses[:10]]  # cap at 10
+    _MAX_XREF_ADDRESSES = 10
+    _truncated_xref = len(function_addresses) > _MAX_XREF_ADDRESSES
+    parsed_addrs = [_parse_addr(a) for a in function_addresses[:_MAX_XREF_ADDRESSES]]
 
     def _build_xref_map():
         _ensure_project_and_cfg()
+        project_snap, cfg_snap = state.get_angr_snapshot()
+        if cfg_snap is None:
+            return {"error": "CFG not available."}
 
-        callgraph = state.angr_cfg.functions.callgraph
+        callgraph = cfg_snap.functions.callgraph
 
         # String address lookup (cached)
         string_addrs = state.result_cache.get("_string_addr_map", ())
@@ -1677,8 +1688,8 @@ async def get_cross_reference_map(
                 visited.add(fn_addr)
                 try:
                     for callee_addr in callgraph.successors(fn_addr):
-                        if callee_addr in state.angr_cfg.functions:
-                            cfunc = state.angr_cfg.functions[callee_addr]
+                        if callee_addr in cfg_snap.functions:
+                            cfunc = cfg_snap.functions[callee_addr]
                             cname = cfunc.name
                             if cname not in calls:
                                 calls.append(cname)
@@ -1697,8 +1708,8 @@ async def get_cross_reference_map(
             callers = []
             try:
                 for caller_addr in callgraph.predecessors(addr_used):
-                    if caller_addr in state.angr_cfg.functions:
-                        callers.append(state.angr_cfg.functions[caller_addr].name)
+                    if caller_addr in cfg_snap.functions:
+                        callers.append(cfg_snap.functions[caller_addr].name)
             except Exception:
                 logger.debug("get_cross_reference_map: failed to collect callers for %s", hex(addr_used), exc_info=True)
 
@@ -1707,7 +1718,7 @@ async def get_cross_reference_map(
             try:
                 for block in func.blocks:
                     for insn_addr in block.instruction_addrs:
-                        xrefs = state.angr_project.kb.xrefs.xrefs_by_ins_addr.get(insn_addr, [])
+                        xrefs = project_snap.kb.xrefs.xrefs_by_ins_addr.get(insn_addr, [])
                         for xref in xrefs:
                             if xref.memory_data and xref.memory_data.addr in string_addrs:
                                 s = string_addrs[xref.memory_data.addr]
@@ -1742,6 +1753,8 @@ async def get_cross_reference_map(
         "functions": result_data,
         "depth": depth,
     }
+    if _truncated_xref:
+        result["_truncated"] = f"Input truncated from {len(function_addresses)} to {_MAX_XREF_ADDRESSES} addresses"
 
     return await _check_mcp_response_size(ctx, result, "get_cross_reference_map")
 
@@ -1799,6 +1812,7 @@ async def batch_decompile(
     total_search_matches = 0
 
     # Acquire decompile lock to prevent races with enrichment sweep
+    _batch_lock_held = False
     state._decompile_on_demand_waiting = True
     if not state._decompile_lock.acquire(timeout=60):
         raise RuntimeError(
@@ -1807,7 +1821,8 @@ async def batch_decompile(
     state._decompile_on_demand_waiting = False
     _batch_lock_held = True
 
-    for i, addr_str in enumerate(addresses):
+    try:
+     for i, addr_str in enumerate(addresses):
         await ctx.report_progress(i, len(addresses))
         target_addr = _parse_addr(addr_str)
         cache_key = (target_addr,)
@@ -1914,10 +1929,11 @@ async def batch_decompile(
         results.append(func_result)
         succeeded += 1
 
-    # Release decompile lock before response formatting
-    if _batch_lock_held:
-        state._decompile_lock.release()
-        _batch_lock_held = False
+    finally:
+        # Release decompile lock — must run even on exception to prevent deadlock
+        if _batch_lock_held:
+            state._decompile_lock.release()
+            _batch_lock_held = False
 
     await ctx.report_progress(len(addresses), len(addresses))
     output = {

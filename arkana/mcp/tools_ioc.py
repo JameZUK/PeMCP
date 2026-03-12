@@ -80,6 +80,9 @@ def _collect_iocs_from_triage() -> Dict[str, set]:
     return iocs
 
 
+_MAX_IOCS_PER_CATEGORY = 10_000
+
+
 def _collect_iocs_from_notes() -> Dict[str, set]:
     """Extract IOCs mentioned in analysis notes."""
     iocs: Dict[str, set] = {
@@ -91,19 +94,31 @@ def _collect_iocs_from_notes() -> Dict[str, set]:
     for note in notes:
         content = note.get("content", "")
         for ip in _IP_RE.findall(content):
+            if len(iocs["ipv4"]) >= _MAX_IOCS_PER_CATEGORY:
+                break
             if not ip.startswith(_PRIVATE_IP_PREFIXES):
                 iocs["ipv4"].add(ip)
         for url in _URL_RE.findall(content):
+            if len(iocs["urls"]) >= _MAX_IOCS_PER_CATEGORY:
+                break
             iocs["urls"].add(url)
         for domain in _DOMAIN_RE.findall(content):
+            if len(iocs["domains"]) >= _MAX_IOCS_PER_CATEGORY:
+                break
             tld = domain.rsplit(".", 1)[-1].lower()
             if tld not in _DOMAIN_FALSE_POSITIVE_TLDS and not re.match(r"^\d+\.\d+\.\d+", domain):
                 iocs["domains"].add(domain)
         for key in _REGISTRY_RE.findall(content):
+            if len(iocs["registry_keys"]) >= _MAX_IOCS_PER_CATEGORY:
+                break
             iocs["registry_keys"].add(key)
         for mutex in _MUTEX_RE.findall(content):
+            if len(iocs["mutexes"]) >= _MAX_IOCS_PER_CATEGORY:
+                break
             iocs["mutexes"].add(mutex)
         for email in _EMAIL_RE.findall(content):
+            if len(iocs["emails"]) >= _MAX_IOCS_PER_CATEGORY:
+                break
             iocs["emails"].add(email)
 
     return iocs

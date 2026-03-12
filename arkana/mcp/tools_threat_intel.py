@@ -382,6 +382,7 @@ async def map_mitre_attack(
     analysis = await asyncio.to_thread(_map)
 
     if output_path:
+        state.check_path_allowed(os.path.realpath(output_path))
         if analysis.get("navigator_layer"):
             text_bytes = json.dumps(analysis["navigator_layer"], indent=2).encode("utf-8")
             artifact_meta = await asyncio.to_thread(
@@ -552,6 +553,7 @@ async def generate_sigma_rule(
     result = await asyncio.to_thread(_generate)
 
     if output_path and result.get("combined_yaml"):
+        state.check_path_allowed(os.path.realpath(output_path))
         text_bytes = result["combined_yaml"].encode("utf-8")
         artifact_meta = await asyncio.to_thread(
             _write_output_and_register_artifact,
@@ -664,7 +666,8 @@ def _generate_file_event_rule(
         return None
 
     selection = "\n".join(detection_items)
-    yaml = f"""title: 'Suspicious File Drop - {filename} (DRAFT)'
+    safe_filename_file = filename.replace("'", "''").replace("\\", "\\\\")[:80]
+    yaml = f"""title: 'Suspicious File Drop - {safe_filename_file} (DRAFT)'
 id: arkana-file-{sha256[:8]}
 status: experimental
 description: >
@@ -791,7 +794,8 @@ def _generate_network_rule(
 
     confidence = "medium" if len(ips) + len(domains) >= 2 else "low"
     selection = "\n".join(detection_items)
-    yaml = f"""title: 'Suspicious Network Connection - {filename} (DRAFT)'
+    safe_filename_net = filename.replace("'", "''").replace("\\", "\\\\")[:80]
+    yaml = f"""title: 'Suspicious Network Connection - {safe_filename_net} (DRAFT)'
 id: arkana-net-{sha256[:8]}
 status: experimental
 description: >

@@ -232,6 +232,8 @@ def _classify_core() -> Dict[str, Any]:
 
     if behavioral_indicators:
         result["behavioral_indicators"] = behavioral_indicators[:20]
+        if len(behavioral_indicators) > 20:
+            result["behavioral_indicators_pagination"] = {"total": len(behavioral_indicators), "returned": 20, "has_more": True}
     if risk_level:
         result["risk_level"] = risk_level
 

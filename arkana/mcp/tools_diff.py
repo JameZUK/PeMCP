@@ -37,6 +37,9 @@ async def diff_payloads(
     """
     await ctx.info("Comparing two binary payloads")
 
+    if context_bytes < 0 or context_bytes > 1_000_000:
+        raise ValueError(f"context_bytes must be 0-1000000, got {context_bytes}")
+
     # Check hex string length BEFORE decoding to avoid allocating huge intermediates.
     # 2 hex chars = 1 byte, so _MAX_HEX_LEN hex chars = _MAX_HEX_LEN/2 decoded bytes.
     _MAX_HEX_LEN = 2 * 1024 * 1024  # 2MB hex chars = 1MB decoded bytes

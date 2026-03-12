@@ -629,7 +629,7 @@ class TestSinceLastDigestFiltering:
         with open(session_path) as f:
             source = f.read()
         idx = source.index("async def get_analysis_digest(")
-        func_body = source[idx:idx + 4000]
+        func_body = source[idx:idx + 5000]
         assert "_note_is_new" in func_body, \
             "get_analysis_digest should have a _note_is_new helper for timestamp filtering"
         assert "last_ts" in func_body, \

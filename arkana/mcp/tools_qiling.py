@@ -32,6 +32,9 @@ def _validate_max_instructions(max_instructions: int) -> int:
 
 _MAX_TIMEOUT_SECONDS = 600  # 10 minutes
 
+_VALID_OS_TYPES = frozenset({"windows", "linux", "macos"})
+_VALID_ARCHITECTURES = frozenset({"x86", "x8664", "arm", "arm64", "mips"})
+
 
 def _validate_timeout(timeout_seconds: int) -> int:
     """Validate timeout_seconds parameter."""
@@ -295,6 +298,10 @@ async def emulate_shellcode_with_qiling(
     _check_qiling("emulate_shellcode_with_qiling")
     _validate_max_instructions(max_instructions)
     _validate_timeout(timeout_seconds)
+    if os_type not in _VALID_OS_TYPES:
+        raise ValueError(f"Invalid os_type '{os_type}'. Must be one of: {', '.join(sorted(_VALID_OS_TYPES))}")
+    if architecture not in _VALID_ARCHITECTURES:
+        raise ValueError(f"Invalid architecture '{architecture}'. Must be one of: {', '.join(sorted(_VALID_ARCHITECTURES))}")
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_shellcode_with_qiling", timeout_seconds))
@@ -706,6 +713,9 @@ async def qiling_memory_search(
     _check_pe_loaded("qiling_memory_search")
     _validate_max_instructions(max_instructions)
     _validate_timeout(timeout_seconds)
+
+    if context_bytes < 0 or context_bytes > 1_000_000:
+        raise ValueError(f"context_bytes must be 0-1000000, got {context_bytes}")
 
     if not search_patterns and not search_hex:
         return {"error": "No search criteria provided. Specify search_patterns (strings) and/or search_hex (bytes)."}

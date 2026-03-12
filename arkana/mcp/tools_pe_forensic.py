@@ -230,6 +230,8 @@ async def generate_yara_rule(
                                 "matched_data": instance.matched_data.hex()[:64],
                             })
                     match_info["strings"] = string_matches[:20]
+                    if len(string_matches) > 20:
+                        match_info["strings_pagination"] = {"total": len(string_matches), "returned": 20, "has_more": True}
                     scan_results.append(match_info)
                 result["scan_result"] = {
                     "matched": len(scan_results) > 0,

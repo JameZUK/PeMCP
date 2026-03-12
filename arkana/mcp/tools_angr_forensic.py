@@ -13,6 +13,7 @@ from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_resp
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
+from arkana.mcp._input_helpers import _paginate_field
 from arkana.utils import shannon_entropy
 
 if ANGR_AVAILABLE:
@@ -87,31 +88,32 @@ async def diff_binaries(
         differing = []
         unmatched_a = []
         unmatched_b = []
+        _diff_warnings = []
 
         try:
             for fa, fb in list(getattr(diff, 'identical_functions', []))[:limit]:
                 identical.append({"a": hex(fa.addr), "b": hex(fb.addr), "name": str(fa.name)})
         except Exception as e:
-            logger.debug("Skipped identical_functions during diff: %s", e)
-            pass
+            logger.warning("BinDiff: failed to extract identical_functions: %s", e)
+            _diff_warnings.append(f"identical_functions extraction failed: {e}")
         try:
             for fa, fb in list(getattr(diff, 'differing_functions', []))[:limit]:
                 differing.append({"a": hex(fa.addr), "b": hex(fb.addr), "name_a": str(fa.name), "name_b": str(fb.name)})
         except Exception as e:
-            logger.debug("Skipped differing_functions during diff: %s", e)
-            pass
+            logger.warning("BinDiff: failed to extract differing_functions: %s", e)
+            _diff_warnings.append(f"differing_functions extraction failed: {e}")
         try:
             for f in list(getattr(diff, 'unmatched_from_a', getattr(diff, 'unmatched_a', [])))[:limit]:
                 unmatched_a.append({"address": hex(f.addr), "name": str(f.name)})
         except Exception as e:
-            logger.debug("Skipped unmatched_from_a during diff: %s", e)
-            pass
+            logger.warning("BinDiff: failed to extract unmatched_from_a: %s", e)
+            _diff_warnings.append(f"unmatched_from_a extraction failed: {e}")
         try:
             for f in list(getattr(diff, 'unmatched_from_b', getattr(diff, 'unmatched_b', [])))[:limit]:
                 unmatched_b.append({"address": hex(f.addr), "name": str(f.name)})
         except Exception as e:
-            logger.debug("Skipped unmatched_from_b during diff: %s", e)
-            pass
+            logger.warning("BinDiff: failed to extract unmatched_from_b: %s", e)
+            _diff_warnings.append(f"unmatched_from_b extraction failed: {e}")
 
         # Force all values to plain Python types — avoids CFFI
         # _CDataBase pickle errors when the result is stored in the
@@ -128,6 +130,8 @@ async def diff_binaries(
             "unmatched_in_a": unmatched_a,
             "unmatched_in_b": unmatched_b,
         }
+        if _diff_warnings:
+            result["warnings"] = _diff_warnings
 
         # Explicitly delete angr objects to release CFFI references
         # before this dict crosses the thread boundary.
@@ -1036,6 +1040,7 @@ async def emulate_with_watchpoints(
 async def identify_cpp_classes(
     ctx: Context,
     limit: int = 20,
+    method_limit: int = 20,
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -1050,6 +1055,7 @@ async def identify_cpp_classes(
 
     Args:
         limit: Max classes to return.
+        method_limit: Max methods per class to return (default 20).
         run_in_background: Run as background task.
     """
     _check_angr_ready("identify_cpp_classes")
@@ -1070,7 +1076,10 @@ async def identify_cpp_classes(
                     "vtable_address": hex(cls.vtable_addr) if hasattr(cls, 'vtable_addr') else None,
                 }
                 if hasattr(cls, 'methods'):
-                    entry["methods"] = [hex(m) if isinstance(m, int) else str(m) for m in cls.methods[:20]]
+                    all_methods = [hex(m) if isinstance(m, int) else str(m) for m in cls.methods]
+                    entry["methods"] = all_methods[:method_limit]
+                    entry["method_count"] = len(all_methods)
+                    entry["methods_has_more"] = len(all_methods) > method_limit
                 if hasattr(cls, 'parents'):
                     entry["parents"] = [str(p) for p in cls.parents]
                 classes.append(entry)
@@ -1174,7 +1183,9 @@ async def identify_cpp_classes(
                     vtables.append({
                         "vtable_address": hex(vtable_addr),
                         "method_count": consecutive_funcs,
-                        "methods": methods[:20],
+                        "methods": methods[:method_limit],
+                        "method_count": len(methods),
+                        "methods_has_more": len(methods) > method_limit,
                         "section": getattr(section, 'name', 'unknown'),
                     })
 
@@ -1347,6 +1358,7 @@ async def get_call_graph(
 async def find_anti_debug_comprehensive(
     ctx: Context,
     compact: bool = False,
+    limit: int = 60,
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Comprehensive anti-analysis technique detection — covers
@@ -1765,16 +1777,24 @@ async def find_anti_debug_comprehensive(
                 "note": "Use find_anti_debug_comprehensive(compact=False) for per-occurrence technique details.",
             }
 
+        funcs_page, funcs_pag = _paginate_field(functions_with_antidbg, 0, limit)
+        vm_page, vm_pag = _paginate_field(vm_strings_found, 0, limit)
+        instr_page, instr_pag = _paginate_field(instruction_findings, 0, limit)
+        tech_page, tech_pag = _paginate_field(techniques, 0, limit)
         return {
             "total_techniques_found": len(techniques),
             "severity_summary": severity_counts,
             "categories": categories,
             "hypervisor_breakdown": hypervisor_breakdown,
-            "functions_with_anti_debug": functions_with_antidbg[:30],
+            "functions_with_anti_debug": funcs_page,
+            "functions_with_anti_debug_pagination": funcs_pag,
             "tls_callbacks": tls_callbacks,
-            "vm_indicator_strings": vm_strings_found[:30],
-            "instruction_findings": instruction_findings[:20],
-            "techniques": techniques[:60],
+            "vm_indicator_strings": vm_page,
+            "vm_indicator_strings_pagination": vm_pag,
+            "instruction_findings": instr_page,
+            "instruction_findings_pagination": instr_pag,
+            "techniques": tech_page,
+            "techniques_pagination": tech_pag,
         }
 
     try:

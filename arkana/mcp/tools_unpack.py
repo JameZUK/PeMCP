@@ -108,6 +108,11 @@ async def try_all_unpackers(
                     "error": stderr.decode(errors="replace")[:300],
                 })
         except asyncio.TimeoutError:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
             results.append({"method": "unipacker", "status": "timeout"})
         except Exception as e:
             results.append({"method": "unipacker", "status": "error", "error": str(e)[:200]})

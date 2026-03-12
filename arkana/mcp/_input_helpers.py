@@ -124,7 +124,14 @@ def _make_cache_key(**params) -> tuple:
     different pages of the same query hit the same cache entry.
     """
     _SKIP = frozenset({"offset", "limit", "compact", "ctx", "line_offset", "line_limit",
-                        "search", "context_lines", "case_sensitive"})
+                        "search", "context_lines", "case_sensitive",
+                        "notes_offset", "notes_limit", "history_limit",
+                        "findings_offset", "findings_limit",
+                        "functions_offset", "functions_limit",
+                        "ioc_limit", "ioc_offset",
+                        "unexplored_offset", "unexplored_limit",
+                        "indicator_offset", "indicator_limit",
+                        "method_limit", "max_suggestions"})
     parts = []
     for k in sorted(params):
         if k in _SKIP:
@@ -169,6 +176,27 @@ def _paginated_response(
     if extra:
         result.update(extra)
     return result
+
+
+def _paginate_field(items, offset=0, limit=50):
+    """Slice a list and return ``(page, pagination_dict)``.
+
+    Lightweight helper for adding pagination metadata to individual
+    fields within a larger response dict — unlike ``_paginated_response``
+    which builds the entire response wrapper.
+    """
+    if not isinstance(items, list):
+        items = list(items) if items else []
+    total = len(items)
+    offset = max(0, min(offset, total))
+    page = items[offset:offset + limit]
+    return page, {
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "returned": len(page),
+        "has_more": (offset + limit) < total,
+    }
 
 
 def _cached_paginated_response(

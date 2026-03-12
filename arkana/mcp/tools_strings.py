@@ -320,6 +320,15 @@ async def get_floss_analysis_info(ctx: Context,
     if string_type is None: # Return metadata and config
         response_data["metadata"] = floss_data_block.get("metadata", {})
         response_data["analysis_config"] = floss_data_block.get("analysis_config", {})
+        # Surface xref enrichment cap so the AI knows if some strings lack references
+        from arkana.constants import MAX_FLOSS_ENRICHMENT_STRINGS
+        static_count = len(floss_data_block.get("strings", {}).get("static_strings", []))
+        response_data["xref_enrichment"] = {
+            "strings_enriched": min(static_count, MAX_FLOSS_ENRICHMENT_STRINGS),
+            "total_static": static_count,
+            "enrichment_cap": MAX_FLOSS_ENRICHMENT_STRINGS,
+            "capped": static_count > MAX_FLOSS_ENRICHMENT_STRINGS,
+        }
         await ctx.info("Returning FLOSS metadata and analysis configuration.")
     else: # Return specific string type with pagination
         all_strings_of_type = floss_data_block.get("strings", {}).get(string_type, [])
@@ -1390,34 +1399,41 @@ async def search_yara_custom(
     await ctx.info("[yara] Scanning binary...")
 
     filepath = state.filepath
-    try:
-        matches = compiled.match(filepath)
-    except Exception as e:
-        return {"error": f"YARA scan error: {e}"}
 
-    results = []
-    for match in matches:
-        match_info: Dict[str, Any] = {
-            "rule": match.rule,
-            "tags": list(match.tags) if match.tags else [],
-            "meta": dict(match.meta) if match.meta else {},
+    def _yara_scan():
+        try:
+            matches = compiled.match(filepath)
+        except Exception as e:
+            return {"error": f"YARA scan error: {e}"}
+
+        results = []
+        for match in matches:
+            match_info: Dict[str, Any] = {
+                "rule": match.rule,
+                "tags": list(match.tags) if match.tags else [],
+                "meta": dict(match.meta) if match.meta else {},
+            }
+            string_matches = []
+            for s in match.strings:
+                for instance in s.instances[:limit]:
+                    string_matches.append({
+                        "identifier": s.identifier,
+                        "offset": instance.offset,
+                        "matched_data": instance.matched_data.hex()[:64],
+                    })
+            match_info["strings"] = string_matches[:limit]
+            results.append(match_info)
+
+        return {
+            "matches": results,
+            "match_count": len(results),
+            "rules_compiled": True,
         }
-        string_matches = []
-        for s in match.strings:
-            for instance in s.instances[:limit]:
-                string_matches.append({
-                    "identifier": s.identifier,
-                    "offset": instance.offset,
-                    "matched_data": instance.matched_data.hex()[:64],
-                })
-        match_info["strings"] = string_matches[:limit]
-        results.append(match_info)
 
-    return await _check_mcp_response_size(ctx, {
-        "matches": results,
-        "match_count": len(results),
-        "rules_compiled": True,
-    }, "search_yara_custom")
+    scan_result = await asyncio.to_thread(_yara_scan)
+    if "error" in scan_result:
+        return scan_result
+    return await _check_mcp_response_size(ctx, scan_result, "search_yara_custom")
 
 
 # ===================================================================

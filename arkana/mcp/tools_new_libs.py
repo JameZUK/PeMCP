@@ -281,6 +281,10 @@ async def disassemble_raw_bytes(
     await ctx.info(f"Disassembling raw bytes ({architecture})")
     _check_lib("capstone", CAPSTONE_AVAILABLE, "disassemble_raw_bytes")
 
+    _MAX_RAW_HEX_LEN = 200_000  # 100KB decoded
+    if len(hex_bytes) > _MAX_RAW_HEX_LEN:
+        raise ValueError(f"hex_bytes too large ({len(hex_bytes)} chars, max {_MAX_RAW_HEX_LEN}).")
+
     try:
         code = bytes.fromhex(hex_bytes)
     except ValueError:
@@ -348,6 +352,10 @@ async def assemble_instruction(
     """
     await ctx.info(f"Assembling: {assembly[:60]}")
     _check_lib("keystone", KEYSTONE_AVAILABLE, "assemble_instruction")
+
+    _MAX_ASSEMBLY_LEN = 100_000  # 100KB
+    if len(assembly) > _MAX_ASSEMBLY_LEN:
+        raise ValueError(f"Assembly input too large ({len(assembly)} chars, max {_MAX_ASSEMBLY_LEN}).")
 
     base_addr = int(base_address, 0)
 

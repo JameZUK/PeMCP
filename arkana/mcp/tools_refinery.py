@@ -518,14 +518,20 @@ async def refinery_decompress(
         return data | unit_cls() | bytes
 
     result = await asyncio.to_thread(_run)
+    _MAX_DECOMPRESS_OUTPUT = 100 * 1024 * 1024  # 100MB
+    original_output_size = len(result)
+    if original_output_size > _MAX_DECOMPRESS_OUTPUT:
+        result = result[:_MAX_DECOMPRESS_OUTPUT]
     response: Dict[str, Any] = {
         "algorithm": algo,
         "input_size": len(data),
-        "output_size": len(result),
-        "compression_ratio": round(len(result) / max(len(data), 1), 2),
+        "output_size": original_output_size,
+        "compression_ratio": round(original_output_size / max(len(data), 1), 2),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
     }
+    if original_output_size > _MAX_DECOMPRESS_OUTPUT:
+        response["_output_truncated"] = f"Output truncated from {original_output_size} to {_MAX_DECOMPRESS_OUTPUT} bytes"
     if output_path:
         artifact_meta = await asyncio.to_thread(
             _write_output_and_register_artifact,

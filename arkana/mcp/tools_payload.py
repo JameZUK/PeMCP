@@ -891,7 +891,8 @@ async def extract_config_automated(
         )
 
     if output_path:
-        import json
+        import os, json
+        state.check_path_allowed(os.path.realpath(output_path))
         config_output = {"config": config, "total_indicators": total}
         if encrypted_configs:
             config_output["encrypted_configs"] = encrypted_configs
@@ -1353,7 +1354,8 @@ async def extract_config_for_family(
             pass
 
     if output_path and result.get("status") == "extracted":
-        import json
+        import os, json
+        state.check_path_allowed(os.path.realpath(output_path))
         text_bytes = json.dumps(result, indent=2, default=str).encode("utf-8")
         artifact_meta = await asyncio.to_thread(
             _write_output_and_register_artifact,
