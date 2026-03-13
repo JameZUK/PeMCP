@@ -226,11 +226,14 @@ def _parse_floss_static_only(
     try:
         sample_path = Path(pe_filepath_str)
         t0 = time.monotonic()
+        _MAX_STATIC_STRINGS = 200_000
         static_strings_gen = get_static_strings(sample_path, min_length)
-        static_list = [
-            {"offset": hex(s_obj.offset), "string": s_obj.string}
-            for s_obj in static_strings_gen
-        ]
+        static_list = []
+        for s_obj in static_strings_gen:
+            static_list.append({"offset": hex(s_obj.offset), "string": s_obj.string})
+            if len(static_list) >= _MAX_STATIC_STRINGS:
+                logger.warning("FLOSS static-only: cap reached (%d), truncating.", _MAX_STATIC_STRINGS)
+                break
         result["strings"]["static_strings"] = static_list
         result["status"] = f"Static extraction complete ({len(static_list)} strings in {time.monotonic() - t0:.1f}s). Deep analysis pending."
         logger.info("FLOSS static-only: %d strings in %.1fs", len(static_list), time.monotonic() - t0)

@@ -339,7 +339,7 @@ def _decompile_sweep(
     state._cached_function_scores = scored
 
     # Import the decompile cache to store results
-    from arkana.mcp.tools_angr import _set_decompile_meta, _get_cached_lines
+    from arkana.mcp.tools_angr import _set_decompile_meta, _get_cached_lines, _make_decompile_key
 
     max_funcs = min(len(scored), _MAX_DECOMPILE)
     decompiled = 0
@@ -369,7 +369,7 @@ def _decompile_sweep(
             continue
 
         # Skip if already cached (e.g. from a previous session)
-        cache_key = (addr_int,)
+        cache_key = _make_decompile_key(addr_int)
         if _get_cached_lines(cache_key) is not None:
             continue
 
@@ -423,7 +423,7 @@ def _decompile_sweep(
 def _auto_note_sweep(state: AnalyzerState, generation: int = 0) -> None:
     """Auto-note top functions that have been decompiled."""
     from arkana.mcp.tools_notes import _auto_note_single
-    from arkana.mcp.tools_angr import _get_cached_lines
+    from arkana.mcp.tools_angr import _get_cached_lines, _make_decompile_key
 
     scored = state._cached_function_scores or []
     noted = 0
@@ -439,7 +439,7 @@ def _auto_note_sweep(state: AnalyzerState, generation: int = 0) -> None:
             continue
 
         # Only auto-note functions that were decompiled
-        cache_key = (addr_int,)
+        cache_key = _make_decompile_key(addr_int)
         if _get_cached_lines(cache_key) is None:
             continue
 
@@ -496,21 +496,22 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
             serializable['_cached_function_scores'] = state._cached_function_scores
 
         # Save decompiled functions (metadata + code lines) for cache restore
+        # Only save entries belonging to the current session (key[0] == session UUID)
         try:
-            from arkana.mcp.tools_angr import _decompile_meta
-            if _decompile_meta:
+            from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+            session_uuid = state._state_uuid
+            with _decompile_meta_lock:
                 decompiled_funcs = []
-                # Snapshot to avoid RuntimeError: dict changed size during iteration
-                for key, meta in dict(_decompile_meta).items():
-                    if isinstance(key, tuple) and key:
+                for key, meta in _decompile_meta.items():
+                    if isinstance(key, tuple) and len(key) >= 2 and key[0] == session_uuid:
                         decompiled_funcs.append({
-                            "addr_int": key[0],
+                            "addr_int": key[1],
                             "function_name": meta.get("function_name", ""),
                             "address": meta.get("address", ""),
                             "lines": meta.get("lines"),
                         })
-                if decompiled_funcs:
-                    serializable['_decompiled_functions'] = decompiled_funcs
+            if decompiled_funcs:
+                serializable['_decompiled_functions'] = decompiled_funcs
         except ImportError:
             pass
 

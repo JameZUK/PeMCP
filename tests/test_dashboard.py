@@ -431,11 +431,11 @@ class TestDecompileStateApi:
     def test_get_decompiled_code_with_cache(self):
         from arkana.dashboard.state_api import get_decompiled_code
         try:
-            from arkana.mcp.tools_angr import _decompile_meta
+            from arkana.mcp.tools_angr import _decompile_meta, _make_decompile_key
         except ImportError:
             pytest.skip("angr tools not importable")
-        # Inject a cached decompilation
-        cache_key = (0x401000,)
+        # Inject a cached decompilation using session-scoped key
+        cache_key = _make_decompile_key(0x401000)
         _decompile_meta[cache_key] = {
             "function_name": "test_func",
             "address": "0x401000",

@@ -211,10 +211,13 @@ async def batch_rename(
     for i, entry in enumerate(renames):
         rtype = entry.get("type")
         addr = normalize_address(entry.get("address", ""))
+        _MAX_NAME_LEN = 200
         if rtype == "function":
             name = entry.get("new_name", "").strip()
             if not name:
                 validation_errors.append(f"[{i}] Missing new_name for function rename.")
+            elif len(name) > _MAX_NAME_LEN:
+                validation_errors.append(f"[{i}] Function name too long ({len(name)} chars). Maximum is {_MAX_NAME_LEN}.")
             else:
                 validated_entries.append(("function", addr, {"name": name}))
         elif rtype == "variable":
@@ -222,6 +225,8 @@ async def batch_rename(
             new = entry.get("new_name", "").strip()
             if not old or not new:
                 validation_errors.append(f"[{i}] Missing old_name or new_name for variable rename.")
+            elif len(new) > _MAX_NAME_LEN:
+                validation_errors.append(f"[{i}] Variable name too long ({len(new)} chars). Maximum is {_MAX_NAME_LEN}.")
             else:
                 validated_entries.append(("variable", addr, {"old": old, "new": new}))
         elif rtype == "label":

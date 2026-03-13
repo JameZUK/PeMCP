@@ -199,7 +199,9 @@ def _build_csv(iocs: Dict[str, List[str]]) -> str:
     lines = ["type,value"]
     for category, values in iocs.items():
         for value in values:
-            escaped = value.replace('"', '""')
+            # Strip newlines to prevent CSV row boundary injection
+            escaped = value.replace('\r', ' ').replace('\n', ' ')
+            escaped = escaped.replace('"', '""')
             if escaped and escaped[0] in _DANGEROUS_CSV_PREFIXES:
                 escaped = "'" + escaped
             lines.append(f'{category},"{escaped}"')

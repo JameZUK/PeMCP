@@ -11,7 +11,7 @@ from arkana.constants import (
     MAX_SEARCH_CONTEXT_LINES,
     MAX_SEARCH_MATCHES,
 )
-from arkana.utils import validate_regex_pattern
+from arkana.utils import validate_regex_pattern, safe_regex_search
 
 
 def _build_context_regions(
@@ -99,7 +99,7 @@ def search_lines_with_context(
     match_indices: List[int] = []
     truncated = False
     for i, line in enumerate(lines):
-        if compiled.search(line):
+        if safe_regex_search(compiled, line):
             if len(match_indices) >= max_matches:
                 truncated = True
                 break
@@ -174,7 +174,7 @@ def search_instructions_with_context(
             if label_name:
                 text += f" {label_name}"
 
-        if compiled.search(text):
+        if safe_regex_search(compiled, text):
             if len(match_indices) >= max_matches:
                 truncated = True
                 break

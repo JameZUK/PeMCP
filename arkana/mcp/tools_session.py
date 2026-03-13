@@ -22,7 +22,7 @@ _EXPLORING_TOOLS = frozenset({
 })
 
 
-_phase_caches: Dict[int, Dict[str, Any]] = {}  # keyed by id(state) for session isolation
+_phase_caches: Dict[str, Dict[str, Any]] = {}  # keyed by state._state_uuid for session isolation
 
 
 def _detect_analysis_phase() -> str:
@@ -37,7 +37,7 @@ def _detect_analysis_phase() -> str:
     now = time.monotonic()
     history = state.get_tool_history()
     history_len = len(history) if history else 0
-    sid = id(state)
+    sid = state._state_uuid
     _pc = _phase_caches.get(sid)
     if (_pc is not None
             and _pc["version"] == history_len
@@ -142,6 +142,13 @@ async def get_session_summary(
                 result["angr"] = "ready" if proj else "not_initialized"
         else:
             result["angr"] = "unavailable"
+        # Surface library warning count (also needed in compact mode)
+        warning_count = state.get_warning_count()
+        if warning_count > 0:
+            result["analysis_warnings"] = {
+                "count": warning_count,
+                "hint": "Library warnings were captured during analysis. Call get_analysis_warnings() to review them.",
+            }
         return result
 
     notes_page, notes_pag = _paginate_field(notes, notes_offset, notes_limit)

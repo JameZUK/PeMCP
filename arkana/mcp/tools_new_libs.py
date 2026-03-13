@@ -508,6 +508,10 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
     target = _get_filepath(file_path)
 
     def _compute():
+        _MAX_SIMILARITY_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
+        fsize = os.path.getsize(target)
+        if fsize > _MAX_SIMILARITY_FILE_SIZE:
+            raise ValueError(f"File too large for similarity hashing ({fsize} bytes). Maximum is {_MAX_SIMILARITY_FILE_SIZE}.")
         with open(target, 'rb') as f:
             data = f.read()
 
@@ -731,6 +735,9 @@ async def emulate_shellcode_with_speakeasy(
     _check_lib("speakeasy", _check_speakeasy_available(), "emulate_shellcode_with_speakeasy")
     if timeout_seconds < 1 or timeout_seconds > 600:
         raise ValueError(f"timeout_seconds must be 1-600, got {timeout_seconds}")
+    _MAX_SHELLCODE_HEX = 20_000_000  # 20MB hex = 10MB shellcode
+    if shellcode_hex and len(shellcode_hex) > _MAX_SHELLCODE_HEX:
+        raise ValueError(f"shellcode_hex too large ({len(shellcode_hex)} chars). Maximum is {_MAX_SHELLCODE_HEX}.")
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_shellcode_with_speakeasy", timeout_seconds)

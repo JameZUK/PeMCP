@@ -298,6 +298,9 @@ async def emulate_shellcode_with_qiling(
     _check_qiling("emulate_shellcode_with_qiling")
     _validate_max_instructions(max_instructions)
     _validate_timeout(timeout_seconds)
+    _MAX_SHELLCODE_HEX = 20_000_000  # 20MB hex = 10MB shellcode
+    if shellcode_hex and len(shellcode_hex) > _MAX_SHELLCODE_HEX:
+        raise ValueError(f"shellcode_hex too large ({len(shellcode_hex)} chars). Maximum is {_MAX_SHELLCODE_HEX}.")
     if os_type not in _VALID_OS_TYPES:
         raise ValueError(f"Invalid os_type '{os_type}'. Must be one of: {', '.join(sorted(_VALID_OS_TYPES))}")
     if architecture not in _VALID_ARCHITECTURES:
@@ -560,6 +563,9 @@ async def qiling_resolve_api_hashes(
     """
     if hash_values is None:
         hash_values = []
+    _MAX_HASH_VALUES = 1000
+    if len(hash_values) > _MAX_HASH_VALUES:
+        raise ValueError(f"Too many hash_values ({len(hash_values)}). Maximum is {_MAX_HASH_VALUES}.")
 
     # Apply family_hint overrides from KB
     if family_hint:

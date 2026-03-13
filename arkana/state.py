@@ -754,6 +754,7 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             stale_to_cleanup.append(stale_session)
 
         if session_key not in _session_registry:
+            _start_session_reaper()  # Lazy start on first session creation
             new_state = AnalyzerState()
             # Inherit server-level config from the default state
             new_state.allowed_paths = _default_state.allowed_paths
@@ -826,8 +827,18 @@ def _session_reaper_loop() -> None:
             logger.warning("Session reaper: iteration error", exc_info=True)
 
 
-_reaper_thread = threading.Thread(target=_session_reaper_loop, daemon=True, name="session-reaper")
-_reaper_thread.start()
+_reaper_thread = None
+_reaper_started = False
+
+
+def _start_session_reaper():
+    """Start the session reaper thread lazily on first session creation."""
+    global _reaper_thread, _reaper_started
+    if _reaper_started:
+        return
+    _reaper_started = True
+    _reaper_thread = threading.Thread(target=_session_reaper_loop, daemon=True, name="session-reaper")
+    _reaper_thread.start()
 
 
 def get_all_session_states() -> list:

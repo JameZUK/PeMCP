@@ -578,9 +578,10 @@ def _generate_process_creation_rule(
         detection_items.append(f"        Hashes|contains: '{md5}'")
         confidence = "medium"
 
-    # Image name
+    # Image name — escape for YAML single-quoted context
     if filename and filename != "unknown":
-        detection_items.append(f"        Image|endswith: '\\\\{filename}'")
+        safe_fn = filename.replace("'", "''").replace("\\", "\\\\")
+        detection_items.append(f"        Image|endswith: '\\\\{safe_fn}'")
 
     # Suspicious parent-child from imports
     imports_data = pe_data.get("imports", [])
@@ -656,7 +657,8 @@ def _generate_file_event_rule(
 
     detection_items = []
     if filename and filename != "unknown":
-        detection_items.append(f"        TargetFilename|endswith: '\\\\{filename}'")
+        safe_fn = filename.replace("'", "''").replace("\\", "\\\\")
+        detection_items.append(f"        TargetFilename|endswith: '\\\\{safe_fn}'")
     for path in file_paths[:3]:
         # H5: Escape YAML special chars to prevent injection
         escaped = path.replace("\\", "\\\\").replace("'", "''")

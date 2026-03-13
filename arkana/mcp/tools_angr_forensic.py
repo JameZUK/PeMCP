@@ -672,6 +672,7 @@ async def find_path_with_custom_input(
     _check_angr_ready("find_path_with_custom_input")
     target = _parse_addr(target_address)
     avoid = _parse_addr(avoid_address, "avoid_address") if avoid_address else None
+    max_steps = max(1, min(max_steps, 100_000))
 
     _partial_custom = {}  # shared state for on_timeout callback
 
@@ -734,6 +735,10 @@ async def find_path_with_custom_input(
         while len(simgr.active) > 0 and len(simgr.found) == 0 and steps < max_steps:
             if len(simgr.active) > 30:
                 simgr.split(from_stash='active', to_stash='deferred', limit=30)
+            # Cap deferred stash to prevent unbounded state accumulation
+            deferred = getattr(simgr, 'deferred', None)
+            if deferred is not None and len(deferred) > 500:
+                simgr.drop(stash='deferred', filter_func=lambda s: True)
             simgr.step()
             steps += 1
             _partial_custom['steps'] = steps
@@ -851,6 +856,7 @@ async def emulate_with_watchpoints(
     """
     _check_angr_ready("emulate_with_watchpoints")
     target = _parse_addr(function_address)
+    max_steps = max(1, min(max_steps, 100_000))
     if args_hex is None:
         args_hex = []
     args = [_parse_addr(a, "argument") for a in args_hex]
@@ -1182,7 +1188,7 @@ async def identify_cpp_classes(
 
                     vtables.append({
                         "vtable_address": hex(vtable_addr),
-                        "method_count": consecutive_funcs,
+                        "consecutive_pointers": consecutive_funcs,
                         "methods": methods[:method_limit],
                         "method_count": len(methods),
                         "methods_has_more": len(methods) > method_limit,

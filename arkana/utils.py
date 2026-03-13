@@ -8,6 +8,7 @@ import math
 import os
 import re
 import sys
+import threading
 
 from typing import Dict, Any, Optional, List
 
@@ -33,8 +34,10 @@ def _safe_env_int(key: str, default: int) -> int:
 
 # Module-level shared executor for regex timeout protection.
 # Using a small pool avoids per-call thread creation/teardown overhead.
+# Pool is recreated when stuck threads exhaust it (see safe_regex_search).
 _regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-atexit.register(_regex_executor.shutdown, wait=False)
+_regex_executor_lock = threading.Lock()
+atexit.register(lambda: _regex_executor.shutdown(wait=False))
 
 # --- Safe slicing ---
 
@@ -117,19 +120,31 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
     Raises:
         ValueError: If the search exceeds the timeout.
     """
+    global _regex_executor
     future = _regex_executor.submit(compiled_re.search, text)
     try:
         return future.result(timeout=timeout)
     except concurrent.futures.TimeoutError:
         future.cancel()
         pattern_preview = str(compiled_re.pattern)[:80]
-        # M-S5: Log pool utilisation to help detect pool exhaustion from stuck threads
+        # Check pool health — if all workers are stuck, replace the pool
         active = getattr(_regex_executor, '_threads', set())
         active_count = len([t for t in active if t.is_alive()]) if active else -1
+        max_workers = _regex_executor._max_workers
         logger.warning(
             "Regex timed out after %ss — pattern: %s (active pool threads: %d/%d)",
-            timeout, pattern_preview, active_count, _regex_executor._max_workers,
+            timeout, pattern_preview, active_count, max_workers,
         )
+        # Recreate pool if all workers are potentially stuck (>= max_workers alive)
+        if active_count >= max_workers:
+            with _regex_executor_lock:
+                # Double-check under lock
+                cur_active = getattr(_regex_executor, '_threads', set())
+                if len([t for t in cur_active if t.is_alive()]) >= max_workers:
+                    logger.warning("Regex pool exhausted — recreating executor")
+                    old = _regex_executor
+                    _regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+                    old.shutdown(wait=False)
         raise ValueError(
             f"Regex execution timed out after {timeout}s. "
             "The pattern may cause catastrophic backtracking. "

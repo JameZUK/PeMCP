@@ -82,6 +82,8 @@ async def generate_yara_rule(
             name = f"mal_{mode}_{sha}"
         # Sanitize: YARA identifiers are [a-zA-Z0-9_]
         name = "".join(c if c.isalnum() or c == "_" else "_" for c in name)
+        if not name:
+            name = "rule_unknown"
         if name[0].isdigit():
             name = "rule_" + name
 
@@ -101,8 +103,9 @@ async def generate_yara_rule(
             candidates = _collect_string_candidates(pe_data, triage, min_string_length)
             for s in candidates[:max_strings]:
                 var_name = f"$s{string_idx}"
-                # Escape YARA special chars
+                # Escape YARA special chars (backslash first, then quotes, then control chars)
                 escaped = s.replace("\\", "\\\\").replace('"', '\\"')
+                escaped = escaped.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
                 string_defs.append(f'        {var_name} = "{escaped}"')
                 string_idx += 1
 
@@ -121,6 +124,7 @@ async def generate_yara_rule(
                         if pdb and len(pdb) > 4:
                             var_name = f"$pdb{string_idx}"
                             escaped = pdb.replace("\\", "\\\\").replace('"', '\\"')
+                            escaped = escaped.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
                             string_defs.append(f'        {var_name} = "{escaped}"')
                             condition_parts.append(f"{var_name}")
                             string_idx += 1
@@ -573,6 +577,9 @@ def _compute_authenticode_hash(pe: "pefile.PE") -> Optional[str]:
 
         # PE checksum offset: e_lfanew + 24 + 64 = offset to CheckSum in optional header
         pe_offset = struct.unpack_from('<I', data, 0x3C)[0]
+        if pe_offset + 24 + 68 > len(data):
+            logger.debug("Authenticode hash: e_lfanew (0x%x) points beyond data", pe_offset)
+            return None
         checksum_offset = pe_offset + 24 + 64
 
         # Security directory entry offset: after checksum, in data directories

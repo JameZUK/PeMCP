@@ -257,8 +257,13 @@ async def reconstruct_pe_from_dump(
             "LIEF library is required for PE reconstruction. Install with: pip install lief"
         )
 
+    # Check hex string size before decode to prevent transient OOM
+    _clean_hex = data_hex.replace(" ", "").replace("0x", "")
+    if len(_clean_hex) > 200 * 1024 * 1024:  # 200MB hex = 100MB decoded
+        raise ValueError("data_hex too large (max 200MB hex string = 100MB decoded).")
+
     try:
-        data = bytes.fromhex(data_hex.replace(" ", "").replace("0x", ""))
+        data = bytes.fromhex(_clean_hex)
     except ValueError as e:
         raise ValueError(f"Invalid data_hex: {e}")
 

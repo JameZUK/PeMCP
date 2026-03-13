@@ -407,11 +407,11 @@ async def open_file(
                     cached_decompiled = cached.get('_decompiled_functions')
                     if cached_decompiled:
                         try:
-                            from arkana.mcp.tools_angr import _set_decompile_meta, _get_cached_lines
+                            from arkana.mcp.tools_angr import _set_decompile_meta, _get_cached_lines, _make_decompile_key
                             for entry in cached_decompiled:
                                 addr_int = entry.get("addr_int")
                                 if addr_int is not None:
-                                    key = (addr_int,)
+                                    key = _make_decompile_key(addr_int)
                                     if _get_cached_lines(key) is None:
                                         _set_decompile_meta(key, {
                                             "function_name": entry.get("function_name", ""),
@@ -715,10 +715,10 @@ async def close_file(ctx: Context) -> Dict[str, str]:
             triage_status=state.get_all_triage_snapshot(),
         )
 
-    # C5: Clear decompile meta cache on file close
+    # C5: Clear decompile meta cache for this session only
     try:
         from arkana.mcp.tools_angr import clear_decompile_meta
-        clear_decompile_meta()
+        clear_decompile_meta(session_uuid=state._state_uuid)
     except ImportError:
         pass
 
@@ -739,7 +739,7 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     # L2: Clean up session-specific phase cache entry
     try:
         from arkana.mcp.tools_session import _phase_caches
-        _phase_caches.pop(id(state), None)
+        _phase_caches.pop(state._state_uuid, None)
     except ImportError:
         pass
 

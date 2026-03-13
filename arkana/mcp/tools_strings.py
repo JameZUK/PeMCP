@@ -117,6 +117,10 @@ def _get_cached_flat_strings(include_basic_ascii: bool = True, deduplicate: bool
                         seen.add(item)
                     all_strings.append({"string": item})
 
+    _MAX_FLAT_STRINGS = 100_000
+    if len(all_strings) > _MAX_FLAT_STRINGS:
+        all_strings = all_strings[:_MAX_FLAT_STRINGS]
+
     cache.set("_flat_strings", versioned_key, all_strings)
     return all_strings
 

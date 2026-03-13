@@ -21,9 +21,15 @@ from arkana.mcp._search_helpers import search_lines_with_context
 # Cache for paginated decompilation results — avoids re-decompiling when
 # the client requests subsequent pages of the same function.
 # C5: Bounded with FIFO eviction and protected by lock.
+# Keys are (session_uuid, addr_int) for session isolation in HTTP mode.
 _decompile_meta: dict = {}  # cache_key -> {function_name, address, lines}
 _decompile_meta_lock = threading.Lock()
 _MAX_DECOMPILE_META = 2000
+
+
+def _make_decompile_key(addr_int):
+    """Build a session-scoped decompile cache key."""
+    return (state._state_uuid, addr_int)
 
 
 def _get_cached_lines(cache_key):
@@ -61,10 +67,19 @@ def _set_decompile_meta(cache_key, value):
                 del _decompile_meta[key]
 
 
-def clear_decompile_meta():
-    """Clear the decompile meta cache (called from close_file)."""
+def clear_decompile_meta(session_uuid=None):
+    """Clear the decompile meta cache.
+
+    If *session_uuid* is given, only entries for that session are removed.
+    Otherwise all entries are cleared (legacy behavior for close_file).
+    """
     with _decompile_meta_lock:
-        _decompile_meta.clear()
+        if session_uuid is None:
+            _decompile_meta.clear()
+        else:
+            to_remove = [k for k in _decompile_meta if k[0] == session_uuid]
+            for k in to_remove:
+                del _decompile_meta[k]
 
 if ANGR_AVAILABLE:
     import angr
@@ -322,7 +337,7 @@ async def decompile_function_with_angr(
     target_addr = _parse_addr(function_address)
 
     # Check cache first — serves subsequent pages without re-decompiling
-    cache_key = (target_addr,)
+    cache_key = _make_decompile_key(target_addr)
     cached_entry = _get_cached_entry(cache_key)
 
     if cached_entry is not None:
@@ -399,6 +414,7 @@ async def decompile_function_with_angr(
         # the background decompile sweep.
         state._decompile_on_demand_waiting = True
         if not state._decompile_lock.acquire(timeout=60):
+            state._decompile_on_demand_waiting = False
             raise RuntimeError(
                 "Decompilation lock busy — background analysis in progress. Retry shortly."
             )
@@ -644,6 +660,7 @@ async def find_path_to_address(
     avoid_address: Optional[str] = None,
     enable_veritesting: bool = True,
     use_dfs: bool = True,
+    max_steps: int = 2000,
     run_in_background: bool = True
 ) -> Dict[str, Any]:
     """
@@ -652,11 +669,20 @@ async def find_path_to_address(
     When to use: When you need to find concrete input that triggers a specific code path (e.g., reaching a vulnerability or a hidden branch).
     Next steps: emulate_function_execution() to test with found input, add_note() to record the solution,
     or find_path_with_custom_input() for more control over symbolic inputs.
+
+    Args:
+        target_address: Hex address to reach.
+        avoid_address: Optional hex address to avoid.
+        enable_veritesting: Enable Veritesting technique.
+        use_dfs: Use DFS exploration strategy.
+        max_steps: Max execution steps (1-100000). Default 2000.
+        run_in_background: Run as background task.
     """
 
     _check_angr_ready("find_path_to_address")
     target = _parse_addr(target_address, "target_address")
     avoid = _parse_addr(avoid_address, "avoid_address") if avoid_address else None
+    max_steps = max(1, min(max_steps, 100_000))
 
     # --- IMPROVEMENT: Fail Fast Validation ---
     # Check if the address is actually mapped in the binary
@@ -719,7 +745,6 @@ async def find_path_to_address(
         ))
 
         try:
-            max_steps = 2000
             steps = 0
 
             if task_id_for_progress:
@@ -1655,6 +1680,7 @@ async def get_cross_reference_map(
     _check_angr_ready("get_cross_reference_map")
     if not function_addresses:
         raise ValueError("function_addresses must contain at least one address.")
+    depth = max(1, min(depth, 5))
 
     _MAX_XREF_ADDRESSES = 10
     _truncated_xref = len(function_addresses) > _MAX_XREF_ADDRESSES
@@ -1828,24 +1854,13 @@ async def batch_decompile(
     failed = 0
     total_search_matches = 0
 
-    # Acquire decompile lock to prevent races with enrichment sweep
-    _batch_lock_held = False
-    state._decompile_on_demand_waiting = True
-    if not state._decompile_lock.acquire(timeout=60):
-        raise RuntimeError(
-            "Decompilation lock busy — background analysis in progress. Retry shortly."
-        )
-    state._decompile_on_demand_waiting = False
-    _batch_lock_held = True
-
-    try:
-     for i, addr_str in enumerate(addresses):
+    for i, addr_str in enumerate(addresses):
         await ctx.report_progress(i, len(addresses))
         target_addr = _parse_addr(addr_str)
-        cache_key = (target_addr,)
+        cache_key = _make_decompile_key(target_addr)
         func_result: Dict[str, Any] = {"address": addr_str}
 
-        # Check per-function cache first
+        # Check per-function cache first (no lock needed — _decompile_meta has its own lock)
         cached_lines = _get_cached_lines(cache_key)
         if cached_lines is not None:
             meta = _get_cached_meta(cache_key)
@@ -1876,28 +1891,37 @@ async def batch_decompile(
             succeeded += 1
             continue
 
-        # Fresh decompilation with per-function timeout
+        # Fresh decompilation with per-function timeout.
+        # Lock is acquired/released inside the thread worker (not across await).
         def _decompile_one(t_addr=target_addr):
+            state._decompile_on_demand_waiting = True
+            if not state._decompile_lock.acquire(timeout=60):
+                state._decompile_on_demand_waiting = False
+                return {"error": "Decompilation lock busy — background analysis in progress. Retry shortly."}
             try:
-                func, addr_used = _resolve_function_address(t_addr)
-            except (KeyError, RuntimeError) as e:
-                return {"error": f"No function at {hex(t_addr)}: {e}"}
-            project, cfg = state.get_angr_snapshot()
-            cfg_model = cfg.model if cfg else None
-            try:
-                dec, used_fallback = _safe_decompile(project, func, cfg_model)
-                if dec.codegen is None:
-                    return {"error": f"Decompilation produced no output for {hex(t_addr)}."}
-                result = {
-                    "function_name": func.name,
-                    "address": hex(func.addr),
-                    "c_pseudocode": dec.codegen.text,
-                }
-                if used_fallback:
-                    result["note"] = DECOMPILE_FALLBACK_NOTE
-                return result
-            except Exception as e:
-                return {"error": f"Decompilation failed for {hex(t_addr)}: {e}"}
+                state._decompile_on_demand_waiting = False
+                try:
+                    func, addr_used = _resolve_function_address(t_addr)
+                except (KeyError, RuntimeError) as e:
+                    return {"error": f"No function at {hex(t_addr)}: {e}"}
+                project, cfg = state.get_angr_snapshot()
+                cfg_model = cfg.model if cfg else None
+                try:
+                    dec, used_fallback = _safe_decompile(project, func, cfg_model)
+                    if dec.codegen is None:
+                        return {"error": f"Decompilation produced no output for {hex(t_addr)}."}
+                    result = {
+                        "function_name": func.name,
+                        "address": hex(func.addr),
+                        "c_pseudocode": dec.codegen.text,
+                    }
+                    if used_fallback:
+                        result["note"] = DECOMPILE_FALLBACK_NOTE
+                    return result
+                except Exception as e:
+                    return {"error": f"Decompilation failed for {hex(t_addr)}: {e}"}
+            finally:
+                state._decompile_lock.release()
 
         try:
             result = await asyncio.wait_for(
@@ -1948,12 +1972,6 @@ async def batch_decompile(
             func_result["from_cache"] = False
         results.append(func_result)
         succeeded += 1
-
-    finally:
-        # Release decompile lock — must run even on exception to prevent deadlock
-        if _batch_lock_held:
-            state._decompile_lock.release()
-            _batch_lock_held = False
 
     await ctx.report_progress(len(addresses), len(addresses))
     output = {

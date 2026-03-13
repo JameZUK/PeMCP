@@ -979,19 +979,19 @@ async def refinery_hash(
     await ctx.info(f"Computing hashes: {', '.join(algorithms)}")
 
     def _run():
+        from refinery.units.crypto.hash.cryptographic import (
+            md5, sha1, sha256, sha384, sha512,
+        )
+        from refinery.units.crypto.hash.checksums import crc32, adler32
+
+        _hash_units = {
+            "md5": md5, "sha1": sha1, "sha256": sha256,
+            "sha384": sha384, "sha512": sha512,
+            "crc32": crc32, "adler32": adler32,
+        }
         results = {}
         for algo in algorithms:
             try:
-                from refinery.units.crypto.hash.cryptographic import (
-                    md5, sha1, sha256, sha384, sha512,
-                )
-                from refinery.units.crypto.hash.checksums import crc32, adler32
-
-                _hash_units = {
-                    "md5": md5, "sha1": sha1, "sha256": sha256,
-                    "sha384": sha384, "sha512": sha512,
-                    "crc32": crc32, "adler32": adler32,
-                }
                 if algo in _hash_units:
                     h = data | _hash_units[algo]() | bytes
                     results[algo] = h.hex()
@@ -1246,7 +1246,10 @@ async def refinery_pipeline(
 
     if not steps:
         return {"error": "No pipeline steps provided. Pass a list of step strings."}
+    _MAX_PIPELINE_STEPS = 50
     steps = list(steps)
+    if len(steps) > _MAX_PIPELINE_STEPS:
+        return {"error": f"Too many pipeline steps ({len(steps)}). Maximum is {_MAX_PIPELINE_STEPS}."}
 
     # ── Batch mode ──
     if data_hex_list is not None:

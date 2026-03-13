@@ -953,7 +953,9 @@ def get_functions_data(sort_by: str = "address",
         if cached is not None:
             expire_time, cached_version, cached_data = cached
             if now < expire_time and cached_version == version_key:
-                return list(cached_data)  # shallow copy to prevent caller mutation
+                # Return shallow copy — inner dicts are shared references.
+                # All consumers (JSON serialization, Jinja2 templates) are read-only.
+                return list(cached_data)
 
     try:
         kb = st.angr_project.kb
@@ -1399,7 +1401,7 @@ def get_notes_data(category: Optional[str] = None) -> List[Dict[str, Any]]:
 def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
     """Return cached decompilation for a function, or indicate not cached."""
     try:
-        from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines
+        from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines, _make_decompile_key
         from arkana.mcp._rename_helpers import (
             apply_function_renames_to_lines,
             apply_variable_renames_to_lines,
@@ -1413,7 +1415,7 @@ def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {"cached": False, "error": "invalid address"}
 
-    cache_key = (addr_int,)
+    cache_key = _make_decompile_key(addr_int)
     cached_lines = _get_cached_lines(cache_key)
     if cached_lines is None:
         return {"cached": False}
@@ -1448,7 +1450,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {"cached": False, "error": "invalid address"}
 
-    from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock, _get_cached_lines, _set_decompile_meta
+    from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock, _get_cached_lines, _set_decompile_meta, _make_decompile_key
     from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg
     from arkana.mcp._rename_helpers import (
         apply_function_renames_to_lines,
@@ -1457,7 +1459,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     )
 
     # Check cache first (may have been populated since the GET)
-    cache_key = (addr_int,)
+    cache_key = _make_decompile_key(addr_int)
     cached_lines = _get_cached_lines(cache_key)
     if cached_lines is not None:
         meta = _decompile_meta.get(cache_key, {})
@@ -1585,16 +1587,20 @@ def _detect_phase(st) -> str:
 
 
 def _get_decompiled_addresses() -> set:
-    """Return set of hex addresses that have been decompiled."""
+    """Return set of hex addresses that have been decompiled for the current session."""
     addrs = set()
     try:
         from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+        st = _get_state()
+        if st is None:
+            return addrs
+        session_uuid = st._state_uuid
         with _decompile_meta_lock:
             keys = list(_decompile_meta.keys())
         for key in keys:
-            # Key is a tuple: (target_addr,) where target_addr is int
-            if isinstance(key, tuple) and key:
-                addrs.add(hex(key[0]))
+            # Key is a tuple: (session_uuid, target_addr)
+            if isinstance(key, tuple) and len(key) >= 2 and key[0] == session_uuid:
+                addrs.add(hex(key[1]))
     except Exception:
         logger.debug("Error reading decompile meta keys", exc_info=True)
     return addrs
@@ -2985,18 +2991,21 @@ def search_decompiled_code(query: str, max_results: int = 100) -> Dict[str, Any]
         return result
 
     st = _get_state()
+    if st is None:
+        return result
+    session_uuid = st._state_uuid
     renames = st.get_renames().get("functions", {})
 
     with _decompile_meta_lock:
-        meta_snapshot = dict(_decompile_meta)
+        # Only search entries belonging to the current session
+        meta_snapshot = {k: v for k, v in _decompile_meta.items()
+                        if isinstance(k, tuple) and len(k) >= 2 and k[0] == session_uuid}
 
     result["total_cached"] = len(meta_snapshot)
     matches = []
 
     for cache_key, meta in meta_snapshot.items():
-        if not isinstance(cache_key, tuple) or not cache_key:
-            continue
-        addr_int = cache_key[0]
+        addr_int = cache_key[1]
         addr_hex = hex(addr_int)
         raw_lines = meta.get("lines", [])
         if not raw_lines:

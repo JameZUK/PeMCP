@@ -50,10 +50,16 @@ def _parse_single_file(filepath):
         "size": 0,
     }
 
+    _MAX_BATCH_FILE_SIZE = 200 * 1024 * 1024  # 200 MB
+
     try:
         entry["size"] = os.path.getsize(filepath)
     except OSError as e:
         entry["error"] = f"Cannot stat file: {e}"
+        return entry
+
+    if entry["size"] > _MAX_BATCH_FILE_SIZE:
+        entry["error"] = f"File too large ({entry['size']} bytes). Maximum is {_MAX_BATCH_FILE_SIZE} bytes."
         return entry
 
     try:
@@ -81,6 +87,7 @@ def _parse_single_file(filepath):
             logger.debug("TLSH hash failed for %s", filepath)
 
     # PE parsing
+    pe = None
     try:
         pe = pefile.PE(data=data, fast_load=True)
         pe.parse_data_directories(directories=[
@@ -88,6 +95,8 @@ def _parse_single_file(filepath):
             pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXPORT"],
         ])
     except Exception as e:
+        if pe is not None:
+            pe.close()
         entry["pe_error"] = f"Not a valid PE or parse failed: {e}"
         return entry
 
@@ -191,7 +200,7 @@ def _compare_files(results, include_similarity):
             "files": [{
                 "file": f,
                 "timestamp": t,
-                "date": (datetime.datetime.utcfromtimestamp(t).isoformat() + "Z"
+                "date": (datetime.datetime.fromtimestamp(t, tz=datetime.timezone.utc).isoformat()
                          if 946684800 < t < 2000000000 else "invalid"),
             } for f, t in timestamps],
             "all_identical": len(set(ts_values)) == 1,

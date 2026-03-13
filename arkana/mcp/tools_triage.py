@@ -76,26 +76,37 @@ def _collect_all_string_values() -> Tuple[set, bool]:
     """
     all_string_values: set = set()
 
-    if 'floss_analysis' in state.pe_data and isinstance(state.pe_data['floss_analysis'], dict):
-        floss_strings = state.pe_data['floss_analysis'].get('strings')
-        if isinstance(floss_strings, dict):
-            for str_list in floss_strings.values():
-                if isinstance(str_list, list):
-                    for s in str_list:
-                        if isinstance(s, dict):
-                            val = s.get('string', '')
-                        elif isinstance(s, str):
-                            val = s
-                        else:
-                            continue
-                        # Skip strings too short to be network IOCs
-                        if len(val) < 8:
-                            continue
-                        all_string_values.add(val)
-                        if len(all_string_values) >= _MAX_TRIAGE_STRINGS:
-                            return all_string_values, True
+    # Snapshot pe_data references under lock to avoid reading partially-updated
+    # FLOSS data from background threads.
+    pe_data = state.pe_data
+    if pe_data is None:
+        return all_string_values, False
+    _pe_lock = getattr(state, '_pe_lock', None)
+    if _pe_lock:
+        with _pe_lock:
+            floss_data = (pe_data.get('floss_analysis') or {}).get('strings', {})
+            basic_strings = pe_data.get('basic_ascii_strings', [])
+    else:
+        floss_data = (pe_data.get('floss_analysis') or {}).get('strings', {})
+        basic_strings = pe_data.get('basic_ascii_strings', [])
 
-    basic_strings = state.pe_data.get('basic_ascii_strings')
+    if isinstance(floss_data, dict):
+        for str_list in floss_data.values():
+            if isinstance(str_list, list):
+                for s in str_list:
+                    if isinstance(s, dict):
+                        val = s.get('string', '')
+                    elif isinstance(s, str):
+                        val = s
+                    else:
+                        continue
+                    # Skip strings too short to be network IOCs
+                    if len(val) < 8:
+                        continue
+                    all_string_values.add(val)
+                    if len(all_string_values) >= _MAX_TRIAGE_STRINGS:
+                        return all_string_values, True
+
     if isinstance(basic_strings, list):
         for s in basic_strings:
             if isinstance(s, dict):

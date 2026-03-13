@@ -29,8 +29,13 @@ _SENSITIVE_KEYS = {"vt_api_key"}
 
 
 def _ensure_config_dir() -> None:
-    """Create ~/.arkana/ directory if it does not exist."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    """Create ~/.arkana/ directory if it does not exist, with restrictive permissions."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Tighten permissions if directory already existed with loose perms
+    try:
+        CONFIG_DIR.chmod(0o700)
+    except OSError:
+        pass
 
 
 def load_user_config() -> Dict[str, Any]:
