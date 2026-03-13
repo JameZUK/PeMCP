@@ -177,6 +177,45 @@ def _raise_on_error_dict(result):
     return result
 
 
+DECOMPILE_FALLBACK_NOTE = (
+    "Decompiled without full CFG context due to an angr internal error "
+    "(cffi pickle incompatibility). Pseudocode quality may be reduced — "
+    "cross-references, callee resolution, and type propagation are limited."
+)
+
+
+def _safe_decompile(project, func, cfg_model):
+    """Run angr's Decompiler with a fallback for cffi pickle errors.
+
+    angr's Clinic pass uses ``copy.copy()`` on AIL blocks.  Python's copy
+    module falls back to pickle (``__reduce__``) for objects that don't
+    implement ``__copy__``.  When a block contains cffi-backed VEX/capstone
+    data (``_cffi_backend._CDataBase``), the copy fails with
+    "cannot pickle '_cffi_backend._CDataBase' object".
+
+    This is more likely on local/region-scoped CFGs where the CFG model
+    retains more raw, unprocessed cffi objects.
+
+    Strategy: on pickle-related errors, retry with ``cfg=None`` which forces
+    angr to use a minimal internal CFG path that avoids the problematic
+    copy operations.
+
+    Returns ``(decompiler_result, used_fallback)`` tuple.
+    ``used_fallback`` is True when the cfg=None retry path was taken.
+    """
+    try:
+        return project.analyses.Decompiler(func, cfg=cfg_model), False
+    except Exception as e:
+        err_str = str(e)
+        if "pickle" in err_str or "CDataBase" in err_str or "CData" in err_str:
+            logger.warning(
+                "Decompiler pickle error for %s — retrying with cfg=None: %s",
+                func.name, err_str,
+            )
+            return project.analyses.Decompiler(func, cfg=None), True
+        raise
+
+
 def _format_cc_info(func) -> Dict[str, Any]:
     """Format calling convention info for a single angr Function object."""
     info: Dict[str, Any] = {

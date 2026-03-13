@@ -167,6 +167,13 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
 
   Do NOT read hex dumps to understand what code does. Hex dumps are for examining
   data regions (encrypted blobs, config structs, overlay content, PE headers).
+
+  **Decompiler fallback note**: If a decompilation response includes a `note` field
+  mentioning "cffi pickle incompatibility", the decompiler encountered an angr
+  internal error and fell back to a reduced-quality path (decompiled without full
+  CFG context). Cross-references, callee resolution, and type propagation may be
+  limited. When you see this note, verify critical logic against
+  `get_annotated_disassembly()` to ensure accuracy.
 - **Handle tool limits gracefully**: Responses are soft-capped at 8K chars. Use
   `line_offset`/`line_limit` for pagination. Use `search="pattern"` to grep within
   decompiled/disassembled code — far more efficient than paginating. `batch_decompile`

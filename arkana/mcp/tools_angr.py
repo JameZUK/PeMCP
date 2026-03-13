@@ -14,7 +14,7 @@ from arkana.state import TASK_RUNNING, TASK_FAILED
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
-from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict
+from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict, _safe_decompile, DECOMPILE_FALLBACK_NOTE
 from arkana.mcp._rename_helpers import apply_function_renames_to_lines, apply_variable_renames_to_lines, get_display_name
 from arkana.mcp._search_helpers import search_lines_with_context
 
@@ -327,6 +327,7 @@ async def decompile_function_with_angr(
 
     if cached_entry is not None:
         cached_lines = cached_entry.get("lines", [])
+        cached_note = cached_entry.get("note")
         # Apply user renames to output
         renamed_lines = apply_function_renames_to_lines(cached_lines)
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
@@ -339,7 +340,7 @@ async def decompile_function_with_angr(
                 flat_lines.extend(region["items"])
             page = flat_lines[line_offset:line_offset + line_limit]
             has_more = (line_offset + line_limit) < len(flat_lines)
-            return {
+            cached_search_result = {
                 "function_name": display_name,
                 "address": cached_entry.get("address", hex(target_addr)),
                 "lines": page,
@@ -363,10 +364,13 @@ async def decompile_function_with_angr(
                     "Call auto_note_function(address) to save a behavioral summary of this function."
                 ),
             }
+            if cached_note:
+                cached_search_result["note"] = cached_note
+            return cached_search_result
 
         page = renamed_lines[line_offset:line_offset + line_limit]
         has_more = (line_offset + line_limit) < len(renamed_lines)
-        return {
+        cached_page_result = {
             "function_name": display_name,
             "address": cached_entry.get("address", hex(target_addr)),
             "lines": page,
@@ -383,6 +387,9 @@ async def decompile_function_with_angr(
                 "Call auto_note_function(address) to save a behavioral summary of this function."
             ),
         }
+        if cached_note:
+            cached_page_result["note"] = cached_note
+        return cached_page_result
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
@@ -457,7 +464,7 @@ async def decompile_function_with_angr(
             bridge.report_progress(20, 100)
             bridge.info(f"Decompiling {func.name}...")
             try:
-                dec = project.analyses.Decompiler(func, cfg=decompiler_cfg)
+                dec, used_fallback = _safe_decompile(project, func, decompiler_cfg)
                 bridge.report_progress(90, 100)
                 bridge.info("Formatting output...")
                 if not dec.codegen:
@@ -467,12 +474,17 @@ async def decompile_function_with_angr(
                     "address": hex(addr_to_use),
                     "c_pseudocode": dec.codegen.text,
                 }
+                notes = []
                 if used_local_cfg:
-                    result["note"] = (
+                    notes.append(
                         "Decompiled using a local region CFG (full binary CFG was not available). "
                         "Results may be less complete — cross-references and callee resolution "
                         "are limited to the local region."
                     )
+                if used_fallback:
+                    notes.append(DECOMPILE_FALLBACK_NOTE)
+                if notes:
+                    result["note"] = " | ".join(notes)
                 return result
             except Exception as e:
                 return {"error": f"Decompilation failed: {e}"}
@@ -487,11 +499,14 @@ async def decompile_function_with_angr(
 
     # Cache full result (raw, before renames) and return paginated
     all_lines = result["c_pseudocode"].splitlines()
-    _set_decompile_meta(cache_key, {
+    meta = {
         "function_name": result["function_name"],
         "address": result["address"],
         "lines": all_lines,
-    })
+    }
+    if result.get("note"):
+        meta["note"] = result["note"]
+    _set_decompile_meta(cache_key, meta)
 
     # Apply user renames to output
     renamed_lines = apply_function_renames_to_lines(all_lines)
@@ -549,6 +564,8 @@ async def decompile_function_with_angr(
                 "Call auto_note_function(address) to save a behavioral summary of this function."
             ),
         }
+    if result.get("note"):
+        paginated_result["note"] = result["note"]
     return await _check_mcp_response_size(
         ctx, paginated_result, "decompile_function_with_angr",
         "line_offset and line_limit parameters",
@@ -1868,14 +1885,17 @@ async def batch_decompile(
             project, cfg = state.get_angr_snapshot()
             cfg_model = cfg.model if cfg else None
             try:
-                dec = project.analyses.Decompiler(func, cfg=cfg_model)
+                dec, used_fallback = _safe_decompile(project, func, cfg_model)
                 if dec.codegen is None:
                     return {"error": f"Decompilation produced no output for {hex(t_addr)}."}
-                return {
+                result = {
                     "function_name": func.name,
                     "address": hex(func.addr),
                     "c_pseudocode": dec.codegen.text,
                 }
+                if used_fallback:
+                    result["note"] = DECOMPILE_FALLBACK_NOTE
+                return result
             except Exception as e:
                 return {"error": f"Decompilation failed for {hex(t_addr)}: {e}"}
 

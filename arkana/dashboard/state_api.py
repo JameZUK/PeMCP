@@ -1517,16 +1517,20 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     if not st._decompile_lock.acquire(timeout=30):
         return {"cached": False, "error": "Decompilation lock timeout — background enrichment may be running. Try again shortly."}
     try:
-        dec = project.analyses.Decompiler(func, cfg=decompiler_cfg)
+        from arkana.mcp._angr_helpers import _safe_decompile, DECOMPILE_FALLBACK_NOTE
+        dec, used_fallback = _safe_decompile(project, func, decompiler_cfg)
         if not dec.codegen:
             return {"cached": False, "error": "Decompilation produced no code"}
 
         all_lines = dec.codegen.text.splitlines()
-        _set_decompile_meta(cache_key, {
+        meta = {
             "function_name": func.name,
             "address": hex(addr_to_use),
             "lines": all_lines,
-        })
+        }
+        if used_fallback:
+            meta["note"] = DECOMPILE_FALLBACK_NOTE
+        _set_decompile_meta(cache_key, meta)
         st._newly_decompiled.append(hex(addr_to_use))
     except Exception:
         return {"cached": False, "error": "Decompilation failed"}
@@ -1537,13 +1541,16 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(addr_int))
     display_name = get_display_name(hex(addr_int), func.name)
 
-    return {
+    result = {
         "cached": True,
         "function_name": display_name,
         "address": hex(addr_to_use),
         "lines": renamed_lines,
         "line_count": len(renamed_lines),
     }
+    if used_fallback:
+        result["note"] = DECOMPILE_FALLBACK_NOTE
+    return result
 
 
 def _detect_phase(st) -> str:

@@ -393,14 +393,18 @@ def _decompile_sweep(
 
             func = cfg.functions[addr_int]
             try:
-                dec = proj.analyses.Decompiler(func, cfg=cfg.model)
+                from arkana.mcp._angr_helpers import _safe_decompile, DECOMPILE_FALLBACK_NOTE
+                dec, used_fallback = _safe_decompile(proj, func, cfg.model)
                 if dec.codegen:
                     lines = dec.codegen.text.splitlines()
-                    _set_decompile_meta(cache_key, {
+                    meta = {
                         "function_name": func.name,
                         "address": hex(addr_int),
                         "lines": lines,
-                    })
+                    }
+                    if used_fallback:
+                        meta["note"] = DECOMPILE_FALLBACK_NOTE
+                    _set_decompile_meta(cache_key, meta)
                     state._newly_decompiled.append(hex(addr_int))
                     decompiled += 1
                 else:

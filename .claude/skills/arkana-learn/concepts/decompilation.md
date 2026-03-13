@@ -79,6 +79,25 @@ impose if/else structure on goto-based control flow.
 decompiler may show too many or too few arguments. Compare with
 `get_calling_conventions()` output.
 
+### Decompiler Errors and Fallbacks
+
+Sometimes the decompiler encounters internal errors. The most common is a
+**cffi pickle incompatibility** — angr's internal AIL processing tries to copy
+objects that contain C-level pointers (from cffi), and the copy fails. When this
+happens, Arkana automatically retries the decompilation without the full CFG
+context. The result is still valid pseudocode, but with reduced quality:
+
+- **Cross-references** may be incomplete (callee names may show as raw addresses)
+- **Type propagation** may be less accurate
+- **Variable recovery** may miss some relationships
+
+When this fallback is triggered, the tool response includes a `note` field
+explaining the limitation. If you see this note, cross-reference the output
+with `get_annotated_disassembly()` for any security-critical logic.
+
+This is more common on binaries where the full CFG stalls or times out, forcing
+the decompiler to work with a local (region-scoped) CFG instead.
+
 ### Comparing Decompiled Output with Disassembly
 
 The decompiler is a tool, not an oracle. Verification against disassembly is
@@ -88,6 +107,7 @@ essential when:
 - The decompiler shows dead code or unreachable paths
 - You suspect a type error is changing the meaning of an operation
 - Security-sensitive logic (crypto, auth checks) needs precise understanding
+- The decompilation response includes a fallback `note` (see above)
 
 Use `get_annotated_disassembly(address)` alongside `decompile_function_with_angr(address)`
 to cross-reference. Both support a `search` parameter for regex grep within the output

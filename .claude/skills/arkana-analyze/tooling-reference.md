@@ -113,8 +113,8 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `decompile_function_with_angr` | Get C-like pseudocode for a function (paginated); works without full CFG; applies user renames; supports regex grep via `search` | `address`, `line_offset` (default 0), `line_limit` (default 80), `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
-| `batch_decompile` | Decompile up to 20 functions in one call; per-function 60s timeout; applies renames; `search` filters to matching functions only | `addresses`, `max_lines_per_function` (default 30), `summary_mode`, `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
+| `decompile_function_with_angr` | Get C-like pseudocode for a function (paginated); works without full CFG; applies user renames; supports regex grep via `search`. If the response includes a `note` field mentioning "cffi pickle incompatibility", the decompiler fell back to a reduced-quality path — cross-references and type propagation may be limited; verify critical logic against `get_annotated_disassembly()` | `address`, `line_offset` (default 0), `line_limit` (default 80), `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
+| `batch_decompile` | Decompile up to 20 functions in one call; per-function 60s timeout; applies renames; `search` filters to matching functions only. Per-function `note` field indicates if cffi fallback was used | `addresses`, `max_lines_per_function` (default 30), `summary_mode`, `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
 | `get_angr_partial_functions` | List functions discovered so far (works during/after CFG build) | `limit` (default 50) |
 | `get_annotated_disassembly` | Disassembly with variable names and xrefs; supports regex grep via `search` | `address`, `limit` (default 50), `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
 | `disassemble_at_address` | Raw disassembly at arbitrary address; works without full CFG | `address`, `count` |
