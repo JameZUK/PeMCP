@@ -10,7 +10,7 @@ The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard
 
 Binary summary with risk score, packing status, security mitigations, key findings with clickable function pivot links (`→ func_name`), recent notes with clickable addresses, and an analysis digest panel with AI-generated conclusion (synthesised from classification, triage findings, IOCs, and hypothesis notes). A full-width **File Identity banner** at the top shows the filename (handles long SHA256-hash filenames), format/size/language, SHA256 and MD5 hashes with copy buttons, and the AI's hypothesis assessment (falling back to generic classification). Below it, compact stat cards show RISK, PHASE, and FUNCTIONS.
 
-![Dashboard Overview](Dashboard-Overview.png)
+![Dashboard Overview](screenshots/Dashboard-Overview.png)
 
 ---
 
@@ -26,7 +26,7 @@ Each function row has an **XREF** button that opens an inline analysis panel wit
 
 The XREF panel opens without requiring decompilation, enabling fast cross-reference exploration. Panel state (open/closed, active tab) survives table filter and sort changes.
 
-![Dashboard Functions](Dashboard-Function.png)
+![Dashboard Functions](screenshots/Dashboard-Function.png)
 
 ---
 
@@ -43,7 +43,7 @@ Clicking a node opens a **tabbed sidebar** with four tabs:
 
 Additional features: search with match highlighting, right-click context menu (decompile, triage, focus 2-hop neighbourhood), bookmarks, minimap, layout switching (dagre / breadthfirst / cose / circle), keyboard navigation (arrow keys, Tab, Escape), and PNG/SVG export.
 
-![Dashboard Call Graph](Dashboard-Callgraph.png)
+![Dashboard Call Graph](screenshots/Dashboard-Callgraph.png)
 
 ---
 
@@ -51,7 +51,7 @@ Additional features: search with match highlighting, right-click context menu (d
 
 PE/ELF section permissions with anomaly highlighting (W+X detection) and entropy heatmap with clickable cells linking to hex view.
 
-![Dashboard Sections](Dashboard-Sections.png)
+![Dashboard Sections](screenshots/Dashboard-Sections.png)
 
 ---
 
@@ -89,7 +89,7 @@ Binary diff powered by angr BinDiff. File browser (BROWSE tab) to select a compa
 
 Chronological log of every tool call and note, with expandable detail panels showing request parameters and result summaries. Expanded state is preserved across live refreshes.
 
-![Dashboard Timeline](Dashboard-Timeline.png)
+![Dashboard Timeline](screenshots/Dashboard-Timeline.png)
 
 ---
 
@@ -115,7 +115,7 @@ Unified string explorer combining ASCII strings, FLOSS static, stack, decoded, a
 
 Category-filtered view of all analysis notes (general, function, tool_result, IOC, hypothesis, manual). Addresses are clickable when they resolve to a known function, linking to the Functions page.
 
-![Dashboard Notes](Dashboard-Notes.png)
+![Dashboard Notes](screenshots/Dashboard-Notes.png)
 
 ---
 

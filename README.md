@@ -1,6 +1,6 @@
 # Arkana - Your Entire Malware Analysis Lab, Behind One AI Prompt
 
-![Arkana Logo](docs/logo_banner.svg)
+![Arkana Logo](docs/assets/logo_banner.svg)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/JameZUK/Arkana/actions/workflows/ci.yml/badge.svg)](https://github.com/JameZUK/Arkana/actions/workflows/ci.yml)
@@ -15,9 +15,9 @@ extracts the C2 server (`cveutb.sa.com`), identifies AES-256 encrypted communica
 MessagePack, maps 12 MITRE ATT&CK techniques, detects anti-VM checks for VMware/VirtualBox/
 Sandboxie, finds the persistence mechanism (Registry Run key), and recovers the operator's
 PDB path revealing a Vietnamese-speaking threat actor.
-[See the full report.](docs/example-report-asyncrat.md)
+[See the full report.](docs/examples/example-report-asyncrat.md)
 
-![Arkana analysing AsyncRAT](docs/demo-asyncrat.gif)
+![Arkana analysing AsyncRAT](docs/demos/demo-asyncrat.gif)
 
 Arkana is a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that gives **Claude Code** (or any MCP client) **210 analysis tools** -- decompilation, emulation, string decoding, YARA scanning, and more -- so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
 
@@ -72,7 +72,7 @@ Arkana eliminates this by putting **210 specialised analysis tools behind a sing
 | **Learning curve** | Natural language | Months | Months | Moderate |
 | **Cost** | Free & open source | Free | $1,800+/yr | Free |
 
-Arkana complements rather than replaces Ghidra/IDA -- see [Scenarios & Comparisons](docs/scenarios.md) for detailed analysis.
+Arkana complements rather than replaces Ghidra/IDA -- see [Scenarios & Comparisons](docs/examples/scenarios.md) for detailed analysis.
 
 ### Web Dashboard
 
@@ -94,7 +94,7 @@ Arkana includes a real-time web dashboard that launches automatically on port 80
 - **Global status bar** -- Active tool and background task progress visible from every page
 - **Real-time updates** -- SSE-driven live refresh as the AI runs tools
 
-![Arkana Dashboard Overview](docs/Dashboard-Overview.png)
+![Arkana Dashboard Overview](docs/screenshots/Dashboard-Overview.png)
 
 The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard_token`). Access URL with token is printed at server startup. See the [Dashboard Gallery](docs/dashboard.md) for screenshots of all views.
 
@@ -106,10 +106,10 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 
 | Report | Sample | Highlights |
 |--------|--------|-----------|
-| [Trojan.Delshad BYOVD Loader](docs/example-report.md) | Multi-stage dropper | Payload carving, attack chain diagram, 12 ATT&CK techniques |
-| [LockBit 3.0 Ransomware](docs/example-report-lockbit.md) | Packed ransomware | Entropy analysis, packing detection, stub extraction |
-| [AsyncRAT .NET RAT](docs/example-report-asyncrat.md) | .NET RAT | C2 config extraction despite obfuscated metadata |
-| [StealC Info Stealer](docs/example-report-stealc.md) | Credential stealer | 32 capa rules, browser/Steam targeting, crypto toolkit |
+| [Trojan.Delshad BYOVD Loader](docs/examples/example-report.md) | Multi-stage dropper | Payload carving, attack chain diagram, 12 ATT&CK techniques |
+| [LockBit 3.0 Ransomware](docs/examples/example-report-lockbit.md) | Packed ransomware | Entropy analysis, packing detection, stub extraction |
+| [AsyncRAT .NET RAT](docs/examples/example-report-asyncrat.md) | .NET RAT | C2 config extraction despite obfuscated metadata |
+| [StealC Info Stealer](docs/examples/example-report-stealc.md) | Credential stealer | 32 capa rules, browser/Steam targeting, crypto toolkit |
 
 ---
 
@@ -152,15 +152,15 @@ For other MCP clients, local Python installation, and detailed configuration, se
 
 **AsyncRAT analysis** -- single prompt to full triage, C2 extraction, and MITRE ATT&CK mapping:
 
-![Arkana analysing AsyncRAT](docs/demo-asyncrat.gif)
+![Arkana analysing AsyncRAT](docs/demos/demo-asyncrat.gif)
 
-<sub>Interactive playback: `asciinema play docs/demo-asyncrat.cast`</sub>
+<sub>Interactive playback: `asciinema play docs/demos/demo-asyncrat.cast`</sub>
 
 **Multi-phase investigation** -- deep analysis with decompilation, emulation, and structured findings:
 
-![Arkana deep analysis](docs/demo-analysis.gif)
+![Arkana deep analysis](docs/demos/demo-analysis.gif)
 
-<sub>Interactive playback: `asciinema play docs/demo-analysis.cast`</sub>
+<sub>Interactive playback: `asciinema play docs/demos/demo-analysis.cast`</sub>
 
 ---
 
@@ -172,7 +172,7 @@ For other MCP clients, local Python installation, and detailed configuration, se
 | **[Claude Code Integration](docs/claude-code.md)** | Setup via CLI and JSON config; analysis and learning skills; typical workflows and example queries |
 | **[Configuration](docs/configuration.md)** | API keys, analysis cache, and command-line options |
 | **[Tools Reference](docs/tools-reference.md)** | Complete catalog of all 210 MCP tools organised by category |
-| **[Scenarios & Comparisons](docs/scenarios.md)** | Five real-world analysis walkthroughs; Arkana vs Ghidra, IDA Pro, CyberChef |
+| **[Scenarios & Comparisons](docs/examples/scenarios.md)** | Five real-world analysis walkthroughs; Arkana vs Ghidra, IDA Pro, CyberChef |
 | **[Architecture](docs/architecture.md)** | Package structure, design principles, pagination and result limits |
 | **[Security & Testing](docs/security.md)** | Path sandboxing, security measures, testing and CI/CD |
 | **[Web Dashboard](docs/dashboard.md)** | Real-time analysis dashboard on port 8082; function triage, call graph, timeline, notes |
