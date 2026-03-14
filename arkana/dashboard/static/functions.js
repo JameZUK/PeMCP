@@ -3,9 +3,23 @@ var _debounceTimer;
 var _currentSort = 'address';
 var _sortAsc = true;
 var _openDetailPanels = {};  // addr -> {decompile: data, activeTab: 'xrefs'}
+var _openDetailPanelKeys = []; // LRU order (oldest first)
+var _OPEN_DETAIL_PANELS_MAX = 50;
 var _analysisCache = {};     // addr -> fetched analysis data
 var _analysisCacheKeys = []; // LRU order (oldest first)
 var _ANALYSIS_CACHE_MAX = 50;
+
+function _ensureDetailPanel(addr) {
+    if (!_openDetailPanels[addr]) {
+        _openDetailPanelKeys.push(addr);
+        while (_openDetailPanelKeys.length > _OPEN_DETAIL_PANELS_MAX) {
+            var evict = _openDetailPanelKeys.shift();
+            delete _openDetailPanels[evict];
+        }
+        _openDetailPanels[addr] = {};
+    }
+    return _openDetailPanels[addr];
+}
 
 function debounceReload() {
     clearTimeout(_debounceTimer);
@@ -226,7 +240,7 @@ function toggleAnalysisPanel(btn) {
         if (xrefsTab) switchDetailTab(xrefsTab);
         return;
     }
-    _openDetailPanels[addr] = _openDetailPanels[addr] || {};
+    _ensureDetailPanel(addr);
     _openDetailPanels[addr].activeTab = 'xrefs';
     insertDetailPanel(row, addr, 'xrefs');
 }
@@ -259,7 +273,7 @@ function toggleDecompile(btn) {
     fetchJSON('/dashboard/api/decompile?address=' + encodeURIComponent(addr))
         .then(function(data) {
             if (data.cached) {
-                _openDetailPanels[addr] = _openDetailPanels[addr] || {};
+                _ensureDetailPanel(addr);
                 _openDetailPanels[addr].decompile = data;
                 _openDetailPanels[addr].activeTab = 'code';
                 insertDetailPanel(row, addr, 'code');
@@ -276,7 +290,7 @@ function toggleDecompile(btn) {
                 .then(function(result) {
                     btn.textContent = 'DEC';
                     if (result.cached || result.lines) {
-                        _openDetailPanels[addr] = _openDetailPanels[addr] || {};
+                        _ensureDetailPanel(addr);
                         _openDetailPanels[addr].decompile = result;
                         _openDetailPanels[addr].activeTab = 'code';
                         insertDetailPanel(row, addr, 'code');
@@ -542,7 +556,7 @@ function toggleDetailTab(btn, tabName) {
         if (tab) switchDetailTab(tab);
         return;
     }
-    _openDetailPanels[addr] = _openDetailPanels[addr] || {};
+    _ensureDetailPanel(addr);
     _openDetailPanels[addr].activeTab = tabName;
     insertDetailPanel(row, addr, tabName);
 }

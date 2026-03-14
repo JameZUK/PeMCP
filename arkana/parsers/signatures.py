@@ -211,7 +211,7 @@ def perform_yara_scan(filepath: str, file_data: bytes, yara_rules_path: Optional
         all_matches = []
         for ruleset in rules:
             try:
-                all_matches.extend(ruleset.match(data=file_data))
+                all_matches.extend(ruleset.match(data=file_data, timeout=300))
             except yara.Error as e_scan:
                 logger.warning("   YARA scan error in one ruleset: %s", e_scan)
 

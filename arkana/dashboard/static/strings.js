@@ -233,6 +233,7 @@ document.addEventListener('DOMContentLoaded', function() {
 var _flossRefreshTimer = null;
 
 function loadFlossPanel() {
+    if (document.hidden) return;
     fetchJSON('/dashboard/api/floss-summary').then(function(data) {
         renderFlossPanel(data);
     }).catch(function() {});
@@ -331,3 +332,10 @@ function renderFlossPanel(data) {
         _flossRefreshTimer = setTimeout(loadFlossPanel, 5000);
     }
 }
+
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden && _flossRefreshTimer) {
+        clearTimeout(_flossRefreshTimer);
+        _flossRefreshTimer = null;
+    }
+});

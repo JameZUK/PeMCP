@@ -92,6 +92,9 @@ def _collect_iocs_from_notes() -> Dict[str, set]:
     }
     notes = state.get_notes()
     for note in notes:
+        # M12: Early exit when all categories are full
+        if all(len(v) >= _MAX_IOCS_PER_CATEGORY for v in iocs.values()):
+            break
         content = note.get("content", "")
         for ip in _IP_RE.findall(content):
             if len(iocs["ipv4"]) >= _MAX_IOCS_PER_CATEGORY:

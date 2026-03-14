@@ -50,7 +50,7 @@ class BearerAuthMiddleware:
                     "body": b'{"error": "Ambiguous Authorization: multiple headers provided."}',
                 })
                 return
-            auth_header = auth_values[0].decode("utf-8", "ignore") if auth_values else ""
+            auth_header = auth_values[0].decode("utf-8", "replace") if auth_values else ""
             expected = f"Bearer {self.api_key}"
             # Constant-time comparison to prevent timing side-channel attacks
             if not hmac.compare_digest(auth_header, expected):

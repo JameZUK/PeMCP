@@ -87,15 +87,16 @@ async def hook_function(
                 return {"error": f"Failed to hook symbol '{address_or_name}': {e}"}
 
         # Register hook in state AFTER successful hooking to avoid ghost entries
-        state.angr_hooks[hook_label] = {
-            "target": hook_label,
-            "return_value": hex(ret_val) if ret_val is not None else "void",
-            "nop": nop,
-        }
+        with state._angr_lock:
+            state.angr_hooks[hook_label] = {
+                "target": hook_label,
+                "return_value": hex(ret_val) if ret_val is not None else "void",
+                "nop": nop,
+            }
 
-        # Invalidate CFG since hooks change control flow
-        state.angr_cfg = None
-        state.angr_loop_cache = None
+            # Invalidate CFG since hooks change control flow
+            state.angr_cfg = None
+            state.angr_loop_cache = None
 
         return {
             "status": "success",
@@ -120,10 +121,11 @@ async def list_hooks(ctx: Context) -> Dict[str, Any]:
     await ctx.info("Listing hooks")
     _check_angr_ready("list_hooks")
 
-    hooks_list = list(state.angr_hooks.values())
-    proj_hooks_count = 0
-    if state.angr_project:
-        proj_hooks_count = len(state.angr_project._sim_procedures)
+    with state._angr_lock:
+        hooks_list = list(state.angr_hooks.values())
+        proj_hooks_count = 0
+        if state.angr_project:
+            proj_hooks_count = len(state.angr_project._sim_procedures)
 
     return {
         "user_hooks": hooks_list,
@@ -169,10 +171,11 @@ async def unhook_function(ctx: Context, address_or_name: str) -> Dict[str, Any]:
             except Exception as e:
                 return {"error": f"Failed to unhook '{address_or_name}': {e}"}
 
-        state.angr_hooks.pop(key, None)
-        state.angr_hooks.pop(address_or_name, None)
-        state.angr_cfg = None
-        state.angr_loop_cache = None
+        with state._angr_lock:
+            state.angr_hooks.pop(key, None)
+            state.angr_hooks.pop(address_or_name, None)
+            state.angr_cfg = None
+            state.angr_loop_cache = None
 
         return {"status": "success", "message": f"Unhooked {address_or_name}. CFG cache cleared."}
 

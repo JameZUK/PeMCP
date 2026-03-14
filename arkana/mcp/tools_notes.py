@@ -1,4 +1,5 @@
 """MCP tools for managing analysis notes on the currently loaded file."""
+import asyncio
 from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, analysis_cache, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
@@ -313,7 +314,7 @@ async def auto_note_function(
         succeeded = 0
         for addr in items:
             try:
-                entry = _auto_note_single(addr)
+                entry = await asyncio.to_thread(_auto_note_single, addr)
                 batch_results.append(entry)
                 succeeded += 1
             except Exception as e:
@@ -335,6 +336,6 @@ async def auto_note_function(
     if not function_address:
         raise ValueError("Either 'function_address' or 'address' must be provided.")
 
-    result = _auto_note_single(function_address, custom_summary)
+    result = await asyncio.to_thread(_auto_note_single, function_address, custom_summary)
     _persist_notes_to_cache()
     return result

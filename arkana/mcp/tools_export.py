@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from arkana.config import state, logger, Context, analysis_cache
-from arkana.constants import MAX_TOTAL_ARTIFACT_EXPORT_SIZE
+from arkana.constants import MAX_TOTAL_ARTIFACT_EXPORT_SIZE, MAX_ARTIFACT_FILE_SIZE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded
 from arkana.cache import CACHE_DIR
 from arkana.utils import _safe_env_int
@@ -148,8 +148,11 @@ async def export_project(
         if manifest["binary_included"]:
             binary_path = state.filepath
             binary_name = f"binary/{original_filename}"
-            tar.add(binary_path, arcname=binary_name)
-            await ctx.info(f"Binary included: {original_filename}")
+            if os.path.islink(binary_path):
+                logger.warning("Skipping symlinked binary: %s", binary_path)
+            else:
+                tar.add(binary_path, arcname=binary_name)
+                await ctx.info(f"Binary included: {original_filename}")
 
         # Add artifact files
         for artifact in artifacts_snapshot:
@@ -163,6 +166,9 @@ async def export_project(
                     "Artifact export size limit reached (%d MB). Skipping: %s",
                     MAX_TOTAL_ARTIFACT_EXPORT_SIZE // (1024 * 1024), art_path,
                 )
+                continue
+            if os.path.islink(art_path):
+                logger.warning("Skipping symlinked artifact: %s", art_path)
                 continue
             arcname = f"artifacts/{os.path.basename(art_path)}"
             tar.add(art_path, arcname=arcname)
@@ -342,6 +348,9 @@ async def import_project(
                     counter += 1
                 seen_basenames.add(art_basename)
                 artifact_name_map[original_basename] = art_basename
+                if member.size > MAX_ARTIFACT_FILE_SIZE:
+                    logger.warning("Skipping oversized artifact %s (%d bytes)", art_basename, member.size)
+                    continue
                 af = tar.extractfile(member)
                 if af:
                     artifact_files[art_basename] = af.read()

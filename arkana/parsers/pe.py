@@ -59,8 +59,8 @@ def _parse_file_hashes(data: bytes) -> Dict[str, Optional[str]]:
     try:
         # Feed data through all hashlib instances in a single pass over
         # 64 KB chunks to improve CPU cache utilisation on large files.
-        h_md5 = hashlib.md5()
-        h_sha1 = hashlib.sha1()
+        h_md5 = hashlib.md5(usedforsecurity=False)
+        h_sha1 = hashlib.sha1(usedforsecurity=False)
         h_sha256 = hashlib.sha256()
         mv = memoryview(data)
         chunk_size = 65536
@@ -154,8 +154,8 @@ def _parse_sections(pe: pefile.PE) -> List[Dict[str, Any]]:
             sec_dict['virtual_address'] = section.VirtualAddress
             try:
                 section_data = section.get_data()
-                sec_dict['md5'] = hashlib.md5(section_data).hexdigest()
-                sec_dict['sha1'] = hashlib.sha1(section_data).hexdigest()
+                sec_dict['md5'] = hashlib.md5(section_data, usedforsecurity=False).hexdigest()
+                sec_dict['sha1'] = hashlib.sha1(section_data, usedforsecurity=False).hexdigest()
                 sec_dict['sha256'] = hashlib.sha256(section_data).hexdigest()
                 try:
                     sec_dict['ssdeep'] = ssdeep_hasher.hash(section_data)
@@ -1104,7 +1104,8 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
             result = _safe_parse(key, func, *args, **kwargs)
             return result, round(_time.monotonic() - t0, 2)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(_parallel_tasks)) as pool:
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(_parallel_tasks))
+        try:
             futures = {
                 pool.submit(_timed_safe_parse, key, func, *args): key
                 for key, func, args in _parallel_tasks
@@ -1126,6 +1127,8 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                         "results": None,
                     }
                     _timing[key] = float(timeout) if timeout else 0.0
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         _timing["parallel_scans_wall"] = round(_time.monotonic() - _t_parallel, 2)
 

@@ -27,8 +27,17 @@ def _require_refinery(tool_name: str):
     _check_lib("binary-refinery", REFINERY_AVAILABLE, tool_name, pip_name="binary-refinery")
 
 
+_MAX_HEX_INPUT_LEN = 20_000_000  # 20MB hex = 10MB decoded
+
+
 def _hex_to_bytes(hex_string: str) -> bytes:
     """Convert a hex string (with optional spaces/0x/\\x prefixes) to bytes."""
+    if len(hex_string) > _MAX_HEX_INPUT_LEN:
+        raise ValueError(
+            f"Hex input too large ({len(hex_string):,} chars, "
+            f"limit {_MAX_HEX_INPUT_LEN:,}). Max decoded size: "
+            f"{_MAX_HEX_INPUT_LEN // 2:,} bytes."
+        )
     cleaned = hex_string.replace(" ", "")
     # Strip leading 0x/0X prefix only (not all occurrences)
     if cleaned.startswith(("0x", "0X")):

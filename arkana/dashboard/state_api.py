@@ -78,6 +78,11 @@ _functions_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, version_
 _FUNCTIONS_TTL = 2  # seconds
 _MAX_FUNCTIONS_CACHE = 4  # max cached function lists
 
+# M8: Cache for get_strings_data (2s TTL)
+_strings_cache: Dict[str, tuple] = {}  # _state_uuid -> (expire_time, version_key, data)
+_STRINGS_TTL = 2  # seconds
+_MAX_STRINGS_CACHE = 4  # max cached string listings
+
 # Shared lock protecting all module-level caches above
 _cache_lock = threading.Lock()
 
@@ -945,9 +950,13 @@ def get_functions_data(sort_by: str = "address",
     # M5: Short TTL cache keyed on parameters + state identity
     now = time.time()
     cache_key = st._state_uuid
+    # Use function-relevant change signals instead of tool_history length
+    _renames = st.get_renames()
+    _triage_snap = st.get_all_triage_snapshot()
     version_key = (sort_by, filter_triage, min_score, search, sort_asc,
                    getattr(st, 'filepath', None),
-                   len(st.get_tool_history() or []))
+                   len(_renames.get('functions', {})),
+                   len(_triage_snap))
     with _cache_lock:
         cached = _functions_cache.get(cache_key)
         if cached is not None:
@@ -1644,6 +1653,19 @@ def get_strings_data(
     st = _get_state()
     pe_data = st.pe_data or {}
 
+    # M8: Short TTL cache keyed on parameters + state identity
+    now = time.time()
+    cache_key = st._state_uuid
+    version_key = (search, string_type, category, min_score, sort_by, sort_asc,
+                   offset, limit, getattr(st, 'filepath', None),
+                   id(st.pe_data))
+    with _cache_lock:
+        cached = _strings_cache.get(cache_key)
+        if cached is not None:
+            expire_time, cached_version, cached_data = cached
+            if now < expire_time and cached_version == version_key:
+                return cached_data
+
     all_strings = []
     type_counts: Dict[str, int] = {}
     category_counts: Dict[str, int] = {}
@@ -1774,7 +1796,7 @@ def get_strings_data(
     total = len(all_strings)
     page = all_strings[offset:offset + limit]
 
-    return {
+    result = {
         "strings": page,
         "total": total,
         "total_unfiltered": total_unfiltered,
@@ -1783,6 +1805,15 @@ def get_strings_data(
         "type_counts": type_counts,
         "category_counts": category_counts,
     }
+
+    # M8: Store in cache
+    with _cache_lock:
+        if len(_strings_cache) >= _MAX_STRINGS_CACHE and cache_key not in _strings_cache:
+            oldest_k = min(_strings_cache, key=lambda k: _strings_cache[k][0])
+            _strings_cache.pop(oldest_k, None)
+        _strings_cache[cache_key] = (now + _STRINGS_TTL, version_key, result)
+
+    return result
 
 
 def global_search(query: str, limit_per_category: int = 10) -> Dict[str, Any]:
@@ -3187,6 +3218,7 @@ _MAX_LIST_DEPTH = 10     # maximum directory recursion depth
 # M-E7: Cache file listings to avoid repeated filesystem walks + magic byte reads
 _list_files_cache: Dict[str, tuple] = {}  # samples_path -> (expire_time, result)
 _LIST_FILES_TTL = 10.0  # seconds
+_MAX_LIST_FILES_CACHE = 4  # max cached directory listings
 
 
 def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, Any]:
@@ -3264,6 +3296,10 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
 
     # M-E7: Cache the raw file list (before search/sort) for reuse
     _list_files_cache[resolved_samples] = (time.time() + _LIST_FILES_TTL, files, truncated)
+    # L9: Evict oldest entries if cache grows too large
+    if len(_list_files_cache) > _MAX_LIST_FILES_CACHE:
+        oldest_key = min(_list_files_cache, key=lambda k: _list_files_cache[k][0])
+        _list_files_cache.pop(oldest_key, None)
 
     return _apply_list_files_filters(files, truncated, search, sort_by)
 

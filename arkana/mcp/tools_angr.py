@@ -1,4 +1,5 @@
 """MCP tools for angr-based binary analysis - decompilation, CFG, symbolic execution, etc."""
+import collections
 import datetime
 import threading
 import time
@@ -412,14 +413,17 @@ async def decompile_function_with_angr(
         # Signal to background enrichment that on-demand decompile is waiting,
         # then acquire the decompile lock to ensure mutual exclusion with
         # the background decompile sweep.
-        state._decompile_on_demand_waiting = True
-        if not state._decompile_lock.acquire(timeout=60):
-            state._decompile_on_demand_waiting = False
-            raise RuntimeError(
-                "Decompilation lock busy — background analysis in progress. Retry shortly."
-            )
+        state._decompile_on_demand_count += 1
         try:
-            state._decompile_on_demand_waiting = False
+            if not state._decompile_lock.acquire(timeout=60):
+                raise RuntimeError(
+                    "Decompilation lock busy — background analysis in progress. Retry shortly."
+                )
+        except Exception:
+            state._decompile_on_demand_count -= 1
+            raise
+        try:
+            state._decompile_on_demand_count -= 1
             project, cfg = state.get_angr_snapshot()
             used_local_cfg = False
 
@@ -1168,8 +1172,17 @@ async def get_backward_slice(
 
             if not target_node: return {"error": f"Address {hex(target_addr)} not found in CFG."}
 
-            # Use NetworkX to find ancestors
-            ancestors = nx.ancestors(cfg_snap.graph, target_node)
+            # Bounded BFS instead of unbounded nx.ancestors
+            _MAX_SLICE_NODES = 10_000
+            visited = set()
+            queue = collections.deque([target_node])
+            while queue and len(visited) < _MAX_SLICE_NODES:
+                node = queue.popleft()
+                if node in visited:
+                    continue
+                visited.add(node)
+                queue.extend(cfg_snap.graph.predecessors(node))
+            ancestors = visited - {target_node}
 
             slice_nodes = []
             for n in ancestors:
@@ -1221,8 +1234,17 @@ async def get_forward_slice(
 
             if not source_node: return {"error": f"Address {hex(source_addr)} not found in CFG."}
 
-            # Use NetworkX to find descendants
-            descendants = nx.descendants(cfg_snap.graph, source_node)
+            # Bounded BFS instead of unbounded nx.descendants
+            _MAX_SLICE_NODES = 10_000
+            visited = set()
+            queue = collections.deque([source_node])
+            while queue and len(visited) < _MAX_SLICE_NODES:
+                node = queue.popleft()
+                if node in visited:
+                    continue
+                visited.add(node)
+                queue.extend(cfg_snap.graph.successors(node))
+            descendants = visited - {source_node}
 
             slice_nodes = []
             for n in descendants:
@@ -1524,6 +1546,8 @@ async def get_global_data_refs(
                 pass
         if local_cfg is None:
             local_cfg = project.analyses.CFGFast(normalize=True, collect_data_references=True)
+            # Cache the data-reference CFG for reuse
+            state.set_angr_results(project, local_cfg, state.angr_loop_cache, state.angr_loop_cache_config)
 
         try:
             func = local_cfg.functions[target_addr]
@@ -1721,7 +1745,7 @@ async def get_cross_reference_map(
                 continue
 
             # Callees (depth-aware)
-            calls = []
+            calls = set()
             suspicious_apis = []
             visited = set()
 
@@ -1735,7 +1759,7 @@ async def get_cross_reference_map(
                             cfunc = cfg_snap.functions[callee_addr]
                             cname = cfunc.name
                             if cname not in calls:
-                                calls.append(cname)
+                                calls.add(cname)
                             for api_name, (risk, cat) in CATEGORIZED_IMPORTS_DB.items():
                                 if api_name in cname:
                                     suspicious_apis.append({"name": cname, "risk": risk, "category": cat})
@@ -1772,7 +1796,7 @@ async def get_cross_reference_map(
 
             # Complexity
             try:
-                block_count = len(list(func.blocks))
+                block_count = func.graph.number_of_nodes()
                 edge_count = func.graph.number_of_edges()
             except Exception:
                 logger.debug("get_cross_reference_map: failed to compute complexity for %s", hex(addr_used), exc_info=True)
@@ -1781,7 +1805,7 @@ async def get_cross_reference_map(
 
             functions_result[hex(addr_used)] = {
                 "name": func.name,
-                "calls": calls[:30],
+                "calls": sorted(calls)[:30],
                 "called_by": callers[:20],
                 "strings_referenced": strings_referenced[:20],
                 "suspicious_apis": suspicious_apis,
@@ -1894,12 +1918,12 @@ async def batch_decompile(
         # Fresh decompilation with per-function timeout.
         # Lock is acquired/released inside the thread worker (not across await).
         def _decompile_one(t_addr=target_addr):
-            state._decompile_on_demand_waiting = True
+            state._decompile_on_demand_count += 1
             if not state._decompile_lock.acquire(timeout=60):
-                state._decompile_on_demand_waiting = False
+                state._decompile_on_demand_count -= 1
                 return {"error": "Decompilation lock busy — background analysis in progress. Retry shortly."}
             try:
-                state._decompile_on_demand_waiting = False
+                state._decompile_on_demand_count -= 1
                 try:
                     func, addr_used = _resolve_function_address(t_addr)
                 except (KeyError, RuntimeError) as e:

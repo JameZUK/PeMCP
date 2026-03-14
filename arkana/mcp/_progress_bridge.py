@@ -79,7 +79,7 @@ class ProgressBridge:
         if self._loop is None or self._loop.is_closed():
             return
         self._last_progress_time = now
-        self._dispatch(self._ctx.report_progress(current, total))
+        self._dispatch(self._ctx.report_progress, current, total)
 
     def info(self, message: str, *, force: bool = False) -> None:
         """Send a log-level info message to the MCP client."""
@@ -89,7 +89,7 @@ class ProgressBridge:
         if self._loop is None or self._loop.is_closed():
             return
         self._last_info_time = now
-        self._dispatch(self._ctx.info(message))
+        self._dispatch(self._ctx.info, message)
 
     def make_callback(
         self, base_pct: int = 0, range_pct: int = 100
@@ -119,12 +119,17 @@ class ProgressBridge:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _dispatch(self, coro) -> None:
-        """Post *coro* to the event loop from the current (worker) thread."""
+    def _dispatch(self, coro_fn, *args) -> None:
+        """Post a coroutine to the event loop from the current (worker) thread.
+
+        Accepts a callable and args rather than a pre-created coroutine to avoid
+        TOCTOU issues where a coroutine is created but never awaited if the loop
+        is closed between creation and dispatch.
+        """
         if self._loop is None or self._loop.is_closed():
             return
         try:
-            asyncio.run_coroutine_threadsafe(coro, self._loop)
+            asyncio.run_coroutine_threadsafe(coro_fn(*args), self._loop)
         except Exception:
             # Never let progress reporting break an analysis.
             logger.debug("ProgressBridge: notification dispatch failed", exc_info=True)

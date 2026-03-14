@@ -518,7 +518,8 @@ def _parse_certificates_crypto(raw_sig: bytes, anomalies: List) -> List[Dict[str
 def _validate_with_signify(pe: "pefile.PE", anomalies: List) -> Dict[str, Any]:
     """Validate authenticode signature using signify."""
     try:
-        with io.BytesIO(pe.__data__) as f:
+        # Read from disk to avoid duplicating PE data in memory
+        with open(state.filepath, 'rb') as f:
             auth_file = AuthenticodeFile.from_stream(f)
             status, err = auth_file.explain_verify()
 
@@ -589,8 +590,14 @@ def _compute_authenticode_hash(pe: "pefile.PE") -> Optional[str]:
         magic = struct.unpack_from('<H', data, optional_header_offset)[0]
         if magic == 0x20B:  # PE32+
             sec_dir_offset = optional_header_offset + 144
-        else:  # PE32
+        elif magic == 0x10B:  # PE32
             sec_dir_offset = optional_header_offset + 128
+        else:
+            logger.debug("Authenticode hash: unknown PE magic 0x%x", magic)
+            return None
+
+        if sec_dir_offset + 8 > len(data):
+            return None
 
         # Get signature location
         sec_dir_idx = pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_SECURITY']

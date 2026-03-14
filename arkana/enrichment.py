@@ -286,8 +286,8 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             last_progress_epoch=time.time(),
         )
     finally:
-        # Ensure on-demand flag is cleared
-        state._decompile_on_demand_waiting = False
+        # Ensure on-demand counter is reset
+        state._decompile_on_demand_count = 0
 
 
 def _wait_for_cfg(state: AnalyzerState, timeout: int = ENRICHMENT_TIMEOUT, generation: int = 0) -> bool:
@@ -350,9 +350,9 @@ def _decompile_sweep(
             break
 
         # Yield to on-demand decompile requests (with 120s timeout)
-        if state._decompile_on_demand_waiting:
+        if state._decompile_on_demand_count > 0:
             wait_deadline = time.time() + _ON_DEMAND_YIELD_TIMEOUT
-            while state._decompile_on_demand_waiting:
+            while state._decompile_on_demand_count > 0:
                 time.sleep(0.1)
                 if _cancelled(state, generation) or time.time() > wait_deadline:
                     break

@@ -1406,7 +1406,7 @@ async def search_yara_custom(
 
     def _yara_scan():
         try:
-            matches = compiled.match(filepath)
+            matches = compiled.match(filepath, timeout=120)
         except Exception as e:
             return {"error": f"YARA scan error: {e}"}
 

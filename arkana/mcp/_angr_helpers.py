@@ -30,7 +30,9 @@ def _rebuild_project_with_hooks():
     """
     proj = angr.Project(state.filepath, auto_load_libs=False)
 
-    for key, info in state.angr_hooks.items():
+    with state._angr_lock:
+        hooks_snapshot = dict(state.angr_hooks)
+    for key, info in hooks_snapshot.items():
         ret_raw = info.get("return_value", "void")
         nop = info.get("nop", False)
 
@@ -88,10 +90,14 @@ def _ensure_project_and_cfg():
             project, cfg = state.get_angr_snapshot()
             if cfg is not None:
                 return
-            if state.angr_hooks:
+            with state._angr_lock:
+                has_hooks = bool(state.angr_hooks)
+            if has_hooks:
                 _rebuild_project_with_hooks()
                 project, cfg = state.get_angr_snapshot()
         if cfg is None:
+            # Refresh project reference after potential hooks rebuild
+            project, _ = state.get_angr_snapshot()
             # Build CFG outside the lock to avoid blocking other tools
             new_cfg = project.analyses.CFGFast(normalize=True)
             with _init_lock:

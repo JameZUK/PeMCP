@@ -274,7 +274,8 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         )
         monitor.start()
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             future = executor.submit(
                 project.analyses.CFGFast,
                 normalize=True,
@@ -307,7 +308,9 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
                 print(f"\n[!] Background Angr CFG timed out after {cfg_timeout}s ({funcs_found} functions found).", file=sys.stderr)
                 return  # monitor thread exits on next iteration (status != RUNNING)
 
-        state.set_angr_results(project, cfg, None, None)
+            state.set_angr_results(project, cfg, None, None)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         _update_progress(task_id, 80, "Identifying loops...", bridge=bridge)
 
         # 3. Pre-calculate Loops

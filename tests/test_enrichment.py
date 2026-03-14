@@ -24,8 +24,8 @@ class TestEnrichmentStateFields:
     def test_decompile_lock_exists(self):
         assert isinstance(self.state._decompile_lock, type(threading.Lock()))
 
-    def test_decompile_on_demand_flag_default(self):
-        assert self.state._decompile_on_demand_waiting is False
+    def test_decompile_on_demand_counter_default(self):
+        assert self.state._decompile_on_demand_count == 0
 
     def test_enrichment_cancel_event(self):
         assert isinstance(self.state._enrichment_cancel, threading.Event)
@@ -304,12 +304,17 @@ class TestDecompileLock:
         assert self.state._decompile_lock.acquire(timeout=1)
         self.state._decompile_lock.release()
 
-    def test_on_demand_flag(self):
-        """On-demand flag starts False and can be toggled."""
-        assert not self.state._decompile_on_demand_waiting
-        self.state._decompile_on_demand_waiting = True
-        assert self.state._decompile_on_demand_waiting
-        self.state._decompile_on_demand_waiting = False
+    def test_on_demand_counter(self):
+        """On-demand counter starts at 0 and can be incremented/decremented."""
+        assert self.state._decompile_on_demand_count == 0
+        self.state._decompile_on_demand_count += 1
+        assert self.state._decompile_on_demand_count == 1
+        self.state._decompile_on_demand_count += 1
+        assert self.state._decompile_on_demand_count == 2
+        self.state._decompile_on_demand_count -= 1
+        assert self.state._decompile_on_demand_count == 1
+        self.state._decompile_on_demand_count -= 1
+        assert self.state._decompile_on_demand_count == 0
 
     def test_lock_mutual_exclusion(self):
         """Lock provides mutual exclusion between threads."""

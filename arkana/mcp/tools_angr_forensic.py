@@ -1299,9 +1299,16 @@ async def get_call_graph(
                     "edges": edges,
                 }
             else:
-                # All descendants
-                descendants = nx.descendants(callgraph, root)
-                descendants.add(root)
+                # Bounded BFS instead of unbounded nx.descendants
+                _MAX_SLICE_NODES = 10_000
+                descendants = set()
+                _queue = deque([root])
+                while _queue and len(descendants) < _MAX_SLICE_NODES:
+                    _node = _queue.popleft()
+                    if _node in descendants:
+                        continue
+                    descendants.add(_node)
+                    _queue.extend(callgraph.successors(_node))
                 subgraph = callgraph.subgraph(descendants)
                 edges = []
                 for src, dst in list(subgraph.edges())[:limit]:

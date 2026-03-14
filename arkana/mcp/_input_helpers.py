@@ -52,12 +52,26 @@ class _ToolResultCache:
     ``_LRU_SLOTS_PER_TOOL`` cached results; the least-recently-used entry
     is evicted when the limit is exceeded.  Entries older than
     ``_CACHE_TTL_SECONDS`` are treated as cache misses.
+
+    A class-level registry tracks all instances and enforces a global entry
+    cap of ``_GLOBAL_MAX_ENTRIES`` to bound total memory usage.
     """
+
+    _all_instances: List["_ToolResultCache"] = []
+    _global_lock = threading.Lock()
+    _global_entry_count = 0
+    _GLOBAL_MAX_ENTRIES = 200
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         # tool_name -> OrderedDict[(params_key) -> {"items": list, "ts": float}]
         self._store: Dict[str, collections.OrderedDict] = {}
+        with _ToolResultCache._global_lock:
+            _ToolResultCache._all_instances.append(self)
+
+    def _entry_count(self) -> int:
+        """Return total entries across all tool buckets (caller must hold self._lock)."""
+        return sum(len(b) for b in self._store.values())
 
     def get(self, tool_name: str, params_key) -> Optional[List]:
         """Return cached items list or ``None`` on miss (including TTL expiry)."""
@@ -69,6 +83,8 @@ class _ToolResultCache:
             # TTL check — evict stale entries
             if time.time() - entry["ts"] > _CACHE_TTL_SECONDS:
                 del bucket[params_key]
+                with _ToolResultCache._global_lock:
+                    _ToolResultCache._global_entry_count = max(0, _ToolResultCache._global_entry_count - 1)
                 return None
             bucket.move_to_end(params_key)
             return entry["items"]
@@ -77,10 +93,20 @@ class _ToolResultCache:
         """Store *items* in the cache, evicting LRU if needed."""
         with self._lock:
             bucket = self._store.setdefault(tool_name, collections.OrderedDict())
+            is_new = params_key not in bucket
             bucket[params_key] = {"items": items, "ts": time.time()}
             bucket.move_to_end(params_key)
+            evicted = 0
             while len(bucket) > _LRU_SLOTS_PER_TOOL:
                 bucket.popitem(last=False)
+                evicted += 1
+        with _ToolResultCache._global_lock:
+            if is_new:
+                _ToolResultCache._global_entry_count += 1
+            _ToolResultCache._global_entry_count -= evicted
+            _ToolResultCache._global_entry_count = max(0, _ToolResultCache._global_entry_count)
+            if _ToolResultCache._global_entry_count > _ToolResultCache._GLOBAL_MAX_ENTRIES:
+                _ToolResultCache._cleanup_expired()
 
     def keys(self, tool_name: str) -> List:
         """Return a snapshot of cached param keys for *tool_name*."""
@@ -92,9 +118,25 @@ class _ToolResultCache:
         """Clear cache for a specific tool, or all tools if *tool_name* is ``None``."""
         with self._lock:
             if tool_name is None:
+                removed = sum(len(b) for b in self._store.values())
                 self._store.clear()
             else:
-                self._store.pop(tool_name, None)
+                bucket = self._store.pop(tool_name, None)
+                removed = len(bucket) if bucket else 0
+        with _ToolResultCache._global_lock:
+            _ToolResultCache._global_entry_count = max(0, _ToolResultCache._global_entry_count - removed)
+
+    @classmethod
+    def _cleanup_expired(cls) -> None:
+        """Remove expired entries across all instances (caller must hold _global_lock)."""
+        now = time.time()
+        for inst in cls._all_instances:
+            with inst._lock:
+                for _tool_name, bucket in list(inst._store.items()):
+                    expired_keys = [k for k, v in bucket.items() if now - v["ts"] > _CACHE_TTL_SECONDS]
+                    for k in expired_keys:
+                        del bucket[k]
+                        cls._global_entry_count = max(0, cls._global_entry_count - 1)
 
 
 # ---------------------------------------------------------------------------
@@ -117,21 +159,23 @@ def _make_hashable(v, _depth=0):
     return v
 
 
+_SKIP = frozenset({"offset", "limit", "compact", "ctx", "line_offset", "line_limit",
+                    "search", "context_lines", "case_sensitive",
+                    "notes_offset", "notes_limit", "history_limit",
+                    "findings_offset", "findings_limit",
+                    "functions_offset", "functions_limit",
+                    "ioc_limit", "ioc_offset",
+                    "unexplored_offset", "unexplored_limit",
+                    "indicator_offset", "indicator_limit",
+                    "method_limit", "max_suggestions"})
+
+
 def _make_cache_key(**params) -> tuple:
     """Build a hashable cache key from keyword arguments.
 
     Excludes ``offset``, ``limit``, ``compact``, and ``ctx`` so that
     different pages of the same query hit the same cache entry.
     """
-    _SKIP = frozenset({"offset", "limit", "compact", "ctx", "line_offset", "line_limit",
-                        "search", "context_lines", "case_sensitive",
-                        "notes_offset", "notes_limit", "history_limit",
-                        "findings_offset", "findings_limit",
-                        "functions_offset", "functions_limit",
-                        "ioc_limit", "ioc_offset",
-                        "unexplored_offset", "unexplored_limit",
-                        "indicator_offset", "indicator_limit",
-                        "method_limit", "max_suggestions"})
     parts = []
     for k in sorted(params):
         if k in _SKIP:

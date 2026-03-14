@@ -72,7 +72,13 @@ class LibraryWarningHandler(logging.Handler):
 
 
 def install_warning_handler() -> None:
-    """Attach the LibraryWarningHandler to the root logger."""
+    """Attach the LibraryWarningHandler to the root logger.
+
+    Idempotent — skips installation if a handler is already attached.
+    """
+    root = logging.getLogger()
+    if any(isinstance(h, LibraryWarningHandler) for h in root.handlers):
+        return
     handler = LibraryWarningHandler()
     handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
-    logging.getLogger().addHandler(handler)
+    root.addHandler(handler)

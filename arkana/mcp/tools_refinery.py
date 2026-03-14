@@ -152,6 +152,7 @@ async def refinery_codec(
     await ctx.info(f"{'Encoding' if d == 'encode' else 'Decoding'} with {encoding}")
     mod_path, cls_name = _ENCODING_MAP[encoding_lower].rsplit(":", 1)
 
+    _used_text_fallback = False
     try:
         input_data = _hex_to_bytes(data_hex)
     except (ValueError, TypeError):
@@ -159,6 +160,7 @@ async def refinery_codec(
         # hex should know their input was treated as raw text.
         logger.warning("Input is not valid hex, treating as raw text (UTF-8)")
         input_data = data_hex.encode("utf-8")
+        _used_text_fallback = True
 
     if len(input_data) > _MAX_INPUT_SIZE:
         raise RuntimeError(f"Input too large ({len(input_data)} bytes). Max: {_MAX_INPUT_SIZE}.")
@@ -180,6 +182,8 @@ async def refinery_codec(
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result)[:2000],
     }
+    if _used_text_fallback:
+        response["warning"] = "Input was not valid hex — treated as raw UTF-8 text"
     if output_path:
         artifact_meta = await asyncio.to_thread(
             _write_output_and_register_artifact,
@@ -511,14 +515,21 @@ async def refinery_decompress(
 
     mod_path, cls_name = _COMPRESS_MAP[algo].rsplit(":", 1)
 
+    _MAX_DECOMPRESS_OUTPUT = 100 * 1024 * 1024  # 100MB
+
     def _run():
         import importlib
         mod = importlib.import_module(mod_path)
         unit_cls = getattr(mod, cls_name)
-        return data | unit_cls() | bytes
+        result = data | unit_cls() | bytes
+        if len(result) > _MAX_DECOMPRESS_OUTPUT:
+            raise RuntimeError(
+                f"Decompression output too large ({len(result):,} bytes, "
+                f"limit {_MAX_DECOMPRESS_OUTPUT:,} bytes). Input may be a decompression bomb."
+            )
+        return result
 
     result = await asyncio.to_thread(_run)
-    _MAX_DECOMPRESS_OUTPUT = 100 * 1024 * 1024  # 100MB
     original_output_size = len(result)
     if original_output_size > _MAX_DECOMPRESS_OUTPUT:
         result = result[:_MAX_DECOMPRESS_OUTPUT]
@@ -1030,6 +1041,9 @@ _PIPELINE_UNIT_MAP = {
 _MAX_BATCH_PIPELINE = 100
 
 
+_PIPELINE_MAX_INTERMEDIATE_SIZE = 100 * 1024 * 1024  # 100MB
+
+
 def _run_pipeline_single(data: bytes, steps: list) -> tuple:
     """Execute a pipeline on a single data blob. Returns (result_bytes, step_log)."""
     import importlib
@@ -1196,6 +1210,13 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
             current = current | unit_cls(**kwargs) | bytes
         else:
             raise ValueError(f"Unknown pipeline unit: '{unit_name}'")
+
+        if len(current) > _PIPELINE_MAX_INTERMEDIATE_SIZE:
+            raise RuntimeError(
+                f"Pipeline step '{unit_name}' produced output too large "
+                f"({len(current):,} bytes, limit {_PIPELINE_MAX_INTERMEDIATE_SIZE:,}). "
+                f"Possible decompression bomb."
+            )
 
         step_log.append({"step": step_str, "size": len(current)})
 

@@ -28,6 +28,8 @@ MAX_COMPLETED_TASKS = 50
 MAX_TOOL_HISTORY = 500
 MAX_NOTES = 10_000
 MAX_ARTIFACTS = 1_000
+MAX_RENAMES = 10_000
+MAX_TRIAGE_STATUS = 100_000
 
 # Stale session TTL in seconds (1 hour).
 SESSION_TTL_SECONDS = 3600
@@ -126,7 +128,7 @@ class AnalyzerState:
 
         # Decompilation priority control (background vs on-demand)
         self._decompile_lock = threading.Lock()
-        self._decompile_on_demand_waiting: bool = False
+        self._decompile_on_demand_count: int = 0  # Atomic counter for on-demand decompile requests
 
         # Enrichment cancellation and generation tracking
         self._enrichment_cancel = threading.Event()
@@ -147,8 +149,9 @@ class AnalyzerState:
         self.result_cache = _ToolResultCache()
 
         # Analysis warnings (captured from library loggers, session-scoped)
+        from arkana.constants import MAX_ANALYSIS_WARNINGS
         self._warnings_lock = threading.Lock()
-        self.analysis_warnings: List[Dict[str, Any]] = []
+        self.analysis_warnings: deque = deque(maxlen=MAX_ANALYSIS_WARNINGS)
         self._warning_dedup: Dict[tuple, Dict[str, Any]] = {}  # (logger, level, msg[:100]) -> entry
 
         # Timestamp of last activity (for session TTL cleanup)
@@ -385,6 +388,8 @@ class AnalyzerState:
         """Thread-safe function rename. Returns the rename entry."""
         addr = address.lower()
         with self._renames_lock:
+            if addr not in self.renames["functions"] and len(self.renames["functions"]) >= MAX_RENAMES:
+                raise ValueError(f"Maximum rename limit ({MAX_RENAMES}) reached for functions")
             self.renames["functions"][addr] = new_name
             return {"address": addr, "new_name": new_name, "type": "function"}
 
@@ -392,6 +397,12 @@ class AnalyzerState:
         """Thread-safe variable rename within function scope."""
         faddr = func_addr.lower()
         with self._renames_lock:
+            total_vars = sum(len(v) for v in self.renames["variables"].values())
+            if total_vars >= MAX_RENAMES:
+                # Allow update of existing entry, block new ones
+                existing = self.renames["variables"].get(faddr, {})
+                if old_name not in existing:
+                    raise ValueError(f"Maximum rename limit ({MAX_RENAMES}) reached for variables")
             if faddr not in self.renames["variables"]:
                 self.renames["variables"][faddr] = {}
             self.renames["variables"][faddr][old_name] = new_name
@@ -402,6 +413,8 @@ class AnalyzerState:
         addr = address.lower()
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._renames_lock:
+            if addr not in self.renames["labels"] and len(self.renames["labels"]) >= MAX_RENAMES:
+                raise ValueError(f"Maximum rename limit ({MAX_RENAMES}) reached for labels")
             self.renames["labels"][addr] = {"name": name, "category": category, "created_at": now}
             return {"address": addr, "name": name, "category": category, "type": "label"}
 
@@ -541,6 +554,8 @@ class AnalyzerState:
         if status not in ("unreviewed", "suspicious", "clean", "flagged"):
             raise ValueError(f"Invalid triage status: {status}")
         with self._triage_lock:
+            if len(self.triage_status) >= MAX_TRIAGE_STATUS and addr not in self.triage_status:
+                raise ValueError(f"Maximum triage status limit ({MAX_TRIAGE_STATUS}) reached")
             self.triage_status[addr] = status
             return {"address": addr, "status": status}
 
@@ -573,8 +588,8 @@ class AnalyzerState:
         """Thread-safe warning capture with deduplication.
 
         Returns the new entry dict, or None if deduplicated (count incremented).
+        Uses a deque(maxlen=MAX_ANALYSIS_WARNINGS) for O(1) eviction.
         """
-        from arkana.constants import MAX_ANALYSIS_WARNINGS
         # Truncate message to prevent unbounded growth
         msg = message[:500] if len(message) > 500 else message
         dedup_key = (logger_name, level, msg[:100])
@@ -587,9 +602,10 @@ class AnalyzerState:
                 existing["last_seen"] = now
                 return None
 
-            # Evict oldest if at capacity
-            if len(self.analysis_warnings) >= MAX_ANALYSIS_WARNINGS:
-                oldest = self.analysis_warnings.pop(0)
+            # If at capacity, deque will auto-evict the oldest on append.
+            # Clean up the dedup dict for the entry that will be evicted.
+            if len(self.analysis_warnings) == self.analysis_warnings.maxlen:
+                oldest = self.analysis_warnings[0]
                 oldest_key = (oldest["logger"], oldest["level"], oldest["message"][:100])
                 self._warning_dedup.pop(oldest_key, None)
 
@@ -630,7 +646,7 @@ class AnalyzerState:
         """Clear all warnings. Returns count removed."""
         with self._warnings_lock:
             count = len(self.analysis_warnings)
-            self.analysis_warnings = []
+            self.analysis_warnings.clear()
             self._warning_dedup = {}
             return count
 

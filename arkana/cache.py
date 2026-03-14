@@ -84,6 +84,20 @@ class AnalysisCache:
         CACHE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
         # Enforce permissions even if the directory already existed
         os.chmod(str(CACHE_DIR), 0o700)
+        # Clean up orphaned .tmp files from previous interrupted writes
+        self._cleanup_orphaned_tmp_files()
+
+    def _cleanup_orphaned_tmp_files(self) -> None:
+        """Remove .tmp files left behind by interrupted put() or _save_meta() calls."""
+        try:
+            for tmp_file in CACHE_DIR.rglob("*.tmp"):
+                try:
+                    tmp_file.unlink(missing_ok=True)
+                    logger.debug("Cleaned up orphaned tmp file: %s", tmp_file)
+                except OSError:
+                    pass
+        except OSError:
+            pass  # Cache dir may not be fully accessible yet
 
     def _entry_dir(self, sha256: str) -> Path:
         return CACHE_DIR / sha256[:2]
@@ -284,27 +298,30 @@ class AnalysisCache:
             "triage_status": triage_status or {},
         }
 
-        # Compress OUTSIDE the lock — this can be slow for large analyses
-        # and would otherwise block concurrent get()/put() callers.
+        # Write compressed JSON OUTSIDE the lock — this can be slow for
+        # large analyses and would otherwise block concurrent get()/put()
+        # callers.  Streaming via gzip.open avoids materialising the full
+        # JSON + compressed bytes in memory simultaneously.
         try:
-            compressed = gzip.compress(
-                json.dumps(wrapper).encode("utf-8")
-            )
-        except (TypeError, ValueError) as e:
+            entry_dir = self._entry_dir(sha256)
+            entry_dir.mkdir(parents=True, exist_ok=True)
+            entry_path = self._entry_path(sha256)
+            tmp = entry_path.with_suffix(".tmp")
+
+            try:
+                with gzip.open(tmp, "wt", encoding="utf-8") as gz:
+                    json.dump(wrapper, gz)
+                tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                raise
+        except (TypeError, ValueError, OSError) as e:
             logger.error("Cache serialization error for %s...: %s", sha256[:12], e)
             return False
 
         with self._lock:
             try:
-                entry_dir = self._entry_dir(sha256)
-                entry_dir.mkdir(parents=True, exist_ok=True)
-                entry_path = self._entry_path(sha256)
-
-                tmp = entry_path.with_suffix(".tmp")
-                tmp.write_bytes(compressed)
-                tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
-
-                file_size = len(compressed)
+                file_size = entry_path.stat().st_size
                 meta = self._load_meta()
                 meta[sha256] = {
                     "original_filename": os.path.basename(original_filepath),
@@ -556,6 +573,7 @@ class AnalysisCache:
             meta = self._load_meta()
             meta[sha256] = meta_entry
             self._save_meta(meta)
+            self._evict_if_needed(meta)
 
     def remove_entry_by_hash(self, sha256: str) -> bool:
         """Remove a single entry by hash.  Returns True if it existed."""
