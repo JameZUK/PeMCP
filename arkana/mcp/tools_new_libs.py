@@ -88,11 +88,12 @@ from arkana.utils import _safe_slice  # noqa: E402 — canonical implementation 
 
 async def _subprocess_progress_reporter(ctx, tool_name: str, timeout_seconds: int):
     """Report estimated progress for opaque subprocess operations."""
-    start = asyncio.get_event_loop().time()
+    import time as _time
+    start = _time.monotonic()  # H5-v9: replace deprecated asyncio.get_event_loop().time()
     interval = max(3, timeout_seconds // 20)
     while True:
         await asyncio.sleep(interval)
-        elapsed = asyncio.get_event_loop().time() - start
+        elapsed = _time.monotonic() - start
         pct = min(int((elapsed / timeout_seconds) * 95), 95)
         try:
             await ctx.report_progress(pct, 100)

@@ -218,7 +218,7 @@ async def generate_yara_rule(
             try:
                 # M2-v8: Disable includes even for generated rules (defense in depth)
                 compiled = yara.compile(source=rule_text, includes=False)
-                matches = compiled.match(state.filepath)
+                matches = compiled.match(state.filepath, timeout=120)  # M4-v9: match timeout
                 scan_results = []
                 for match in matches:
                     match_info: Dict[str, Any] = {

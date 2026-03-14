@@ -49,20 +49,13 @@ def _get_cached_capa_rules(mock_args):
     """
     rules_key = os.path.realpath(str(mock_args.rules[0])) if mock_args.rules else ""
 
-    # M18: Check cache under lock — OrderedDict is not thread-safe for
-    # concurrent reads + move_to_end, so the fast path must also hold the lock.
+    # L4-v9: Single lock acquisition instead of double-checked locking pattern.
+    # The lock is held during rule loading (potentially slow) but this is acceptable
+    # since rule loading happens once per rules path and subsequent calls return from cache.
     with _capa_rules_lock:
         cached = _capa_rules_cache.get(rules_key)
         if cached is not None:
             logger.info("Using cached capa rules for: %s", rules_key)
-            _capa_rules_cache.move_to_end(rules_key)
-            return cached
-
-    with _capa_rules_lock:
-        # Re-check under lock (another thread may have loaded it)
-        cached = _capa_rules_cache.get(rules_key)
-        if cached is not None:
-            logger.info("Using cached capa rules for: %s (after lock)", rules_key)
             _capa_rules_cache.move_to_end(rules_key)
             return cached
         t0 = time.monotonic()

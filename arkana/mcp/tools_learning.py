@@ -178,9 +178,11 @@ def _save_profile_unlocked(profile: Dict[str, Any]) -> None:
     Caller MUST hold ``_profile_lock``.
     """
     profile["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    _PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    _PROFILE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)  # L2-v9: restrictive dir perms
     tmp = _PROFILE_PATH.with_suffix(".tmp")
     tmp.write_text(json.dumps(profile, indent=2, default=str), encoding="utf-8")
+    import os as _os
+    _os.chmod(str(tmp), 0o600)  # L2-v9: restrictive file perms
     tmp.replace(_PROFILE_PATH)
 
 

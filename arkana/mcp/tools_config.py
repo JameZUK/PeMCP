@@ -77,6 +77,17 @@ def _build_mount_mappings() -> List[Dict[str, str]]:
     return mappings
 
 
+_mount_mappings_cache: Optional[List[Dict[str, str]]] = None  # L1-v9: cache mount mappings
+
+
+def _get_mount_mappings() -> List[Dict[str, str]]:
+    """Return cached mount mappings, building on first call."""
+    global _mount_mappings_cache
+    if _mount_mappings_cache is None:
+        _mount_mappings_cache = _build_mount_mappings()
+    return _mount_mappings_cache
+
+
 def translate_to_host_path(container_path: str) -> Optional[str]:
     """Translate a container-internal path to the corresponding host path.
 
@@ -89,7 +100,7 @@ def translate_to_host_path(container_path: str) -> Optional[str]:
     if not container_path:
         return None
 
-    mappings = _build_mount_mappings()
+    mappings = _get_mount_mappings()
     if not mappings:
         return None
 
@@ -189,7 +200,7 @@ def _get_environment_info() -> Dict[str, Any]:
                 writable_paths.append(p)
 
     # Build mount mappings once — used for both path translation and host lookups
-    mount_mappings = _build_mount_mappings()
+    mount_mappings = _get_mount_mappings()
 
     # Samples dir info — derive host path from mount mappings
     samples_internal = state.samples_path

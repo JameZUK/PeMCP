@@ -17,6 +17,7 @@ if TLSH_AVAILABLE:
 
 
 MAX_BATCH_FILES = 50
+_MAX_TOTAL_BATCH_SIZE = 2 * 1024 * 1024 * 1024  # M1-v9: 2GB total batch limit
 
 # Magic bytes for supported binary formats
 _BINARY_MAGIC = {
@@ -45,8 +46,7 @@ def _is_binary_file(filepath):
 def _parse_single_file(filepath):
     """Parse a single PE file and extract key metadata for comparison."""
     entry = {
-        "path": filepath,
-        "filename": os.path.basename(filepath),
+        "filename": os.path.basename(filepath),  # L3-v9: no full path in response
         "size": 0,
     }
 
@@ -86,21 +86,21 @@ def _parse_single_file(filepath):
         except Exception:
             logger.debug("TLSH hash failed for %s", filepath)
 
-    # PE parsing
+    # Release raw bytes after hashing — PE object works from its own copy
+    del data
+
+    # M4-v9: PE parsing with try/finally for reliable cleanup
     pe = None
     try:
-        pe = pefile.PE(data=data, fast_load=True)
+        with open(filepath, "rb") as f:
+            pe_data = f.read()
+        pe = pefile.PE(data=pe_data, fast_load=True)
+        del pe_data  # Release raw bytes immediately
         pe.parse_data_directories(directories=[
             pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"],
             pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXPORT"],
         ])
-    except Exception as e:
-        if pe is not None:
-            pe.close()
-        entry["pe_error"] = f"Not a valid PE or parse failed: {e}"
-        return entry
 
-    try:
         entry["machine"] = hex(pe.FILE_HEADER.Machine)
         entry["timestamp"] = pe.FILE_HEADER.TimeDateStamp
         entry["entry_point"] = hex(pe.OPTIONAL_HEADER.AddressOfEntryPoint)
@@ -141,14 +141,14 @@ def _parse_single_file(filepath):
             entry["exports"] = exports[:50]
             if len(exports) > 50:
                 entry["exports_pagination"] = {"total": len(exports), "returned": 50, "has_more": True}
-
-        pe.close()
     except Exception as e:
-        entry["parse_error"] = str(e)
-        try:
-            pe.close()
-        except Exception:
-            logger.debug("pe.close() failed for %s", filepath)
+        entry["pe_error"] = f"PE parse failed: {e}"
+    finally:
+        if pe is not None:
+            try:
+                pe.close()
+            except Exception:
+                logger.debug("pe.close() failed for %s", filepath)
 
     return entry
 
@@ -359,6 +359,14 @@ async def analyze_batch(
     if not paths:
         return {"error": "No binary files found to analyze.",
                 "directory": directory, "file_paths": file_paths}
+
+    # M1-v9: Total batch size limit to prevent excessive memory usage
+    total_size = sum(os.path.getsize(p) for p in paths if os.path.isfile(p))
+    if total_size > _MAX_TOTAL_BATCH_SIZE:
+        raise ValueError(
+            f"Total batch size ({total_size / (1024**3):.1f}GB) exceeds limit "
+            f"({_MAX_TOTAL_BATCH_SIZE // (1024**3)}GB)."
+        )
 
     await ctx.info(f"Batch analyzing {len(paths)} files")
     await ctx.report_progress(5, 100)

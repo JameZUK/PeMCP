@@ -42,6 +42,10 @@ async def refinery_regex_extract(
     """
     _require_refinery("refinery_regex_extract")
 
+    # H1-v9: Validate regex against ReDoS before passing to refinery
+    from arkana.utils import validate_regex_pattern
+    validate_regex_pattern(pattern)
+
     data = _get_data_from_hex_or_file(data_hex)
     if len(data) > _MAX_INPUT_SIZE:
         data = data[:_MAX_INPUT_SIZE]
@@ -99,6 +103,10 @@ async def refinery_regex_replace(
         Dictionary with transformed output.
     """
     _require_refinery("refinery_regex_replace")
+
+    # H1-v9: Validate regex against ReDoS before passing to refinery
+    from arkana.utils import validate_regex_pattern
+    validate_regex_pattern(pattern)
 
     try:
         data = _hex_to_bytes(data_hex)
@@ -210,6 +218,14 @@ async def refinery_key_derive(
     """
     _require_refinery("refinery_key_derive")
 
+    # H2-v9: Bound iterations and key_length to prevent CPU/memory exhaustion
+    _MAX_ITERATIONS = 10_000_000
+    _MAX_KEY_LENGTH = 1024
+    if iterations < 1 or iterations > _MAX_ITERATIONS:
+        raise ValueError(f"iterations must be 1-{_MAX_ITERATIONS}, got {iterations}")
+    if key_length < 1 or key_length > _MAX_KEY_LENGTH:
+        raise ValueError(f"key_length must be 1-{_MAX_KEY_LENGTH}, got {key_length}")
+
     password = _hex_to_bytes(password_hex)
     salt = _hex_to_bytes(salt_hex) if salt_hex else b""
 
@@ -291,21 +307,27 @@ async def refinery_string_operations(
 
     def _run():
         if op.startswith("snip"):
-            parts = (argument or op).replace("snip:", "").replace("snip", "").split(":")
-            parts = [p.strip() for p in parts if p.strip()]
-            if len(parts) == 0:
-                s = slice(None)
-            elif len(parts) == 1:
-                s = slice(int(parts[0]))
-            elif len(parts) == 2:
-                start = int(parts[0]) if parts[0] else None
-                stop = int(parts[1]) if parts[1] else None
-                s = slice(start, stop)
-            else:
-                start = int(parts[0]) if parts[0] else None
-                stop = int(parts[1]) if parts[1] else None
-                step = int(parts[2]) if parts[2] else None
-                s = slice(start, stop, step)
+            # M3-v9: Add bounds validation and error handling for snip indices
+            try:
+                parts = (argument or op).replace("snip:", "").replace("snip", "").split(":")
+                parts = [p.strip() for p in parts if p.strip()]
+                max_idx = max(len(data) * 2, 1)
+                parsed = []
+                for p in parts:
+                    v = int(p)
+                    if abs(v) > max_idx:
+                        raise ValueError(f"Slice index {v} out of reasonable range (max {max_idx})")
+                    parsed.append(v)
+                if len(parsed) == 0:
+                    s = slice(None)
+                elif len(parsed) == 1:
+                    s = slice(parsed[0])
+                elif len(parsed) == 2:
+                    s = slice(parsed[0], parsed[1])
+                else:
+                    s = slice(parsed[0], parsed[1], parsed[2])
+            except (ValueError, TypeError) as e:
+                raise ValueError(f"Invalid snip argument: {e}")
             return bytes(data[s])
         elif op == "trim":
             from refinery.units.strings.trim import trim

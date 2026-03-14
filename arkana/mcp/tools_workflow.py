@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import os
 import re
+from collections import Counter  # L5-v9: module-level import
 
 from typing import Dict, Any, List, Optional
 
@@ -246,7 +247,6 @@ async def generate_analysis_report(
         # --- Tool History Summary ---
         sections.append("## Analysis Timeline\n")
         sections.append(f"Total tool invocations: {len(history)}\n")
-        from collections import Counter
         tool_counts = Counter(h["tool_name"] for h in history)
         sections.append("### Most Used Tools\n")
         for tool_name, count in tool_counts.most_common(10):

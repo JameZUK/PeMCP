@@ -323,9 +323,12 @@ async def find_and_decode_encoded_strings(
         raise ValueError("Parameter 'max_decode_layers' must be an integer between 1 and 10.")
 
     # Validate regex patterns upfront to avoid wasting CPU on decode cycles
+    # L6-v9: Also validate against ReDoS before compiling
+    from arkana.utils import validate_regex_pattern
     _compiled_decoded_regex = []
     if decoded_regex_patterns:
         for i, pat in enumerate(decoded_regex_patterns):
+            validate_regex_pattern(pat)
             try:
                 _compiled_decoded_regex.append(re.compile(pat))
             except re.error as e:
@@ -363,116 +366,116 @@ async def find_and_decode_encoded_strings(
         ("base64", lambda b: codecs.decode(b, 'base64')),
         ("hex", lambda b: bytes.fromhex(b.decode('ascii'))),
     ]
-    for cand_idx, match in enumerate(initial_candidates):
-        if len(found_decoded_strings) >= limit: break
 
-        if total_candidates > 0 and cand_idx % max(1, total_candidates // 10) == 0:
-            pct = 15 + int((cand_idx / total_candidates) * 60)
-            bridge.report_progress(pct, 100)
-            bridge.info(f"[decode] Processing candidate {cand_idx + 1}/{total_candidates}...")
+    # H4-v9: Batch all candidate decoding in a single asyncio.to_thread call
+    # instead of per-candidate dispatch (eliminates up to 30K+ thread dispatches)
+    def _decode_all_candidates():
+        found = []
+        regex_timeouts = 0
 
-        original_encoded_bytes = match.group(0)
-        start_offset = match.start()
+        for cand_idx, match in enumerate(initial_candidates):
+            if len(found) >= limit:
+                break
 
-        # --- HEURISTIC: Calculate initial confidence based on section ---
-        section_confidence = 0.5  # Default low confidence
-        try:
-            section = pe.get_section_by_offset(start_offset)
-            if section:
-                sec_name = section.Name.decode('utf-8', 'ignore').strip('\x00')
-                if '.data' in sec_name or '.rdata' in sec_name:
-                    section_confidence = 1.0  # High confidence for data sections
-                elif '.text' not in sec_name:
-                    section_confidence = 0.8  # Medium confidence for other non-code sections
-        except Exception:
-            pass  # Keep default confidence if section lookup fails
+            if total_candidates > 0 and cand_idx % max(1, total_candidates // 10) == 0:
+                pct = 15 + int((cand_idx / total_candidates) * 60)
+                bridge.report_progress(pct, 100)
+                bridge.info(f"[decode] Processing candidate {cand_idx + 1}/{total_candidates}...")
 
-        # Early filter: skip candidates that can't possibly reach min_confidence
-        if section_confidence < min_confidence:
-            continue
+            original_encoded_bytes = match.group(0)
+            start_offset = match.start()
 
-        # --- MULTI-LAYER DECODING ---
-        current_bytes = original_encoded_bytes
-        encoding_layers = []
-        final_decoded_text = None
+            section_confidence = 0.5
+            try:
+                section = pe.get_section_by_offset(start_offset)
+                if section:
+                    sec_name = section.Name.decode('utf-8', 'ignore').strip('\x00')
+                    if '.data' in sec_name or '.rdata' in sec_name:
+                        section_confidence = 1.0
+                    elif '.text' not in sec_name:
+                        section_confidence = 0.8
+            except Exception:
+                pass
 
-        for _ in range(max_decode_layers):
-            decoded_this_layer = False
-            # Try standard decoders first
-            for enc_name, dec_func in decoding_attempts:
-                try:
-                    decoded_bytes = await asyncio.to_thread(dec_func, current_bytes)
-                    if decoded_bytes and decoded_bytes != current_bytes:
-                        encoding_layers.append(enc_name)
-                        current_bytes = decoded_bytes
-                        decoded_this_layer = True
-                        break
-                except Exception:
-                    continue
-
-            # If standard decoders found something, check if the result is printable
-            if decoded_this_layer:
-                try:
-                    text_candidate = current_bytes.decode('utf-8', 'ignore')
-                    if _is_mostly_printable_ascii_sync(text_candidate, printable_threshold):
-                        final_decoded_text = text_candidate
-                        break # Found final printable payload
-                except Exception:
-                    pass # Not printable, continue to next layer or XOR
-
-            # If standard decoders failed OR result wasn't printable, try XOR
-            if not final_decoded_text:
-                xor_result = await asyncio.to_thread(_decode_single_byte_xor, current_bytes)
-                if xor_result:
-                    decoded_bytes, key = xor_result
-                    encoding_layers.append(f"xor(0x{key:02x})")
-                    current_bytes = decoded_bytes
-                    final_decoded_text = current_bytes.decode('utf-8', 'ignore')
-                    break # Assume XOR result is final payload
-
-            if not decoded_this_layer:
-                break # No decoders worked on this layer, stop
-
-        # --- Final filtering and result creation ---
-        if final_decoded_text and len(final_decoded_text) >= min_decoded_printable_length:
-            # Adjust confidence based on decoded content quality
-            confidence = section_confidence
-            decoded_stripped = final_decoded_text.strip()
-
-            # Reduce confidence for purely numeric strings (dates, versions)
-            if decoded_stripped.isdigit():
-                confidence *= 0.3
-
-            # Reduce confidence for common benign patterns
-            if any(p.match(decoded_stripped) for p in _BENIGN_PATTERNS):
-                confidence *= 0.4
-
-            # Very short decoded strings are less interesting
-            if len(decoded_stripped) < 8:
-                confidence *= 0.7
-
-            if confidence < min_confidence:
+            if section_confidence < min_confidence:
                 continue
 
-            if _compiled_decoded_regex:
-                try:
-                    if not any(_safe_regex_search(p, final_decoded_text) for p in _compiled_decoded_regex):
+            current_bytes = original_encoded_bytes
+            encoding_layers = []
+            final_decoded_text = None
+
+            for _ in range(max_decode_layers):
+                decoded_this_layer = False
+                for enc_name, dec_func in decoding_attempts:
+                    try:
+                        decoded_bytes = dec_func(current_bytes)  # direct call
+                        if decoded_bytes and decoded_bytes != current_bytes:
+                            encoding_layers.append(enc_name)
+                            current_bytes = decoded_bytes
+                            decoded_this_layer = True
+                            break
+                    except Exception:
                         continue
-                except ValueError:
-                    await ctx.warning("A regex timed out during search (possible ReDoS). Skipping.")
+
+                if decoded_this_layer:
+                    try:
+                        text_candidate = current_bytes.decode('utf-8', 'ignore')
+                        if _is_mostly_printable_ascii_sync(text_candidate, printable_threshold):
+                            final_decoded_text = text_candidate
+                            break
+                    except Exception:
+                        pass
+
+                if not final_decoded_text:
+                    xor_result = _decode_single_byte_xor(current_bytes)  # direct call
+                    if xor_result:
+                        decoded_bytes, key = xor_result
+                        encoding_layers.append(f"xor(0x{key:02x})")
+                        current_bytes = decoded_bytes
+                        final_decoded_text = current_bytes.decode('utf-8', 'ignore')
+                        break
+
+                if not decoded_this_layer:
+                    break
+
+            if final_decoded_text and len(final_decoded_text) >= min_decoded_printable_length:
+                confidence = section_confidence
+                decoded_stripped = final_decoded_text.strip()
+
+                if decoded_stripped.isdigit():
+                    confidence *= 0.3
+                if any(p.match(decoded_stripped) for p in _BENIGN_PATTERNS):
+                    confidence *= 0.4
+                if len(decoded_stripped) < 8:
+                    confidence *= 0.7
+                if confidence < min_confidence:
                     continue
 
-            snippet_start = max(0, start_offset - 16)
-            snippet_end = min(len(file_data), match.end() + 16)
+                if _compiled_decoded_regex:
+                    try:
+                        if not any(_safe_regex_search(p, final_decoded_text) for p in _compiled_decoded_regex):
+                            continue
+                    except ValueError:
+                        regex_timeouts += 1
+                        continue
 
-            found_decoded_strings.append({
-                "original_match_offset": hex(start_offset),
-                "encoded_substring_repr": original_encoded_bytes.decode('ascii', 'replace')[:200],
-                "encoding_layers": encoding_layers,
-                "decoded_string": final_decoded_text,
-                "confidence": round(confidence, 2),
-                "context_snippet_hex": file_data[snippet_start:snippet_end].hex()
-            })
+                snippet_start = max(0, start_offset - 16)
+                snippet_end = min(len(file_data), match.end() + 16)
+
+                found.append({
+                    "original_match_offset": hex(start_offset),
+                    "encoded_substring_repr": original_encoded_bytes.decode('ascii', 'replace')[:200],
+                    "encoding_layers": encoding_layers,
+                    "decoded_string": final_decoded_text,
+                    "confidence": round(confidence, 2),
+                    "context_snippet_hex": file_data[snippet_start:snippet_end].hex()
+                })
+
+        return found, regex_timeouts
+
+    found_decoded_strings, _regex_timeouts = await asyncio.to_thread(_decode_all_candidates)
+    if _regex_timeouts:
+        await ctx.warning(f"{_regex_timeouts} regex pattern(s) timed out during search (possible ReDoS).")
 
     await ctx.report_progress(80, 100)
     await ctx.info("[decode] Ranking and filtering results...")

@@ -71,8 +71,7 @@ async def refinery_executable(
 
         def _run_sections():
             from refinery.units.formats.exe.vsect import vsect
-            import math
-            from collections import Counter
+            from arkana.utils import shannon_entropy  # M5-v9: use shared implementation
 
             results = []
             for chunk in data | vsect():
@@ -86,12 +85,7 @@ async def refinery_executable(
                         if key in chunk.meta:
                             entry[key] = str(chunk.meta[key])
                 if raw:
-                    length = len(raw)
-                    entropy = 0.0
-                    for c in Counter(raw).values():
-                        p = c / length
-                        entropy -= p * math.log2(p)
-                    entry["entropy"] = round(entropy, 4)
+                    entry["entropy"] = round(shannon_entropy(raw), 4)
                 entry["preview_hex"] = raw[:64].hex()
                 results.append(entry)
                 if len(results) >= limit:
@@ -141,27 +135,30 @@ async def refinery_executable(
         def _run_f2v():
             import pefile
             pe = pefile.PE(data=data)
-            image_base = pe.OPTIONAL_HEADER.ImageBase
-            for section in pe.sections:
-                sec_start = section.PointerToRawData
-                sec_end = sec_start + section.SizeOfRawData
-                if sec_start <= off < sec_end:
-                    rva = section.VirtualAddress + (off - sec_start)
-                    va = image_base + rva
-                    return {
-                        "file_offset": hex(off),
-                        "virtual_address": hex(va),
-                        "rva": hex(rva),
-                        "image_base": hex(image_base),
-                        "section": section.Name.rstrip(b"\x00").decode("utf-8", errors="replace"),
-                    }
-            return {
-                "file_offset": hex(off),
-                "virtual_address": hex(image_base + off),
-                "rva": hex(off),
-                "image_base": hex(image_base),
-                "section": "(header)",
-            }
+            try:  # L7-v9: ensure PE object is closed
+                image_base = pe.OPTIONAL_HEADER.ImageBase
+                for section in pe.sections:
+                    sec_start = section.PointerToRawData
+                    sec_end = sec_start + section.SizeOfRawData
+                    if sec_start <= off < sec_end:
+                        rva = section.VirtualAddress + (off - sec_start)
+                        va = image_base + rva
+                        return {
+                            "file_offset": hex(off),
+                            "virtual_address": hex(va),
+                            "rva": hex(rva),
+                            "image_base": hex(image_base),
+                            "section": section.Name.rstrip(b"\x00").decode("utf-8", errors="replace"),
+                        }
+                return {
+                    "file_offset": hex(off),
+                    "virtual_address": hex(image_base + off),
+                    "rva": hex(off),
+                    "image_base": hex(image_base),
+                    "section": "(header)",
+                }
+            finally:
+                pe.close()
 
         result = await asyncio.to_thread(_run_f2v)
         result["operation"] = op

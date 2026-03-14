@@ -7,6 +7,7 @@ qiling_resolve_api_hashes.
 import binascii
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -18,6 +19,7 @@ _EXTENDED_DB_PATH = _DATA_DIR / "windows_api_exports_oalabs.json"
 
 _api_db_cache: Optional[Dict[str, List[str]]] = None
 _extended_names_cache: Optional[List[str]] = None
+_api_db_lock = threading.Lock()  # M6-v9: thread-safe cache loading
 
 
 def _load_api_name_db() -> Dict[str, List[str]]:
@@ -28,12 +30,15 @@ def _load_api_name_db() -> Dict[str, List[str]]:
     global _api_db_cache
     if _api_db_cache is not None:
         return _api_db_cache
-    if not _API_DB_PATH.exists():
-        logger.warning("Windows API name database not found at %s", _API_DB_PATH)
-        return {}
-    with open(_API_DB_PATH, "r") as f:
-        _api_db_cache = json.load(f)
-    return _api_db_cache
+    with _api_db_lock:
+        if _api_db_cache is not None:
+            return _api_db_cache
+        if not _API_DB_PATH.exists():
+            logger.warning("Windows API name database not found at %s", _API_DB_PATH)
+            return {}
+        with open(_API_DB_PATH, "r") as f:
+            _api_db_cache = json.load(f)
+        return _api_db_cache
 
 
 def _load_extended_api_names() -> List[str]:
@@ -45,15 +50,18 @@ def _load_extended_api_names() -> List[str]:
     global _extended_names_cache
     if _extended_names_cache is not None:
         return _extended_names_cache
-    if not _EXTENDED_DB_PATH.exists():
-        return []
-    try:
-        with open(_EXTENDED_DB_PATH, "r") as f:
-            _extended_names_cache = json.load(f)
-        return _extended_names_cache
-    except Exception:
-        logger.debug("Failed to load extended API name database", exc_info=True)
-        return []
+    with _api_db_lock:
+        if _extended_names_cache is not None:
+            return _extended_names_cache
+        if not _EXTENDED_DB_PATH.exists():
+            return []
+        try:
+            with open(_EXTENDED_DB_PATH, "r") as f:
+                _extended_names_cache = json.load(f)
+            return _extended_names_cache
+        except Exception:
+            logger.debug("Failed to load extended API name database", exc_info=True)
+            return []
 
 
 def get_all_api_names(include_extended: bool = False) -> List[str]:

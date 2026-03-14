@@ -598,19 +598,17 @@ def get_overview_data() -> Dict[str, Any]:
             binary_summary["classification"] = classification.get("primary_type", "")
             binary_summary["classification_confidence"] = classification.get("confidence", "")
 
-    # AI assessment — hypothesis notes take priority over generic classification
-    hypothesis_notes = [
-        n for n in notes
-        if n.get("category") == "hypothesis" and n.get("content")
-    ]
+    # M8-v9: Single pass over notes to extract hypothesis and conclusion
+    hypothesis_notes = []
+    conclusion_notes = []
+    for n in notes:
+        cat = n.get("category")
+        if cat == "hypothesis" and n.get("content"):
+            hypothesis_notes.append(n)
+        elif cat == "conclusion" and n.get("content"):
+            conclusion_notes.append(n)
     if hypothesis_notes:
         binary_summary["ai_assessment"] = hypothesis_notes[-1].get("content", "")[:300]
-
-    # Full conclusion note (markdown, no truncation)
-    conclusion_notes = [
-        n for n in notes
-        if n.get("category") == "conclusion" and n.get("content")
-    ]
     if conclusion_notes:
         binary_summary["ai_conclusion"] = conclusion_notes[-1].get("content", "")[:10000]
 
