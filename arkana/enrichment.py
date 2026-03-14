@@ -282,12 +282,14 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             TASK_ID,
             status=TASK_FAILED,
             progress_percent=0,
-            progress_message=f"Failed: {e}",
+            progress_message=f"Failed: {str(e)[:200]}",  # M4-v10: truncate exception
             last_progress_epoch=time.time(),
         )
     finally:
-        # Ensure on-demand counter is reset
-        state._decompile_on_demand_count = 0
+        # M11-v10: Removed unconditional counter reset — the counter is self-balancing
+        # (each increment in tools_angr.py has a matching decrement). Resetting here
+        # corrupts the counter if an on-demand decompile is in flight.
+        pass
 
 
 def _wait_for_cfg(state: AnalyzerState, timeout: int = ENRICHMENT_TIMEOUT, generation: int = 0) -> bool:

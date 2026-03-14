@@ -272,17 +272,18 @@ class SecurityHeadersMiddleware:
 
 def _ensure_token() -> str:
     """Load or generate the dashboard token. Persisted to ~/.arkana/dashboard_token."""
-    _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)  # M1-v10
     if _TOKEN_FILE.exists():
         token = _TOKEN_FILE.read_text().strip()
         if token:
             return token
     token = secrets.token_urlsafe(32)
-    _TOKEN_FILE.write_text(token)
+    # M2-v10: Atomic secure file creation — never world-readable
+    fd = os.open(str(_TOKEN_FILE), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     try:
-        os.chmod(str(_TOKEN_FILE), 0o600)
-    except OSError:
-        pass
+        os.write(fd, token.encode())
+    finally:
+        os.close(fd)
     return token
 
 

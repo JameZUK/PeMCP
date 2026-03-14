@@ -79,7 +79,12 @@ async def export_project(
     sha256 = hashes.get("sha256", "unknown")
     original_filename = os.path.basename(state.filepath) if state.filepath else "unknown"
 
+    # H3-v10: Snapshot once, reuse for both manifest counts and wrapper data
     artifacts_snapshot = state.get_all_artifacts_snapshot()
+    notes_snapshot = state.get_all_notes_snapshot()
+    history_snapshot = state.get_tool_history_snapshot()
+    renames_snapshot = state.get_all_renames_snapshot()
+    types_snapshot = state.get_all_types_snapshot()
 
     # Build manifest
     manifest = {
@@ -90,11 +95,11 @@ async def export_project(
         "original_filename": original_filename,
         "mode": state.pe_data.get("mode", "unknown"),
         "binary_included": include_binary and state.filepath is not None and os.path.isfile(state.filepath),
-        "notes_count": len(state.get_all_notes_snapshot()),
-        "tool_history_count": len(state.get_tool_history_snapshot()),
+        "notes_count": len(notes_snapshot),
+        "tool_history_count": len(history_snapshot),
         "artifacts_count": len(artifacts_snapshot),
-        "renames_count": sum(len(v) for v in state.get_all_renames_snapshot().values()),
-        "custom_types_count": sum(len(v) for v in state.get_all_types_snapshot().values()),
+        "renames_count": sum(len(v) for v in renames_snapshot.values()),
+        "custom_types_count": sum(len(v) for v in types_snapshot.values()),
     }
 
     # Build the cache wrapper (same format as disk cache)
@@ -108,11 +113,11 @@ async def export_project(
             "mode": state.pe_data.get("mode", "unknown"),
         },
         "pe_data": {k: v for k, v in state.pe_data.items() if k != "filepath"},
-        "notes": state.get_all_notes_snapshot(),
-        "tool_history": state.get_tool_history_snapshot(),
+        "notes": notes_snapshot,
+        "tool_history": history_snapshot,
         "artifacts": artifacts_snapshot,
-        "renames": state.get_all_renames_snapshot(),
-        "custom_types": state.get_all_types_snapshot(),
+        "renames": renames_snapshot,
+        "custom_types": types_snapshot,
     }
 
     await ctx.info(f"Creating project archive: {abs_output}")
@@ -365,7 +370,7 @@ async def import_project(
     # Store the analysis data in the cache
     if sha256 and len(sha256) == 64:
         cache_entry_dir = CACHE_DIR / sha256[:2]
-        cache_entry_dir.mkdir(parents=True, exist_ok=True)
+        cache_entry_dir.mkdir(parents=True, exist_ok=True, mode=0o700)  # M1-v10
         cache_entry_path = cache_entry_dir / f"{sha256}.json.gz"
 
         # Write the wrapper directly as a cache entry
@@ -406,7 +411,7 @@ async def import_project(
                 "Set ARKANA_MAX_FILE_SIZE_MB to change this limit."
             )
         # Enforce total import directory size limit
-        IMPORT_DIR.mkdir(parents=True, exist_ok=True)
+        IMPORT_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)  # M1-v10
         existing_size = sum(f.stat().st_size for f in IMPORT_DIR.iterdir() if f.is_file())
         if existing_size + len(binary_data) > _MAX_IMPORT_DIR_SIZE:
             raise RuntimeError(
@@ -430,7 +435,7 @@ async def import_project(
     # Extract artifact files
     if artifact_files:
         artifacts_dir = IMPORT_DIR / "artifacts"
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        artifacts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)  # M1-v10
         extracted_artifacts = 0
         for art_basename, art_data in artifact_files.items():
             art_dest = artifacts_dir / art_basename

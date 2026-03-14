@@ -258,7 +258,7 @@ async def get_angr_partial_functions(
 
         for addr, func in list(kb_funcs.items())[:limit]:
             try:
-                block_count = len(list(func.blocks))
+                block_count = func.graph.number_of_nodes() if func.graph else len(list(func.blocks))  # L6-v10: O(1)
             except Exception:
                 block_count = 0
             functions.append({
@@ -1029,7 +1029,7 @@ async def analyze_binary_loops(
                             func_addr = node.function_address
                             if func_addr not in raw_loops: raw_loops[func_addr] = []
 
-                            block_count = len(list(loop.body_nodes))
+                            block_count = len(loop.body_nodes)  # L10-v10: body_nodes is already a set
                             raw_loops[func_addr].append({
                                 "entry": hex(loop.entry.addr),
                                 "blocks": block_count,

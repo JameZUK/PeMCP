@@ -150,7 +150,7 @@ async def refinery_extract(
                 entry: Dict[str, Any] = {
                     "size": len(raw),
                     "sha256": hashlib.sha256(raw).hexdigest(),
-                    "md5": hashlib.md5(raw).hexdigest(),
+                    "md5": hashlib.md5(raw, usedforsecurity=False).hexdigest(),  # H1-v10
                 }
                 if hasattr(chunk, "meta") and isinstance(chunk.meta, dict):
                     if "path" in chunk.meta:
@@ -416,7 +416,7 @@ async def refinery_extract(
             entry: Dict[str, Any] = {
                 "size": len(raw),
                 "sha256": hashlib.sha256(raw).hexdigest(),
-                "md5": hashlib.md5(raw).hexdigest(),
+                "md5": hashlib.md5(raw, usedforsecurity=False).hexdigest(),  # H1-v10
             }
             if hasattr(chunk, "meta") and isinstance(chunk.meta, dict):
                 for key in ("path", "name", "mime", "ext", "offset"):

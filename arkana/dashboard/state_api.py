@@ -18,6 +18,31 @@ from arkana.state import (
 )
 
 
+# M7-v10: Shared phase detection helper using canonical tool sets
+# Import the frozensets from tools_session to avoid duplication/drift
+def _detect_phase_for_state(st) -> str:
+    """Determine analysis phase from an explicit state object.
+
+    Uses canonical tool sets from tools_session and efficient accessors.
+    """
+    if not st.filepath or not st.pe_data:
+        return "not_started"
+
+    from arkana.mcp.tools_session import _ADVANCED_TOOLS, _EXPLORING_TOOLS
+
+    ran_tools = st.get_ran_tool_names()
+    prev = getattr(st, "previous_session_history", []) or []
+    ran_tools |= set(h.get("tool_name", "") for h in prev)
+
+    if ran_tools & _ADVANCED_TOOLS:
+        return "advanced"
+    if ran_tools & _EXPLORING_TOOLS:
+        return "exploring"
+    if "get_triage_report" in ran_tools:
+        return "triaged"
+    return "file_loaded"
+
+
 def _get_state():
     """Return the most relevant AnalyzerState for dashboard reads.
 
@@ -976,8 +1001,9 @@ def get_functions_data(sort_by: str = "address",
         if not hasattr(kb, "functions"):
             return functions
 
-        triage = st.get_all_triage_snapshot()
-        renames = st.get_renames().get("functions", {})
+        # H4-v10: Reuse snapshots from version key computation
+        triage = _triage_snap
+        renames = _renames.get("functions", {})
         decompiled_addrs = _get_decompiled_addresses()
 
         score_lookup = _build_score_lookup(st)
@@ -1529,10 +1555,14 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
             return {"cached": False, "error": f"No function found at {hex(addr_int)} in local CFG"}
         decompiler_cfg = local_cfg.model
 
+    # L2-v10: Signal on-demand decompile to enrichment sweep for cooperative yielding
+    st._decompile_on_demand_count += 1
     # Acquire decompile lock for mutual exclusion with background enrichment sweep
     if not st._decompile_lock.acquire(timeout=30):
+        st._decompile_on_demand_count -= 1
         return {"cached": False, "error": "Decompilation lock timeout — background enrichment may be running. Try again shortly."}
     try:
+        st._decompile_on_demand_count -= 1
         from arkana.mcp._angr_helpers import _safe_decompile, DECOMPILE_FALLBACK_NOTE
         dec, used_fallback = _safe_decompile(project, func, decompiler_cfg)
         if not dec.codegen:
@@ -1570,33 +1600,11 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
 
 
 def _detect_phase(st) -> str:
-    """Determine analysis phase from state."""
-    if not st.filepath or not st.pe_data:
-        return "not_started"
+    """Determine analysis phase from state.
 
-    current_history = st.get_tool_history()
-    ran_tools = set(h.get("tool_name", "") for h in current_history)
-    prev = getattr(st, "previous_session_history", []) or []
-    ran_tools |= set(h.get("tool_name", "") for h in prev)
-
-    advanced_tools = {
-        "find_path_to_address", "emulate_function_execution",
-        "find_path_with_custom_input", "emulate_with_watchpoints",
-        "run_speakeasy_emulation", "run_qiling_emulation",
-    }
-    exploring_tools = {
-        "decompile_function_with_angr", "get_annotated_disassembly",
-        "get_function_cfg", "get_forward_slice", "get_backward_slice",
-        "get_reaching_definitions", "get_cross_reference_map",
-    }
-
-    if ran_tools & advanced_tools:
-        return "advanced"
-    if ran_tools & exploring_tools:
-        return "exploring"
-    if "get_triage_report" in ran_tools:
-        return "triaged"
-    return "file_loaded"
+    M7-v10: Delegates to shared helper using canonical tool sets from tools_session.
+    """
+    return _detect_phase_for_state(st)
 
 
 
@@ -1609,12 +1617,11 @@ def _get_decompiled_addresses() -> set:
         if st is None:
             return addrs
         session_uuid = st._state_uuid
+        # M6-v10: Filter inside the lock to avoid copying all keys
         with _decompile_meta_lock:
-            keys = list(_decompile_meta.keys())
-        for key in keys:
-            # Key is a tuple: (session_uuid, target_addr)
-            if isinstance(key, tuple) and len(key) >= 2 and key[0] == session_uuid:
-                addrs.add(hex(key[1]))
+            for key in _decompile_meta:
+                if isinstance(key, tuple) and len(key) >= 2 and key[0] == session_uuid:
+                    addrs.add(hex(key[1]))
     except Exception:
         logger.debug("Error reading decompile meta keys", exc_info=True)
     return addrs
@@ -1966,7 +1973,7 @@ def get_function_analysis_data(address_hex: str) -> Dict[str, Any]:
             except (AttributeError, TypeError):
                 pass
             try:
-                result["complexity"]["edges"] = len(list(func.graph.edges()))
+                result["complexity"]["edges"] = func.graph.number_of_edges()  # L7-v10: O(1)
             except (AttributeError, TypeError):
                 pass
         else:
@@ -3523,38 +3530,9 @@ def get_digest_data() -> Dict[str, Any]:
 def _detect_analysis_phase(st) -> str:
     """Determine analysis phase for a given state object.
 
-    Dashboard version — reads from any AnalyzerState without requiring
-    the global ``state`` proxy.
+    M7-v10: Delegates to shared helper using canonical tool sets from tools_session.
     """
-    if not st.filepath or not st.pe_data:
-        return "not_started"
-
-    current_history = st.get_tool_history()
-    ran_tools = set(h.get("tool_name", "") for h in current_history)
-    prev = getattr(st, "previous_session_history", []) or []
-    ran_tools |= set(h.get("tool_name", "") for h in prev)
-
-    _ADVANCED = {
-        "emulate_function_execution", "find_path_to_address",
-        "emulate_with_watchpoints", "find_path_with_custom_input",
-        "analyze_binary_loops", "get_reaching_definitions",
-        "get_data_dependencies", "get_value_set_analysis",
-        "identify_cpp_classes", "emulate_pe_with_windows_apis",
-        "emulate_shellcode_with_speakeasy", "emulate_binary_with_qiling",
-    }
-    _EXPLORING = {
-        "decompile_function_with_angr", "batch_decompile",
-        "get_annotated_disassembly", "get_function_cfg",
-        "get_function_xrefs", "get_backward_slice", "get_forward_slice",
-    }
-
-    if ran_tools & _ADVANCED:
-        return "advanced"
-    if ran_tools & _EXPLORING:
-        return "exploring"
-    if "get_triage_report" in ran_tools:
-        return "triaged"
-    return "file_loaded"
+    return _detect_phase_for_state(st)
 
 
 # ---------------------------------------------------------------------------

@@ -773,7 +773,7 @@ def _parse_overlay_data(pe: pefile.PE) -> Optional[Dict[str, Any]]:
         return {
             'offset': hex(offset),
             'size': len(data) if data else 0,
-            'md5': hashlib.md5(data).hexdigest() if data else None,
+            'md5': hashlib.md5(data, usedforsecurity=False).hexdigest() if data else None,  # H1-v10
             'sha256': hashlib.sha256(data).hexdigest() if data else None,
             'sample_hex': data[:64].hex() if data else None,
         }

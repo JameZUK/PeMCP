@@ -61,7 +61,11 @@ def _get_cached_flat_strings(include_basic_ascii: bool = True, deduplicate: bool
     floss_counts = sum(len(v) if isinstance(v, list) else 0
                        for v in (pe_data.get('floss_analysis', {}).get('strings', {}) or {}).values())
     basic_count = len(pe_data.get('basic_ascii_strings', [])) if include_basic_ascii else 0
-    versioned_key = (cache_key, floss_counts, basic_count)
+    # L3-v10: Include sifter score count to invalidate when sifter completes
+    sifter_count = sum(1 for v in (pe_data.get('floss_analysis', {}).get('strings', {}) or {}).values()
+                       if isinstance(v, list) for item in v
+                       if isinstance(item, dict) and 'sifter_score' in item)
+    versioned_key = (cache_key, floss_counts, basic_count, sifter_count)
 
     cached = cache.get("_flat_strings", versioned_key)
     if cached is not None:

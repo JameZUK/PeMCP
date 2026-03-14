@@ -430,7 +430,7 @@ CREATE INDEX IF NOT EXISTS idx_functions_structural
 
 def _ensure_db_dir() -> Path:
     """Create the BSim DB directory if it doesn't exist."""
-    BSIM_DB_DIR.mkdir(parents=True, exist_ok=True)
+    BSIM_DB_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)  # M3-v10
     return BSIM_DB_DIR
 
 

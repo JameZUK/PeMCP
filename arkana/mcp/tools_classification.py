@@ -49,6 +49,10 @@ def _classify_internal(current_state: AnalyzerState) -> Dict[str, Any]:
 
 def _classify_core() -> Dict[str, Any]:
     """Core classification logic using the current state proxy."""
+    # L11-v10: Guard against pe_data being None
+    if state.pe_data is None:
+        return {"error": "No file loaded. Call open_file() first."}
+
     classifications = []
     evidence = []
 

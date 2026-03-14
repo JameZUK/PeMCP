@@ -183,7 +183,7 @@ def _write_output_and_register_artifact(
 
     # Compute hashes
     sha256 = hashlib.sha256(data).hexdigest()
-    md5 = hashlib.md5(data).hexdigest()
+    md5 = hashlib.md5(data, usedforsecurity=False).hexdigest()  # H1-v10
 
     # Detect file type
     detected_type = _detect_file_type(data)

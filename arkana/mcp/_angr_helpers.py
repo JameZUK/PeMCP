@@ -260,7 +260,7 @@ def _format_cc_info(func) -> Dict[str, Any]:
     # Even without a formal CC, provide useful heuristic data
     if not cc and not proto:
         try:
-            info["block_count"] = len(list(func.blocks))
+            info["block_count"] = func.graph.number_of_nodes() if func.graph else len(list(func.blocks))  # L6-v10: O(1)
             info["has_return"] = func.has_return
             info["is_plt"] = getattr(func, 'is_plt', False)
         except Exception:

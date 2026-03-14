@@ -81,12 +81,8 @@ def _collect_all_string_values() -> Tuple[set, bool]:
     pe_data = state.pe_data
     if pe_data is None:
         return all_string_values, False
-    _pe_lock = getattr(state, '_pe_lock', None)
-    if _pe_lock:
-        with _pe_lock:
-            floss_data = (pe_data.get('floss_analysis') or {}).get('strings', {})
-            basic_strings = pe_data.get('basic_ascii_strings', [])
-    else:
+    # L1-v10: _pe_lock is always initialized — removed dead getattr fallback
+    with state._pe_lock:
         floss_data = (pe_data.get('floss_analysis') or {}).get('strings', {})
         basic_strings = pe_data.get('basic_ascii_strings', [])
 
@@ -1338,6 +1334,11 @@ def _triage_macho_security(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
                 macho_sec["is_pie"] = bool(flags & 0x200000)  # MH_PIE
                 macho_sec["no_heap_execution"] = bool(flags & 0x1000000)  # MH_NO_HEAP_EXECUTION
                 macho_sec["has_restrict"] = bool(flags & 0x00000080)  # MH_RESTRICT segment
+
+            # M13-v10: Empty-file guard before mmap (matches ELF path)
+            if os.path.getsize(state.filepath) == 0:
+                macho_sec["note"] = "Empty file — skipped byte-search checks"
+                return macho_sec, risk_score
 
             # Use mmap for byte-search checks (avoids loading full file into memory)
             with open(state.filepath, 'rb') as f:

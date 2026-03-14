@@ -652,6 +652,12 @@ class AnalyzerState:
         with self._warnings_lock:
             return len(self.analysis_warnings)
 
+    def get_error_warning_count(self) -> int:
+        """M10-v10: Count warnings with ERROR or CRITICAL level without copying the list."""
+        with self._warnings_lock:
+            return sum(1 for w in self.analysis_warnings
+                       if w.get("level") in ("ERROR", "CRITICAL"))
+
     def clear_warnings(self) -> int:
         """Clear all warnings. Returns count removed."""
         with self._warnings_lock:
@@ -855,6 +861,12 @@ def _session_reaper_loop() -> None:
                     try:
                         from arkana.dashboard.state_api import _cleanup_session_caches
                         _cleanup_session_caches(stale._state_uuid)
+                    except (ImportError, AttributeError):
+                        pass
+                    # M8-v10: Clean up phase detection cache for this session
+                    try:
+                        from arkana.mcp.tools_session import cleanup_phase_cache
+                        cleanup_phase_cache(stale._state_uuid)
                     except (ImportError, AttributeError):
                         pass
                 except Exception:

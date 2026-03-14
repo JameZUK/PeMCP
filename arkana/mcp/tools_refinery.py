@@ -752,7 +752,7 @@ async def refinery_carve(
             results.append({
                 "size": len(raw),
                 "sha256": hashlib.sha256(raw).hexdigest(),
-                "md5": hashlib.md5(raw).hexdigest(),
+                "md5": hashlib.md5(raw, usedforsecurity=False).hexdigest(),  # H1-v10
                 "preview_hex": raw[:64].hex(),
             })
             raw_items.append(raw)

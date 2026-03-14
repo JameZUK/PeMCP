@@ -191,7 +191,7 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
 
     except Exception as e:
         logger.error("Background task %s failed: %s: %s", task_id, type(e).__name__, e, exc_info=True)
-        state.update_task(task_id, error=str(e), status=TASK_FAILED)
+        state.update_task(task_id, error=str(e)[:200], status=TASK_FAILED)  # M4-v10: truncate exception
         print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
 
 
@@ -325,7 +325,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
                         raw_loops[func_addr] = []
                     raw_loops[func_addr].append({
                         "entry": hex(loop.entry.addr),
-                        "blocks": len(list(loop.body_nodes)),
+                        "blocks": len(loop.body_nodes),  # L10-v10: body_nodes is already a set
                         "subloops": bool(loop.subloops),
                     })
             except Exception:

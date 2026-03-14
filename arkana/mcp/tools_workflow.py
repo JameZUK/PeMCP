@@ -3,6 +3,7 @@ import asyncio
 import datetime
 import os
 import re
+import itertools
 from collections import Counter  # L5-v9: module-level import
 
 from typing import Dict, Any, List, Optional
@@ -129,7 +130,10 @@ async def generate_analysis_report(
     # Gather all data sources
     triage = getattr(state, '_cached_triage', None) or {}
     notes = state.get_notes()
-    history = state.previous_session_history + state.get_tool_history()
+    # M9-v10: Use itertools.chain instead of list concatenation
+    prev = getattr(state, "previous_session_history", []) or []
+    current = state.get_tool_history()
+    history = list(itertools.chain(prev, current))
 
     # Build report
     sections = []

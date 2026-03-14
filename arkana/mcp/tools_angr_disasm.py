@@ -654,7 +654,7 @@ def _build_scored_functions(current_state, include_details: bool = False) -> Lis
         if func.is_simprocedure or func.is_syscall:
             continue
         try:
-            block_count = len(list(func.blocks))
+            block_count = func.graph.number_of_nodes() if func.graph else len(list(func.blocks))  # L6-v10: O(1)
         except Exception:
             block_count = 0
         if block_count == 0:

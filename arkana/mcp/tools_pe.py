@@ -114,7 +114,7 @@ def _start_floss_background_task(current_state, floss_args: tuple):
                 task_id,
                 status=TASK_FAILED,
                 progress_percent=0,
-                progress_message=f"Failed: {e}",
+                progress_message=f"Failed: {str(e)[:200]}",  # M4-v10: truncate exception
                 last_progress_epoch=_time.time(),
             )
 

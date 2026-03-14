@@ -143,7 +143,7 @@ async def generate_yara_rule(
             if isinstance(rich, dict) and rich.get("clear_data_hex"):
                 try:
                     clear_data = bytes.fromhex(rich["clear_data_hex"])
-                    rich_md5 = hashlib.md5(clear_data).hexdigest()
+                    rich_md5 = hashlib.md5(clear_data, usedforsecurity=False).hexdigest()  # H1-v10
                     condition_parts.append(f'hash.md5(pe.rich_signature.clear_data) == "{rich_md5}"')
                     meta_lines.append(f'        rich_hash = "{rich_md5}"')
                 except Exception:

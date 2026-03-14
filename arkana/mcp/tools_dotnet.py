@@ -219,6 +219,18 @@ def _parse_with_dotnetfile(target: str, limit: int) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Not a valid .NET binary or parsing failed: {e}"}
 
+    # H5-v10: Ensure DotNetPE is always closed (matches dnfile path's try/finally)
+    try:
+        return _parse_with_dotnetfile_inner(dn, target, limit)
+    finally:
+        try:
+            dn.close()
+        except Exception:
+            pass
+
+
+def _parse_with_dotnetfile_inner(dn, target: str, limit: int) -> Dict[str, Any]:
+    """Inner parsing logic for dotnetfile backend."""
     result: Dict[str, Any] = {"file": os.path.basename(target), "is_dotnet": True}
 
     # CLR header

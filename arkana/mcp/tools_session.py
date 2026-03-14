@@ -25,6 +25,11 @@ _EXPLORING_TOOLS = frozenset({
 _phase_caches: Dict[str, Dict[str, Any]] = {}  # keyed by state._state_uuid for session isolation
 
 
+def cleanup_phase_cache(state_uuid: str) -> None:
+    """M8-v10: Remove phase cache entry for a reaped session."""
+    _phase_caches.pop(state_uuid, None)
+
+
 def _detect_analysis_phase() -> str:
     """Determine what phase of analysis the session is in.
 
@@ -152,11 +157,19 @@ async def get_session_summary(
         return result
 
     notes_page, notes_pag = _paginate_field(notes, notes_offset, notes_limit)
+    # L9-v10: Single-pass categorization (builds Counter + func_notes together)
+    _cat_counter: Dict[str, int] = {}
+    _func_notes: List = []
+    for n in notes:
+        cat = n.get("category", "general")
+        _cat_counter[cat] = _cat_counter.get(cat, 0) + 1
+        if cat == "function":
+            _func_notes.append(n)
     result["notes"] = {
         "count": len(notes),
         "notes": notes_page,
         "notes_pagination": notes_pag,
-        "by_category": dict(Counter(n.get("category", "general") for n in notes)),
+        "by_category": _cat_counter,
     }
 
     tool_counts = Counter(h["tool_name"] for h in current_history)
@@ -240,8 +253,7 @@ async def get_session_summary(
 
     # Notes-related suggestions based on analysis phase
     phase = result["analysis_phase"]
-    func_notes = [n for n in notes if n.get("category") == "function"]
-    if phase in ("exploring", "advanced") and not func_notes:
+    if phase in ("exploring", "advanced") and not _func_notes:
         suggested.append("auto_note_function(address) — record findings after decompiling each function")
     if notes and "get_analysis_digest" not in ran_tools:
         suggested.append("get_analysis_digest() — review accumulated findings")
@@ -481,8 +493,8 @@ async def get_analysis_digest(
     # Surface library warning counts if any exist
     warning_count = state.get_warning_count()
     if warning_count > 0:
-        warnings = state.get_warnings()
-        error_count = sum(1 for w in warnings if w.get("level") in ("ERROR", "CRITICAL"))
+        # M10-v10: Use efficient accessor instead of copying full warnings list
+        error_count = state.get_error_warning_count()
         result["library_warnings"] = {
             "unique_warnings": warning_count,
             "errors": error_count,
@@ -581,7 +593,7 @@ async def get_progress_overview(
 
     # Include top-3 suggestions when requested
     if include_suggestions:
-        result["suggestions"] = _build_suggestions(max_suggestions=3)
+        result["suggestions"], _ = _build_suggestions(max_suggestions=3)
 
     return result
 
@@ -775,11 +787,13 @@ async def list_tools_by_phase(
 #  Intelligent next-action suggestion
 # ===================================================================
 
-def _build_suggestions(max_suggestions: int = 5) -> List[Dict[str, str]]:
+def _build_suggestions(max_suggestions: int = 5):
     """Build rule-based next-action suggestions from current session state.
 
     Shared logic used by both suggest_next_action (full detail) and
     get_progress_overview (compact top-3).
+
+    M5-v10: Returns (suggestions, notes_count) tuple to avoid redundant get_notes().
     """
     suggestions: List[Dict[str, str]] = []
     phase = _detect_analysis_phase()
@@ -793,7 +807,7 @@ def _build_suggestions(max_suggestions: int = 5) -> List[Dict[str, str]]:
     func_scores = getattr(state, '_cached_function_scores', None)
 
     if phase == "not_started" or not state.filepath:
-        return [{"tool": "open_file(filepath='...')", "rationale": "No file loaded. Load a binary to begin analysis."}]
+        return [{"tool": "open_file(filepath='...')", "rationale": "No file loaded. Load a binary to begin analysis."}], 0
 
     # --- Phase: file_loaded ---
     if phase == "file_loaded":
@@ -801,7 +815,7 @@ def _build_suggestions(max_suggestions: int = 5) -> List[Dict[str, str]]:
             "tool": "get_triage_report(compact=True)",
             "rationale": "File loaded but not triaged yet. Start with automated triage for risk assessment.",
         })
-        return suggestions[:max_suggestions]
+        return suggestions[:max_suggestions], len(notes)
 
     # --- Phase: triaged ---
     if "get_triage_report" in ran_tools and triage:
@@ -908,7 +922,7 @@ def _build_suggestions(max_suggestions: int = 5) -> List[Dict[str, str]]:
             "rationale": "Review accumulated findings to decide next steps.",
         })
 
-    return suggestions[:max_suggestions]
+    return suggestions[:max_suggestions], len(notes)
 
 
 @tool_decorator
@@ -931,11 +945,10 @@ async def suggest_next_action(
     """
     max_suggestions = max(1, min(max_suggestions, 20))
     phase = _detect_analysis_phase()
-    suggestions = _build_suggestions(max_suggestions=max_suggestions)
+    # M5-v10: _build_suggestions returns (suggestions, notes_count) to avoid redundant get_notes()
+    suggestions, notes_count = _build_suggestions(max_suggestions=max_suggestions)
 
-    notes = state.get_notes() if state.filepath else []
     # L2-v8: Use efficient accessor to avoid full deque copy
-    # (already called inside _detect_analysis_phase and _build_suggestions)
     ran_tools = state.get_ran_tool_names()
     prev = getattr(state, "previous_session_history", []) or []
     ran_tools |= set(h["tool_name"] for h in prev)
@@ -944,7 +957,7 @@ async def suggest_next_action(
         "phase": phase,
         "suggestions": suggestions,
         "tools_used": len(ran_tools),
-        "notes_count": len(notes),
+        "notes_count": notes_count,
     }
 
 

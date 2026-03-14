@@ -55,7 +55,7 @@ def _parse_single_file(filepath):
     try:
         entry["size"] = os.path.getsize(filepath)
     except OSError as e:
-        entry["error"] = f"Cannot stat file: {e}"
+        entry["error"] = f"Cannot stat file: {e.strerror}"  # L5-v10: avoid full path in error
         return entry
 
     if entry["size"] > _MAX_BATCH_FILE_SIZE:
@@ -66,11 +66,11 @@ def _parse_single_file(filepath):
         with open(filepath, "rb") as f:
             data = f.read()
     except Exception as e:
-        entry["error"] = f"Cannot read file: {e}"
+        entry["error"] = f"Cannot read file: {getattr(e, 'strerror', str(e)[:200])}"  # L5-v10
         return entry
 
     # Hashes
-    entry["md5"] = hashlib.md5(data).hexdigest()
+    entry["md5"] = hashlib.md5(data, usedforsecurity=False).hexdigest()  # H1-v10
     entry["sha256"] = hashlib.sha256(data).hexdigest()
 
     # Similarity hashes (optional)

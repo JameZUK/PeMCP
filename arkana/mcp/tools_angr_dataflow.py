@@ -132,7 +132,7 @@ async def get_reaching_definitions(
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("RDA failed: %s", tb)
-            return {"error": f"ReachingDefinitionsAnalysis failed: {type(e).__name__}: {e}", "traceback_tail": tb[-500:]}
+            return {"error": f"ReachingDefinitionsAnalysis failed: {type(e).__name__}: {str(e)[:200]}"}  # H2-v10: removed traceback_tail
 
         if task_id_for_progress:
             _update_progress(task_id_for_progress, 80, "Formatting results...", bridge=_progress_bridge)
@@ -288,7 +288,7 @@ async def get_data_dependencies(
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("RDA (data-dep) failed: %s", tb)
-            return {"error": f"Data dependency analysis failed: {type(e).__name__}: {e}"}
+            return {"error": f"Data dependency analysis failed: {type(e).__name__}: {str(e)[:200]}"}  # L4-v10
 
         if task_id_for_progress:
             _update_progress(task_id_for_progress, 70, "Building dependency graph from RDA...", bridge=_progress_bridge)
@@ -581,7 +581,7 @@ async def propagate_constants(
         except Exception as e:
             tb = traceback.format_exc()
             logger.error("PropagatorAnalysis failed: %s", tb)
-            return {"error": f"PropagatorAnalysis failed: {type(e).__name__}: {e}", "traceback_tail": tb[-500:]}
+            return {"error": f"PropagatorAnalysis failed: {type(e).__name__}: {str(e)[:200]}"}  # H2-v10: removed traceback_tail
 
         bridge.report_progress(80, 100)
         bridge.info("Extracting replacements...")
