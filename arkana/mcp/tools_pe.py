@@ -392,7 +392,7 @@ async def open_file(
                     if session_meta:
                         with state._notes_lock:
                             state.notes = session_meta.get("notes", [])
-                        state.previous_session_history = session_meta.get("tool_history", [])
+                        state.previous_session_history = session_meta.get("tool_history", [])[:MAX_TOOL_HISTORY]  # M3-v11: bound
                         with state._artifacts_lock:
                             state.artifacts = session_meta.get("artifacts", [])
                         with state._renames_lock:

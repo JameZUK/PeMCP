@@ -128,7 +128,7 @@ async def go_analyze(
                         "methods": methods[:method_cap],
                     })
             except Exception as e:
-                result["packages_error"] = str(e)
+                result["packages_error"] = str(e)[:200]
             result["packages"] = packages
 
             # Vendor packages (third-party dependencies)

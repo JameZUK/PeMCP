@@ -2,6 +2,7 @@
 import bisect
 import copy
 import datetime
+import itertools
 import logging
 import math
 import os
@@ -3559,7 +3560,9 @@ def generate_report_text() -> Dict[str, Any]:
 
     triage = getattr(st, "_cached_triage", None) or {}
     notes = st.get_notes()
-    history = (getattr(st, "previous_session_history", None) or []) + st.get_tool_history()
+    prev_history = getattr(st, "previous_session_history", None) or []
+    cur_history = st.get_tool_history()
+    history = list(itertools.chain(prev_history, cur_history))  # H2-v11: avoid list concat copy
 
     risk_level = triage.get("risk_level", "UNKNOWN")
     risk_score = triage.get("risk_score", 0)

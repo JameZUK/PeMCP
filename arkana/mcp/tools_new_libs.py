@@ -469,7 +469,7 @@ def _compute_similarity_internal(current_state) -> Dict[str, Any]:
         try:
             result["ssdeep"] = ppdeep.hash(data)
         except Exception as e:
-            result["ssdeep_error"] = str(e)
+            result["ssdeep_error"] = str(e)[:200]
     else:
         result["ssdeep"] = "ppdeep not installed (pip install ppdeep)"
 
@@ -478,7 +478,7 @@ def _compute_similarity_internal(current_state) -> Dict[str, Any]:
             h = tlsh.hash(data)
             result["tlsh"] = h if h else "data too small for TLSH"
         except Exception as e:
-            result["tlsh_error"] = str(e)
+            result["tlsh_error"] = str(e)[:200]
     else:
         result["tlsh"] = "tlsh not installed (pip install py-tlsh)"
 
@@ -522,7 +522,7 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
             try:
                 result["ssdeep"] = ppdeep.hash(data)
             except Exception as e:
-                result["ssdeep_error"] = str(e)
+                result["ssdeep_error"] = str(e)[:200]
         else:
             result["ssdeep"] = "ppdeep not installed (pip install ppdeep)"
 
@@ -531,7 +531,7 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
                 h = tlsh.hash(data)
                 result["tlsh"] = h if h else "data too small for TLSH"
             except Exception as e:
-                result["tlsh_error"] = str(e)
+                result["tlsh_error"] = str(e)[:200]
         else:
             result["tlsh"] = "tlsh not installed (pip install py-tlsh)"
 
@@ -591,7 +591,7 @@ async def compare_file_similarity(
                 result["ssdeep_hash_a"] = hash_a
                 result["ssdeep_hash_b"] = hash_b
             except Exception as e:
-                result["ssdeep_error"] = str(e)
+                result["ssdeep_error"] = str(e)[:200]
 
         if TLSH_AVAILABLE:
             try:
@@ -604,7 +604,7 @@ async def compare_file_similarity(
                     result["tlsh_hash_b"] = h_b
                     result["tlsh_verdict"] = "very similar" if distance < 30 else "similar" if distance < 100 else "different"
             except Exception as e:
-                result["tlsh_error"] = str(e)
+                result["tlsh_error"] = str(e)[:200]
 
         return result
 

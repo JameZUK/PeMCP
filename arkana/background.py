@@ -192,7 +192,7 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
     except Exception as e:
         logger.error("Background task %s failed: %s: %s", task_id, type(e).__name__, e, exc_info=True)
         state.update_task(task_id, error=str(e)[:200], status=TASK_FAILED)  # M4-v10: truncate exception
-        print(f"\n[!] Task {task_id[:8]} failed: {e}", file=sys.stderr)
+        print(f"\n[!] Task {task_id[:8]} failed: {str(e)[:200]}", file=sys.stderr)  # H1-v11: truncate stderr
 
 
 def _cfg_stall_monitor(project, task_id, interval=15):
@@ -348,12 +348,12 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
     except (OSError, RuntimeError, ValueError) as e:
         logger.error("Background Angr analysis failed: %s: %s", type(e).__name__, e, exc_info=True)
-        state.update_task(task_id, status=TASK_FAILED, error=str(e))
-        _update_progress(task_id, 0, f"Failed: {e}", bridge=bridge)
+        state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200])  # H1-v11: truncate
+        _update_progress(task_id, 0, f"Failed: {str(e)[:200]}", bridge=bridge)  # H1-v11: truncate
     except Exception as e:
         logger.error("Background Angr analysis failed unexpectedly: %s: %s", type(e).__name__, e, exc_info=True)
-        state.update_task(task_id, status=TASK_FAILED, error=str(e))
-        _update_progress(task_id, 0, f"Failed: {e}", bridge=bridge)
+        state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200])  # H1-v11: truncate
+        _update_progress(task_id, 0, f"Failed: {str(e)[:200]}", bridge=bridge)  # H1-v11: truncate
 
 
 def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "amd64",

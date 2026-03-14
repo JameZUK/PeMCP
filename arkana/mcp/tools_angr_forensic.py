@@ -977,7 +977,7 @@ async def emulate_with_watchpoints(
                 return {
                     "status": "errored",
                     "steps_taken": steps_taken,
-                    "error": str(e),
+                    "error": str(e)[:200],
                     "total_events": len(events),
                     "events": events[:500],
                 }

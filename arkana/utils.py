@@ -35,9 +35,11 @@ def _safe_env_int(key: str, default: int) -> int:
 # Module-level shared executor for regex timeout protection.
 # Using a small pool avoids per-call thread creation/teardown overhead.
 # Pool is recreated when stuck threads exhaust it (see safe_regex_search).
-_regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+_REGEX_MAX_WORKERS = 4  # M2-v11: named constant replaces private attr access
+_regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_REGEX_MAX_WORKERS)
 _regex_executor_lock = threading.Lock()
 _regex_pool_recreations = 0  # M6-v8: Track pool recreations for monitoring
+_regex_consecutive_timeouts = 0  # M2-v11: replaces private _threads access for pool health
 atexit.register(lambda: _regex_executor.shutdown(wait=False))
 
 # --- Safe slicing ---
@@ -121,28 +123,26 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
     Raises:
         ValueError: If the search exceeds the timeout.
     """
-    global _regex_executor
+    global _regex_executor, _regex_consecutive_timeouts
     future = _regex_executor.submit(compiled_re.search, text)
     try:
-        return future.result(timeout=timeout)
+        result = future.result(timeout=timeout)
+        _regex_consecutive_timeouts = 0  # M2-v11: reset on success
+        return result
     except concurrent.futures.TimeoutError:
         future.cancel()
         pattern_preview = str(compiled_re.pattern)[:80]
-        # Check pool health — if all workers are stuck, replace the pool
-        active = getattr(_regex_executor, '_threads', set())
-        active_count = len([t for t in active if t.is_alive()]) if active else -1
-        max_workers = _regex_executor._max_workers
+        # M2-v11: Track consecutive timeouts instead of accessing private _threads attr
+        _regex_consecutive_timeouts += 1
         logger.warning(
-            "Regex timed out after %ss — pattern: %s (active pool threads: %d/%d)",
-            timeout, pattern_preview, active_count, max_workers,
+            "Regex timed out after %ss — pattern: %s (consecutive timeouts: %d/%d)",
+            timeout, pattern_preview, _regex_consecutive_timeouts, _REGEX_MAX_WORKERS,
         )
-        # Recreate pool if all workers are potentially stuck (>= max_workers alive)
-        if active_count >= max_workers:
+        # Recreate pool after _REGEX_MAX_WORKERS consecutive timeouts (all workers likely stuck)
+        if _regex_consecutive_timeouts >= _REGEX_MAX_WORKERS:
             with _regex_executor_lock:
                 # Double-check under lock
-                cur_active = getattr(_regex_executor, '_threads', set())
-                if len([t for t in cur_active if t.is_alive()]) >= max_workers:
-                    # M6-v8: Track recreation count to detect chronic stuck threads
+                if _regex_consecutive_timeouts >= _REGEX_MAX_WORKERS:
                     global _regex_pool_recreations
                     _regex_pool_recreations += 1
                     logger.warning(
@@ -156,8 +156,9 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
                             _regex_pool_recreations,
                         )
                     old = _regex_executor
-                    _regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+                    _regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_REGEX_MAX_WORKERS)
                     old.shutdown(wait=False)
+                    _regex_consecutive_timeouts = 0
         raise ValueError(
             f"Regex execution timed out after {timeout}s. "
             "The pattern may cause catastrophic backtracking. "
@@ -264,22 +265,28 @@ def get_symbol_type_str(sym_type: int) -> str:
     return type_str
 
 
+_STORAGE_CLASS_MAP: Optional[Dict[int, str]] = None  # L1-v11: lazy-init cache
+
+
 def get_symbol_storage_class_str(storage_class: int) -> str:
-    classes = {
-        0: "NULL", 1: "AUTOMATIC", 2: "EXTERNAL", 3: "STATIC",
-        4: "REGISTER", 5: "EXTERNAL_DEF", 6: "LABEL",
-        7: "UNDEFINED_LABEL", 8: "MEMBER_OF_STRUCT", 9: "ARGUMENT",
-        10: "STRUCT_TAG", 11: "MEMBER_OF_UNION", 12: "UNION_TAG",
-        13: "TYPE_DEFINITION", 14: "UNDEFINED_STATIC", 15: "ENUM_TAG",
-        16: "MEMBER_OF_ENUM", 17: "REGISTER_PARAM", 18: "BIT_FIELD",
-        100: "BLOCK", 101: "FUNCTION", 102: "END_OF_STRUCT",
-        103: "FILE", 104: "SECTION", 105: "WEAK_EXTERNAL",
-        107: "CLR_TOKEN",
-    }
-    if hasattr(pefile, 'SYMBOL_STORAGE_CLASSES'):
-        pefile_classes = {v: k.replace("IMAGE_SYM_CLASS_", "") for k, v in pefile.SYMBOL_STORAGE_CLASSES.items()}
-        classes.update(pefile_classes)
-    return classes.get(storage_class, f"UNKNOWN_CLASS({storage_class})")
+    global _STORAGE_CLASS_MAP
+    if _STORAGE_CLASS_MAP is None:
+        classes = {
+            0: "NULL", 1: "AUTOMATIC", 2: "EXTERNAL", 3: "STATIC",
+            4: "REGISTER", 5: "EXTERNAL_DEF", 6: "LABEL",
+            7: "UNDEFINED_LABEL", 8: "MEMBER_OF_STRUCT", 9: "ARGUMENT",
+            10: "STRUCT_TAG", 11: "MEMBER_OF_UNION", 12: "UNION_TAG",
+            13: "TYPE_DEFINITION", 14: "UNDEFINED_STATIC", 15: "ENUM_TAG",
+            16: "MEMBER_OF_ENUM", 17: "REGISTER_PARAM", 18: "BIT_FIELD",
+            100: "BLOCK", 101: "FUNCTION", 102: "END_OF_STRUCT",
+            103: "FILE", 104: "SECTION", 105: "WEAK_EXTERNAL",
+            107: "CLR_TOKEN",
+        }
+        if hasattr(pefile, 'SYMBOL_STORAGE_CLASSES'):
+            pefile_classes = {v: k.replace("IMAGE_SYM_CLASS_", "") for k, v in pefile.SYMBOL_STORAGE_CLASSES.items()}
+            classes.update(pefile_classes)
+        _STORAGE_CLASS_MAP = classes
+    return _STORAGE_CLASS_MAP.get(storage_class, f"UNKNOWN_CLASS({storage_class})")
 
 
 def _dump_aux_symbol_to_dict(parent_symbol_struct, aux_symbol_struct, aux_idx: int) -> Dict[str, Any]:

@@ -103,7 +103,7 @@ async def dotnet_analyze(
                                 })
                         result["metadata_streams"] = streams
             except Exception as e:
-                result["clr_header_error"] = str(e)
+                result["clr_header_error"] = str(e)[:200]
 
             # TypeDef table
             types = []

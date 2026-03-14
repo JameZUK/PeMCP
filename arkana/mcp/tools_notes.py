@@ -318,7 +318,7 @@ async def auto_note_function(
                 batch_results.append(entry)
                 succeeded += 1
             except Exception as e:
-                batch_results.append({"address": addr, "error": str(e)})
+                batch_results.append({"address": addr, "error": str(e)[:200]})
 
         _persist_notes_to_cache()
 

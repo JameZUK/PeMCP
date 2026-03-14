@@ -706,7 +706,7 @@ async def refinery_carve(
                             entry["decoded_text"] = _safe_decode(decoded)[:200]
                             entry["decoded_size"] = len(decoded)
                     except Exception as e:
-                        entry["decode_error"] = str(e)
+                        entry["decode_error"] = str(e)[:200]
                 results.append(entry)
                 if len(results) >= limit:
                     break
@@ -1296,7 +1296,7 @@ async def refinery_pipeline(
                         entry["output_text"] = _safe_decode(out)[:2000]
                         entry["output_size"] = len(out)
                 except Exception as e:
-                    entry["error"] = str(e)
+                    entry["error"] = str(e)[:200]
                 results.append(entry)
             return results
 
@@ -1383,7 +1383,7 @@ async def refinery_list_units(
                     "units": units,
                 }
             except Exception as e:
-                result[cat] = {"error": str(e)}
+                result[cat] = {"error": str(e)[:200]}
         return result
 
     result = await asyncio.to_thread(_run)

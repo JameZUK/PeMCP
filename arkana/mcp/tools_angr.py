@@ -791,7 +791,7 @@ async def find_path_to_address(
             }
 
         except Exception as e:
-            return {"status": "error", "error_message": str(e)}
+            return {"status": "error", "error_message": str(e)[:200]}
 
     def _on_timeout_path():
         return {
@@ -928,7 +928,7 @@ async def emulate_function_execution(
                 return {"status": "uncertain", "message": "Simulation finished but no active or deadended states."}
 
         except Exception as e:
-            return {"status": "crash", "error": str(e)}
+            return {"status": "crash", "error": str(e)[:200]}
 
     def _on_timeout_emu():
         return {

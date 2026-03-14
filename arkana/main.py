@@ -367,12 +367,12 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
                 )
             logger.info("Auto-detected format: %s", effective_mode)
 
-        # Guard against excessively large files for modes that read into memory
-        if effective_mode in ('shellcode', 'elf', 'macho'):
-            file_size = os.path.getsize(abs_input_file)
-            if file_size > 500 * 1024 * 1024:  # 500 MB
-                logger.critical("File too large for preload: %d bytes", file_size)
-                sys.exit(1)
+        # M1-v11: Guard against excessively large files for ALL modes (not just shellcode/elf/macho)
+        max_file_mb = int(os.environ.get("ARKANA_MAX_FILE_SIZE_MB", "500"))
+        file_size = os.path.getsize(abs_input_file)
+        if file_size > max_file_mb * 1024 * 1024:
+            logger.critical("File too large for preload: %d bytes (limit: %d MB)", file_size, max_file_mb)
+            sys.exit(1)
 
         # Loading logic with mode support
         if effective_mode == 'shellcode':
@@ -501,8 +501,11 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
                 "No --api-key provided. Auto-generated API key for HTTP transport: %s...",
                 api_key[:8],
             )
-            # Print full key once to stderr for operator use
-            print(f"Auto-generated API key: {api_key}", file=sys.stderr)
+            # M4-v11: Show full key only in interactive terminals; mask in log captures
+            if sys.stderr.isatty():
+                print(f"Auto-generated API key: {api_key}", file=sys.stderr)
+            else:
+                print(f"Auto-generated API key: {api_key[:8]}... (run interactively to see full key)", file=sys.stderr)
 
     # Configure samples directory
     samples_path = args.samples_path or os.environ.get("ARKANA_SAMPLES") or os.environ.get("PEMCP_SAMPLES")

@@ -511,7 +511,7 @@ def _parse_certificates_crypto(raw_sig: bytes, anomalies: List) -> List[Dict[str
 
     except Exception as e:
         logger.debug("Certificate parsing error: %s", e)
-        certs_info.append({"error": str(e)})
+        certs_info.append({"error": str(e)[:200]})
 
     return certs_info
 

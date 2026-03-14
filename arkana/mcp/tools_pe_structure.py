@@ -468,7 +468,7 @@ def _analyze_x86_seh(
 
                 result["handlers"] = handlers
             except Exception as e:
-                result["handler_parse_error"] = str(e)
+                result["handler_parse_error"] = str(e)[:200]
         elif se_table_va == 0 and se_count == 0:
             # NO_SEH flag check
             nt = pe_data.get("nt_headers", {})

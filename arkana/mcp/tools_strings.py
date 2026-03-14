@@ -763,7 +763,7 @@ async def get_capa_rule_match_details(ctx: Context,
                 if "error" not in entry:
                     succeeded += 1
             except Exception as e:
-                batch_results[rid] = {"error": str(e)}
+                batch_results[rid] = {"error": str(e)[:200]}
 
         response: Dict[str, Any] = {
             "batch_results": batch_results,
@@ -1555,7 +1555,7 @@ async def get_string_at_va(
                 if "error" not in entry:
                     succeeded += 1
             except Exception as e:
-                batch_results[va_str] = {"error": str(e)}
+                batch_results[va_str] = {"error": str(e)[:200]}
 
         response: Dict[str, Any] = {
             "batch_results": batch_results,

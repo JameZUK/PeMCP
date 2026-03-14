@@ -1,7 +1,8 @@
 """MCP tools for session summary and analysis digest — helps the AI get up to speed."""
 import datetime
+import threading
 import time
-from collections import Counter
+from collections import Counter, OrderedDict
 from typing import Dict, Any, List, Optional
 from arkana.config import state, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
@@ -22,12 +23,15 @@ _EXPLORING_TOOLS = frozenset({
 })
 
 
-_phase_caches: Dict[str, Dict[str, Any]] = {}  # keyed by state._state_uuid for session isolation
+# M5-v11: OrderedDict + lock for O(1) eviction and thread safety
+_phase_caches: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+_phase_caches_lock = threading.Lock()
 
 
 def cleanup_phase_cache(state_uuid: str) -> None:
     """M8-v10: Remove phase cache entry for a reaped session."""
-    _phase_caches.pop(state_uuid, None)
+    with _phase_caches_lock:
+        _phase_caches.pop(state_uuid, None)
 
 
 def _detect_analysis_phase() -> str:
@@ -43,12 +47,13 @@ def _detect_analysis_phase() -> str:
     # L2-v8: Use efficient accessors to avoid copying the full history deque.
     history_len = state.get_tool_history_count()
     sid = state._state_uuid
-    _pc = _phase_caches.get(sid)
-    if (_pc is not None
-            and _pc["version"] == history_len
-            and now - _pc["time"] < 2.0
-            and _pc["result"] is not None):
-        return _pc["result"]
+    with _phase_caches_lock:
+        _pc = _phase_caches.get(sid)
+        if (_pc is not None
+                and _pc["version"] == history_len
+                and now - _pc["time"] < 2.0
+                and _pc["result"] is not None):
+            return _pc["result"]
 
     ran_tools = state.get_ran_tool_names()
     prev = getattr(state, "previous_session_history", []) or []
@@ -63,12 +68,12 @@ def _detect_analysis_phase() -> str:
     else:
         result = "file_loaded"
 
-    # Evict stale entries to prevent unbounded growth
-    if len(_phase_caches) > 100:
-        oldest = sorted(_phase_caches, key=lambda k: _phase_caches[k]["time"])
-        for k in oldest[:len(_phase_caches) - 50]:
-            del _phase_caches[k]
-    _phase_caches[sid] = {"result": result, "version": history_len, "time": now}
+    # M5-v11: O(1) eviction via OrderedDict.popitem(last=False) + thread-safe access
+    with _phase_caches_lock:
+        while len(_phase_caches) > 100:
+            _phase_caches.popitem(last=False)
+        _phase_caches[sid] = {"result": result, "version": history_len, "time": now}
+        _phase_caches.move_to_end(sid)
     return result
 
 
