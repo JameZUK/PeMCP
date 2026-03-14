@@ -60,6 +60,16 @@ Key themes:
 15. `arkana/mcp/tools_pe.py` — M3
 16. `arkana/mcp/tools_session.py` — M5, L2
 
+## Error Message Truncation (H1, H3)
+
+All exception messages in MCP error responses and background task metadata are truncated to **200 characters** via `str(e)[:200]`. This is a defense-in-depth measure to prevent attacker-controlled data in malicious binaries (e.g. crafted section names, embedded strings) from flowing verbatim into MCP responses.
+
+**Practical impact**: Minimal. Python exception messages almost always convey useful diagnostic information within the first ~50 characters. The exception *type* (e.g. `PEFormatError`, `ValueError`) is never truncated. The existing response-level size limits (`_check_mcp_response_size` at 8K/64KB) provide an additional backstop.
+
+**Locations**: 25 locations across 11 files — all inside `except` blocks that return error dicts. Successful responses are never truncated by this mechanism.
+
+**Not currently configurable per-request.** The 200-char limit is hardcoded. If a future use case requires full exception text for debugging, options include: a server-level env var (`ARKANA_ERROR_DETAIL_LIMIT`), a session-level setting via a config tool, or per-tool parameters. For now the fixed limit is sufficient as real-world error messages fit comfortably within 200 characters.
+
 ## Rejected / False Positives
 
 | Finding | Verdict | Reason |
