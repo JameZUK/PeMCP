@@ -127,14 +127,16 @@ def _compile_yara_rules(yara_rules_path: str, verbose: bool = False) -> Optional
         compiled_list = []
         for group_key, group_files in groups.items():
             try:
-                compiled_list.append(yara.compile(filepaths=group_files))
+                # M2-v8: Disable includes to prevent downloaded rule packs
+                # from including arbitrary filesystem paths.
+                compiled_list.append(yara.compile(filepaths=group_files, includes=False))
                 if verbose:
                     logger.info("   [VERBOSE-YARA] Batch-compiled %d rules from %s/", len(group_files), group_key)
             except yara.Error as e_batch:
                 logger.info("   YARA batch compile failed for %s/ (%s) -- trying per-file.", group_key, e_batch)
                 for key, path in group_files.items():
                     try:
-                        compiled_list.append(yara.compile(filepath=path))
+                        compiled_list.append(yara.compile(filepath=path, includes=False))
                     except yara.Error as e_comp:
                         logger.warning("   YARA compile error in %s: %s -- skipping.", key, e_comp)
 
@@ -143,7 +145,7 @@ def _compile_yara_rules(yara_rules_path: str, verbose: bool = False) -> Optional
             return None
         return compiled_list
     elif os.path.isfile(yara_rules_path):
-        return [yara.compile(filepath=yara_rules_path)]
+        return [yara.compile(filepath=yara_rules_path, includes=False)]
     else:
         logger.warning("   YARA rules path not valid: %s", yara_rules_path)
         return None

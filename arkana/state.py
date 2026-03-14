@@ -332,6 +332,16 @@ class AnalyzerState:
         with self._history_lock:
             return list(self.tool_history)
 
+    def get_tool_history_count(self) -> int:
+        """L2-v8: Thread-safe count without copying the full deque."""
+        with self._history_lock:
+            return len(self.tool_history)
+
+    def get_ran_tool_names(self) -> set:
+        """L2-v8: Thread-safe set of tool names without copying the full deque."""
+        with self._history_lock:
+            return {h.get("tool_name") for h in self.tool_history}
+
     # ------------------------------------------------------------------
     #  Artifact accessors
     # ------------------------------------------------------------------
@@ -835,6 +845,18 @@ def _session_reaper_loop() -> None:
                         stale.close_pe()
                     if stale.angr_project is not None and stale.angr_project is not _default_state.angr_project:
                         stale.reset_angr()
+                    # M3-v8: Clean up module-level _decompile_meta entries for this session
+                    try:
+                        from arkana.mcp.tools_angr import clear_decompile_meta
+                        clear_decompile_meta(stale._state_uuid)
+                    except ImportError:
+                        pass
+                    # L5-v8: Clean up module-level state_api caches for this session
+                    try:
+                        from arkana.dashboard.state_api import _cleanup_session_caches
+                        _cleanup_session_caches(stale._state_uuid)
+                    except (ImportError, AttributeError):
+                        pass
                 except Exception:
                     logger.warning("Session reaper: cleanup error for session", exc_info=True)
             if stale_to_cleanup:

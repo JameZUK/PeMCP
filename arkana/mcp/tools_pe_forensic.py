@@ -216,7 +216,8 @@ async def generate_yara_rule(
             import yara
             rule_text = result.get("rule", "")
             try:
-                compiled = yara.compile(source=rule_text)
+                # M2-v8: Disable includes even for generated rules (defense in depth)
+                compiled = yara.compile(source=rule_text, includes=False)
                 matches = compiled.match(state.filepath)
                 scan_results = []
                 for match in matches:

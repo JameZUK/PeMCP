@@ -517,11 +517,11 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
 
         sha = serializable.get("file_hashes", {}).get("sha256")
         if sha and state.filepath:
-            analysis_cache.put(sha, serializable, state.filepath)
-
-            # Also save session metadata
-            analysis_cache.update_session_data(
-                sha,
+            # M5-v8: Pass session data directly to put() instead of calling
+            # put() then update_session_data() — avoids redundant gzip
+            # decompress + recompress cycle (double I/O).
+            analysis_cache.put(
+                sha, serializable, state.filepath,
                 notes=state.get_all_notes_snapshot(),
                 tool_history=state.get_tool_history_snapshot(),
                 artifacts=state.get_all_artifacts_snapshot(),

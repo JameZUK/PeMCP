@@ -38,18 +38,13 @@ def _get_state():
         ]
 
     # Now iterate candidates outside the lock to avoid holding it
-    # during get_tool_history() calls
     file_candidates = [st for st in candidates if st.filepath is not None]
     if file_candidates:
         if len(file_candidates) == 1:
             return file_candidates[0]
-        # Pick the session with the most recent tool call
-        def _last_activity(st):
-            hist = st.get_tool_history()
-            if hist:
-                return hist[-1].get("timestamp_epoch", 0)
-            return 0
-        return max(file_candidates, key=_last_activity)
+        # L3-v8: Use last_active (simple float, no lock/copy) instead of
+        # get_tool_history() which copies the entire deque per session.
+        return max(file_candidates, key=lambda st: st.last_active)
 
     # Fall back to a session with an active tool (e.g. open_file loading)
     if active_candidates:
@@ -85,6 +80,18 @@ _MAX_STRINGS_CACHE = 4  # max cached string listings
 
 # Shared lock protecting all module-level caches above
 _cache_lock = threading.Lock()
+
+
+def _cleanup_session_caches(state_uuid: str) -> None:
+    """L5-v8: Remove stale entries for a reaped session from module-level caches.
+
+    Called from the session reaper in state.py to prevent stale entries
+    from accumulating after session cleanup.
+    """
+    with _cache_lock:
+        for cache in [_func_lookup_cache, _overview_enrichment_cache,
+                      _overview_cache, _functions_cache, _strings_cache]:
+            cache.pop(state_uuid, None)
 
 
 def _build_score_lookup(st) -> Dict[str, int]:
@@ -504,7 +511,7 @@ def get_overview_data() -> Dict[str, Any]:
     # Counts
     notes = st.get_notes()
     notes_count = len(notes)
-    tool_calls = len(st.get_tool_history())
+    tool_calls = st.get_tool_history_count()  # L2-v8: avoid full deque copy
     all_artifacts = st.get_artifacts()
     artifacts_count = len(all_artifacts)
 
@@ -2983,7 +2990,7 @@ def get_export_report_data() -> Dict[str, Any]:
         for n in st.get_notes()[:100]
     ]
 
-    report["tool_history_count"] = len(st.get_tool_history())
+    report["tool_history_count"] = st.get_tool_history_count()  # L2-v8
 
     return report
 

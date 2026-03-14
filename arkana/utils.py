@@ -37,6 +37,7 @@ def _safe_env_int(key: str, default: int) -> int:
 # Pool is recreated when stuck threads exhaust it (see safe_regex_search).
 _regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 _regex_executor_lock = threading.Lock()
+_regex_pool_recreations = 0  # M6-v8: Track pool recreations for monitoring
 atexit.register(lambda: _regex_executor.shutdown(wait=False))
 
 # --- Safe slicing ---
@@ -141,7 +142,19 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
                 # Double-check under lock
                 cur_active = getattr(_regex_executor, '_threads', set())
                 if len([t for t in cur_active if t.is_alive()]) >= max_workers:
-                    logger.warning("Regex pool exhausted — recreating executor")
+                    # M6-v8: Track recreation count to detect chronic stuck threads
+                    global _regex_pool_recreations
+                    _regex_pool_recreations += 1
+                    logger.warning(
+                        "Regex pool exhausted — recreating executor (recreation #%d)",
+                        _regex_pool_recreations,
+                    )
+                    if _regex_pool_recreations > 5:
+                        logger.error(
+                            "Regex pool recreated %d times — chronic stuck thread issue. "
+                            "Consider reviewing regex patterns for ReDoS.",
+                            _regex_pool_recreations,
+                        )
                     old = _regex_executor
                     _regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
                     old.shutdown(wait=False)

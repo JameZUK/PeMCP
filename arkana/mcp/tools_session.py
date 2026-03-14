@@ -35,8 +35,8 @@ def _detect_analysis_phase() -> str:
         return "not_started"
 
     now = time.monotonic()
-    history = state.get_tool_history()
-    history_len = len(history) if history else 0
+    # L2-v8: Use efficient accessors to avoid copying the full history deque.
+    history_len = state.get_tool_history_count()
     sid = state._state_uuid
     _pc = _phase_caches.get(sid)
     if (_pc is not None
@@ -45,7 +45,7 @@ def _detect_analysis_phase() -> str:
             and _pc["result"] is not None):
         return _pc["result"]
 
-    ran_tools = set(h["tool_name"] for h in history)
+    ran_tools = state.get_ran_tool_names()
     prev = getattr(state, "previous_session_history", []) or []
     ran_tools |= set(h["tool_name"] for h in prev)
 
@@ -543,9 +543,8 @@ async def get_progress_overview(
         "tool_result": by_cat.get("tool_result", 0),
     }
 
-    # Tool history count
-    current_history = state.get_tool_history()
-    result["tool_calls"] = len(current_history)
+    # L2-v8: Use count accessor to avoid full deque copy
+    result["tool_calls"] = state.get_tool_history_count()
 
     # Function coverage
     # H6: Use snapshot to prevent race condition with concurrent CFG invalidation
@@ -785,8 +784,8 @@ def _build_suggestions(max_suggestions: int = 5) -> List[Dict[str, str]]:
     suggestions: List[Dict[str, str]] = []
     phase = _detect_analysis_phase()
 
-    history = state.get_tool_history()
-    ran_tools = set(h["tool_name"] for h in history)
+    # L2-v8: Use efficient accessor to avoid full deque copy
+    ran_tools = state.get_ran_tool_names()
     prev = getattr(state, "previous_session_history", []) or []
     ran_tools |= set(h["tool_name"] for h in prev)
     notes = state.get_notes() if state.filepath else []
@@ -935,8 +934,9 @@ async def suggest_next_action(
     suggestions = _build_suggestions(max_suggestions=max_suggestions)
 
     notes = state.get_notes() if state.filepath else []
-    history = state.get_tool_history()
-    ran_tools = set(h["tool_name"] for h in history)
+    # L2-v8: Use efficient accessor to avoid full deque copy
+    # (already called inside _detect_analysis_phase and _build_suggestions)
+    ran_tools = state.get_ran_tool_names()
     prev = getattr(state, "previous_session_history", []) or []
     ran_tools |= set(h["tool_name"] for h in prev)
 

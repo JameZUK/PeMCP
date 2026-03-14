@@ -285,12 +285,19 @@ async def open_file(
         with state._notes_lock:
             state.notes = []
             state._notes_counter = 0
-        state.tool_history = deque(maxlen=MAX_TOOL_HISTORY)
-        state.artifacts = []
-        state._artifacts_counter = 0
-        state.renames = {"functions": {}, "variables": {}, "labels": {}}
-        state.triage_status = {}
-        state.custom_types = {"structs": {}, "enums": {}}
+        # H2-v8: Acquire respective locks before resetting fields to prevent
+        # concurrent readers from seeing partial state during reset.
+        with state._history_lock:
+            state.tool_history = deque(maxlen=MAX_TOOL_HISTORY)
+        with state._artifacts_lock:
+            state.artifacts = []
+            state._artifacts_counter = 0
+        with state._renames_lock:
+            state.renames = {"functions": {}, "variables": {}, "labels": {}}
+        with state._triage_lock:
+            state.triage_status = {}
+        with state._types_lock:
+            state.custom_types = {"structs": {}, "enums": {}}
         state.previous_session_history = []
 
     _loaded_from_cache = False
@@ -379,14 +386,21 @@ async def open_file(
                     _loaded_from_cache = True
 
                     # Restore notes, previous session history, artifacts, renames, and types from cache
+                    # H2-v8: Acquire respective locks to prevent concurrent readers from
+                    # seeing partial state during cache restore.
                     session_meta = analysis_cache.get_session_metadata(_file_sha256)
                     if session_meta:
-                        state.notes = session_meta.get("notes", [])
+                        with state._notes_lock:
+                            state.notes = session_meta.get("notes", [])
                         state.previous_session_history = session_meta.get("tool_history", [])
-                        state.artifacts = session_meta.get("artifacts", [])
-                        state.renames = session_meta.get("renames", {"functions": {}, "variables": {}, "labels": {}})
-                        state.custom_types = session_meta.get("custom_types", {"structs": {}, "enums": {}})
-                        state.triage_status = session_meta.get("triage_status", {})
+                        with state._artifacts_lock:
+                            state.artifacts = session_meta.get("artifacts", [])
+                        with state._renames_lock:
+                            state.renames = session_meta.get("renames", {"functions": {}, "variables": {}, "labels": {}})
+                        with state._types_lock:
+                            state.custom_types = session_meta.get("custom_types", {"structs": {}, "enums": {}})
+                        with state._triage_lock:
+                            state.triage_status = session_meta.get("triage_status", {})
 
                     # Restore cached enrichment data from pe_data → state attrs,
                     # then remove from pe_data to avoid in-memory duplication.

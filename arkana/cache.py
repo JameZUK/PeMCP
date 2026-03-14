@@ -459,8 +459,9 @@ class AnalysisCache:
         sha256 = _validate_sha256(sha256)
         entry_path = self._entry_path(sha256)
 
-        # Hold lock for entire read-modify-write to prevent TOCTOU races.
-        # Performance impact is acceptable because updates are infrequent.
+        # M4-v8: Read under lock (fast — file is in page cache), modify in memory,
+        # then write OUTSIDE the lock using streaming gzip to avoid blocking
+        # concurrent get()/put() calls during slow compression + I/O.
         with self._lock:
             if not entry_path.exists():
                 return False
@@ -472,33 +473,32 @@ class AnalysisCache:
                 logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
                 return False
 
-            if notes is not None:
-                wrapper["notes"] = notes
-            if tool_history is not None:
-                wrapper["tool_history"] = tool_history
-            if artifacts is not None:
-                wrapper["artifacts"] = artifacts
-            if renames is not None:
-                wrapper["renames"] = renames
-            if custom_types is not None:
-                wrapper["custom_types"] = custom_types
-            if triage_status is not None:
-                wrapper["triage_status"] = triage_status
+        # Modify wrapper in memory (no lock needed — local copy)
+        if notes is not None:
+            wrapper["notes"] = notes
+        if tool_history is not None:
+            wrapper["tool_history"] = tool_history
+        if artifacts is not None:
+            wrapper["artifacts"] = artifacts
+        if renames is not None:
+            wrapper["renames"] = renames
+        if custom_types is not None:
+            wrapper["custom_types"] = custom_types
+        if triage_status is not None:
+            wrapper["triage_status"] = triage_status
 
-            try:
-                compressed = gzip.compress(json.dumps(wrapper).encode("utf-8"))
-            except (TypeError, ValueError) as e:
-                logger.error("Failed to serialize session data for %s...: %s", sha256[:12], e)
-                return False
-
-            try:
-                tmp = entry_path.with_suffix(".tmp")
-                tmp.write_bytes(compressed)
-                tmp.replace(entry_path)
-                return True
-            except OSError as e:
-                logger.error("Failed to write session data for %s...: %s", sha256[:12], e)
-                return False
+        # Write outside lock using streaming (avoids 3x memory spike from
+        # json.dumps().encode() + gzip.compress())
+        tmp = entry_path.with_suffix(".tmp")
+        try:
+            with gzip.open(tmp, "wt", encoding="utf-8") as gz:
+                json.dump(wrapper, gz)
+            tmp.replace(entry_path)
+            return True
+        except (TypeError, ValueError, OSError) as e:
+            logger.error("Failed to write session data for %s...: %s", sha256[:12], e)
+            tmp.unlink(missing_ok=True)
+            return False
 
     # ------------------------------------------------------------------
     #  Management helpers (exposed via MCP tools)

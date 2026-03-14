@@ -1395,7 +1395,9 @@ async def search_yara_custom(
     import yara
 
     try:
-        compiled = yara.compile(source=rules_string)
+        # M2-v8: Disable YARA include directives for user-supplied rules to
+        # prevent arbitrary filesystem reads via include "/path/to/file".
+        compiled = yara.compile(source=rules_string, includes=False)
     except yara.SyntaxError as e:
         return {"error": f"YARA compilation error: {e}"}
 

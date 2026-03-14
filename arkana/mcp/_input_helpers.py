@@ -7,6 +7,7 @@ paginated results with a consistent format.
 import collections
 import threading
 import time
+import weakref
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 
@@ -57,7 +58,9 @@ class _ToolResultCache:
     cap of ``_GLOBAL_MAX_ENTRIES`` to bound total memory usage.
     """
 
-    _all_instances: List["_ToolResultCache"] = []
+    # H1-v8: Use WeakSet so reaped AnalyzerState sessions (and their caches)
+    # can be garbage collected.  Strong refs in a plain list prevented GC.
+    _all_instances: weakref.WeakSet = weakref.WeakSet()
     _global_lock = threading.Lock()
     _global_entry_count = 0
     _GLOBAL_MAX_ENTRIES = 200
@@ -67,7 +70,7 @@ class _ToolResultCache:
         # tool_name -> OrderedDict[(params_key) -> {"items": list, "ts": float}]
         self._store: Dict[str, collections.OrderedDict] = {}
         with _ToolResultCache._global_lock:
-            _ToolResultCache._all_instances.append(self)
+            _ToolResultCache._all_instances.add(self)
 
     def _entry_count(self) -> int:
         """Return total entries across all tool buckets (caller must hold self._lock)."""
@@ -75,6 +78,10 @@ class _ToolResultCache:
 
     def get(self, tool_name: str, params_key) -> Optional[List]:
         """Return cached items list or ``None`` on miss (including TTL expiry)."""
+        # H3-v8: Release self._lock BEFORE acquiring _global_lock to prevent
+        # ABBA deadlock with set() -> _cleanup_expired() which acquires
+        # _global_lock then inst._lock.
+        need_global_decrement = False
         with self._lock:
             bucket = self._store.get(tool_name)
             if bucket is None or params_key not in bucket:
@@ -83,11 +90,15 @@ class _ToolResultCache:
             # TTL check — evict stale entries
             if time.time() - entry["ts"] > _CACHE_TTL_SECONDS:
                 del bucket[params_key]
-                with _ToolResultCache._global_lock:
-                    _ToolResultCache._global_entry_count = max(0, _ToolResultCache._global_entry_count - 1)
-                return None
-            bucket.move_to_end(params_key)
-            return entry["items"]
+                need_global_decrement = True
+            else:
+                bucket.move_to_end(params_key)
+                return entry["items"]
+        # Decrement global counter outside self._lock (consistent lock ordering)
+        if need_global_decrement:
+            with _ToolResultCache._global_lock:
+                _ToolResultCache._global_entry_count = max(0, _ToolResultCache._global_entry_count - 1)
+        return None
 
     def set(self, tool_name: str, params_key, items: List) -> None:
         """Store *items* in the cache, evicting LRU if needed."""
@@ -128,9 +139,13 @@ class _ToolResultCache:
 
     @classmethod
     def _cleanup_expired(cls) -> None:
-        """Remove expired entries across all instances (caller must hold _global_lock)."""
+        """Remove expired entries across all instances (caller must hold _global_lock).
+
+        H3-v8: WeakSet iteration is safe — dead refs are automatically skipped.
+        Lock ordering: _global_lock (held by caller) -> inst._lock (acquired here).
+        """
         now = time.time()
-        for inst in cls._all_instances:
+        for inst in list(cls._all_instances):  # snapshot to avoid WeakSet mutation during iteration
             with inst._lock:
                 for _tool_name, bucket in list(inst._store.items()):
                     expired_keys = [k for k, v in bucket.items() if now - v["ts"] > _CACHE_TTL_SECONDS]
