@@ -94,7 +94,7 @@ Arkana includes a real-time web dashboard that launches automatically on port 80
 - **Global status bar** -- Active tool and background task progress visible from every page
 - **Real-time updates** -- SSE-driven live refresh as the AI runs tools
 
-![Arkana Dashboard Overview](docs/screenshots/Dashboard-Overview.png)
+![Arkana Dashboard Overview](docs/screenshots/Arkana%20%E2%80%94%20Overview.png)
 
 The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard_token`). Access URL with token is printed at server startup. See the [Dashboard Gallery](docs/dashboard.md) for screenshots of all views.
 

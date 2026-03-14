@@ -10,7 +10,7 @@ The dashboard uses token-based authentication (persisted to `~/.arkana/dashboard
 
 Binary summary with risk score, packing status, security mitigations, key findings with clickable function pivot links (`→ func_name`), recent notes with clickable addresses, and an analysis digest panel with AI-generated conclusion (synthesised from classification, triage findings, IOCs, and hypothesis notes). A full-width **File Identity banner** at the top shows the filename (handles long SHA256-hash filenames), format/size/language, SHA256 and MD5 hashes with copy buttons, and the AI's hypothesis assessment (falling back to generic classification). Below it, compact stat cards show RISK, PHASE, and FUNCTIONS.
 
-![Dashboard Overview](screenshots/Dashboard-Overview.png)
+![Dashboard Overview](screenshots/Arkana%20%E2%80%94%20Overview.png)
 
 ---
 
@@ -26,7 +26,7 @@ Each function row has an **XREF** button that opens an inline analysis panel wit
 
 The XREF panel opens without requiring decompilation, enabling fast cross-reference exploration. Panel state (open/closed, active tab) survives table filter and sort changes.
 
-![Dashboard Functions](screenshots/Dashboard-Function.png)
+![Dashboard Functions](screenshots/Arkana%20%E2%80%94%20Function%20Explorer.png)
 
 ---
 
@@ -43,7 +43,7 @@ Clicking a node opens a **tabbed sidebar** with four tabs:
 
 Additional features: search with match highlighting, right-click context menu (decompile, triage, focus 2-hop neighbourhood), bookmarks, minimap, layout switching (dagre / breadthfirst / cose / circle), keyboard navigation (arrow keys, Tab, Escape), and PNG/SVG export.
 
-![Dashboard Call Graph](screenshots/Dashboard-Callgraph.png)
+![Dashboard Call Graph](screenshots/Arkana%20%E2%80%94%20Call%20Graph.png)
 
 ---
 
@@ -51,7 +51,7 @@ Additional features: search with match highlighting, right-click context menu (d
 
 PE/ELF section permissions with anomaly highlighting (W+X detection) and entropy heatmap with clickable cells linking to hex view.
 
-![Dashboard Sections](screenshots/Dashboard-Sections.png)
+![Dashboard Sections](screenshots/Arkana%20%E2%80%94%20Section%20Map.png)
 
 ---
 
@@ -59,11 +59,15 @@ PE/ELF section permissions with anomaly highlighting (W+X detection) and entropy
 
 Infinite-scroll hex dump with 16 bytes per row. Loads 4096-byte chunks on demand, keeps a maximum of 64KB in the DOM (trims from the opposite end). Jump-to-offset navigation for quick access to specific file locations.
 
+![Dashboard Hex View](screenshots/Arkana%20%E2%80%94%20Hex%20View.png)
+
 ---
 
 ## CAPA
 
 Capa capability matches grouped by namespace with clickable function links. Shows the mapping between binary behaviours and the MITRE ATT&CK framework.
+
+![Dashboard Capabilities](screenshots/Arkana%20%E2%80%94%20Capabilities.png)
 
 ---
 
@@ -71,11 +75,15 @@ Capa capability matches grouped by namespace with clickable function links. Show
 
 ATT&CK technique matrix with IOC panel. Aggregates findings from capa, import classification, behavioural indicators, and string matches into a visual technique grid.
 
+![Dashboard MITRE ATT&CK](screenshots/Arkana%20%E2%80%94%20MITRE%20ATTCK.png)
+
 ---
 
 ## Types
 
 Custom struct and enum type editor for defining binary data structures. Create structs with typed fields (uint8-64, cstring, wstring, ipv4, bytes, padding) and enums with name-to-integer mappings. Apply types at file offsets to parse binary data.
+
+![Dashboard Type Editor](screenshots/Arkana%20%E2%80%94%20Type%20Editor.png)
 
 ---
 
@@ -83,19 +91,23 @@ Custom struct and enum type editor for defining binary data structures. Create s
 
 Binary diff powered by angr BinDiff. File browser (BROWSE tab) to select a comparison binary from the samples directory, or manual path entry (MANUAL PATH tab). Shows identical, differing, and unmatched functions.
 
+![Dashboard Binary Diff](screenshots/Arkana%20%E2%80%94%20Binary%20Diff.png)
+
 ---
 
 ## Timeline
 
 Chronological log of every tool call and note, with expandable detail panels showing request parameters and result summaries. Expanded state is preserved across live refreshes.
 
-![Dashboard Timeline](screenshots/Dashboard-Timeline.png)
+![Dashboard Timeline](screenshots/Arkana%20%E2%80%94%20Timeline.png)
 
 ---
 
 ## Imports
 
 DLL import tables with export/function grouping, showing imported functions organised by DLL. Export addresses are clickable, linking to the containing function on the Functions page.
+
+![Dashboard Imports](screenshots/Arkana%20%E2%80%94%20Imports%20Exports.png)
 
 ---
 
@@ -109,13 +121,15 @@ Unified string explorer combining ASCII strings, FLOSS static, stack, decoded, a
 - **Function column** -- Clickable links showing which function references each string.
 - **Pagination** -- Large string sets are paginated for performance.
 
+![Dashboard Strings](screenshots/Arkana%20%E2%80%94%20Strings.png)
+
 ---
 
 ## Notes
 
 Category-filtered view of all analysis notes (general, function, tool_result, IOC, hypothesis, manual). Addresses are clickable when they resolve to a known function, linking to the Functions page.
 
-![Dashboard Notes](screenshots/Dashboard-Notes.png)
+![Dashboard Notes](screenshots/Arkana%20%E2%80%94%20Notes.png)
 
 ---
 
