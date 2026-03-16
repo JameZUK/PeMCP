@@ -465,7 +465,7 @@ def _generate_process_creation_rule(
         return None
 
     selection = "\n".join(detection_items)
-    safe_filename = filename.replace("'", "''").replace("\\", "\\\\")[:80]
+    safe_filename = filename.replace("\n", " ").replace("\r", " ").replace("'", "''").replace("\\", "\\\\")[:80]
     yaml = f"""title: 'Suspicious Process - {safe_filename} (DRAFT)'
 id: arkana-proc-{sha256[:8]}
 status: experimental
@@ -534,7 +534,7 @@ def _generate_file_event_rule(
         return None
 
     selection = "\n".join(detection_items)
-    safe_filename_file = filename.replace("'", "''").replace("\\", "\\\\")[:80]
+    safe_filename_file = filename.replace("\n", " ").replace("\r", " ").replace("'", "''").replace("\\", "\\\\")[:80]
     yaml = f"""title: 'Suspicious File Drop - {safe_filename_file} (DRAFT)'
 id: arkana-file-{sha256[:8]}
 status: experimental
@@ -601,7 +601,7 @@ def _generate_registry_rule(
         return None
 
     selection = "\n".join(detection_items)
-    safe_filename_reg = filename.replace("'", "''").replace("\\", "\\\\")[:80]
+    safe_filename_reg = filename.replace("\n", " ").replace("\r", " ").replace("'", "''").replace("\\", "\\\\")[:80]
     yaml = f"""title: 'Suspicious Registry Modification - {safe_filename_reg} (DRAFT)'
 id: arkana-reg-{sha256[:8]}
 status: experimental
@@ -662,7 +662,7 @@ def _generate_network_rule(
 
     confidence = "medium" if len(ips) + len(domains) >= 2 else "low"
     selection = "\n".join(detection_items)
-    safe_filename_net = filename.replace("'", "''").replace("\\", "\\\\")[:80]
+    safe_filename_net = filename.replace("\n", " ").replace("\r", " ").replace("'", "''").replace("\\", "\\\\")[:80]
     yaml = f"""title: 'Suspicious Network Connection - {safe_filename_net} (DRAFT)'
 id: arkana-net-{sha256[:8]}
 status: experimental

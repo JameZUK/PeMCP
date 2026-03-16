@@ -48,9 +48,9 @@ def apply_function_renames_to_lines(lines: List[str]) -> List[str]:
 def apply_variable_renames_to_lines(lines: List[str], func_address: str) -> List[str]:
     """Apply variable renames to decompiled code lines.
 
-    Warning: Renames are applied sequentially (regex substitution). If rename A
-    introduces text that matches rename B's pattern, B will also transform A's
-    output. Callers should avoid overlapping rename patterns.
+    Uses a single combined regex so all old names are matched in one pass,
+    preventing cascading substitutions where rename A's output could be
+    transformed by rename B.
     """
     state = get_current_state()
     var_renames = state.renames.get("variables", {})
@@ -58,17 +58,18 @@ def apply_variable_renames_to_lines(lines: List[str], func_address: str) -> List
     if addr not in var_renames or not var_renames[addr]:
         return lines
 
-    # M7: Pre-compile patterns once outside the line loop
-    compiled_renames = [
-        (re.compile(r'\b' + re.escape(old_name) + r'\b'), new_name)
-        for old_name, new_name in var_renames[addr].items()
-    ]
-    result = []
-    for line in lines:
-        for pattern, new_name in compiled_renames:
-            line = pattern.sub(new_name, line)
-        result.append(line)
-    return result
+    # M-1: Build a single combined regex from all old names and use a
+    # replacement function to look up the match.  This avoids sequential
+    # substitution where rename A's output could be transformed by rename B.
+    rename_map = var_renames[addr]
+    combined_pattern = re.compile(
+        r'\b(?:' + '|'.join(re.escape(old_name) for old_name in rename_map) + r')\b'
+    )
+
+    def _replace_match(match):
+        return rename_map.get(match.group(0), match.group(0))
+
+    return [combined_pattern.sub(_replace_match, line) for line in lines]
 
 
 def get_display_name(address: str, default_name: str) -> str:

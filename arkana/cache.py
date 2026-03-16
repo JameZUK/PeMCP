@@ -14,6 +14,7 @@ import gzip
 import json
 import os
 import re
+import tempfile
 import time
 import logging
 import threading
@@ -175,6 +176,9 @@ class AnalysisCache:
         try:
             with gzip.open(entry_path, "rt", encoding="utf-8") as f:
                 wrapper = json.load(f)
+        except FileNotFoundError:
+            # File disappeared between exists() check and open — just return None.
+            return None
         except (gzip.BadGzipFile, json.JSONDecodeError, OSError, KeyError) as e:
             logger.warning("Cache read error for %s...: %s", sha256[:12], e)
             with self._lock:
@@ -214,37 +218,38 @@ class AnalysisCache:
             current_mtime = None
             current_size = None
 
-        try:
-            with self._lock:
-                meta = self._load_meta()
-                if file_exists and current_mtime is not None:
-                    cached_meta = meta.get(sha256, {})
-                    cached_mtime = cached_meta.get("file_mtime")
-                    cached_size = cached_meta.get("file_size")
-                    if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
-                        logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
-                        # Inline removal using already-loaded meta to avoid
-                        # redundant _load_meta + _save_meta round-trip.
-                        self._remove_entry(sha256)
-                        meta.pop(sha256, None)
-                        self._save_meta(meta)
-                        return None
-                    if cached_size is not None and current_size != cached_size:
-                        logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
-                        self._remove_entry(sha256)
-                        meta.pop(sha256, None)
-                        self._save_meta(meta)
-                        return None
-                # Touch LRU timestamp (throttled to once per 60s).
-                # Safe: runs inside self._lock so no concurrent modification.
+        with self._lock:
+            # single lock acquisition for validation + LRU update
+            meta = self._load_meta()
+            if file_exists and current_mtime is not None:
+                cached_meta = meta.get(sha256, {})
+                cached_mtime = cached_meta.get("file_mtime")
+                cached_size = cached_meta.get("file_size")
+                if cached_mtime is not None and abs(current_mtime - cached_mtime) > 0.01:
+                    logger.info("Cache mtime mismatch for %s..., invalidating.", sha256[:12])
+                    # Inline removal using already-loaded meta to avoid
+                    # redundant _load_meta + _save_meta round-trip.
+                    self._remove_entry(sha256)
+                    meta.pop(sha256, None)
+                    self._save_meta(meta)
+                    return None
+                if cached_size is not None and current_size != cached_size:
+                    logger.info("Cache file size mismatch for %s..., invalidating.", sha256[:12])
+                    self._remove_entry(sha256)
+                    meta.pop(sha256, None)
+                    self._save_meta(meta)
+                    return None
+
+            # Touch LRU timestamp (throttled to once per minute)
+            try:
                 if sha256 in meta:
                     last = meta[sha256].get("last_accessed", 0)
                     now = time.time()
                     if now - last > 60:
                         meta[sha256]["last_accessed"] = now
                         self._save_meta(meta)
-        except OSError as exc:
-            logger.debug("Failed to update LRU timestamp for %s: %s", sha256[:12], exc)
+            except OSError as exc:
+                logger.debug("Failed to update LRU timestamp for %s: %s", sha256[:12], exc)
 
         # Patch session-specific field
         pe_data["filepath"] = current_filepath
@@ -306,9 +311,16 @@ class AnalysisCache:
             entry_dir = self._entry_dir(sha256)
             entry_dir.mkdir(parents=True, exist_ok=True)
             entry_path = self._entry_path(sha256)
-            tmp = entry_path.with_suffix(".tmp")
 
+            # M-10: Use NamedTemporaryFile to avoid .tmp collisions between
+            # concurrent put() calls for different SHA256 values that share
+            # the same entry_dir.
+            fd = tempfile.NamedTemporaryFile(
+                dir=str(entry_dir), suffix='.tmp', delete=False,
+            )
+            tmp = Path(fd.name)
             try:
+                fd.close()  # close the raw fd; gzip.open re-opens by path
                 with gzip.open(tmp, "wt", encoding="utf-8") as gz:
                     json.dump(wrapper, gz)
                 tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
@@ -488,7 +500,12 @@ class AnalysisCache:
                 wrapper["triage_status"] = triage_status
 
             # Write atomically using streaming gzip
-            tmp = entry_path.with_suffix(".tmp")
+            # M-10: Use NamedTemporaryFile to avoid .tmp collisions
+            fd = tempfile.NamedTemporaryFile(
+                dir=str(entry_path.parent), suffix='.tmp', delete=False,
+            )
+            tmp = Path(fd.name)
+            fd.close()
             try:
                 with gzip.open(tmp, "wt", encoding="utf-8") as gz:
                     json.dump(wrapper, gz)

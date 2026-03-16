@@ -1,5 +1,6 @@
 """MCP tools for angr-based forensic and advanced binary analysis."""
 import datetime
+import re
 import time
 import uuid
 import asyncio
@@ -9,6 +10,7 @@ from typing import Dict, Any, Optional, List
 from collections import deque
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE, ANGR_ANALYSIS_TIMEOUT, ANGR_SHORT_TIMEOUT
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
@@ -45,6 +47,7 @@ async def diff_binaries(
         limit: Max entries per category (identical, differing, unmatched).
         run_in_background: Run as background task (default True).
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_angr_ready("diff_binaries")
     abs_path_b = os.path.realpath(file_path_b)
     state.check_path_allowed(abs_path_b)
@@ -61,88 +64,93 @@ async def diff_binaries(
         except Exception as e:
             return {"error": f"Failed to load second binary: {e}"}
 
-        if task_id_for_progress:
-            _update_progress(task_id_for_progress, 20, "Building CFG for second binary...", bridge=_progress_bridge)
-
+        # M-3: Wrap in try/finally to ensure proj_b is cleaned up even if
+        # CFG generation or BinDiff fails.
+        cfg_b = None
+        diff = None
         try:
-            cfg_b = proj_b.analyses.CFGFast(normalize=True)
-        except Exception as e:
-            return {"error": f"CFG generation failed for second binary: {e}"}
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 20, "Building CFG for second binary...", bridge=_progress_bridge)
 
-        if task_id_for_progress:
-            _update_progress(task_id_for_progress, 50, "Running BinDiff analysis...", bridge=_progress_bridge)
+            try:
+                cfg_b = proj_b.analyses.CFGFast(normalize=True)
+            except Exception as e:
+                return {"error": f"CFG generation failed for second binary: {e}"}
 
-        try:
-            # BinDiff internally calls get_any_node() which lives on
-            # the CFGModel, not on the raw CFGFast analysis object.
-            diff = state.angr_project.analyses.BinDiff(
-                proj_b, cfg_a=state.angr_cfg.model, cfg_b=cfg_b.model,
-            )
-        except Exception as e:
-            return {"error": f"BinDiff failed: {type(e).__name__}: {e}"}
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 50, "Running BinDiff analysis...", bridge=_progress_bridge)
 
-        if task_id_for_progress:
-            _update_progress(task_id_for_progress, 90, "Formatting results...", bridge=_progress_bridge)
+            try:
+                # BinDiff internally calls get_any_node() which lives on
+                # the CFGModel, not on the raw CFGFast analysis object.
+                diff = state.angr_project.analyses.BinDiff(
+                    proj_b, cfg_a=state.angr_cfg.model, cfg_b=cfg_b.model,
+                )
+            except Exception as e:
+                return {"error": f"BinDiff failed: {type(e).__name__}: {e}"}
 
-        identical = []
-        differing = []
-        unmatched_a = []
-        unmatched_b = []
-        _diff_warnings = []
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 90, "Formatting results...", bridge=_progress_bridge)
 
-        try:
-            for fa, fb in list(getattr(diff, 'identical_functions', []))[:limit]:
-                identical.append({"a": hex(fa.addr), "b": hex(fb.addr), "name": str(fa.name)})
-        except Exception as e:
-            logger.warning("BinDiff: failed to extract identical_functions: %s", e)
-            _diff_warnings.append(f"identical_functions extraction failed: {e}")
-        try:
-            for fa, fb in list(getattr(diff, 'differing_functions', []))[:limit]:
-                differing.append({"a": hex(fa.addr), "b": hex(fb.addr), "name_a": str(fa.name), "name_b": str(fb.name)})
-        except Exception as e:
-            logger.warning("BinDiff: failed to extract differing_functions: %s", e)
-            _diff_warnings.append(f"differing_functions extraction failed: {e}")
-        try:
-            for f in list(getattr(diff, 'unmatched_from_a', getattr(diff, 'unmatched_a', [])))[:limit]:
-                unmatched_a.append({"address": hex(f.addr), "name": str(f.name)})
-        except Exception as e:
-            logger.warning("BinDiff: failed to extract unmatched_from_a: %s", e)
-            _diff_warnings.append(f"unmatched_from_a extraction failed: {e}")
-        try:
-            for f in list(getattr(diff, 'unmatched_from_b', getattr(diff, 'unmatched_b', [])))[:limit]:
-                unmatched_b.append({"address": hex(f.addr), "name": str(f.name)})
-        except Exception as e:
-            logger.warning("BinDiff: failed to extract unmatched_from_b: %s", e)
-            _diff_warnings.append(f"unmatched_from_b extraction failed: {e}")
+            identical = []
+            differing = []
+            unmatched_a = []
+            unmatched_b = []
+            _diff_warnings = []
 
-        # Force all values to plain Python types — avoids CFFI
-        # _CDataBase pickle errors when the result is stored in the
-        # task registry and later serialised for the MCP response.
-        result = {
-            "file_a": str(state.filepath),
-            "file_b": str(file_path_b),
-            "identical_count": len(identical),
-            "differing_count": len(differing),
-            "unmatched_a_count": len(unmatched_a),
-            "unmatched_b_count": len(unmatched_b),
-            "identical_functions": identical,
-            "differing_functions": differing,
-            "unmatched_in_a": unmatched_a,
-            "unmatched_in_b": unmatched_b,
-        }
-        if _diff_warnings:
-            result["warnings"] = _diff_warnings
+            try:
+                for fa, fb in list(getattr(diff, 'identical_functions', []))[:limit]:
+                    identical.append({"a": hex(fa.addr), "b": hex(fb.addr), "name": str(fa.name)})
+            except Exception as e:
+                logger.warning("BinDiff: failed to extract identical_functions: %s", e)
+                _diff_warnings.append(f"identical_functions extraction failed: {e}")
+            try:
+                for fa, fb in list(getattr(diff, 'differing_functions', []))[:limit]:
+                    differing.append({"a": hex(fa.addr), "b": hex(fb.addr), "name_a": str(fa.name), "name_b": str(fb.name)})
+            except Exception as e:
+                logger.warning("BinDiff: failed to extract differing_functions: %s", e)
+                _diff_warnings.append(f"differing_functions extraction failed: {e}")
+            try:
+                for f in list(getattr(diff, 'unmatched_from_a', getattr(diff, 'unmatched_a', [])))[:limit]:
+                    unmatched_a.append({"address": hex(f.addr), "name": str(f.name)})
+            except Exception as e:
+                logger.warning("BinDiff: failed to extract unmatched_from_a: %s", e)
+                _diff_warnings.append(f"unmatched_from_a extraction failed: {e}")
+            try:
+                for f in list(getattr(diff, 'unmatched_from_b', getattr(diff, 'unmatched_b', [])))[:limit]:
+                    unmatched_b.append({"address": hex(f.addr), "name": str(f.name)})
+            except Exception as e:
+                logger.warning("BinDiff: failed to extract unmatched_from_b: %s", e)
+                _diff_warnings.append(f"unmatched_from_b extraction failed: {e}")
 
-        # Explicitly delete angr objects to release CFFI references
-        # before this dict crosses the thread boundary.
-        try:
-            if hasattr(proj_b, 'close'):
-                proj_b.close()
-        except Exception:
-            pass
-        del diff, cfg_b, proj_b
+            # Force all values to plain Python types — avoids CFFI
+            # _CDataBase pickle errors when the result is stored in the
+            # task registry and later serialised for the MCP response.
+            result = {
+                "file_a": str(state.filepath),
+                "file_b": str(file_path_b),
+                "identical_count": len(identical),
+                "differing_count": len(differing),
+                "unmatched_a_count": len(unmatched_a),
+                "unmatched_b_count": len(unmatched_b),
+                "identical_functions": identical,
+                "differing_functions": differing,
+                "unmatched_in_a": unmatched_a,
+                "unmatched_in_b": unmatched_b,
+            }
+            if _diff_warnings:
+                result["warnings"] = _diff_warnings
 
-        return result
+            return result
+        finally:
+            # Explicitly delete angr objects to release CFFI references
+            # before this dict crosses the thread boundary.
+            try:
+                if hasattr(proj_b, 'close'):
+                    proj_b.close()
+            except Exception:
+                pass
+            del diff, cfg_b, proj_b
 
     if run_in_background:
         task_id = str(uuid.uuid4())
@@ -181,6 +189,7 @@ async def detect_self_modifying_code(
     Next steps: get_hex_dump() at detected addresses, decompile_function_with_angr()
     to understand the unpacking routine, or auto_unpack_pe() for automated unpacking.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for self-modifying code")
     _check_angr_ready("detect_self_modifying_code")
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
@@ -292,6 +301,7 @@ async def find_code_caves(
         min_size: Minimum cave size in bytes (default 16).
         limit: Max caves to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for code caves")
     _check_angr_ready("find_code_caves")
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
@@ -343,32 +353,13 @@ async def find_code_caves(
                     logger.debug("Skipped section during code cave scan (memory load failed): %s", e)
                     continue
 
-                # Scan for runs of null bytes
-                cave_start = None
-                cave_len = 0
-                for i, b in enumerate(data):
-                    if b == 0x00 or b == 0xCC:  # null or INT3 padding
-                        if cave_start is None:
-                            cave_start = start + i
-                            cave_len = 1
-                        else:
-                            cave_len += 1
-                    else:
-                        if cave_start is not None and cave_len >= min_size:
-                            caves.append({
-                                "address": hex(cave_start),
-                                "size": cave_len,
-                                "fill_byte": "0x00/0xCC",
-                                "section": getattr(section, 'name', 'unknown'),
-                            })
-                        cave_start = None
-                        cave_len = 0
-
-                # Handle cave at end of section
-                if cave_start is not None and cave_len >= min_size:
+                # Scan for runs of null/INT3 bytes using regex for efficiency
+                import re as _re
+                pattern = _re.compile(rb'[\x00\xcc]{' + str(min_size).encode() + rb',}')
+                for m in pattern.finditer(data):
                     caves.append({
-                        "address": hex(cave_start),
-                        "size": cave_len,
+                        "address": hex(start + m.start()),
+                        "size": m.end() - m.start(),
                         "fill_byte": "0x00/0xCC",
                         "section": getattr(section, 'name', 'unknown'),
                     })
@@ -570,6 +561,9 @@ async def save_patched_binary(
         if state.angr_project is None:
             return {"error": "No angr project loaded. Open a file first."}
 
+        # Re-validate path inside thread to reduce TOCTOU window
+        state.check_path_allowed(os.path.realpath(output_path))
+
         proj = state.angr_project
         loader = proj.loader
 
@@ -700,12 +694,17 @@ async def find_path_with_custom_input(
                     pass
 
         # Apply symbolic memory ranges
+        _MAX_SYMBOLIC_MEM_SIZE = 4096  # M-7: cap per-range size to prevent memory exhaustion
         if symbolic_memory_ranges:
             for spec in symbolic_memory_ranges:
                 try:
                     parts = spec.split(":")
                     mem_addr = int(parts[0], 0)
                     mem_size = int(parts[1])
+                    if mem_size < 1 or mem_size > _MAX_SYMBOLIC_MEM_SIZE:
+                        raise ValueError(
+                            f"Symbolic memory size must be 1-{_MAX_SYMBOLIC_MEM_SIZE} bytes, got {mem_size}"
+                        )
                     sym_mem = entry_state.solver.BVS(f"sym_mem_{hex(mem_addr)}", mem_size * 8)
                     entry_state.memory.store(mem_addr, sym_mem)
                 except Exception as e:
@@ -1064,6 +1063,8 @@ async def identify_cpp_classes(
         method_limit: Max methods per class to return (default 20).
         run_in_background: Run as background task.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
+    method_limit = max(1, min(method_limit, MAX_TOOL_LIMIT))
     _check_angr_ready("identify_cpp_classes")
 
     def _identify(task_id_for_progress=None, _progress_bridge=None):
@@ -1256,6 +1257,7 @@ async def get_call_graph(
         max_depth: If >0 with root_address, limit traversal depth.
         limit: Max edges to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Exporting call graph")
     _check_angr_ready("get_call_graph")
     root = _parse_addr(root_address, "root_address") if root_address else None
@@ -1391,6 +1393,7 @@ async def find_anti_debug_comprehensive(
         compact: (bool) If True, return a grouped summary instead of per-occurrence
             technique listings. Saves context budget when you only need an overview.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for anti-debug and anti-analysis techniques")
     _check_angr_ready("find_anti_debug_comprehensive")
     _ad_bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
@@ -1675,21 +1678,33 @@ async def find_anti_debug_comprehensive(
                 (b"52:54:00", "QEMU", "MAC OUI: QEMU"),
                 (b"52-54-00", "QEMU", "MAC OUI: QEMU (dash)"),
             ]
-            file_lower = file_data.lower()
-            for indicator, target, detail in _VM_INDICATORS:
-                if indicator.lower() in file_lower:
-                    vm_strings_found.append({
-                        "indicator": indicator.decode('ascii', 'replace'),
-                        "target": target,
-                        "detail": detail,
-                    })
-                    techniques.append({
-                        "technique": f"VM_String_{target}",
-                        "category": "vm_detection",
-                        "severity": "medium",
-                        "function": "string_scan",
-                        "function_name": f"Contains '{indicator.decode('ascii', 'replace')}' ({detail})",
-                    })
+            # Build a single case-insensitive regex from all indicator strings
+            # and scan the binary in one pass — avoids creating a full lowercase
+            # copy of file_data and running N individual `in` checks.
+            _ind_lookup = {ind.lower(): (ind, target, detail) for ind, target, detail in _VM_INDICATORS}
+            _vm_pattern = re.compile(
+                b'(' + b'|'.join(re.escape(ind) for ind in _ind_lookup) + b')',
+                re.IGNORECASE,
+            )
+            seen_indicators = set()
+            for m in _vm_pattern.finditer(file_data):
+                matched_lower = m.group().lower()
+                if matched_lower in seen_indicators:
+                    continue
+                seen_indicators.add(matched_lower)
+                indicator, target, detail = _ind_lookup[matched_lower]
+                vm_strings_found.append({
+                    "indicator": indicator.decode('ascii', 'replace'),
+                    "target": target,
+                    "detail": detail,
+                })
+                techniques.append({
+                    "technique": f"VM_String_{target}",
+                    "category": "vm_detection",
+                    "severity": "medium",
+                    "function": "string_scan",
+                    "function_name": f"Contains '{indicator.decode('ascii', 'replace')}' ({detail})",
+                })
 
         # Scan executable sections for anti-analysis instructions
         _ad_bridge.report_progress(90, 100)

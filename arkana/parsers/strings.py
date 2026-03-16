@@ -2,6 +2,7 @@
 import os
 import re
 import collections
+import threading
 
 from typing import Dict, Any, Optional, List, Tuple
 
@@ -12,6 +13,11 @@ from arkana.config import (
 if STRINGSIFTER_AVAILABLE:
     import stringsifter.lib.util as sifter_util
     import joblib
+
+# Module-level cache for StringSifter ML models to avoid reloading on every call
+_sifter_model_lock = threading.Lock()
+_sifter_featurizer = None
+_sifter_ranker = None
 
 
 def _extract_strings_from_data(data_bytes: bytes, min_length: int = 5) -> List[Tuple[int, str]]:
@@ -101,9 +107,14 @@ def _perform_unified_string_sifting(pe_info_dict: Dict[str, Any]):
             "Ranking %d unique strings with StringSifter (from %d total)...",
             len(unique_strings), len(all_strings_for_sifter),
         )
-        modeldir = os.path.join(sifter_util.package_base(), "model")
-        featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
-        ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
+        global _sifter_featurizer, _sifter_ranker
+        with _sifter_model_lock:
+            if _sifter_featurizer is None or _sifter_ranker is None:
+                modeldir = os.path.join(sifter_util.package_base(), "model")
+                _sifter_featurizer = joblib.load(os.path.join(modeldir, "featurizer.pkl"))
+                _sifter_ranker = joblib.load(os.path.join(modeldir, "ranker.pkl"))
+            featurizer = _sifter_featurizer
+            ranker = _sifter_ranker
 
         X_test = featurizer.transform(unique_strings)
         y_scores = ranker.predict(X_test)
@@ -124,6 +135,12 @@ def _correlate_strings_and_capa(pe_info_dict: Dict[str, Any]):
     Correlates string usage with Capa's behavioral findings by checking if
     a string's referencing function is also flagged by a Capa rule.
     Modifies pe_info_dict in place.
+
+    NOTE: This function intentionally mutates the string dicts inside
+    pe_info_dict (adding 'related_capabilities' keys).  This is safe because
+    enrichment runs exactly once per file load, after all parsing is complete,
+    so no concurrent readers observe a half-enriched state.  Wrapping with a
+    lock would require importing state and risk circular dependencies.
     """
     logger.info("Correlating strings with Capa behavioral indicators...")
     try:

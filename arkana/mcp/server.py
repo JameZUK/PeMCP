@@ -194,6 +194,8 @@ def tool_decorator(func):
             if ctx is not None and not getattr(ctx, '_arkana_progress_wrapped', False):
                 _orig_report_progress = ctx.report_progress
                 async def _wrapped_report_progress(progress, total=100):
+                    if getattr(current_state, '_closing', False):
+                        return
                     with current_state._active_tool_lock:
                         current_state.active_tool_progress = progress
                         current_state.active_tool_total = total
@@ -513,6 +515,8 @@ async def _check_mcp_response_size(
 
                 if largest_key:
                     val = modified_data[largest_key]
+                    # Measure old field size via repr (cheap proxy) before replacement
+                    old_field_repr_len = largest_len
                     if isinstance(val, list):
                         orig_len = len(val)
                         new_len = int(orig_len * reduction_ratio)
@@ -541,25 +545,30 @@ async def _check_mcp_response_size(
                     else:
                         # Fallback: if we can't shrink the biggest value, we fail gracefully to avoid infinite loop
                         break
+                    # Estimate new size by subtracting old field size and adding new.
+                    # This avoids a full json.dumps on every iteration.
+                    try:
+                        new_field_repr_len = len(repr(modified_data[largest_key]))
+                    except Exception:
+                        new_field_repr_len = old_field_repr_len
+                    current_chars -= (old_field_repr_len - new_field_repr_len)
 
             elif isinstance(modified_data, list):
                 # If the root object is a list, slice the list itself
                 old_len = len(modified_data)
-                new_len = int(old_len * reduction_ratio)
+                new_len = max(1, int(old_len * reduction_ratio))
                 modified_data = modified_data[:new_len]
                 # We can't add a key to a list, so we append a warning item if possible, or rely on ctx.warning
                 if len(modified_data) > 0 and isinstance(modified_data[0], dict):
                     modified_data.append({"_warning": f"List truncated from {old_len} to {new_len} items."})
+                # Estimate: size scales roughly linearly with item count
+                current_chars = int(current_chars * (new_len / old_len)) if old_len > 0 else current_chars
 
             elif isinstance(modified_data, str):
-                new_len = int(len(modified_data) * reduction_ratio)
+                old_str_len = len(modified_data)
+                new_len = int(old_str_len * reduction_ratio)
                 modified_data = modified_data[:new_len] + "...[TRUNCATED]"
-
-            # Re-measure char count after this iteration's modification.
-            try:
-                current_chars = len(json.dumps(modified_data, ensure_ascii=False))
-            except (TypeError, ValueError):
-                break
+                current_chars -= (old_str_len - len(modified_data))
 
         # Single final serialization for both char and byte checks.
         final_json = json.dumps(modified_data, ensure_ascii=False)

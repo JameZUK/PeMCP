@@ -9,6 +9,7 @@ import contextvars
 import copy
 import datetime
 import logging
+import os
 import time
 import threading
 import uuid
@@ -33,6 +34,13 @@ MAX_TRIAGE_STATUS = 100_000
 
 # Stale session TTL in seconds (1 hour).
 SESSION_TTL_SECONDS = 3600
+
+# Maximum number of concurrent active sessions in the registry (HTTP mode).
+# Prevents unbounded memory growth from session flooding.
+try:
+    MAX_ACTIVE_SESSIONS = int(os.environ.get("ARKANA_MAX_SESSIONS", "100"))
+except (TypeError, ValueError):
+    MAX_ACTIVE_SESSIONS = 100
 
 # Task status constants — use these instead of raw strings to prevent typo bugs.
 TASK_RUNNING = "running"
@@ -115,7 +123,14 @@ class AnalyzerState:
         # Previous session context (populated from cache on open_file)
         self.previous_session_history: List[Dict[str, Any]] = []
 
-        # Cached analysis results for progressive disclosure tools
+        # Cached analysis results for progressive disclosure tools.
+        # M-13: These _cached_* fields rely on CPython's GIL for atomic
+        # reference assignment (single STORE_NAME bytecode).  Readers see
+        # either the old or new dict reference — never a half-written one.
+        # This is safe because each field is only ever replaced wholesale
+        # (state._cached_X = new_dict), never mutated in place after
+        # assignment.  Compound read-modify-write operations on these
+        # fields would NOT be safe without an explicit lock.
         self._cached_triage: Optional[Dict[str, Any]] = None
         self._cached_function_scores: Optional[List[Dict[str, Any]]] = None
         self.last_digest_timestamp: float = 0.0
@@ -252,7 +267,7 @@ class AnalyzerState:
                   address: Optional[str] = None) -> List[Dict[str, Any]]:
         """Thread-safe filtered read of notes. Returns copies."""
         with self._notes_lock:
-            result = list(self.notes)
+            result = [dict(n) for n in self.notes]
         if category:
             result = [n for n in result if n.get("category") == category]
         if address:
@@ -631,6 +646,17 @@ class AnalyzerState:
             }
             self.analysis_warnings.append(entry)
             self._warning_dedup[dedup_key] = entry
+
+            # M-12: Periodic reconciliation — if _warning_dedup has grown
+            # much larger than the deque (due to evicted entries whose dedup
+            # keys were not cleaned up), rebuild it from current deque entries.
+            max_dedup = self.analysis_warnings.maxlen * 2
+            if len(self._warning_dedup) > max_dedup:
+                self._warning_dedup = {
+                    (w["logger"], w["level"], w["message"][:100]): w
+                    for w in self.analysis_warnings
+                }
+
             return dict(entry)
 
     def get_warnings(self, logger_name: Optional[str] = None,
@@ -785,6 +811,24 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             stale_session._closing = True
             stale_to_cleanup.append(stale_session)
 
+        # H-6: Enforce max session limit to prevent session flooding.
+        if session_key not in _session_registry and len(_session_registry) >= MAX_ACTIVE_SESSIONS:
+            # Try to evict the oldest session by last_active timestamp.
+            oldest_key = None
+            oldest_time = float('inf')
+            for k, st in _session_registry.items():
+                if st.last_active < oldest_time:
+                    oldest_time = st.last_active
+                    oldest_key = k
+            if oldest_key is not None:
+                evicted = _session_registry.pop(oldest_key)
+                evicted._closing = True
+                stale_to_cleanup.append(evicted)
+                logger.warning(
+                    "Session limit reached (%d). Evicted oldest session to make room.",
+                    MAX_ACTIVE_SESSIONS,
+                )
+
         if session_key not in _session_registry:
             _start_session_reaper()  # Lazy start on first session creation
             new_state = AnalyzerState()
@@ -882,9 +926,12 @@ _reaper_started = False
 
 
 def _start_session_reaper():
-    """Start the session reaper thread lazily on first session creation."""
+    """Start the session reaper thread lazily on first session creation.
+
+    NOTE: Must be called under _registry_lock to prevent duplicate reaper threads.
+    """
     global _reaper_thread, _reaper_started
-    if _reaper_started:
+    if _reaper_started and _reaper_thread is not None and _reaper_thread.is_alive():
         return
     _reaper_started = True
     _reaper_thread = threading.Thread(target=_session_reaper_loop, daemon=True, name="session-reaper")

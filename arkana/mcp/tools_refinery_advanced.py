@@ -59,7 +59,7 @@ async def refinery_regex_extract(
             raw = bytes(chunk)
             entry: Dict[str, Any] = {
                 "match_hex": _bytes_to_hex(raw, 512),
-                "match_text": _safe_decode(raw)[:500],
+                "match_text": _safe_decode(raw, max_len=500),
                 "size": len(raw),
             }
             if hasattr(chunk, "meta") and isinstance(chunk.meta, dict):
@@ -130,7 +130,7 @@ async def refinery_regex_replace(
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
+        "output_text": _safe_decode(result, max_len=2000),
     }, "refinery_regex_replace")
 
 
@@ -174,7 +174,7 @@ async def refinery_auto_decrypt(
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
+        "output_text": _safe_decode(result, max_len=2000),
     }
     if output_path:
         artifact_meta = await asyncio.to_thread(
@@ -337,6 +337,13 @@ async def refinery_string_operations(
             if not argument:
                 raise ValueError("Replace requires argument as 'old_hex:new_hex'.")
             parts = argument.split(":")
+            _MAX_HEX_INPUT_LEN = 2_000_000  # 2M hex chars = 1MB decoded
+            for _p in parts:
+                if len(_p) > _MAX_HEX_INPUT_LEN:
+                    raise ValueError(
+                        f"Hex argument too large ({len(_p):,} chars, "
+                        f"limit {_MAX_HEX_INPUT_LEN:,})."
+                    )
             old = bytes.fromhex(parts[0])
             new = bytes.fromhex(parts[1]) if len(parts) > 1 else b""
             return data | repl(old, new) | bytes
@@ -358,7 +365,7 @@ async def refinery_string_operations(
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
+        "output_text": _safe_decode(result, max_len=2000),
     }, "refinery_string_operations")
 
 
@@ -419,7 +426,7 @@ async def refinery_pretty_print(
         "format": fmt,
         "input_size": len(data),
         "output_size": len(result),
-        "formatted_text": _safe_decode(result)[:8000],
+        "formatted_text": _safe_decode(result, max_len=8000),
     }, "refinery_pretty_print")
 
 
@@ -469,7 +476,7 @@ async def refinery_decompile(
             "language": lang,
             "input_size": len(data),
             "output_size": len(result),
-            "source_code": _safe_decode(result)[:8000],
+            "source_code": _safe_decode(result, max_len=8000),
         }
         if output_path:
             artifact_meta = await asyncio.to_thread(
@@ -488,13 +495,15 @@ async def refinery_decompile(
             raw = bytes(chunk)
             entry: Dict[str, Any] = {
                 "size": len(raw),
-                "text": _safe_decode(raw)[:4000],
+                "text": _safe_decode(raw, max_len=4000),
             }
             if hasattr(chunk, "meta") and isinstance(chunk.meta, dict):
                 for key in ("name", "path", "type"):
                     if key in chunk.meta:
                         entry[key] = str(chunk.meta[key])
             results.append(entry)
+            if len(results) >= _MAX_OUTPUT_ITEMS:
+                break
         return results
 
     results = await asyncio.to_thread(_run_autoit)

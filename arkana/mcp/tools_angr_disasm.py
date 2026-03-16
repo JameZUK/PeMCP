@@ -5,6 +5,7 @@ import traceback
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _format_cc_info, _raise_on_error_dict
 from arkana.mcp._rename_helpers import get_display_name
@@ -112,6 +113,7 @@ async def get_calling_conventions(
         recover_all: If True, run full-binary calling convention analysis (slow).
         limit: Max functions to return when recover_all is True.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Recovering calling conventions")
     _check_angr_ready("get_calling_conventions")
 
@@ -179,7 +181,16 @@ async def get_calling_conventions(
             "functions": results,
         }
 
-    result = await asyncio.to_thread(_recover)
+    # M-6: Wrap with timeout to prevent unbounded recover_all from blocking
+    try:
+        result = await asyncio.wait_for(asyncio.to_thread(_recover), timeout=300)
+    except asyncio.TimeoutError:
+        result = {
+            "total_recovered": 0,
+            "functions": [],
+            "warning": "Calling convention recovery timed out after 300s. "
+                       "Try analysing individual functions with function_address parameter.",
+        }
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_calling_conventions", "the 'limit' parameter")
 
@@ -669,6 +680,9 @@ def _build_scored_functions(current_state, include_details: bool = False) -> Lis
         callee_names = []
         categories_hit: set = set()
         try:
+            # O(N*M) where N=callees and M=len(CATEGORIZED_IMPORTS_DB).
+            # For large binaries with many imports, consider Aho-Corasick for
+            # multi-pattern matching to reduce to O(N * max_name_len).
             for callee_addr in callgraph.successors(addr):
                 if callee_addr in current_state.angr_cfg.functions:
                     cname = current_state.angr_cfg.functions[callee_addr].name

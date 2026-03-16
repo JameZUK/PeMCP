@@ -76,6 +76,8 @@ def _ensure_project_and_cfg():
     CFG construction is performed outside the lock to avoid blocking ALL
     angr-based tools across ALL sessions when a pathological binary causes
     the CFGFast analysis to hang.
+
+    Lock ordering: _init_lock -> state._angr_lock. Never acquire _angr_lock then _init_lock.
     """
     with _init_lock:
         project, cfg = state.get_angr_snapshot()
@@ -104,7 +106,10 @@ def _ensure_project_and_cfg():
                 # Only store if no other thread beat us to it
                 _, existing_cfg = state.get_angr_snapshot()
                 if existing_cfg is None:
-                    state.set_angr_results(project, new_cfg, state.angr_loop_cache, state.angr_loop_cache_config)
+                    # Read loop cache fields inside _init_lock to ensure consistency
+                    loop_cache = state.angr_loop_cache
+                    loop_cache_config = state.angr_loop_cache_config
+                    state.set_angr_results(project, new_cfg, loop_cache, loop_cache_config)
 
 
 def _build_region_cfg(project, target_addr: int, region_size: int = 0x10000):
@@ -113,6 +118,8 @@ def _build_region_cfg(project, target_addr: int, region_size: int = 0x10000):
     Uses ``CFGFast(regions=..., function_starts=...)`` to restrict analysis
     to a region around the target.  Much faster than full-binary CFG and
     sufficient for single-function decompilation.
+
+    Note: 64KB region may clip very large functions. Consider expanding if func.size is known.
     """
     obj = project.loader.find_object_containing(target_addr)
     if obj is None:
@@ -154,10 +161,11 @@ def _resolve_function_address(target_addr: int):
     addr_to_use = target_addr
 
     if addr_to_use not in cfg.functions:
-        if (state.pe_object
-                and hasattr(state.pe_object, 'OPTIONAL_HEADER')
-                and state.pe_object.OPTIONAL_HEADER):
-            image_base = state.pe_object.OPTIONAL_HEADER.ImageBase
+        pe_obj = state.pe_object
+        if (pe_obj
+                and hasattr(pe_obj, 'OPTIONAL_HEADER')
+                and pe_obj.OPTIONAL_HEADER):
+            image_base = pe_obj.OPTIONAL_HEADER.ImageBase
             potential_va = target_addr + image_base
             if potential_va in cfg.functions:
                 addr_to_use = potential_va

@@ -6,6 +6,7 @@ steganography detection through a single dispatched tool.
 """
 import asyncio
 import hashlib
+import threading
 
 from typing import Dict, Any, Optional
 
@@ -15,6 +16,8 @@ from arkana.mcp._refinery_helpers import (
     _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
     _get_file_data, _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
 )
+
+_entropy_lock = threading.Lock()
 
 
 @tool_decorator
@@ -120,7 +123,7 @@ async def refinery_executable(
             "requested_size": size,
             "actual_size": len(result),
             "hex": _bytes_to_hex(result),
-            "text": _safe_decode(result)[:1000],
+            "text": _safe_decode(result, max_len=1000),
         }
 
     # ── file_to_virtual: offset → VA conversion ────────────────────
@@ -133,6 +136,8 @@ async def refinery_executable(
         await ctx.info(f"Converting file offset {hex(off)} to virtual address...")
 
         def _run_f2v():
+            # Note: state.pe_object could be used instead, but a fresh parse
+            # provides isolation from concurrent state changes in the thread.
             import pefile
             pe = pefile.PE(data=data)
             try:  # L7-v9: ensure PE object is closed
@@ -167,7 +172,9 @@ async def refinery_executable(
     # ── disassemble: native code (x86/x64/ARM) ─────────────────────
     if op == "disassemble":
         if data_hex:
-            cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
+            cleaned = data_hex.replace(" ", "").replace("\\x", "")
+            if cleaned.startswith(("0x", "0X")):
+                cleaned = cleaned[2:]
             data = bytes.fromhex(cleaned)
         else:
             _check_pe_loaded("refinery_executable")
@@ -184,13 +191,21 @@ async def refinery_executable(
         return await _check_mcp_response_size(ctx, {
             "operation": op,
             "input_size": len(data),
-            "disassembly": _safe_decode(result)[:8000],
+            "disassembly": _safe_decode(result, max_len=8000),
         }, "refinery_executable")
 
     # ── disassemble_cil: .NET CIL/MSIL bytecode ────────────────────
     if op == "disassemble_cil":
         if data_hex:
-            cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
+            _MAX_HEX_INPUT_LEN_CIL = 2_000_000  # 2M hex chars = 1MB decoded
+            if len(data_hex) > _MAX_HEX_INPUT_LEN_CIL:
+                raise ValueError(
+                    f"Hex input too large ({len(data_hex):,} chars, "
+                    f"limit {_MAX_HEX_INPUT_LEN_CIL:,})."
+                )
+            cleaned = data_hex.replace(" ", "").replace("\\x", "")
+            if cleaned.startswith(("0x", "0X")):
+                cleaned = cleaned[2:]
             data = bytes.fromhex(cleaned)
         else:
             _check_pe_loaded("refinery_executable")
@@ -206,13 +221,21 @@ async def refinery_executable(
             "operation": op,
             "input_size": len(data),
             "output_size": len(result),
-            "disassembly": _safe_decode(result)[:8000],
+            "disassembly": _safe_decode(result, max_len=8000),
         }, "refinery_executable")
 
     # ── entropy_map: entropy heatmap ────────────────────────────────
     if op == "entropy_map":
         if data_hex:
-            cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
+            _MAX_HEX_INPUT_LEN_ENT = 2_000_000  # 2M hex chars = 1MB decoded
+            if len(data_hex) > _MAX_HEX_INPUT_LEN_ENT:
+                raise ValueError(
+                    f"Hex input too large ({len(data_hex):,} chars, "
+                    f"limit {_MAX_HEX_INPUT_LEN_ENT:,})."
+                )
+            cleaned = data_hex.replace(" ", "").replace("\\x", "")
+            if cleaned.startswith(("0x", "0X")):
+                cleaned = cleaned[2:]
             data = bytes.fromhex(cleaned)
         else:
             data = _get_file_data()
@@ -227,25 +250,35 @@ async def refinery_executable(
             # REFINERY_TERM_SIZE env var is insufficient because the EVInt
             # descriptor reads it once at import time and caches the result;
             # later os.environ changes are never picked up.
-            old_val = environment.term_size.value
-            try:
-                environment.term_size.value = 120
-                return data | iemap() | bytes
-            finally:
-                environment.term_size.value = old_val
+            # Lock protects the global term_size mutation from concurrent calls.
+            with _entropy_lock:
+                old_val = environment.term_size.value
+                try:
+                    environment.term_size.value = 120
+                    return data | iemap() | bytes
+                finally:
+                    environment.term_size.value = old_val
 
         result = await asyncio.to_thread(_run_entropy)
         return await _check_mcp_response_size(ctx, {
             "operation": op,
             "input_size": len(data),
             "output_size": len(result),
-            "entropy_map": _safe_decode(result)[:8000],
+            "entropy_map": _safe_decode(result, max_len=8000),
         }, "refinery_executable")
 
     # ── stego: steganography extraction ─────────────────────────────
     # op == "stego"
     if data_hex:
-        cleaned = data_hex.replace(" ", "").replace("0x", "").replace("\\x", "")
+        _MAX_HEX_INPUT_LEN = 2_000_000  # 2M hex chars = 1MB decoded
+        if len(data_hex) > _MAX_HEX_INPUT_LEN:
+            raise ValueError(
+                f"Hex input too large ({len(data_hex):,} chars, "
+                f"limit {_MAX_HEX_INPUT_LEN:,})."
+            )
+        cleaned = data_hex.replace(" ", "").replace("\\x", "")
+        if cleaned.startswith(("0x", "0X")):
+            cleaned = cleaned[2:]
         data = bytes.fromhex(cleaned)
     else:
         data = _get_file_data()
@@ -266,6 +299,8 @@ async def refinery_executable(
             elif raw[:4] == b"PK\x03\x04":
                 entry["detected_type"] = "ZIP archive"
             results.append(entry)
+            if len(results) >= limit:
+                break
         return results
 
     results = await asyncio.to_thread(_run_stego)

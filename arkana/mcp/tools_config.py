@@ -1,6 +1,7 @@
 """MCP tools for configuration, task status, and utility functions."""
 import datetime
 import os
+import threading
 import time
 from typing import Dict, Any, List, Optional
 from arkana.config import (
@@ -78,14 +79,16 @@ def _build_mount_mappings() -> List[Dict[str, str]]:
 
 
 _mount_mappings_cache: Optional[List[Dict[str, str]]] = None  # L1-v9: cache mount mappings
+_mount_cache_lock = threading.Lock()
 
 
 def _get_mount_mappings() -> List[Dict[str, str]]:
     """Return cached mount mappings, building on first call."""
     global _mount_mappings_cache
-    if _mount_mappings_cache is None:
-        _mount_mappings_cache = _build_mount_mappings()
-    return _mount_mappings_cache
+    with _mount_cache_lock:
+        if _mount_mappings_cache is None:
+            _mount_mappings_cache = _build_mount_mappings()
+        return _mount_mappings_cache
 
 
 def translate_to_host_path(container_path: str) -> Optional[str]:

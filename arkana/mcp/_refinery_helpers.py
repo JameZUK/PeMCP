@@ -27,7 +27,7 @@ def _require_refinery(tool_name: str):
     _check_lib("binary-refinery", REFINERY_AVAILABLE, tool_name, pip_name="binary-refinery")
 
 
-_MAX_HEX_INPUT_LEN = 20_000_000  # 20MB hex = 10MB decoded
+_MAX_HEX_INPUT_LEN = 2_000_000  # 2M hex chars = 1MB decoded
 
 
 def _hex_to_bytes(hex_string: str) -> bytes:
@@ -44,7 +44,13 @@ def _hex_to_bytes(hex_string: str) -> bytes:
         cleaned = cleaned[2:]
     # Strip \x escape sequences throughout
     cleaned = cleaned.replace("\\x", "").replace("\\X", "")
-    return bytes.fromhex(cleaned)
+    try:
+        return bytes.fromhex(cleaned)
+    except ValueError as e:
+        raise ValueError(
+            f"Invalid hex string: {e}. Ensure input contains only hex characters "
+            f"(0-9, a-f, A-F) and has an even number of digits."
+        ) from e
 
 
 def _bytes_to_hex(data: bytes, max_len: int = 4096) -> str:
@@ -54,8 +60,14 @@ def _bytes_to_hex(data: bytes, max_len: int = 4096) -> str:
     return data.hex()
 
 
-def _safe_decode(data: bytes) -> str:
-    """Attempt to decode bytes as UTF-8 text, falling back to latin-1."""
+def _safe_decode(data: bytes, max_len: int = 0) -> str:
+    """Attempt to decode bytes as UTF-8 text, falling back to latin-1.
+
+    When *max_len* > 0 the input is truncated **before** decoding so we
+    never allocate a huge string only to slice it immediately afterwards.
+    """
+    if max_len > 0:
+        data = data[:max_len]
     try:
         return data.decode("utf-8")
     except UnicodeDecodeError:
@@ -67,19 +79,21 @@ _MAX_FILE_READ_SIZE = 500 * 1024 * 1024  # 500 MB safety limit
 
 def _get_file_data() -> bytes:
     """Get the raw bytes of the currently loaded file."""
-    if not state.pe_object:
+    pe_obj = state.pe_object
+    fpath = state.filepath
+    if not pe_obj:
         raise RuntimeError("No file is loaded. Use open_file() first.")
-    raw = getattr(state.pe_object, "__data__", None)
+    raw = getattr(pe_obj, "__data__", None)
     if raw is None:
-        raw = getattr(state.pe_object, "get_data", lambda: None)()
-    if raw is None and state.filepath and os.path.isfile(state.filepath):
-        file_size = os.path.getsize(state.filepath)
+        raw = getattr(pe_obj, "get_data", lambda: None)()
+    if raw is None and fpath and os.path.isfile(fpath):
+        file_size = os.path.getsize(fpath)
         if file_size > _MAX_FILE_READ_SIZE:
             raise RuntimeError(
                 f"File too large to read into memory ({file_size / (1024*1024):.0f} MB, "
                 f"limit is {_MAX_FILE_READ_SIZE // (1024*1024)} MB)."
             )
-        with open(state.filepath, "rb") as f:
+        with open(fpath, "rb") as f:
             raw = f.read()
     if raw is None:
         raise RuntimeError("Cannot access raw file data.")

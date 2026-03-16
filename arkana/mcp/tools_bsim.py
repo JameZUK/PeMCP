@@ -166,6 +166,12 @@ async def find_similar_functions(
     if not os.path.isfile(abs_path_b):
         raise ValueError(f"File not found: {abs_path_b}")
 
+    # M-4: Guard against excessively large comparison files
+    _MAX_COMPARISON_FILE_SIZE = 200 * 1024 * 1024  # 200 MB
+    file_size_b = os.path.getsize(abs_path_b)
+    if file_size_b > _MAX_COMPARISON_FILE_SIZE:
+        return {"error": f"Second binary too large ({file_size_b} bytes). Max {_MAX_COMPARISON_FILE_SIZE} bytes."}
+
     source_addr = _parse_addr(function_address)
 
     bsim_timeout = _safe_env_int("ARKANA_BSIM_BACKGROUND_TIMEOUT", BSIM_BACKGROUND_TIMEOUT)
@@ -375,7 +381,9 @@ async def build_function_signature_db(
         _partial_build['total'] = total
         _partial_build['binary'] = binary_basename
 
-        # Hold lock only for the register_binary DB write
+        # Hold lock only for the register_binary DB write.
+        # The returned connection is held open for the duration of batch
+        # inserts for efficiency — closed in the finally block below.
         with _db_write_lock:
             binary_id, conn = register_binary(
                 sha256=file_hash,

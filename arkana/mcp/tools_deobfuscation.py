@@ -15,6 +15,7 @@ if STRINGSIFTER_AVAILABLE:
     from arkana.mcp.tools_strings import _get_sifter_models
 
 _MAX_INITIAL_CANDIDATES = 10_000
+_MAX_HEX_INPUT_LEN = 2_000_000  # 2M hex chars = 1MB decoded
 
 _BENIGN_PATTERNS = (
     re.compile(r'^\d{4}[-/]\d{2}[-/]\d{2}'),    # date YYYY-MM-DD
@@ -66,6 +67,8 @@ async def get_hex_dump(ctx: Context, start_offset: Union[int, str] = 0, length: 
         raise ValueError("start_offset must be a non-negative integer.")
     if length <= 0:
         raise ValueError("length must be a positive integer.")
+    _MAX_HEX_DUMP_LENGTH = 1024 * 1024  # 1 MB cap
+    length = min(length, _MAX_HEX_DUMP_LENGTH)
 
     bpl = 16
     if bytes_per_line is not None:
@@ -124,6 +127,11 @@ async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
         ValueError: If the response size exceeds the server limit.
     """
     await ctx.info(f"Attempting to deobfuscate Base64 from hex string: {hex_string[:60]}...")
+    if len(hex_string) > _MAX_HEX_INPUT_LEN:
+        raise ValueError(
+            f"Hex input too large ({len(hex_string):,} chars, "
+            f"limit {_MAX_HEX_INPUT_LEN:,})."
+        )
     try:
         base64_encoded_bytes = bytes.fromhex(hex_string)
         decoded_payload_bytes = codecs.decode(base64_encoded_bytes, 'base64') # pyright: ignore [reportUnknownMemberType]
@@ -177,6 +185,11 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
         logger.warning("MCP: Invalid XOR key %d requested.", key)
         raise ValueError("XOR key must be an integer between 0 and 255.")
 
+    if len(data_hex) > _MAX_HEX_INPUT_LEN:
+        raise ValueError(
+            f"Hex input too large ({len(data_hex):,} chars, "
+            f"limit {_MAX_HEX_INPUT_LEN:,})."
+        )
     try:
         data_bytes = bytes.fromhex(data_hex)
         deobfuscated_bytes = bytes([b ^ key for b in data_bytes])

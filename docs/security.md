@@ -65,6 +65,17 @@ Arkana applies defence-in-depth input validation across all layers:
 - **Path validation**: `_get_filepath()` always validates paths via `state.check_path_allowed()`, even when falling back to the default loaded file.
 - **Recursion depth guard**: `_make_hashable()` enforces a max depth of 20 to prevent stack overflow on cyclic data structures.
 - **Cache size bounds**: `ARKANA_CACHE_MAX_SIZE_MB` env var is clamped to 1–50,000 MB to prevent misconfiguration.
+- **File size limit**: `DEFAULT_MAX_FILE_SIZE_MB` (256) caps file loading, overridable via `ARKANA_MAX_FILE_SIZE_MB` env var (parsed safely via `_safe_env_int()`).
+- **Systemic limit clamping**: All ~60 tool functions that accept a `limit` parameter clamp it via `max(1, min(limit, MAX_TOOL_LIMIT))` where `MAX_TOOL_LIMIT` is 100,000 (from `arkana.constants`).
+- **Decompression bomb protection**: `refinery_decompress` uses streaming chunk iteration with a cumulative byte counter, aborting when output exceeds 100 MB (`_MAX_DECOMPRESS_OUTPUT`). Prevents zip-bomb style attacks.
+- **Hex input validation**: All `bytes.fromhex()` call sites validate input length before decoding. `_hex_to_bytes()` in `_refinery_helpers.py` provides friendly error messages for invalid hex. `patch_binary_memory` caps hex input at 2 MB.
+- **Refinery pipeline loop limits**: Pipeline iteration loops break when item count reaches the configured `limit`, preventing unbounded output accumulation.
+- **IOC IP filtering**: `_is_non_routable_ip()` uses Python's `ipaddress` module to correctly filter CGNAT (100.64.0.0/10), multicast, and other non-routable ranges.
+- **Session limits**: `MAX_ACTIVE_SESSIONS` (default 100) caps concurrent HTTP sessions with oldest-session eviction. Overridable via `ARKANA_MAX_SESSIONS` env var.
+- **Cache atomic writes**: `cache.put()` and `update_session_data()` use `tempfile.NamedTemporaryFile()` + `os.replace()` for atomic writes, preventing `.tmp` file collisions and partial writes on crash.
+- **Resource entry cap**: PE resource directory traversal is bounded at 1,000 entries (`_MAX_RESOURCE_ENTRIES`).
+- **Config atomic writes**: `user_config.py` uses `tempfile.mkstemp()` + `os.replace()` for atomic config file writes.
+- **Result cache defensive copy**: `_ToolResultCache.set()` stores a shallow copy of the items list to prevent callers from mutating cached data.
 
 ---
 
@@ -72,7 +83,7 @@ Arkana applies defence-in-depth input validation across all layers:
 
 Arkana has two layers of testing, with automated CI via **GitHub Actions**:
 
-- **Unit tests** (`tests/`)  - 398 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrised edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
+- **Unit tests** (`tests/`)  - 1117 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrised edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
 - **Integration tests** (`mcp_test_client.py`)  - End-to-end tests for all 209 MCP tools against a running server, organised into 19 test categories with pytest markers.
 - **CI/CD** (`.github/workflows/ci.yml`)  - Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (65% floor with branch coverage), and syntax checking on every push, PR, and manual dispatch. Dependabot monitors pip dependencies weekly.
 

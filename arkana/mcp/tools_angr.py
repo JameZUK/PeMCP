@@ -10,7 +10,7 @@ import sys
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE, ANGR_ANALYSIS_TIMEOUT
-from arkana.constants import MAX_BATCH_DECOMPILE, BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT
+from arkana.constants import MAX_BATCH_DECOMPILE, BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT, MAX_TOOL_LIMIT
 from arkana.state import TASK_RUNNING, TASK_FAILED
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
@@ -21,9 +21,9 @@ from arkana.mcp._search_helpers import search_lines_with_context
 
 # Cache for paginated decompilation results — avoids re-decompiling when
 # the client requests subsequent pages of the same function.
-# C5: Bounded with FIFO eviction and protected by lock.
+# M-14: OrderedDict with LRU eviction (move_to_end on access, popitem(last=False) on eviction).
 # Keys are (session_uuid, addr_int) for session isolation in HTTP mode.
-_decompile_meta: dict = {}  # cache_key -> {function_name, address, lines}
+_decompile_meta: collections.OrderedDict = collections.OrderedDict()  # cache_key -> {function_name, address, lines}
 _decompile_meta_lock = threading.Lock()
 _MAX_DECOMPILE_META = 2000
 
@@ -38,6 +38,7 @@ def _get_cached_lines(cache_key):
     with _decompile_meta_lock:
         meta = _decompile_meta.get(cache_key)
         if meta:
+            _decompile_meta.move_to_end(cache_key)  # M-14: LRU touch
             return meta.get("lines")
     return None
 
@@ -47,6 +48,7 @@ def _get_cached_entry(cache_key):
     with _decompile_meta_lock:
         meta = _decompile_meta.get(cache_key)
         if meta:
+            _decompile_meta.move_to_end(cache_key)  # M-14: LRU touch
             return dict(meta)  # shallow copy to avoid mutation
     return None
 
@@ -54,18 +56,21 @@ def _get_cached_entry(cache_key):
 def _get_cached_meta(cache_key):
     """Thread-safe read of decompile metadata."""
     with _decompile_meta_lock:
-        return _decompile_meta.get(cache_key, {}).copy()
+        meta = _decompile_meta.get(cache_key)
+        if meta is not None:
+            _decompile_meta.move_to_end(cache_key)  # M-14: LRU touch
+            return dict(meta)
+        return {}
 
 
 def _set_decompile_meta(cache_key, value):
-    """Thread-safe store with FIFO eviction when exceeding max size."""
+    """Thread-safe store with LRU eviction when exceeding max size."""
     with _decompile_meta_lock:
+        if cache_key in _decompile_meta:
+            _decompile_meta.move_to_end(cache_key)  # M-14: LRU touch on update
         _decompile_meta[cache_key] = value
-        if len(_decompile_meta) > _MAX_DECOMPILE_META:
-            # Evict oldest entries (FIFO — dict preserves insertion order)
-            to_remove = len(_decompile_meta) - _MAX_DECOMPILE_META
-            for key in list(_decompile_meta.keys())[:to_remove]:
-                del _decompile_meta[key]
+        while len(_decompile_meta) > _MAX_DECOMPILE_META:
+            _decompile_meta.popitem(last=False)  # M-14: evict least-recently-used
 
 
 def clear_decompile_meta(session_uuid=None):
@@ -242,6 +247,7 @@ async def get_angr_partial_functions(
     Args:
         limit: Max number of functions to return (default 50).
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Listing partially discovered angr functions")
     _check_angr_ready("get_angr_partial_functions", require_cfg=False)
 
@@ -333,6 +339,7 @@ async def decompile_function_with_angr(
         case_sensitive: Whether the search is case-sensitive (default False).
     """
 
+    line_limit = max(1, min(line_limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Requesting Angr decompilation for: {function_address}")
     _check_angr_ready("decompile_function_with_angr", require_cfg=False)
     target_addr = _parse_addr(function_address)
@@ -413,6 +420,10 @@ async def decompile_function_with_angr(
         # Signal to background enrichment that on-demand decompile is waiting,
         # then acquire the decompile lock to ensure mutual exclusion with
         # the background decompile sweep.
+        # M-8: _decompile_on_demand_count += 1 / -= 1 rely on CPython's GIL
+        # for atomicity of int reference assignment.  The counter is only used
+        # as a "someone is waiting" signal (> 0 vs == 0), so interleaved
+        # increments/decrements cannot cause incorrect behavior.
         state._decompile_on_demand_count += 1
         try:
             if not state._decompile_lock.acquire(timeout=60):
@@ -612,6 +623,8 @@ async def get_function_cfg(
         edge_limit: Max edges to return (default 100).
     """
 
+    node_limit = max(1, min(node_limit, MAX_TOOL_LIMIT))
+    edge_limit = max(1, min(edge_limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Requesting CFG for: {function_address}")
     _check_angr_ready("get_function_cfg")
     target_addr = _parse_addr(function_address)
@@ -879,6 +892,14 @@ async def emulate_function_execution(
                 if not simgr.active: break
                 simgr.run(n=chunk_size)
                 steps_taken += chunk_size
+
+                # M-2: Prune active states to prevent state explosion
+                if len(simgr.active) > 30:
+                    simgr.split(from_stash='active', to_stash='deferred', limit=30)
+                deferred = getattr(simgr, 'deferred', None)
+                if deferred is not None and len(deferred) > 500:
+                    simgr.drop(stash='deferred')
+
                 _partial_emu['steps'] = steps_taken
                 try:
                     _partial_emu['stdout'] = simgr.active[0].posix.dumps(1).decode('utf-8', 'ignore') if simgr.active else ""
@@ -976,6 +997,7 @@ async def analyze_binary_loops(
     or extract_function_constants() to find crypto constants in loop bodies.
     """
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_angr_ready("analyze_binary_loops")
 
     def _core_logic(task_id_for_progress=None, _progress_bridge=None):
@@ -1014,34 +1036,42 @@ async def analyze_binary_loops(
                 state.set_angr_results(project, new_cfg, None, state.angr_loop_cache_config)
                 cfg = new_cfg
 
-        # Loop cache build (lighter weight, OK under lock)
+        # M-5: Double-check pattern -- build loop cache outside _init_lock,
+        # then acquire lock only to store the result.
+        need_loop_build = False
         with _init_lock:
             if state.angr_loop_cache is None:
-                if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...", bridge=_progress_bridge)
-
-                loop_finder = project.analyses.LoopFinder(kb=project.kb)
-                raw_loops = {}
-
-                for loop in loop_finder.loops:
-                    try:
-                        node = cfg.model.get_any_node(loop.entry.addr)
-                        if node and node.function_address:
-                            func_addr = node.function_address
-                            if func_addr not in raw_loops: raw_loops[func_addr] = []
-
-                            block_count = len(loop.body_nodes)  # L10-v10: body_nodes is already a set
-                            raw_loops[func_addr].append({
-                                "entry": hex(loop.entry.addr),
-                                "blocks": block_count,
-                                "subloops": bool(loop.subloops)
-                            })
-                    except Exception:
-                        logger.debug("analyze_binary_loops: failed to process loop at %s", hex(loop.entry.addr) if hasattr(loop, 'entry') else 'unknown', exc_info=True)
-                        continue
-
-                state.set_angr_results(project, cfg, raw_loops, req_config)
+                need_loop_build = True
             else:
                 if task_id_for_progress: _update_progress(task_id_for_progress, 90, "Using cached analysis data...", bridge=_progress_bridge)
+
+        if need_loop_build:
+            if task_id_for_progress: _update_progress(task_id_for_progress, 80, "Analyzing graph for loops...", bridge=_progress_bridge)
+
+            loop_finder = project.analyses.LoopFinder(kb=project.kb)
+            raw_loops = {}
+
+            for loop in loop_finder.loops:
+                try:
+                    node = cfg.model.get_any_node(loop.entry.addr)
+                    if node and node.function_address:
+                        func_addr = node.function_address
+                        if func_addr not in raw_loops: raw_loops[func_addr] = []
+
+                        block_count = len(loop.body_nodes)  # L10-v10: body_nodes is already a set
+                        raw_loops[func_addr].append({
+                            "entry": hex(loop.entry.addr),
+                            "blocks": block_count,
+                            "subloops": bool(loop.subloops)
+                        })
+                except Exception:
+                    logger.debug("analyze_binary_loops: failed to process loop at %s", hex(loop.entry.addr) if hasattr(loop, 'entry') else 'unknown', exc_info=True)
+                    continue
+
+            with _init_lock:
+                # Double-check: another thread may have built it while we were computing
+                if state.angr_loop_cache is None:
+                    state.set_angr_results(project, cfg, raw_loops, req_config)
 
         # Filtering Results
         if task_id_for_progress: _update_progress(task_id_for_progress, 95, "Formatting results...", bridge=_progress_bridge)
@@ -1102,6 +1132,7 @@ async def get_function_xrefs(
     Retrieves Cross-References (Callers/Callees) for a function.
     """
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Requesting X-Refs for: {function_address} (Limit: {limit})")
     _check_angr_ready("get_function_xrefs")
     target_addr = _parse_addr(function_address)
@@ -1153,6 +1184,7 @@ async def get_backward_slice(
     Finds all code (Basic Blocks) that can reach the target address (Control Flow Ancestors).
     """
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Calculating backward reachability for: {target_address} (Limit: {limit})")
     _check_angr_ready("get_backward_slice")
     target_addr = _parse_addr(target_address)
@@ -1216,6 +1248,7 @@ async def get_forward_slice(
     Finds all code (Basic Blocks) reachable FROM the source address (Control Flow Descendants).
     """
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Calculating forward reachability from: {source_address} (Limit: {limit})")
     _check_angr_ready("get_forward_slice")
     source_addr = _parse_addr(source_address)
@@ -1356,6 +1389,7 @@ async def get_function_complexity_list(
             Reduces per-function output size significantly. Default False.
     """
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Requesting function complexity list. Limit: {limit}, Sort: {sort_by}")
 
     _check_angr_ready("get_function_complexity_list")
@@ -1441,6 +1475,7 @@ async def extract_function_constants(
     Useful for extracting potential IOCs, keys, or config data from a target function.
     """
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Extracting constants from: {function_address} (Limit: {limit})")
 
     _check_angr_ready("extract_function_constants")
@@ -1520,6 +1555,7 @@ async def get_global_data_refs(
     Useful for understanding what global state (flags, config, strings) a function interacts with.
     """
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Scanning global refs in: {function_address} (Limit: {limit})")
 
     _check_angr_ready("scan_global_references")
@@ -1546,8 +1582,9 @@ async def get_global_data_refs(
                 pass
         if local_cfg is None:
             local_cfg = project.analyses.CFGFast(normalize=True, collect_data_references=True)
-            # Cache the data-reference CFG for reuse
-            state.set_angr_results(project, local_cfg, state.angr_loop_cache, state.angr_loop_cache_config)
+            # Note: do NOT replace the global CFG — other tools depend on the
+            # original CFG's state (loop cache, function scores, enrichment).
+            # The data-reference CFG is used locally only.
 
         try:
             func = local_cfg.functions[target_addr]
@@ -1593,6 +1630,7 @@ async def scan_for_indirect_jumps(
     This helps detect switch tables, virtual function calls, or obfuscated control flow.
     """
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Scanning for indirect jumps in: {function_address} (Limit: {limit})")
 
     _check_angr_ready("scan_for_indirect_jumps")
@@ -1652,6 +1690,12 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
     await ctx.info(f"Patching memory at {address}")
     _check_angr_ready("patch_binary_memory")
     addr = _parse_addr(address)
+    _MAX_HEX_INPUT_LEN = 2_000_000  # 2M hex chars = 1MB decoded
+    if len(patch_bytes_hex) > _MAX_HEX_INPUT_LEN:
+        raise ValueError(
+            f"Hex input too large ({len(patch_bytes_hex):,} chars, "
+            f"limit {_MAX_HEX_INPUT_LEN:,})."
+        )
     try:
         patch_data = bytes.fromhex(patch_bytes_hex)
     except ValueError: raise ValueError("Invalid hex data format.")
@@ -1751,6 +1795,8 @@ async def get_cross_reference_map(
 
             def _collect_callees(fn_addr, current_depth):
                 if current_depth > depth or fn_addr in visited:
+                    return
+                if len(visited) > 1000:
                     return
                 visited.add(fn_addr)
                 try:
@@ -1948,6 +1994,8 @@ async def batch_decompile(
                 state._decompile_lock.release()
 
         try:
+            # Note: asyncio.wait_for timeout is advisory — the thread continues
+            # after timeout. The decompile lock may be held until the thread completes.
             result = await asyncio.wait_for(
                 asyncio.to_thread(_decompile_one),
                 timeout=BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT,

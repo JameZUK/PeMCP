@@ -303,10 +303,12 @@ async def reconstruct_pe_from_dump(
         section_alignment = pe.optional_header.section_alignment
         file_alignment = pe.optional_header.file_alignment
         if file_alignment == 0:
-            pe.optional_header.file_alignment = 0x200
+            file_alignment = 0x200
+            pe.optional_header.file_alignment = file_alignment
             issues_fixed.append("Fixed FileAlignment to 0x200")
         if section_alignment == 0:
-            pe.optional_header.section_alignment = 0x1000
+            section_alignment = 0x1000
+            pe.optional_header.section_alignment = section_alignment
             issues_fixed.append("Fixed SectionAlignment to 0x1000")
 
         bridge.report_progress(40, 100)
@@ -525,6 +527,8 @@ async def find_oep_heuristic(
                             "entropy_after": round(ent_curr, 2),
                             "confidence": 0.5,
                         })
+                    if len(candidates) >= 20:
+                        break
         except Exception as e:
             logger.debug("Entropy transition detection failed: %s", e)
 

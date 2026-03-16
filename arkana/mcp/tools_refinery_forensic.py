@@ -81,7 +81,7 @@ async def refinery_forensic(
                 "operation": op,
                 "input_size": len(data),
                 "output_size": len(result),
-                "defanged_text": _safe_decode(result)[:8000],
+                "defanged_text": _safe_decode(result, max_len=8000),
             }, "refinery_forensic")
         else:  # url_guards
             def _run_urlguards():
@@ -92,7 +92,7 @@ async def refinery_forensic(
                 "operation": op,
                 "input_size": len(data),
                 "output_size": len(result),
-                "cleaned_text": _safe_decode(result)[:4000],
+                "cleaned_text": _safe_decode(result, max_len=4000),
             }, "refinery_forensic")
 
     # ── All other operations get data from hex or file ──────────────
@@ -121,7 +121,7 @@ async def refinery_forensic(
             "operation": op,
             "input_size": len(data),
             "output_size": len(result),
-            "decoded_json": _safe_decode(result)[:8000],
+            "decoded_json": _safe_decode(result, max_len=8000),
         }, "refinery_forensic")
 
     # ── pcap: TCP stream reassembly ─────────────────────────────────
@@ -169,7 +169,7 @@ async def refinery_forensic(
                     for key in ("url", "method", "status", "content_type", "host"):
                         if key in chunk.meta:
                             entry[key] = str(chunk.meta[key])
-                entry["body_preview"] = _safe_decode(raw)[:1000]
+                entry["body_preview"] = _safe_decode(raw, max_len=1000)
                 entry["sha256"] = hashlib.sha256(raw).hexdigest()
                 results.append(entry)
                 if len(results) >= limit:
@@ -261,7 +261,7 @@ async def refinery_forensic(
             raw = bytes(chunk)
             entry: Dict[str, Any] = {
                 "size": len(raw),
-                "content": _safe_decode(raw)[:4000],
+                "content": _safe_decode(raw, max_len=4000),
             }
             if hasattr(chunk, "meta") and isinstance(chunk.meta, dict):
                 for key in ("target", "arguments", "workdir", "icon", "description",
@@ -269,6 +269,8 @@ async def refinery_forensic(
                     if key in chunk.meta:
                         entry[key] = str(chunk.meta[key])
             results.append(entry)
+            if len(results) >= limit:
+                break
         return results
 
     results = await asyncio.to_thread(_run_lnk)

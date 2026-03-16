@@ -127,19 +127,23 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
     future = _regex_executor.submit(compiled_re.search, text)
     try:
         result = future.result(timeout=timeout)
-        _regex_consecutive_timeouts = 0  # M2-v11: reset on success
+        # M-9: Protect counter reset under lock for thread safety
+        with _regex_executor_lock:
+            _regex_consecutive_timeouts = 0
         return result
     except concurrent.futures.TimeoutError:
         future.cancel()
         pattern_preview = str(compiled_re.pattern)[:80]
-        # M2-v11: Track consecutive timeouts instead of accessing private _threads attr
-        _regex_consecutive_timeouts += 1
+        # M-9: Protect counter increment and pool recreation under lock
+        with _regex_executor_lock:
+            _regex_consecutive_timeouts += 1
+            current_timeouts = _regex_consecutive_timeouts
         logger.warning(
             "Regex timed out after %ss — pattern: %s (consecutive timeouts: %d/%d)",
-            timeout, pattern_preview, _regex_consecutive_timeouts, _REGEX_MAX_WORKERS,
+            timeout, pattern_preview, current_timeouts, _REGEX_MAX_WORKERS,
         )
         # Recreate pool after _REGEX_MAX_WORKERS consecutive timeouts (all workers likely stuck)
-        if _regex_consecutive_timeouts >= _REGEX_MAX_WORKERS:
+        if current_timeouts >= _REGEX_MAX_WORKERS:
             with _regex_executor_lock:
                 # Double-check under lock
                 if _regex_consecutive_timeouts >= _REGEX_MAX_WORKERS:

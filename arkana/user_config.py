@@ -7,6 +7,7 @@ persist across sessions. Environment variables always take priority.
 import os
 import json
 import logging
+import tempfile
 
 from pathlib import Path
 from typing import Optional, Dict, Any
@@ -55,13 +56,25 @@ def load_user_config() -> Dict[str, Any]:
 
 
 def save_user_config(config: Dict[str, Any]) -> None:
-    """Write config dict to ~/.arkana/config.json, creating the directory if needed."""
+    """Write config dict to ~/.arkana/config.json, creating the directory if needed.
+
+    Uses atomic write (temp file + rename) to prevent partial writes from
+    corrupting the config file on crash or power loss.
+    """
     _ensure_config_dir()
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, sort_keys=True)
-        # Restrict permissions to owner only (API keys are sensitive)
-        CONFIG_FILE.chmod(0o600)
+        fd, tmp_path = tempfile.mkstemp(dir=str(CONFIG_FILE.parent), suffix='.tmp')
+        try:
+            os.chmod(fd, 0o600)
+            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+                json.dump(config, f, indent=2, sort_keys=True)
+            os.replace(tmp_path, str(CONFIG_FILE))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except OSError as e:
         logger.error("Failed to write user config to %s: %s", CONFIG_FILE, e)
         raise

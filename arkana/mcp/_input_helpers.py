@@ -105,7 +105,7 @@ class _ToolResultCache:
         with self._lock:
             bucket = self._store.setdefault(tool_name, collections.OrderedDict())
             is_new = params_key not in bucket
-            bucket[params_key] = {"items": items, "ts": time.time()}
+            bucket[params_key] = {"items": list(items), "ts": time.time()}
             bucket.move_to_end(params_key)
             evicted = 0
             while len(bucket) > _LRU_SLOTS_PER_TOOL:
@@ -152,6 +152,10 @@ class _ToolResultCache:
                     for k in expired_keys:
                         del bucket[k]
                         cls._global_entry_count = max(0, cls._global_entry_count - 1)
+        # Recount actual entries to correct any drift in _global_entry_count
+        cls._global_entry_count = sum(
+            len(b) for inst in list(cls._all_instances) for b in inst._store.values()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -169,7 +173,7 @@ def _make_hashable(v, _depth=0):
         return bytes(v)
     if isinstance(v, dict):
         return tuple(sorted((k, _make_hashable(val, _depth + 1)) for k, val in v.items()))
-    if isinstance(v, (list, set)):
+    if isinstance(v, (list, tuple, set)):
         return tuple(_make_hashable(item, _depth + 1) for item in v)
     return v
 

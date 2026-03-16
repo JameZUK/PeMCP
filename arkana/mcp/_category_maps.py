@@ -165,7 +165,7 @@ STRING_CATEGORY_PATTERNS = {
     ),
     "mutex_names": _re.compile(r'(?:Global|Local)\\[^\s\'"]+'),
     "email_addresses": _re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'),
-    "base64_blobs": _re.compile(r'[A-Za-z0-9+/]{40,}={0,2}'),
+    "base64_blobs": _re.compile(r'[A-Za-z0-9+/]{60,}={0,2}'),
 }
 
 # Well-known benign IPs to exclude from IOC extraction

@@ -1671,7 +1671,7 @@ def get_strings_data(
     cache_key = st._state_uuid
     version_key = (search, string_type, category, min_score, sort_by, sort_asc,
                    offset, limit, getattr(st, 'filepath', None),
-                   id(st.pe_data))
+                   len(st.pe_data) if st.pe_data else 0)
     with _cache_lock:
         cached = _strings_cache.get(cache_key)
         if cached is not None:
@@ -1980,13 +1980,17 @@ def get_function_analysis_data(address_hex: str) -> Dict[str, Any]:
         else:
             result["name"] = renames.get(hex(addr_int), address_hex)
 
-        # Callers / callees from callgraph
+        # Callers / callees from callgraph (bounded to prevent oversized responses)
+        _MAX_XREFS = 200
         if hasattr(kb, "callgraph") and addr_int in kb.callgraph:
             cg = kb.callgraph
             seen_suspicious = set()
 
             # Callers (predecessors)
             for pred in cg.predecessors(addr_int):
+                if len(result["callers"]) >= _MAX_XREFS:
+                    result["callers_truncated"] = True
+                    break
                 pred_hex = hex(pred)
                 name = renames.get(pred_hex, "")
                 if not name and hasattr(kb, "functions") and pred in kb.functions:
@@ -2009,6 +2013,9 @@ def get_function_analysis_data(address_hex: str) -> Dict[str, Any]:
 
             # Callees (successors)
             for succ in cg.successors(addr_int):
+                if len(result["callees"]) >= _MAX_XREFS:
+                    result["callees_truncated"] = True
+                    break
                 succ_hex = hex(succ)
                 name = renames.get(succ_hex, "")
                 if not name and hasattr(kb, "functions") and succ in kb.functions:
@@ -3250,7 +3257,8 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
 
     # M-E7: Check cache before filesystem walk (search/sort applied post-cache)
     now = time.time()
-    cached_entry = _list_files_cache.get(resolved_samples)
+    with _cache_lock:
+        cached_entry = _list_files_cache.get(resolved_samples)
     if cached_entry is not None:
         expire_time, cached_files, cached_truncated = cached_entry
         if now < expire_time:
@@ -3308,11 +3316,12 @@ def get_list_files_data(search: str = "", sort_by: str = "name") -> Dict[str, An
         return {"files": [], "error": "Failed to read samples directory"}
 
     # M-E7: Cache the raw file list (before search/sort) for reuse
-    _list_files_cache[resolved_samples] = (time.time() + _LIST_FILES_TTL, files, truncated)
-    # L9: Evict oldest entries if cache grows too large
-    if len(_list_files_cache) > _MAX_LIST_FILES_CACHE:
-        oldest_key = min(_list_files_cache, key=lambda k: _list_files_cache[k][0])
-        _list_files_cache.pop(oldest_key, None)
+    with _cache_lock:
+        _list_files_cache[resolved_samples] = (time.time() + _LIST_FILES_TTL, files, truncated)
+        # L9: Evict oldest entries if cache grows too large
+        if len(_list_files_cache) > _MAX_LIST_FILES_CACHE:
+            oldest_key = min(_list_files_cache, key=lambda k: _list_files_cache[k][0])
+            _list_files_cache.pop(oldest_key, None)
 
     return _apply_list_files_filters(files, truncated, search, sort_by)
 

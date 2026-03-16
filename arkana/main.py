@@ -368,7 +368,9 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
             logger.info("Auto-detected format: %s", effective_mode)
 
         # M1-v11: Guard against excessively large files for ALL modes (not just shellcode/elf/macho)
-        max_file_mb = int(os.environ.get("ARKANA_MAX_FILE_SIZE_MB", "500"))
+        # M-11: Use _safe_env_int to handle non-numeric env values gracefully
+        from arkana.constants import DEFAULT_MAX_FILE_SIZE_MB
+        max_file_mb = _safe_env_int("ARKANA_MAX_FILE_SIZE_MB", DEFAULT_MAX_FILE_SIZE_MB)
         file_size = os.path.getsize(abs_input_file)
         if file_size > max_file_mb * 1024 * 1024:
             logger.critical("File too large for preload: %d bytes (limit: %d MB)", file_size, max_file_mb)

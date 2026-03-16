@@ -111,7 +111,6 @@ _EXTENDED_SIGNATURES_2 = {
     b'PK': ("zip", "ZIP/Archive"),
     b'\x1f\x8b': ("gzip", "GZIP Compressed"),
     b'\xd0\xcf': ("ole", "OLE/MS-CFB (Office)"),
-    b'\x7fC': ("cgc", "CGC Binary"),       # \x7fCGC
     b'\xfd7': ("xz", "XZ Compressed"),
     b'de': ("dex", "Android DEX/ODEX"),     # dex\n or dey\n
 }
@@ -126,6 +125,7 @@ _EXTENDED_SIGNATURES_4 = {
     b'dex\n': ("dex", "Android DEX"),
     b'dey\n': ("odex", "Android ODEX"),
     b'7z\xbc\xaf': ("7z", "7-Zip Archive"),
+    b'\x7fCGC': ("cgc", "CGC Binary"),
 }
 
 

@@ -35,9 +35,14 @@ def _load_api_name_db() -> Dict[str, List[str]]:
             return _api_db_cache
         if not _API_DB_PATH.exists():
             logger.warning("Windows API name database not found at %s", _API_DB_PATH)
-            return {}
-        with open(_API_DB_PATH, "r") as f:
-            _api_db_cache = json.load(f)
+            _api_db_cache = {}
+            return _api_db_cache
+        try:
+            with open(_API_DB_PATH, "r") as f:
+                _api_db_cache = json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Failed to load API name database: %s", e)
+            _api_db_cache = {}
         return _api_db_cache
 
 
@@ -64,12 +69,18 @@ def _load_extended_api_names() -> List[str]:
             return []
 
 
+_flat_names_cache: Dict[bool, List[str]] = {}
+
+
 def get_all_api_names(include_extended: bool = False) -> List[str]:
     """Return a flat list of all API names from the database.
 
     Args:
         include_extended: If True, also include the ~10K OALabs export list.
     """
+    cached = _flat_names_cache.get(include_extended)
+    if cached is not None:
+        return cached
     db = _load_api_name_db()
     names = []
     for dll_names in db.values():
@@ -78,6 +89,7 @@ def get_all_api_names(include_extended: bool = False) -> List[str]:
         extended = _load_extended_api_names()
         existing = set(names)
         names.extend(n for n in extended if n not in existing)
+    _flat_names_cache[include_extended] = names
     return names
 
 
@@ -192,5 +204,8 @@ def build_hash_lookup(
     lookup = {}
     for name in api_names:
         h = compute_hash(name, algorithm, seed=seed, case_handling=case_handling)
+        existing = lookup.get(h)
+        if existing is not None and existing != name:
+            logger.debug("Hash collision: %s and %s both hash to %d", existing, name, h)
         lookup[h] = name
     return lookup

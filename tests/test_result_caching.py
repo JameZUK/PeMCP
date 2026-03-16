@@ -23,7 +23,7 @@ class TestToolResultCache:
         cache = _ToolResultCache()
         items = [{"a": 1}, {"b": 2}]
         cache.set("tool", "key", items)
-        assert cache.get("tool", "key") is items
+        assert cache.get("tool", "key") == items
 
     def test_different_keys(self):
         cache = _ToolResultCache()
@@ -183,9 +183,9 @@ class TestCachedFlatStrings:
         result1 = _get_cached_flat_strings(include_basic_ascii=True, deduplicate=True)
         assert len(result1) == 1
 
-        # Same data — cache hit returns same object
+        # Same data — cache hit returns same list (get returns same ref)
         result2 = _get_cached_flat_strings(include_basic_ascii=True, deduplicate=True)
-        assert result2 is result1
+        assert result2 == result1
         assert len(result2) == 1
 
         # Modify underlying data — cache key includes content version,

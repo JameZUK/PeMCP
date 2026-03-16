@@ -23,7 +23,7 @@ from arkana.mcp._format_helpers import detect_format_from_magic, detect_format_e
 from arkana.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from arkana.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
 
-from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT, INTEGRITY_FLAGGED_TIMEOUT_FACTOR, MAX_ARTIFACT_FILE_SIZE
+from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT, INTEGRITY_FLAGGED_TIMEOUT_FACTOR, MAX_ARTIFACT_FILE_SIZE, DEFAULT_MAX_FILE_SIZE_MB
 from arkana.integrity import check_file_integrity as _check_integrity_fn
 from arkana.state import MAX_TOOL_HISTORY
 from arkana.parsers.floss import _parse_floss_analysis
@@ -250,7 +250,7 @@ async def open_file(
         raise RuntimeError(f"[open_file] File not found: {abs_path}")
 
     # Reject files that are too large to analyze safely in memory
-    MAX_FILE_SIZE = _safe_env_int("ARKANA_MAX_FILE_SIZE_MB", _safe_env_int("PEMCP_MAX_FILE_SIZE_MB", 256)) * 1024 * 1024
+    MAX_FILE_SIZE = _safe_env_int("ARKANA_MAX_FILE_SIZE_MB", _safe_env_int("PEMCP_MAX_FILE_SIZE_MB", DEFAULT_MAX_FILE_SIZE_MB)) * 1024 * 1024
     file_size = os.path.getsize(abs_path)
     if file_size > MAX_FILE_SIZE:
         raise RuntimeError(

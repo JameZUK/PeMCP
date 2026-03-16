@@ -86,16 +86,12 @@ def _parse_single_file(filepath):
         except Exception:
             logger.debug("TLSH hash failed for %s", filepath)
 
-    # Release raw bytes after hashing — PE object works from its own copy
-    del data
-
     # M4-v9: PE parsing with try/finally for reliable cleanup
+    # Reuse data from initial read — pefile.PE(data=...) makes its own internal copy
     pe = None
     try:
-        with open(filepath, "rb") as f:
-            pe_data = f.read()
-        pe = pefile.PE(data=pe_data, fast_load=True)
-        del pe_data  # Release raw bytes immediately
+        pe = pefile.PE(data=data, fast_load=True)
+        del data  # Release raw bytes after PE has its own copy
         pe.parse_data_directories(directories=[
             pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"],
             pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_EXPORT"],

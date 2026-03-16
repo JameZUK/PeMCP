@@ -754,7 +754,7 @@ def _parse_pogo(pe: "pefile.PE", debug_entry) -> List[Dict[str, Any]]:
             # Name is null-terminated ASCII
             name_start = offset + 8
             name_end = data.find(b'\x00', name_start)
-            if name_end == -1 or name_end > ptr + size:
+            if name_end == -1 or name_end > len(data):
                 break
             name = data[name_start:name_end].decode('ascii', 'replace')
 

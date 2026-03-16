@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from arkana.config import state, logger, Context, analysis_cache
-from arkana.constants import MAX_TOTAL_ARTIFACT_EXPORT_SIZE, MAX_ARTIFACT_FILE_SIZE
+from arkana.constants import MAX_TOTAL_ARTIFACT_EXPORT_SIZE, MAX_ARTIFACT_FILE_SIZE, DEFAULT_MAX_FILE_SIZE_MB
 from arkana.mcp.server import tool_decorator, _check_pe_loaded
 from arkana.cache import CACHE_DIR
 from arkana.utils import _safe_env_int
@@ -29,7 +29,7 @@ PROJECT_EXTENSION = ".arkana_project.tar.gz"
 IMPORT_DIR = Path.home() / ".arkana" / "imported"
 
 # Maximum size of a single imported binary (default 256 MB)
-_MAX_IMPORT_BINARY_SIZE = _safe_env_int("ARKANA_MAX_FILE_SIZE_MB", _safe_env_int("PEMCP_MAX_FILE_SIZE_MB", 256)) * 1024 * 1024
+_MAX_IMPORT_BINARY_SIZE = _safe_env_int("ARKANA_MAX_FILE_SIZE_MB", _safe_env_int("PEMCP_MAX_FILE_SIZE_MB", DEFAULT_MAX_FILE_SIZE_MB)) * 1024 * 1024
 
 # Maximum total size of all imported binaries (default 1 GB)
 _MAX_IMPORT_DIR_SIZE = _safe_env_int("ARKANA_MAX_IMPORT_DIR_SIZE_MB", _safe_env_int("PEMCP_MAX_IMPORT_DIR_SIZE_MB", 1024)) * 1024 * 1024

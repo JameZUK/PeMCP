@@ -111,6 +111,18 @@ Beyond the cache and API key settings above, Arkana supports several environment
 |---|---|---|
 | `ARKANA_MAX_CONCURRENT_ANALYSES` | `3` | Maximum concurrent heavy analysis operations (semaphore). Prevents CPU/memory exhaustion when multiple tools run simultaneously. |
 
+### Session Management
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARKANA_MAX_SESSIONS` | `100` | Maximum concurrent HTTP sessions. When reached, the oldest session (by last activity) is evicted. Prevents unbounded memory growth in HTTP mode. |
+
+### File Limits
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARKANA_MAX_FILE_SIZE_MB` | `256` | Maximum file size (in MB) accepted by `open_file`. Parsed safely via `_safe_env_int()`. |
+
 ### Auto-Enrichment
 
 | Variable | Default | Description |

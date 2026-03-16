@@ -274,7 +274,7 @@ async def refinery_extract(
                         if key in chunk.meta:
                             entry[key] = str(chunk.meta[key])
                 if sop in ("vba", "vba_pcode", "vba_strings", "text", "metadata"):
-                    entry["text"] = _safe_decode(raw)[:4000]
+                    entry["text"] = _safe_decode(raw, max_len=4000)
                 else:
                     entry["preview_hex"] = raw[:128].hex()
                 results.append(entry)
@@ -344,7 +344,7 @@ async def refinery_extract(
             "operation": op,
             "input_size": len(data),
             "output_size": len(result),
-            "deobfuscated_text": _safe_decode(result)[:8000],
+            "deobfuscated_text": _safe_decode(result, max_len=8000),
         }
         if output_path:
             artifact_meta = await asyncio.to_thread(
@@ -377,7 +377,7 @@ async def refinery_extract(
                     for key in ("path", "name", "type", "obj"):
                         if key in chunk.meta:
                             entry[key] = str(chunk.meta[key])
-                text = _safe_decode(raw)[:1000]
+                text = _safe_decode(raw, max_len=1000)
                 if text.isprintable() or any(c in text for c in "\n\r\t"):
                     entry["text_preview"] = text
                 else:

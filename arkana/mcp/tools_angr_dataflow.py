@@ -7,6 +7,7 @@ import asyncio
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
@@ -100,6 +101,7 @@ async def get_reaching_definitions(
         limit: Max definition entries to return.
         run_in_background: Run as background task (default True).
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_angr_ready("get_reaching_definitions")
     func_addr = _parse_addr(function_address)
     target_insn = _parse_addr(target_instruction, "target_instruction") if target_instruction else None
@@ -253,6 +255,7 @@ async def get_data_dependencies(
         limit: Max dependency entries to return.
         run_in_background: Run as background task (default True).
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_angr_ready("get_data_dependencies")
     func_addr = _parse_addr(function_address)
     insn_addr = _parse_addr(instruction_address, "instruction_address") if instruction_address else None
@@ -434,6 +437,7 @@ async def get_control_dependencies(
         target_address: Optional; if set, return only the branches that control this block.
         limit: Max entries to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Building CDG for {function_address}")
     _check_angr_ready("get_control_dependencies")
     func_addr = _parse_addr(function_address)
@@ -551,6 +555,7 @@ async def propagate_constants(
         function_address: Hex address of the function.
         limit: Max propagated values to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Propagating constants in {function_address}")
     _check_angr_ready("propagate_constants")
     func_addr = _parse_addr(function_address)
@@ -645,6 +650,7 @@ async def get_value_set_analysis(
         limit: Max value-set entries to return.
         run_in_background: Run as background task (default True).
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_angr_ready("get_value_set_analysis")
     func_addr = _parse_addr(function_address)
 

@@ -132,10 +132,10 @@ async def refinery_dotnet(
         resp: Dict[str, Any] = {"operation": op, "output_size": len(result)}
         if op == "headers":
             resp["filepath"] = state.filepath
-            resp["headers_json"] = _safe_decode(result)[:8000]
+            resp["headers_json"] = _safe_decode(result, max_len=8000)
         else:
             resp["input_size"] = len(data)
-            resp["deserialized_json"] = _safe_decode(result)[:8000]
+            resp["deserialized_json"] = _safe_decode(result, max_len=8000)
         return await _check_mcp_response_size(ctx, resp, "refinery_dotnet")
 
     # ── disassemble: multi-output, text-oriented ────────────────────
@@ -149,13 +149,15 @@ async def refinery_dotnet(
                 raw = bytes(chunk)
                 entry: Dict[str, Any] = {
                     "size": len(raw),
-                    "disassembly": _safe_decode(raw)[:4000],
+                    "disassembly": _safe_decode(raw, max_len=4000),
                 }
                 if hasattr(chunk, "meta") and isinstance(chunk.meta, dict):
                     for key in ("name", "token", "method", "type"):
                         if key in chunk.meta:
                             entry[key] = str(chunk.meta[key])
                 results.append(entry)
+                if len(results) >= limit:
+                    break
             return results
 
         results = await asyncio.to_thread(_run_disasm)

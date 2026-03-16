@@ -519,49 +519,48 @@ def _parse_certificates_crypto(raw_sig: bytes, anomalies: List) -> List[Dict[str
 def _validate_with_signify(pe: "pefile.PE", anomalies: List) -> Dict[str, Any]:
     """Validate authenticode signature using signify."""
     try:
-        # Read from disk to avoid duplicating PE data in memory
-        with open(state.filepath, 'rb') as f:
-            auth_file = AuthenticodeFile.from_stream(f)
-            status, err = auth_file.explain_verify()
+        # Use in-memory PE data to avoid TOCTOU and extra disk read
+        auth_file = AuthenticodeFile.from_stream(io.BytesIO(pe.__data__))
+        status, err = auth_file.explain_verify()
 
-            result = {
-                "status": str(status),
-                "valid": "OK" in str(status),
-                "error": str(err) if err else None,
-            }
+        result = {
+            "status": str(status),
+            "valid": "OK" in str(status),
+            "error": str(err) if err else None,
+        }
 
-            # Extract signer info
-            signers = []
-            countersigs = []
-            for sig in auth_file.signatures:
-                if hasattr(sig, 'signer_info') and sig.signer_info:
-                    si = sig.signer_info
-                    signer = {}
-                    if hasattr(si, 'program_name') and si.program_name:
-                        signer["program_name"] = si.program_name
-                    if hasattr(si, 'issuer'):
-                        signer["issuer"] = str(si.issuer)
-                    signers.append(signer)
+        # Extract signer info
+        signers = []
+        countersigs = []
+        for sig in auth_file.signatures:
+            if hasattr(sig, 'signer_info') and sig.signer_info:
+                si = sig.signer_info
+                signer = {}
+                if hasattr(si, 'program_name') and si.program_name:
+                    signer["program_name"] = si.program_name
+                if hasattr(si, 'issuer'):
+                    signer["issuer"] = str(si.issuer)
+                signers.append(signer)
 
-                    # Countersignatures (timestamps)
-                    if hasattr(si, 'countersigner') and si.countersigner:
-                        cs = si.countersigner
-                        cs_info = {}
-                        if hasattr(cs, 'signing_time'):
-                            cs_info["timestamp"] = str(cs.signing_time)
-                        countersigs.append(cs_info)
+                # Countersignatures (timestamps)
+                if hasattr(si, 'countersigner') and si.countersigner:
+                    cs = si.countersigner
+                    cs_info = {}
+                    if hasattr(cs, 'signing_time'):
+                        cs_info["timestamp"] = str(cs.signing_time)
+                    countersigs.append(cs_info)
 
-            result["signers"] = signers
-            result["countersignatures"] = countersigs
+        result["signers"] = signers
+        result["countersignatures"] = countersigs
 
-            if not result["valid"]:
-                anomalies.append({
-                    "type": "invalid_signature",
-                    "severity": "high",
-                    "description": f"Signature validation failed: {status}",
-                })
+        if not result["valid"]:
+            anomalies.append({
+                "type": "invalid_signature",
+                "severity": "high",
+                "description": f"Signature validation failed: {status}",
+            })
 
-            return result
+        return result
 
     except Exception as e:
         return {"error": f"Signify validation failed: {e}"}
@@ -834,9 +833,17 @@ async def unify_artifact_timeline(
     return await _check_mcp_response_size(ctx, analysis, "unify_artifact_timeline")
 
 
-def _collect_resource_timestamps(resource_dir, artifacts: List, depth: int = 0):
+_MAX_RESOURCE_ENTRIES = 1000
+
+
+def _collect_resource_timestamps(resource_dir, artifacts: List, depth: int = 0, _counter: List = None):
     """Recursively collect timestamps from resource directory entries."""
+    if _counter is None:
+        _counter = [0]
     if depth > 3:
+        return
+    _counter[0] += 1
+    if _counter[0] > _MAX_RESOURCE_ENTRIES:
         return
     ts = getattr(resource_dir.struct, 'TimeDateStamp', 0)
     if ts and ts != 0:
@@ -848,8 +855,10 @@ def _collect_resource_timestamps(resource_dir, artifacts: List, depth: int = 0):
         })
     if hasattr(resource_dir, 'entries') and resource_dir.entries:
         for entry in resource_dir.entries:
+            if _counter[0] > _MAX_RESOURCE_ENTRIES:
+                break
             if hasattr(entry, 'directory') and entry.directory:
-                _collect_resource_timestamps(entry.directory, artifacts, depth + 1)
+                _collect_resource_timestamps(entry.directory, artifacts, depth + 1, _counter)
 
 
 def _ts_str(ts: int) -> str:

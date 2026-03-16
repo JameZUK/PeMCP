@@ -37,6 +37,7 @@ __all__ = [
     "INTEGRITY_MAX_SECTIONS_PE", "INTEGRITY_FLAGGED_TIMEOUT_FACTOR",
     "INTEGRITY_SAMPLE_SIZE", "INTEGRITY_MAX_ISSUES",
     "MAX_ANALYSIS_WARNINGS",
+    "DEFAULT_MAX_FILE_SIZE_MB",
     "DEPENDENCIES",
 ]
 
@@ -145,6 +146,9 @@ MAX_TOOL_LIMIT = 100_000
 
 # --- Analysis Warning Capture ---
 MAX_ANALYSIS_WARNINGS = 500  # max unique warnings retained per session
+
+# --- File Size Limit ---
+DEFAULT_MAX_FILE_SIZE_MB = 256  # default max file size for open_file / import
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

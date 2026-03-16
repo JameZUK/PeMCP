@@ -129,7 +129,10 @@ class ProgressBridge:
         if self._loop is None or self._loop.is_closed():
             return
         try:
-            asyncio.run_coroutine_threadsafe(coro_fn(*args), self._loop)
+            fut = asyncio.run_coroutine_threadsafe(coro_fn(*args), self._loop)
+            # Surface exceptions from fire-and-forget coroutines so they
+            # don't silently disappear.
+            fut.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
         except Exception:
             # Never let progress reporting break an analysis.
             logger.debug("ProgressBridge: notification dispatch failed", exc_info=True)

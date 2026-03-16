@@ -305,6 +305,12 @@ async def parse_custom_container(
     """
     await ctx.info(f"Parsing custom container (structure={structure})")
 
+    _MAX_HEX_INPUT_LEN = 2_000_000  # 2M hex chars = 1MB decoded
+    if len(data_hex) > _MAX_HEX_INPUT_LEN:
+        raise ValueError(
+            f"Hex input too large ({len(data_hex):,} chars, "
+            f"limit {_MAX_HEX_INPUT_LEN:,})."
+        )
     try:
         data = bytes.fromhex(data_hex.replace(" ", "").replace("0x", ""))
     except ValueError as e:
@@ -317,6 +323,11 @@ async def parse_custom_container(
 
     delim_bytes = None
     if delimiter:
+        if len(delimiter) > _MAX_HEX_INPUT_LEN:
+            raise ValueError(
+                f"Delimiter hex too large ({len(delimiter):,} chars, "
+                f"limit {_MAX_HEX_INPUT_LEN:,})."
+            )
         try:
             delim_bytes = bytes.fromhex(delimiter.replace(" ", "").replace("0x", ""))
         except ValueError as e:
@@ -580,6 +591,9 @@ def _scan_encrypted_configs(data: bytes, bridge: ProgressBridge) -> List[Dict[st
         marker_hex = constants.get("config_start_marker", "")
         marker_bytes = b""
         if isinstance(marker_hex, str) and marker_hex.strip():
+            _MAX_MARKER_HEX_LEN = 2_000_000  # 2M hex chars = 1MB decoded
+            if len(marker_hex) > _MAX_MARKER_HEX_LEN:
+                continue  # Skip oversized marker
             try:
                 marker_bytes = bytes.fromhex(marker_hex.replace(" ", ""))
             except ValueError:

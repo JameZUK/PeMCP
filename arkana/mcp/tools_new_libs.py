@@ -460,6 +460,14 @@ def _compute_similarity_internal(current_state) -> Dict[str, Any]:
     if not target or not os.path.isfile(target):
         return {"error": "No file loaded."}
 
+    _MAX_SIMILARITY_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
+    try:
+        fsize = os.path.getsize(target)
+        if fsize > _MAX_SIMILARITY_FILE_SIZE:
+            return {"error": f"File too large for similarity hashing ({fsize} bytes). Max {_MAX_SIMILARITY_FILE_SIZE} bytes."}
+    except OSError:
+        pass  # proceed — read will fail if file is gone
+
     with open(target, 'rb') as f:
         data = f.read()
 

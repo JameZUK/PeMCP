@@ -112,7 +112,7 @@ arkana/
 - **Graceful Degradation**  - All 20+ optional libraries are detected at startup. Tools that require unavailable libraries return clear error messages instead of crashing.
 - **Auto-Enrichment**  - After `open_file`, a background coordinator (`arkana/enrichment.py`) automatically runs classification, triage, similarity hashing, MITRE mapping, IOC collection, FLIRT library identification, a decompilation sweep, and auto-noting. Each phase checks a cancellation event and yields to on-demand decompile requests. Disable with `ARKANA_AUTO_ENRICHMENT=0`; control sweep depth with `ARKANA_ENRICHMENT_MAX_DECOMPILE=N`.
 - **Tool Decorator**  - Every MCP tool is wrapped by `tool_decorator` in `server.py`, which handles session activation, heartbeat updates, tool history recording, error enrichment, and response size enforcement.
-- **Rename/Annotation Layer**  - Users can rename functions and variables, and add address labels. Renames persist via cache alongside notes and are automatically applied in decompilation and disassembly output. `batch_rename` supports bulk operations with two-pass validate-then-apply atomicity.
+- **Rename/Annotation Layer**  - Users can rename functions and variables, and add address labels. Renames persist via cache alongside notes and are automatically applied in decompilation and disassembly output. Variable renames use a single-pass combined regex to prevent cascading substitutions. `batch_rename` supports bulk operations with two-pass validate-then-apply atomicity.
 - **Custom Types**  - User-defined structs and enums for parsing binary data. Field types reuse `parse_binary_struct` types. Persisted via cache with validation guards (field name regex, enum byte-size checks, duplicate detection, cycle detection for recursive structs).
 - **Artifacts**  - Tools that extract files (unpacking, payload carving, config extraction) register them via `state.register_artifact()` with path, hashes, source tool, and type detection. Artifacts persist via cache and are included in project export/import archives.
 
@@ -204,9 +204,15 @@ Paginated results are cached in an **LRU cache** (5 slots per tool) so that pagi
 
 | Setting | Value | Description |
 |---|---|---|
+| `MAX_ACTIVE_SESSIONS` | 100 | Maximum concurrent HTTP sessions (overridable via `ARKANA_MAX_SESSIONS`). Oldest session evicted when limit reached. |
 | `MAX_COMPLETED_TASKS` | 50 | Maximum completed/failed background tasks retained per session |
 | `MAX_TOOL_HISTORY` | 500 | Maximum tool invocation history entries retained per session |
+| `MAX_NOTES` | 10,000 | Maximum notes per session |
+| `MAX_ARTIFACTS` | 1,000 | Maximum artifacts per session |
+| `MAX_RENAMES` | 10,000 | Maximum renames per session |
 | `SESSION_TTL_SECONDS` | 3600 | Session lifetime before cleanup (1 hour) |
 | `MAX_MCP_RESPONSE_SIZE_KB` | 64 | MCP response size limit per the protocol specification |
 | `ARKANA_MAX_CONCURRENT_ANALYSES` | 3 | Concurrent heavy analysis semaphore (configurable via environment variable) |
 | `MAX_ANALYSIS_WARNINGS` | 500 | Maximum unique library warnings captured per session (deduplicated) |
+| `_MAX_DECOMPILE_META` | 2,000 | Maximum cached decompilation results (LRU eviction via OrderedDict, session-scoped keys) |
+| `MAX_TOOL_LIMIT` | 100,000 | Hard upper bound for `limit` parameters across all ~60 tool functions |

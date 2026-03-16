@@ -4,7 +4,7 @@ from typing import Dict, Any, Optional
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
-from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _raise_on_error_dict
+from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _raise_on_error_dict, _make_return_hook
 
 if ANGR_AVAILABLE:
     import angr
@@ -47,16 +47,9 @@ async def hook_function(
         elif nop:
             ret_val = 0
 
-        # Build a dynamic SimProcedure that returns the requested value
+        # Build a SimProcedure that returns the requested value
         if ret_val is not None:
-            rv = ret_val
-            bits = proj.arch.bits
-
-            class _ReturnHook(angr.SimProcedure):
-                def run(self):
-                    return self.state.solver.BVV(rv, bits)
-
-            hook_proc = _ReturnHook()
+            hook_proc = _make_return_hook(ret_val, proj.arch.bits)
         else:
             class _VoidHook(angr.SimProcedure):
                 IS_FUNCTION = True

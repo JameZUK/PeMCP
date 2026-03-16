@@ -5,6 +5,7 @@ into structured export formats (JSON, CSV, STIX 2.1).
 """
 import asyncio
 import datetime
+import ipaddress
 import json
 import os
 import re
@@ -37,11 +38,17 @@ _REGISTRY_RE = re.compile(r"(?:HKEY_[A-Z_]+|HKLM|HKCU|HKCR)\\[^\s\"]{4,200}")
 _MUTEX_RE = re.compile(r"(?:Global\\|Local\\)\S{4,100}")
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 
-# Private IPs to exclude
-_PRIVATE_IP_PREFIXES = ("10.", "127.", "192.168.", "0.0.", "255.", "169.254.", "172.16.",
-                        "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.",
-                        "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.",
-                        "172.29.", "172.30.", "172.31.")
+def _is_non_routable_ip(ip_str: str) -> bool:
+    """Check if an IP is private, reserved, loopback, or link-local using ipaddress module.
+
+    Covers CGNAT (100.64.0.0/10), multicast, and other non-routable ranges
+    that a simple prefix check would miss.
+    """
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return addr.is_private or addr.is_reserved or addr.is_loopback or addr.is_link_local or addr.is_multicast
+    except ValueError:
+        return True  # Invalid IPs are not routable
 
 
 def _collect_iocs_from_triage() -> Dict[str, set]:
@@ -58,7 +65,7 @@ def _collect_iocs_from_triage() -> Dict[str, set]:
     net = triage.get("network_iocs", {})
     if isinstance(net, dict):
         for ip in net.get("ip_addresses", []):
-            if isinstance(ip, str) and not ip.startswith(_PRIVATE_IP_PREFIXES):
+            if isinstance(ip, str) and not _is_non_routable_ip(ip):
                 iocs["ipv4"].add(ip)
         for url in net.get("urls", []):
             if isinstance(url, str):
@@ -99,7 +106,7 @@ def _collect_iocs_from_notes() -> Dict[str, set]:
         for ip in _IP_RE.findall(content):
             if len(iocs["ipv4"]) >= _MAX_IOCS_PER_CATEGORY:
                 break
-            if not ip.startswith(_PRIVATE_IP_PREFIXES):
+            if not _is_non_routable_ip(ip):
                 iocs["ipv4"].add(ip)
         for url in _URL_RE.findall(content):
             if len(iocs["urls"]) >= _MAX_IOCS_PER_CATEGORY:

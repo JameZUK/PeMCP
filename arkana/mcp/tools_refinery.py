@@ -180,7 +180,7 @@ async def refinery_codec(
         "input_size": len(input_data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
+        "output_text": _safe_decode(result, max_len=2000),
     }
     if _used_text_fallback:
         response["warning"] = "Input was not valid hex — treated as raw UTF-8 text"
@@ -270,7 +270,7 @@ async def refinery_decrypt(
         "input_size": len(ciphertext),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
+        "output_text": _safe_decode(result, max_len=2000),
     }
     if output_path:
         artifact_meta = await asyncio.to_thread(
@@ -357,7 +357,7 @@ async def refinery_xor(
             "input_size": len(data),
             "output_size": len(result),
             "output_hex": _bytes_to_hex(result),
-            "output_text": _safe_decode(result)[:2000],
+            "output_text": _safe_decode(result, max_len=2000),
         }
 
         if output_path:
@@ -411,7 +411,7 @@ async def refinery_xor(
             "input_size": len(data),
             "output_size": len(result),
             "output_hex": _bytes_to_hex(result),
-            "output_text": _safe_decode(result)[:2000],
+            "output_text": _safe_decode(result, max_len=2000),
         }
 
         if output_path:
@@ -446,6 +446,8 @@ async def refinery_xor(
         keys = []
         for chunk in data | xkey():
             keys.append(bytes(chunk))
+            if len(keys) >= _MAX_OUTPUT_ITEMS:
+                break
         return keys
 
     keys = await asyncio.to_thread(_run_guess)
@@ -467,7 +469,7 @@ async def refinery_xor(
         "guessed_key_length": len(best_key),
         "guessed_key_ascii": _safe_decode(best_key),
         "decrypted_preview_hex": preview.hex(),
-        "decrypted_preview_text": _safe_decode(preview)[:500],
+        "decrypted_preview_text": _safe_decode(preview, max_len=500),
         "total_candidates": len(keys),
     }, "refinery_xor")
 
@@ -521,13 +523,20 @@ async def refinery_decompress(
         import importlib
         mod = importlib.import_module(mod_path)
         unit_cls = getattr(mod, cls_name)
-        result = data | unit_cls() | bytes
-        if len(result) > _MAX_DECOMPRESS_OUTPUT:
-            raise RuntimeError(
-                f"Decompression output too large ({len(result):,} bytes, "
-                f"limit {_MAX_DECOMPRESS_OUTPUT:,} bytes). Input may be a decompression bomb."
-            )
-        return result
+        # Iterate chunks incrementally to avoid OOM from decompression bombs.
+        # Binary Refinery's pipe yields chunks; accumulate with a size guard.
+        parts = []
+        total = 0
+        for chunk in data | unit_cls():
+            piece = bytes(chunk)
+            total += len(piece)
+            if total > _MAX_DECOMPRESS_OUTPUT:
+                raise RuntimeError(
+                    f"Decompression output too large (>{_MAX_DECOMPRESS_OUTPUT:,} bytes, "
+                    f"limit {_MAX_DECOMPRESS_OUTPUT:,} bytes). Input may be a decompression bomb."
+                )
+            parts.append(piece)
+        return b"".join(parts)
 
     result = await asyncio.to_thread(_run)
     original_output_size = len(result)
@@ -539,7 +548,7 @@ async def refinery_decompress(
         "output_size": original_output_size,
         "compression_ratio": round(original_output_size / max(len(data), 1), 2),
         "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
+        "output_text": _safe_decode(result, max_len=2000),
     }
     if original_output_size > _MAX_DECOMPRESS_OUTPUT:
         response["_output_truncated"] = f"Output truncated from {original_output_size} to {_MAX_DECOMPRESS_OUTPUT} bytes"
@@ -684,7 +693,7 @@ async def refinery_carve(
                 raw = bytes(chunk)
                 entry: Dict[str, Any] = {
                     "raw_hex": _bytes_to_hex(raw, 512),
-                    "raw_text": _safe_decode(raw)[:200],
+                    "raw_text": _safe_decode(raw, max_len=200),
                     "size": len(raw),
                 }
                 if decode:
@@ -703,7 +712,7 @@ async def refinery_carve(
                             unit_cls = getattr(mod, cls_name)
                             decoded = raw | unit_cls() | bytes
                             entry["decoded_hex"] = _bytes_to_hex(decoded, 512)
-                            entry["decoded_text"] = _safe_decode(decoded)[:200]
+                            entry["decoded_text"] = _safe_decode(decoded, max_len=200)
                             entry["decoded_size"] = len(decoded)
                     except Exception as e:
                         entry["decode_error"] = str(e)[:200]
@@ -848,7 +857,7 @@ async def refinery_pe_operations(
                     "sha256": hashlib.sha256(raw).hexdigest(),
                 }
                 if op == "meta":
-                    entry["text"] = _safe_decode(raw)[:2000]
+                    entry["text"] = _safe_decode(raw, max_len=2000)
                 elif op in ("overlay", "signature"):
                     entry["preview_hex"] = raw[:128].hex()
                     entry["preview_text"] = _safe_decode(raw[:128])
@@ -857,6 +866,8 @@ async def refinery_pe_operations(
                 elif op in ("strip", "debloat"):
                     entry["preview_hex"] = raw[:32].hex()
                 results.append(entry)
+                if len(results) >= _MAX_OUTPUT_ITEMS:
+                    break
         except Exception as e:
             if op == "signature":
                 return [{"error": f"No valid Authenticode signature found: {e}"}]
@@ -950,7 +961,7 @@ async def refinery_deobfuscate_script(
         "script_type": stype,
         "input_size": len(data),
         "output_size": len(result),
-        "deobfuscated_text": _safe_decode(result)[:4000],
+        "deobfuscated_text": _safe_decode(result, max_len=4000),
         "size_change": f"{len(data)} -> {len(result)} bytes",
     }, "refinery_deobfuscate_script")
 
@@ -1047,6 +1058,16 @@ _PIPELINE_MAX_INTERMEDIATE_SIZE = 100 * 1024 * 1024  # 100MB
 def _run_pipeline_single(data: bytes, steps: list) -> tuple:
     """Execute a pipeline on a single data blob. Returns (result_bytes, step_log)."""
     import importlib
+    _MAX_HEX_INPUT_LEN = 2_000_000  # 2M hex chars = 1MB decoded
+
+    def _safe_fromhex(hex_str: str, label: str = "hex") -> bytes:
+        if len(hex_str) > _MAX_HEX_INPUT_LEN:
+            raise ValueError(
+                f"Pipeline {label} too large ({len(hex_str):,} chars, "
+                f"limit {_MAX_HEX_INPUT_LEN:,})."
+            )
+        return bytes.fromhex(hex_str)
+
     current = data
     step_log = [{"step": "input", "size": len(current)}]
 
@@ -1058,7 +1079,7 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
 
         if unit_name == "xor":
             from refinery.units.blockwise.xor import xor
-            key = bytes.fromhex(parts[1]) if len(parts) > 1 else b"\x00"
+            key = _safe_fromhex(parts[1], "xor key") if len(parts) > 1 else b"\x00"
             current = current | xor(key) | bytes
 
         # ── Ciphers (decrypt by default, enc_ prefix to encrypt) ──
@@ -1072,11 +1093,11 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
             unit_cls = getattr(mod, cipher_name)
             kwargs = {}
             if len(parts) > 1:
-                kwargs["key"] = bytes.fromhex(parts[1])
+                kwargs["key"] = _safe_fromhex(parts[1], "cipher key")
             if len(parts) > 2:
                 kwargs["mode"] = parts[2].upper()
             if len(parts) > 3:
-                kwargs["iv"] = bytes.fromhex(parts[3])
+                kwargs["iv"] = _safe_fromhex(parts[3], "cipher iv")
             if encrypt_mode:
                 # Stream ciphers (rc4) are symmetric — reverse isn't needed/accepted.
                 # Block ciphers (aes, des, blowfish) use reverse to switch direction.
@@ -1287,13 +1308,21 @@ async def refinery_pipeline(
             for idx, item_hex in enumerate(items):
                 entry: Dict[str, Any] = {"index": idx, "input_preview": item_hex[:40]}
                 try:
+                    _MAX_HEX_INPUT_LEN = 2_000_000  # 2M hex chars = 1MB decoded
+                    if len(item_hex) > _MAX_HEX_INPUT_LEN:
+                        entry["error"] = (
+                            f"Hex input too large ({len(item_hex):,} chars, "
+                            f"limit {_MAX_HEX_INPUT_LEN:,})."
+                        )
+                        results.append(entry)
+                        continue
                     item_data = bytes.fromhex(item_hex)
                     if len(item_data) > _MAX_INPUT_SIZE:
                         entry["error"] = f"Input too large ({len(item_data)} bytes)."
                     else:
                         out, _log = _run_pipeline_single(item_data, steps)
                         entry["output_hex"] = _bytes_to_hex(out)
-                        entry["output_text"] = _safe_decode(out)[:2000]
+                        entry["output_text"] = _safe_decode(out, max_len=2000)
                         entry["output_size"] = len(out)
                 except Exception as e:
                     entry["error"] = str(e)[:200]
@@ -1325,7 +1354,7 @@ async def refinery_pipeline(
         "step_log": step_log,
         "final_size": len(result),
         "output_hex": _bytes_to_hex(result),
-        "output_text": _safe_decode(result)[:2000],
+        "output_text": _safe_decode(result, max_len=2000),
     }
 
     if output_path:

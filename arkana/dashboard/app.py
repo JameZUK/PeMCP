@@ -298,11 +298,15 @@ def _get_valid_tokens(dashboard_token: str) -> list:
 
 
 def _check_token(provided: str, dashboard_token: str) -> bool:
-    """Check if provided token matches any valid token."""
+    """Check if provided token matches any valid token.
+
+    Accumulates results to avoid early-return timing leak that could
+    reveal how many valid tokens exist.
+    """
+    result = False
     for valid in _get_valid_tokens(dashboard_token):
-        if hmac.compare_digest(provided, valid):
-            return True
-    return False
+        result = hmac.compare_digest(provided, valid) or result
+    return result
 
 
 # ---------------------------------------------------------------------------
