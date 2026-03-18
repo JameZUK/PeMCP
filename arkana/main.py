@@ -77,6 +77,10 @@ import arkana.mcp.tools_rename
 import arkana.mcp.tools_types
 import arkana.mcp.tools_bsim
 import arkana.mcp.tools_warnings
+import arkana.mcp.tools_context
+import arkana.mcp.tools_dashboard_exposed
+import arkana.mcp.tools_frida
+import arkana.mcp.tools_vuln
 # Only register refinery tools when binary-refinery is installed.
 # When absent this saves ~20 tool definitions from the MCP catalog,
 # avoiding wasted context tokens for tools that would fail at runtime.

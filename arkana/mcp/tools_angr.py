@@ -10,7 +10,10 @@ import sys
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE, ANGR_ANALYSIS_TIMEOUT
-from arkana.constants import MAX_BATCH_DECOMPILE, BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT, MAX_TOOL_LIMIT
+from arkana.constants import (
+    MAX_BATCH_DECOMPILE, BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT, MAX_TOOL_LIMIT,
+    MAX_SYMBOLIC_STEPS, MAX_SYMBOLIC_ACTIVE_STATES, MAX_SYMBOLIC_FIND_ADDRESSES,
+)
 from arkana.state import TASK_RUNNING, TASK_FAILED
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
@@ -2063,3 +2066,400 @@ async def batch_decompile(
             "total_matches_across_functions": total_search_matches,
         }
     return await _check_mcp_response_size(ctx, output, "batch_decompile")
+
+
+# =====================================================================
+#  Symbolic Execution Extensions
+# =====================================================================
+
+@tool_decorator
+async def solve_constraints_for_path(
+    ctx: Context,
+    target_address: str,
+    start_address: Optional[str] = None,
+    avoid_addresses: Optional[List[str]] = None,
+    max_steps: int = 2000,
+    timeout_seconds: int = 120,
+    run_in_background: bool = True,
+) -> Dict[str, Any]:
+    """
+    [Phase: advanced] Solve constraints to find concrete input that reaches a target address.
+
+    Uses symbolic execution with the angr constraint solver to find concrete values
+    for stdin, argv, and symbolic registers that cause execution to reach the target.
+    Similar to find_path_to_address but returns detailed constraint solutions.
+
+    When to use: When you need to find specific input values to trigger a code path,
+    e.g. for CTF challenges, reaching a vulnerability, or understanding branch conditions.
+    Next steps: emulate_function_execution() with solved input, add_note() to record solution.
+
+    Args:
+        target_address: Hex address to reach (e.g. '0x401234').
+        start_address: Optional start address (default: binary entry point).
+        avoid_addresses: List of hex addresses to avoid during exploration.
+        max_steps: Maximum simulation steps (100-100000). Default 2000.
+        timeout_seconds: Timeout in seconds (10-1800). Default 120.
+        run_in_background: Run as background task. Default True.
+    """
+    _check_angr_ready("solve_constraints_for_path")
+
+    target = _parse_addr(target_address, "target_address")
+    start = _parse_addr(start_address, "start_address") if start_address else None
+    max_steps = max(100, min(max_steps, MAX_SYMBOLIC_STEPS))
+    timeout_seconds = max(10, min(timeout_seconds, 1800))
+
+    avoid_set = {0x0}  # Always avoid null-pointer jumps
+    if avoid_addresses:
+        for addr_str in avoid_addresses:
+            avoid_set.add(_parse_addr(addr_str, "avoid_address"))
+
+    # Validate target is mapped
+    if state.angr_project is not None:
+        try:
+            obj = state.angr_project.loader.find_object_containing(target)
+            if not obj:
+                valid_min = state.angr_project.loader.min_addr
+                valid_max = state.angr_project.loader.max_addr
+                return {
+                    "error": f"Target address {hex(target)} is unmapped.",
+                    "valid_memory_range": f"{hex(valid_min)} - {hex(valid_max)}",
+                    "hint": "Check 'sections' or 'function_complexity' to find valid addresses.",
+                }
+        except Exception:
+            pass
+
+    _partial = {}
+
+    def _solve(task_id_for_progress=None, _progress_bridge=None):
+        _ensure_project_and_cfg()
+
+        stability_options = {
+            angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
+            angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS,
+        }
+
+        if start:
+            entry_st = state.angr_project.factory.blank_state(
+                addr=start, add_options=stability_options
+            )
+        else:
+            entry_st = state.angr_project.factory.entry_state(
+                add_options=stability_options
+            )
+
+        simgr = state.angr_project.factory.simulation_manager(entry_st)
+
+        # Apply techniques
+        simgr.use_technique(angr.exploration_techniques.DFS())
+        simgr.use_technique(angr.exploration_techniques.LengthLimiter(max_length=5000))
+        simgr.use_technique(angr.exploration_techniques.Explorer(
+            find=target, avoid=list(avoid_set),
+        ))
+
+        try:
+            steps = 0
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 0, "Starting constraint solver...",
+                                 bridge=_progress_bridge)
+
+            while len(simgr.active) > 0 and len(simgr.found) == 0 and steps < max_steps:
+                if len(simgr.active) > 30:
+                    simgr.split(from_stash='active', to_stash='deferred', limit=30)
+                deferred = getattr(simgr, 'deferred', None)
+                if deferred is not None and len(deferred) > 500:
+                    simgr.drop(stash='deferred', filter_func=lambda s: True)
+
+                simgr.step()
+                steps += 1
+                _partial['steps'] = steps
+                _partial['active'] = len(simgr.active)
+
+                if task_id_for_progress and steps % 10 == 0:
+                    active = len(simgr.active)
+                    percent = min(95, int((steps / max_steps) * 100))
+                    _update_progress(task_id_for_progress, percent,
+                                     f"Solving... Active: {active} (Step {steps})",
+                                     bridge=_progress_bridge)
+
+            if simgr.found:
+                found_state = simgr.found[0]
+                solutions = {}
+
+                # Extract stdin solution
+                try:
+                    stdin_data = found_state.posix.dumps(0)
+                    solutions["stdin"] = {
+                        "hex": stdin_data.hex(),
+                        "ascii": stdin_data.decode('utf-8', 'ignore'),
+                        "length": len(stdin_data),
+                    }
+                except Exception:
+                    solutions["stdin"] = None
+
+                # Extract constraint count and summary
+                solver = found_state.solver
+                constraint_count = len(solver.constraints) if hasattr(solver, 'constraints') else 0
+
+                # Try to evaluate symbolic registers
+                reg_solutions = {}
+                try:
+                    for reg_name in ["eax", "ebx", "ecx", "edx", "rax", "rbx", "rcx", "rdx"]:
+                        try:
+                            reg_val = getattr(found_state.regs, reg_name, None)
+                            if reg_val is not None and reg_val.symbolic:
+                                concrete = solver.eval(reg_val)
+                                reg_solutions[reg_name] = hex(concrete)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                return {
+                    "status": "solved",
+                    "solutions": solutions,
+                    "symbolic_registers": reg_solutions if reg_solutions else None,
+                    "constraint_count": constraint_count,
+                    "steps_taken": steps,
+                    "target_reached": hex(target),
+                    "start_address": hex(start) if start else "entry_point",
+                }
+
+            return {
+                "status": "unsolved",
+                "message": f"No solution found after {steps} steps.",
+                "steps_taken": steps,
+                "hint": "Try increasing max_steps, adding avoid_addresses, or changing start_address.",
+            }
+        except Exception as e:
+            return {"status": "error", "error_message": str(e)[:300]}
+
+    def _on_timeout():
+        return {
+            "steps_completed": _partial.get('steps', 0),
+            "active_states": _partial.get('active', 0),
+            "message": f"Timed out after {_partial.get('steps', 0)} steps.",
+        }
+
+    if run_in_background:
+        task_id = str(uuid.uuid4())
+        state.set_task(task_id, {
+            "status": "running",
+            "progress_percent": 0,
+            "progress_message": "Initializing constraint solver...",
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
+            "tool": "solve_constraints_for_path",
+        })
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _solve, ctx=ctx,
+            timeout=timeout_seconds, on_timeout=_on_timeout))
+        task.add_done_callback(_log_task_exception(task_id))
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "message": f"Constraint solver queued (target={hex(target)}, max_steps={max_steps}).",
+        }
+
+    await ctx.info(f"Solving constraints to reach {target_address}")
+    result = await asyncio.to_thread(_solve)
+    _raise_on_error_dict(result)
+    return await _check_mcp_response_size(ctx, result, "solve_constraints_for_path")
+
+
+@tool_decorator
+async def explore_symbolic_states(
+    ctx: Context,
+    find_addresses: List[str],
+    avoid_addresses: Optional[List[str]] = None,
+    start_address: Optional[str] = None,
+    strategy: str = "dfs",
+    max_steps: int = 2000,
+    max_active: int = 30,
+    timeout_seconds: int = 120,
+    run_in_background: bool = True,
+) -> Dict[str, Any]:
+    """
+    [Phase: advanced] Explore symbolic execution states with configurable strategy.
+
+    Explores multiple target addresses simultaneously with selectable exploration strategy
+    (DFS, BFS, or directed). Reports all found states with their constraint summaries
+    and solved input values.
+
+    When to use: When you need to explore multiple code paths simultaneously, e.g.
+    finding inputs that reach any of several interesting locations, or when DFS alone
+    isn't effective and you want to try BFS or directed exploration.
+    Next steps: solve_constraints_for_path() for a specific target, emulate_function_execution()
+    to test with found input.
+
+    Args:
+        find_addresses: List of hex addresses to search for (max 20).
+        avoid_addresses: Optional list of hex addresses to avoid.
+        start_address: Optional start address (default: binary entry point).
+        strategy: Exploration strategy — 'dfs', 'bfs', or 'directed'. Default 'dfs'.
+        max_steps: Maximum simulation steps (100-100000). Default 2000.
+        max_active: Maximum concurrent active states (1-100). Default 30.
+        timeout_seconds: Timeout in seconds (10-1800). Default 120.
+        run_in_background: Run as background task. Default True.
+    """
+    _check_angr_ready("explore_symbolic_states")
+
+    if not find_addresses:
+        return {"error": "find_addresses list cannot be empty."}
+    if len(find_addresses) > MAX_SYMBOLIC_FIND_ADDRESSES:
+        return {"error": f"Too many find_addresses ({len(find_addresses)}). Maximum is {MAX_SYMBOLIC_FIND_ADDRESSES}."}
+
+    find_addrs = [_parse_addr(a, "find_address") for a in find_addresses]
+    start = _parse_addr(start_address, "start_address") if start_address else None
+    max_steps = max(100, min(max_steps, MAX_SYMBOLIC_STEPS))
+    max_active = max(1, min(max_active, MAX_SYMBOLIC_ACTIVE_STATES))
+    timeout_seconds = max(10, min(timeout_seconds, 1800))
+
+    valid_strategies = ("dfs", "bfs", "directed")
+    if strategy not in valid_strategies:
+        return {"error": f"Invalid strategy '{strategy}'. Use one of: {', '.join(valid_strategies)}"}
+
+    avoid_set = {0x0}
+    if avoid_addresses:
+        for addr_str in avoid_addresses:
+            avoid_set.add(_parse_addr(addr_str, "avoid_address"))
+
+    _partial = {}
+
+    def _explore(task_id_for_progress=None, _progress_bridge=None):
+        _ensure_project_and_cfg()
+
+        stability_options = {
+            angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
+            angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS,
+        }
+
+        if start:
+            entry_st = state.angr_project.factory.blank_state(
+                addr=start, add_options=stability_options
+            )
+        else:
+            entry_st = state.angr_project.factory.entry_state(
+                add_options=stability_options
+            )
+
+        simgr = state.angr_project.factory.simulation_manager(entry_st)
+
+        # Apply strategy
+        if strategy == "dfs":
+            simgr.use_technique(angr.exploration_techniques.DFS())
+        elif strategy == "directed":
+            # Directed towards the first find address
+            try:
+                simgr.use_technique(angr.exploration_techniques.Director(
+                    cfg_keep_states=True,
+                    goal_satisfyingness_ratio=0.1,
+                ))
+            except Exception:
+                # Fallback to DFS if Director fails
+                simgr.use_technique(angr.exploration_techniques.DFS())
+
+        simgr.use_technique(angr.exploration_techniques.LengthLimiter(max_length=5000))
+        simgr.use_technique(angr.exploration_techniques.Explorer(
+            find=find_addrs, avoid=list(avoid_set),
+        ))
+
+        try:
+            steps = 0
+            if task_id_for_progress:
+                _update_progress(task_id_for_progress, 0,
+                                 f"Exploring ({strategy})...",
+                                 bridge=_progress_bridge)
+
+            while len(simgr.active) > 0 and steps < max_steps:
+                # Pruning
+                if len(simgr.active) > max_active:
+                    simgr.split(from_stash='active', to_stash='deferred', limit=max_active)
+                deferred = getattr(simgr, 'deferred', None)
+                if deferred is not None and len(deferred) > 500:
+                    simgr.drop(stash='deferred', filter_func=lambda s: True)
+
+                simgr.step()
+                steps += 1
+                _partial['steps'] = steps
+                _partial['active'] = len(simgr.active)
+                _partial['found'] = len(simgr.found)
+
+                if task_id_for_progress and steps % 10 == 0:
+                    active = len(simgr.active)
+                    found = len(simgr.found)
+                    percent = min(95, int((steps / max_steps) * 100))
+                    _update_progress(task_id_for_progress, percent,
+                                     f"Exploring... Active: {active}, Found: {found} (Step {steps})",
+                                     bridge=_progress_bridge)
+
+            # Process found states
+            found_states = []
+            for i, fs in enumerate(simgr.found[:10]):  # Cap at 10 found states
+                state_info = {
+                    "address_reached": hex(fs.addr),
+                    "index": i,
+                }
+                try:
+                    stdin_data = fs.posix.dumps(0)
+                    state_info["stdin"] = {
+                        "hex": stdin_data.hex(),
+                        "ascii": stdin_data.decode('utf-8', 'ignore'),
+                        "length": len(stdin_data),
+                    }
+                except Exception:
+                    state_info["stdin"] = None
+
+                try:
+                    state_info["constraint_count"] = len(fs.solver.constraints)
+                except Exception:
+                    state_info["constraint_count"] = None
+
+                found_states.append(state_info)
+
+            return {
+                "status": "completed",
+                "strategy": strategy,
+                "found_states": found_states,
+                "total_found": len(simgr.found),
+                "steps_taken": steps,
+                "final_active": len(simgr.active),
+                "deadended": len(simgr.deadended) if hasattr(simgr, 'deadended') else 0,
+                "errored": len(simgr.errored) if hasattr(simgr, 'errored') else 0,
+                "target_addresses": [hex(a) for a in find_addrs],
+                "avoided_addresses": [hex(a) for a in avoid_set if a != 0],
+            }
+        except Exception as e:
+            return {"status": "error", "error_message": str(e)[:300]}
+
+    def _on_timeout():
+        return {
+            "steps_completed": _partial.get('steps', 0),
+            "active_states": _partial.get('active', 0),
+            "found_so_far": _partial.get('found', 0),
+            "message": f"Timed out after {_partial.get('steps', 0)} steps.",
+        }
+
+    if run_in_background:
+        task_id = str(uuid.uuid4())
+        state.set_task(task_id, {
+            "status": "running",
+            "progress_percent": 0,
+            "progress_message": f"Initializing explorer ({strategy})...",
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": time.time(),
+            "tool": "explore_symbolic_states",
+        })
+        task = asyncio.create_task(_run_background_task_wrapper(
+            task_id, _explore, ctx=ctx,
+            timeout=timeout_seconds, on_timeout=_on_timeout))
+        task.add_done_callback(_log_task_exception(task_id))
+        return {
+            "status": "queued",
+            "task_id": task_id,
+            "message": f"Explorer queued (strategy={strategy}, targets={len(find_addrs)}, max_steps={max_steps}).",
+        }
+
+    await ctx.info(f"Exploring symbolic states ({strategy})")
+    result = await asyncio.to_thread(_explore)
+    _raise_on_error_dict(result)
+    return await _check_mcp_response_size(ctx, result, "explore_symbolic_states")

@@ -114,6 +114,9 @@ _SELF_REPORTING_TOOLS = frozenset({
     "find_similar_functions",
     # Batch decompilation (self-reporting progress)
     "batch_decompile",
+    # Symbolic execution extensions (background tasks)
+    "solve_constraints_for_path",
+    "explore_symbolic_states",
 })
 
 

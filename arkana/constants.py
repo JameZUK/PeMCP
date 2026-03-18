@@ -38,6 +38,14 @@ __all__ = [
     "INTEGRITY_SAMPLE_SIZE", "INTEGRITY_MAX_ISSUES",
     "MAX_ANALYSIS_WARNINGS",
     "DEFAULT_MAX_FILE_SIZE_MB",
+    # Context aggregation
+    "MAX_CONTEXT_DECOMPILE_LINES", "MAX_CONTEXT_STRINGS", "MAX_CONTEXT_XREFS",
+    # Frida generation
+    "MAX_FRIDA_HOOK_TARGETS", "MAX_FRIDA_TRACE_APIS",
+    # Vulnerability scanning
+    "MAX_VULN_SCAN_FUNCTIONS", "MAX_VULN_FINDINGS",
+    # Symbolic execution extensions
+    "MAX_SYMBOLIC_STEPS", "MAX_SYMBOLIC_ACTIVE_STATES", "MAX_SYMBOLIC_FIND_ADDRESSES",
     "DEPENDENCIES",
 ]
 
@@ -149,6 +157,24 @@ MAX_ANALYSIS_WARNINGS = 500  # max unique warnings retained per session
 
 # --- File Size Limit ---
 DEFAULT_MAX_FILE_SIZE_MB = 256  # default max file size for open_file / import
+
+# --- Context Aggregation ---
+MAX_CONTEXT_DECOMPILE_LINES = 80  # max decompiled lines in context response
+MAX_CONTEXT_STRINGS = 50  # max strings returned per function context
+MAX_CONTEXT_XREFS = 30  # max callers/callees in context response
+
+# --- Frida Generation ---
+MAX_FRIDA_HOOK_TARGETS = 50  # max API targets per hook script
+MAX_FRIDA_TRACE_APIS = 100  # max APIs per trace script
+
+# --- Vulnerability Scanning ---
+MAX_VULN_SCAN_FUNCTIONS = 500  # max functions to scan at once
+MAX_VULN_FINDINGS = 200  # max findings per scan
+
+# --- Symbolic Execution Extensions ---
+MAX_SYMBOLIC_STEPS = 100_000  # upper bound for max_steps parameter
+MAX_SYMBOLIC_ACTIVE_STATES = 100  # upper bound for max_active parameter
+MAX_SYMBOLIC_FIND_ADDRESSES = 20  # max find addresses for explore
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

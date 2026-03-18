@@ -1,0 +1,368 @@
+"""MCP tools for Frida script generation — hooks, bypasses, and API tracing."""
+import asyncio
+import os
+
+from typing import Dict, Any, Optional, List
+
+from arkana.config import state, logger, Context
+from arkana.constants import MAX_FRIDA_HOOK_TARGETS, MAX_FRIDA_TRACE_APIS, MAX_TOOL_LIMIT
+from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp._frida_templates import (
+    FRIDA_API_SIGNATURES,
+    ANTI_DEBUG_BYPASSES,
+    ANTI_DEBUG_APIS,
+    generate_hook_js,
+    generate_hook_for_address,
+    generate_bypass_js,
+    generate_trace_js,
+)
+
+
+def _validate_targets(targets: List[str]) -> List[str]:
+    """Validate and sanitise hook target list."""
+    if not targets:
+        raise ValueError("targets list cannot be empty.")
+    if len(targets) > MAX_FRIDA_HOOK_TARGETS:
+        raise ValueError(f"Too many targets ({len(targets)}). Maximum is {MAX_FRIDA_HOOK_TARGETS}.")
+    cleaned = []
+    for t in targets:
+        if not isinstance(t, str):
+            raise ValueError(f"Invalid target type: {type(t).__name__}. Expected string.")
+        t = t.strip()
+        if not t:
+            continue
+        if len(t) > 256:
+            raise ValueError(f"Target name too long ({len(t)} chars). Maximum is 256.")
+        cleaned.append(t)
+    if not cleaned:
+        raise ValueError("No valid targets after validation.")
+    return cleaned
+
+
+def _save_script(output_path: Optional[str], script_text: str, tool_name: str) -> Optional[Dict[str, Any]]:
+    """Optionally save script to disk and register as artifact."""
+    if not output_path:
+        return None
+    resolved = os.path.realpath(output_path)
+    state.check_path_allowed(resolved)
+    script_bytes = script_text.encode("utf-8")
+    from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
+    return _write_output_and_register_artifact(
+        resolved, script_bytes, tool_name, f"Frida script ({tool_name})"
+    )
+
+
+@tool_decorator
+async def generate_frida_hook_script(
+    ctx: Context,
+    targets: List[str],
+    include_backtrace: bool = True,
+    include_args: bool = True,
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: advanced] Generate a Frida hook script for specified API functions or addresses.
+
+    Produces JavaScript code ready to run with Frida to intercept API calls,
+    log arguments, return values, and optionally capture backtraces.
+
+    When to use: When you want to dynamically instrument a binary to observe API usage
+    at runtime. Useful for tracing C2 communication, crypto operations, or injection techniques.
+    Next steps: Run the generated script with Frida, add_note() to record observations.
+
+    Args:
+        targets: List of API names (e.g. 'CreateRemoteThread') or hex addresses (e.g. '0x401000'). Max 50.
+        include_backtrace: Include call stack backtrace in hook output. Default True.
+        include_args: Include argument values in hook output. Default True.
+        output_path: Optional file path to save the generated script.
+    """
+    targets = _validate_targets(targets)
+
+    hook_parts = [
+        '"use strict";',
+        "",
+        "// ============================================",
+        "// Arkana Hook Script (Frida)",
+        "// ============================================",
+        "",
+    ]
+
+    hooked_apis = []
+    hooked_addresses = []
+    unknown_targets = []
+
+    for target in targets:
+        target_stripped = target.strip()
+        if target_stripped.startswith("0x") or target_stripped.startswith("0X"):
+            # Raw address hook
+            hook_parts.append(generate_hook_for_address(target_stripped, include_backtrace))
+            hook_parts.append("")
+            hooked_addresses.append(target_stripped)
+        elif target_stripped in FRIDA_API_SIGNATURES:
+            # Known API with signature
+            hook_parts.append(generate_hook_js(
+                target_stripped,
+                include_backtrace=include_backtrace,
+                include_args=include_args,
+            ))
+            hook_parts.append("")
+            hooked_apis.append(target_stripped)
+        else:
+            # Unknown API — generate generic hook
+            hook_parts.append(generate_hook_js(
+                target_stripped,
+                include_backtrace=include_backtrace,
+                include_args=False,
+            ))
+            hook_parts.append("")
+            unknown_targets.append(target_stripped)
+
+    total = len(hooked_apis) + len(hooked_addresses) + len(unknown_targets)
+    hook_parts.append(f'console.log("[ARKANA] {total} hooks installed");')
+
+    script_text = "\n".join(hook_parts)
+
+    result: Dict[str, Any] = {
+        "script": script_text,
+        "hooked_apis": hooked_apis,
+        "hooked_addresses": hooked_addresses,
+        "unknown_targets": unknown_targets,
+        "total_hooks": total,
+        "usage": "frida -l <script.js> -p <PID>  OR  frida -l <script.js> -f <binary>",
+    }
+
+    artifact = _save_script(output_path, script_text, "generate_frida_hook_script")
+    if artifact:
+        result["saved_to"] = artifact.get("path", output_path)
+
+    return await _check_mcp_response_size(ctx, result, "generate_frida_hook_script")
+
+
+@tool_decorator
+async def generate_frida_bypass_script(
+    ctx: Context,
+    auto_detect: bool = True,
+    techniques: Optional[List[str]] = None,
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: advanced] Generate a Frida script that bypasses anti-debug techniques.
+
+    Auto-detects anti-debug APIs from the binary's imports and triage data,
+    then generates targeted bypass code for each detected technique.
+
+    When to use: When the binary uses anti-debug techniques that prevent dynamic analysis.
+    Run the generated script alongside the target to neutralise debug detection.
+    Next steps: Run with Frida, then use generate_frida_hook_script() for further instrumentation.
+
+    Args:
+        auto_detect: Automatically detect anti-debug techniques from imports/triage. Default True.
+        techniques: Manual list of technique names to bypass (overrides auto_detect).
+            Available: IsDebuggerPresent, CheckRemoteDebuggerPresent, NtQueryInformationProcess,
+            NtSetInformationThread, OutputDebugStringA, GetTickCount, QueryPerformanceCounter,
+            NtClose, BlockInput, NtQuerySystemInformation.
+        output_path: Optional file path to save the generated script.
+    """
+    detected_techniques = []
+
+    if techniques:
+        # Manual override
+        for tech in techniques:
+            if not isinstance(tech, str):
+                continue
+            tech = tech.strip()
+            if tech in ANTI_DEBUG_BYPASSES:
+                detected_techniques.append(tech)
+        if not detected_techniques:
+            available = ", ".join(sorted(ANTI_DEBUG_BYPASSES.keys()))
+            return {
+                "error": "None of the specified techniques have bypass templates.",
+                "available_techniques": available,
+            }
+    elif auto_detect:
+        # Detect from imports
+        pe_data = state.pe_data or {}
+        imports = pe_data.get("imports", {})
+        import_names = set()
+        if isinstance(imports, dict):
+            for dll_imports in imports.values():
+                if isinstance(dll_imports, list):
+                    for imp in dll_imports:
+                        if isinstance(imp, dict):
+                            import_names.add(imp.get("name", ""))
+                        elif isinstance(imp, str):
+                            import_names.add(imp)
+        elif isinstance(imports, list):
+            for imp in imports:
+                if isinstance(imp, dict):
+                    import_names.add(imp.get("name", ""))
+
+        # Match against known anti-debug APIs
+        for api in import_names:
+            if api in ANTI_DEBUG_APIS and api in ANTI_DEBUG_BYPASSES:
+                detected_techniques.append(api)
+
+        # Also check triage data for anti-debug findings
+        triage = getattr(state, "_cached_triage", None) or {}
+        anti_debug = triage.get("anti_debug_techniques") or triage.get("anti_analysis") or []
+        if isinstance(anti_debug, list):
+            for tech_info in anti_debug:
+                if isinstance(tech_info, dict):
+                    api = tech_info.get("api") or tech_info.get("name", "")
+                    if api in ANTI_DEBUG_BYPASSES and api not in detected_techniques:
+                        detected_techniques.append(api)
+
+        if not detected_techniques:
+            return {
+                "status": "no_anti_debug_detected",
+                "message": "No anti-debug techniques detected in imports or triage data.",
+                "hint": "Use techniques=['IsDebuggerPresent', ...] to manually specify bypasses.",
+                "available_techniques": sorted(ANTI_DEBUG_BYPASSES.keys()),
+            }
+
+    # Sort for deterministic output
+    detected_techniques.sort()
+    script_text = generate_bypass_js(detected_techniques)
+
+    result: Dict[str, Any] = {
+        "script": script_text,
+        "bypassed_techniques": detected_techniques,
+        "total_bypasses": len(detected_techniques),
+        "usage": "frida -l <script.js> -p <PID>  OR  frida -l <script.js> -f <binary>",
+    }
+
+    artifact = _save_script(output_path, script_text, "generate_frida_bypass_script")
+    if artifact:
+        result["saved_to"] = artifact.get("path", output_path)
+
+    return await _check_mcp_response_size(ctx, result, "generate_frida_bypass_script")
+
+
+@tool_decorator
+async def generate_frida_trace_script(
+    ctx: Context,
+    categories: Optional[List[str]] = None,
+    limit: int = 50,
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: advanced] Generate a Frida API tracing script based on the binary's imports.
+
+    Identifies suspicious/interesting APIs from the binary's import table and generates
+    a comprehensive tracing script that logs all calls with arguments and return values.
+
+    When to use: When you want a broad view of the binary's runtime API behaviour.
+    Filter by category to focus on specific behaviours (networking, crypto, injection, etc.).
+    Next steps: Run with Frida, then generate_frida_hook_script() for targeted hooks.
+
+    Args:
+        categories: Filter APIs by category. Options: process_injection, process_creation,
+            memory, networking, file_io, registry, crypto, anti_debug, service, thread.
+            Default: all categories.
+        limit: Maximum number of APIs to include in the script (1-100000). Default 50.
+        output_path: Optional file path to save the generated script.
+    """
+    _check_pe_loaded("generate_frida_trace_script")
+
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
+    valid_categories = {
+        "process_injection", "process_creation", "memory", "networking",
+        "file_io", "registry", "crypto", "anti_debug", "service", "thread",
+    }
+    if categories:
+        invalid = [c for c in categories if c not in valid_categories]
+        if invalid:
+            return {
+                "error": f"Invalid categories: {invalid}",
+                "valid_categories": sorted(valid_categories),
+            }
+
+    # Gather APIs from imports
+    pe_data = state.pe_data or {}
+    imports = pe_data.get("imports", {})
+    import_names = set()
+    if isinstance(imports, dict):
+        for dll_name, dll_imports in imports.items():
+            if isinstance(dll_imports, list):
+                for imp in dll_imports:
+                    name = imp.get("name", "") if isinstance(imp, dict) else str(imp)
+                    if name:
+                        import_names.add((name, dll_name))
+    elif isinstance(imports, list):
+        for imp in imports:
+            if isinstance(imp, dict):
+                name = imp.get("name", "")
+                dll = imp.get("dll", "")
+                if name:
+                    import_names.add((name, dll))
+
+    # Match against signature database
+    apis_to_trace: List[Dict[str, Any]] = []
+    for api_name, sig_info in FRIDA_API_SIGNATURES.items():
+        for imp_name, imp_dll in import_names:
+            if imp_name == api_name:
+                apis_to_trace.append({
+                    "name": api_name,
+                    "module": imp_dll if imp_dll else None,
+                    "category": sig_info.get("category", "unknown"),
+                })
+                break
+
+    # Also add imports that match CATEGORIZED_IMPORTS_DB but aren't in FRIDA_API_SIGNATURES
+    try:
+        from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB
+        for imp_name, imp_dll in import_names:
+            if imp_name in CATEGORIZED_IMPORTS_DB and imp_name not in FRIDA_API_SIGNATURES:
+                risk, cat = CATEGORIZED_IMPORTS_DB[imp_name]
+                apis_to_trace.append({
+                    "name": imp_name,
+                    "module": imp_dll if imp_dll else None,
+                    "category": cat,
+                })
+    except ImportError:
+        pass
+
+    # Deduplicate by name
+    seen = set()
+    unique_apis = []
+    for api in apis_to_trace:
+        if api["name"] not in seen:
+            seen.add(api["name"])
+            unique_apis.append(api)
+
+    # Apply category filter
+    if categories:
+        unique_apis = [a for a in unique_apis if a.get("category") in categories]
+
+    # Apply limit
+    unique_apis = unique_apis[:limit]
+
+    if not unique_apis:
+        return {
+            "status": "no_matching_apis",
+            "message": "No matching APIs found in the binary's imports.",
+            "hint": "Try without category filter, or use generate_frida_hook_script() with specific targets.",
+            "available_categories": sorted(valid_categories),
+        }
+
+    script_text = generate_trace_js(unique_apis, categories)
+
+    # Group by category for summary
+    by_category: Dict[str, List[str]] = {}
+    for api in unique_apis:
+        cat = api.get("category", "unknown")
+        by_category.setdefault(cat, []).append(api["name"])
+
+    result: Dict[str, Any] = {
+        "script": script_text,
+        "traced_apis": [a["name"] for a in unique_apis],
+        "total_apis": len(unique_apis),
+        "by_category": by_category,
+        "usage": "frida -l <script.js> -p <PID>  OR  frida -l <script.js> -f <binary>",
+    }
+
+    artifact = _save_script(output_path, script_text, "generate_frida_trace_script")
+    if artifact:
+        result["saved_to"] = artifact.get("path", output_path)
+
+    return await _check_mcp_response_size(ctx, result, "generate_frida_trace_script")
