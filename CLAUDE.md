@@ -150,7 +150,7 @@ Dashboard triage flags are persisted to the analysis cache and restored when the
 - **Binary Diff**: `/api/diff` runs angr BinDiff in `asyncio.to_thread()`. `/api/list-files` lists samples directory for the file browser. Uses `getattr()` with fallback for BinDiff attribute names across angr versions.
 - **Full-Text Code Search**: `/api/search-code` searches `_decompile_meta` cache with line-level context. Functions page SEARCH button and code search results panel with highlighted matches.
 - **Symbol Tree**: Functions page TABLE/TREE toggle. Groups functions into 6 categories (flagged, suspicious, decompiled, renamed, other, library/PLT). Event delegation via `data-tree-action` attributes.
-- **Responsive nav**: Navigation uses JS-based overflow detection (`scrollWidth > clientWidth`). When links overflow, a dropdown toggle button (`NAV`) appears and links collapse into a vertical dropdown panel. `_initNavCollapse()` in `dashboard.js` runs on load and window resize. No horizontal scrollbar.
+- **Responsive nav**: Navigation uses JS-based overflow detection. Links that fit are shown inline; overflow links are moved into a "MORE (N)" dropdown positioned after the visible links. `_initNavOverflow()` in `dashboard.js` measures each link's position, moves overflow items into `#nav-more-dropdown`, and re-distributes on window resize. Two-pass measurement accounts for the MORE button taking space.
 - **Functions scroll preservation**: `reloadFunctions()` in `functions.js` saves and restores both table container `scrollTop` and `window.scrollY` around `innerHTML` replacement, preventing scroll jumps during SSE-triggered enrichment reloads.
 
 ## Docker

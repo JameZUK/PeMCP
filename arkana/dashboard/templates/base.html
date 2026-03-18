@@ -19,7 +19,6 @@
             <img src="/dashboard/static/logo_icon.svg" alt="Arkana" class="nav-logo">
             <span class="nav-title">ARKANA</span>
         </div>
-        <button class="nav-menu-toggle" id="nav-menu-toggle" aria-label="Toggle navigation">&#9776; NAV</button>
         <div class="nav-links" id="nav-links">
             <a href="/dashboard/" class="nav-link {% if nav_active == 'overview' %}active{% endif %}">OVERVIEW</a>
             <a href="/dashboard/functions" class="nav-link {% if nav_active == 'functions' %}active{% endif %}">FUNCTIONS</a>
@@ -34,6 +33,10 @@
             <a href="/dashboard/diff" class="nav-link {% if nav_active == 'diff' %}active{% endif %}">DIFF</a>
             <a href="/dashboard/timeline" class="nav-link {% if nav_active == 'timeline' %}active{% endif %}">TIMELINE</a>
             <a href="/dashboard/notes" class="nav-link {% if nav_active == 'notes' %}active{% endif %}">NOTES</a>
+        </div>
+        <div class="nav-more-wrap" id="nav-more-wrap">
+            <button class="nav-more-btn" id="nav-more-btn" aria-label="Show more navigation links">MORE <span class="nav-more-count" id="nav-more-count"></span>&#9662;</button>
+            <div class="nav-more-dropdown" id="nav-more-dropdown"></div>
         </div>
         <div class="nav-search" id="nav-search">
             <input type="text" id="global-search-input" placeholder="/ search..." autocomplete="off">

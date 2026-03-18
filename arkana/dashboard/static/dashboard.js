@@ -30,58 +30,91 @@ function applyDataWidths(root) {
 }
 document.addEventListener('DOMContentLoaded', function() {
     applyDataWidths();
-    _initNavCollapse();
+    _initNavOverflow();
 });
 document.addEventListener('htmx:afterSwap', function(e) { applyDataWidths(e.detail.target); });
 
-// --- Nav collapse: dropdown when links don't fit ---
-function _initNavCollapse() {
-    var nav = document.getElementById('top-nav');
-    var links = document.getElementById('nav-links');
-    var toggle = document.getElementById('nav-menu-toggle');
-    if (!nav || !links || !toggle) return;
+// --- Nav overflow: show links that fit inline, rest in MORE dropdown ---
+function _initNavOverflow() {
+    var linksContainer = document.getElementById('nav-links');
+    var moreWrap = document.getElementById('nav-more-wrap');
+    var moreBtn = document.getElementById('nav-more-btn');
+    var moreDropdown = document.getElementById('nav-more-dropdown');
+    var moreCount = document.getElementById('nav-more-count');
+    if (!linksContainer || !moreWrap || !moreBtn || !moreDropdown) return;
 
-    function checkOverflow() {
-        // Temporarily remove collapsed state to measure natural width
-        var wasCollapsed = nav.classList.contains('nav-collapsed');
-        var wasOpen = links.classList.contains('nav-open');
-        nav.classList.remove('nav-collapsed');
-        links.classList.remove('nav-open');
+    // Snapshot original link order (never changes)
+    var allLinks = Array.from(linksContainer.querySelectorAll('.nav-link'));
 
-        // Check if links overflow (scrollWidth > clientWidth)
-        var overflows = links.scrollWidth > links.clientWidth + 1;
+    function redistribute() {
+        // 1. Move all links back to inline container, hide MORE
+        allLinks.forEach(function(link) { linksContainer.appendChild(link); });
+        moreWrap.style.display = 'none';
+        moreDropdown.classList.remove('open');
+        moreBtn.classList.remove('active');
 
-        if (overflows) {
-            nav.classList.add('nav-collapsed');
-            // Restore open state if it was open before
-            if (wasOpen) links.classList.add('nav-open');
+        // 2. Force reflow, then find first link that overflows
+        var containerRight = linksContainer.getBoundingClientRect().right;
+        var firstOverflow = -1;
+        for (var i = 0; i < allLinks.length; i++) {
+            if (allLinks[i].getBoundingClientRect().right > containerRight + 1) {
+                firstOverflow = i;
+                break;
+            }
         }
-        // If not overflowing, leave collapsed off (links show inline)
+        if (firstOverflow === -1) return; // Everything fits
+
+        // 3. Show MORE button (takes space, may push more links out)
+        moreWrap.style.display = '';
+
+        // 4. Re-measure with MORE visible
+        containerRight = linksContainer.getBoundingClientRect().right;
+        firstOverflow = -1;
+        for (var i = 0; i < allLinks.length; i++) {
+            if (allLinks[i].getBoundingClientRect().right > containerRight + 1) {
+                firstOverflow = i;
+                break;
+            }
+        }
+
+        // 5. Move overflow links into dropdown
+        if (firstOverflow === -1) {
+            // MORE button fits without pushing anything out — hide it
+            moreWrap.style.display = 'none';
+            return;
+        }
+        var overflowCount = 0;
+        for (var i = firstOverflow; i < allLinks.length; i++) {
+            moreDropdown.appendChild(allLinks[i]);
+            overflowCount++;
+        }
+        if (moreCount) moreCount.textContent = '(' + overflowCount + ') ';
     }
 
-    toggle.addEventListener('click', function() {
-        links.classList.toggle('nav-open');
-        toggle.classList.toggle('active', links.classList.contains('nav-open'));
+    moreBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        moreDropdown.classList.toggle('open');
+        moreBtn.classList.toggle('active', moreDropdown.classList.contains('open'));
     });
 
-    // Close dropdown when clicking a link
-    links.addEventListener('click', function(e) {
-        if (e.target.closest('.nav-link')) {
-            links.classList.remove('nav-open');
-            toggle.classList.remove('active');
-        }
-    });
-
-    // Close dropdown when clicking outside
+    // Close dropdown on outside click
     document.addEventListener('click', function(e) {
-        if (!e.target.closest('#top-nav')) {
-            links.classList.remove('nav-open');
-            toggle.classList.remove('active');
+        if (!e.target.closest('#nav-more-wrap')) {
+            moreDropdown.classList.remove('open');
+            moreBtn.classList.remove('active');
         }
     });
 
-    checkOverflow();
-    window.addEventListener('resize', checkOverflow);
+    // Close dropdown on link click
+    moreDropdown.addEventListener('click', function(e) {
+        if (e.target.closest('.nav-link')) {
+            moreDropdown.classList.remove('open');
+            moreBtn.classList.remove('active');
+        }
+    });
+
+    redistribute();
+    window.addEventListener('resize', redistribute);
 }
 
 // Skip DOM swap when server response is identical to current content (prevents scroll reset, selection loss)

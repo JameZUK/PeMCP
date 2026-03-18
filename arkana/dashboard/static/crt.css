@@ -107,39 +107,13 @@ body {
     overflow: hidden;
 }
 
-/* Dropdown state: links shown as vertical panel below nav */
-.top-nav.nav-collapsed .nav-links {
-    display: none;
+/* MORE dropdown: shows only the overflow links that don't fit inline */
+.nav-more-wrap {
+    position: relative;
+    flex-shrink: 0;
+    display: none; /* shown by JS when links overflow */
 }
-.top-nav.nav-collapsed .nav-links.nav-open {
-    display: flex;
-    flex-direction: column;
-    position: absolute;
-    top: 100%;
-    left: 0;
-    right: 0;
-    background: var(--bg-surface);
-    border-bottom: 1px solid var(--primary-muted);
-    padding: 4px 0;
-    z-index: 99;
-    gap: 0;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-    max-height: 80vh;
-    overflow-y: auto;
-}
-.top-nav.nav-collapsed .nav-links.nav-open .nav-link {
-    padding: 8px 20px;
-    border-bottom: none;
-    border-left: 2px solid transparent;
-}
-.top-nav.nav-collapsed .nav-links.nav-open .nav-link.active {
-    border-left-color: var(--primary);
-    border-bottom: none;
-}
-
-/* Menu toggle button — hidden when links fit inline */
-.nav-menu-toggle {
-    display: none;
+.nav-more-btn {
     background: transparent;
     border: 1px solid var(--primary-ghost);
     color: var(--primary-dim);
@@ -150,18 +124,48 @@ body {
     cursor: pointer;
     transition: color 0.2s, border-color 0.2s;
     white-space: nowrap;
-    flex-shrink: 0;
 }
-.nav-menu-toggle:hover {
+.nav-more-btn:hover {
     color: var(--primary);
     border-color: var(--primary-muted);
 }
-.top-nav.nav-collapsed .nav-menu-toggle {
-    display: block;
-}
-.top-nav.nav-collapsed .nav-menu-toggle.active {
+.nav-more-btn.active {
     color: var(--highlight);
     border-color: var(--primary);
+}
+.nav-more-count {
+    font-size: 10px;
+    color: var(--primary-muted);
+}
+.nav-more-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    min-width: 160px;
+    background: var(--bg-surface);
+    border: 1px solid var(--primary-muted);
+    padding: 4px 0;
+    z-index: 101;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.nav-more-dropdown.open {
+    display: flex;
+    flex-direction: column;
+}
+.nav-more-dropdown .nav-link {
+    padding: 8px 16px;
+    border-bottom: none;
+    border-left: 2px solid transparent;
+}
+.nav-more-dropdown .nav-link:hover {
+    background: var(--bg-raised);
+}
+.nav-more-dropdown .nav-link.active {
+    border-left-color: var(--primary);
+    border-bottom: none;
 }
 
 .nav-link {

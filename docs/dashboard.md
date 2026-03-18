@@ -135,7 +135,7 @@ Category-filtered view of all analysis notes (general, function, tool_result, IO
 
 ## Responsive Navigation
 
-The top navigation bar uses JS-based overflow detection. When the 13 page links exceed the available width (common on screens narrower than ~1700px), the links collapse behind a **NAV** dropdown toggle button. Clicking the toggle opens a vertical dropdown panel. The dropdown closes on outside click or when a link is selected. No horizontal scrollbar is shown.
+The top navigation bar adapts to available screen width. Links that fit are shown inline; any that overflow are collected into a **MORE (N)** dropdown button positioned after the last visible link. On wider screens all 13 links display inline with no dropdown. On narrower screens only the links that fit are shown, and the rest appear in the dropdown when clicked. The layout re-distributes automatically on window resize.
 
 ---
 
