@@ -85,7 +85,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `elf_dwarf_info` | Extracting DWARF debug symbols from ELF | — |
 | `macho_analyze` | Analyzing Mach-O binaries | — |
 | `dotnet_analyze` | .NET assembly analysis (dnfile + dotnetfile fallback) | — |
-| `dotnet_disassemble_method` | Disassemble specific .NET CIL method | `method_name` |
+| `dotnet_disassemble_method` | Disassemble specific .NET CIL method by RVA (from `dotnet_analyze` method_definitions) | `method_rva` |
 | `go_analyze` | Go binary analysis (packages, version) | — |
 | `rust_analyze` | Rust binary metadata | — |
 | `rust_demangle_symbols` | Demangle Rust symbol names | — |

@@ -10,7 +10,7 @@ from arkana.constants import MAX_TOOL_LIMIT
 if DNFILE_AVAILABLE:
     import dnfile
 if DNCIL_AVAILABLE:
-    from dncil.cil.body import CilMethodBody
+    from dncil.cil.body.reader import read_method_body_from_bytes
     from dncil.cil.error import MethodBodyFormatError as CilError
     from dncil.clr.token import Token
 if DOTNETFILE_AVAILABLE:
@@ -115,7 +115,7 @@ async def dotnet_analyze(
                             types.append({
                                 "name": str(row.TypeName) if hasattr(row, 'TypeName') else None,
                                 "namespace": str(row.TypeNamespace) if hasattr(row, 'TypeNamespace') else None,
-                                "flags": hex(row.Flags) if hasattr(row, 'Flags') else None,
+                                "flags": str(row.Flags) if hasattr(row, 'Flags') else None,
                             })
                             if len(types) >= limit:
                                 break
@@ -133,8 +133,8 @@ async def dotnet_analyze(
                             methods.append({
                                 "name": str(row.Name) if hasattr(row, 'Name') else None,
                                 "rva": hex(row.Rva) if hasattr(row, 'Rva') else None,
-                                "flags": hex(row.Flags) if hasattr(row, 'Flags') else None,
-                                "impl_flags": hex(row.ImplFlags) if hasattr(row, 'ImplFlags') else None,
+                                "flags": str(row.Flags) if hasattr(row, 'Flags') else None,
+                                "impl_flags": str(row.ImplFlags) if hasattr(row, 'ImplFlags') else None,
                             })
                             if len(methods) >= limit:
                                 break
@@ -353,7 +353,7 @@ async def dotnet_disassemble_method(
 
             try:
                 data = dn.__data__[offset:]
-                body = CilMethodBody(data)
+                body = read_method_body_from_bytes(data)
             except CilError as e:
                 return {"error": f"Failed to parse CIL method body: {e}"}
             except Exception as e:
@@ -376,7 +376,7 @@ async def dotnet_disassemble_method(
                 "header_size": body.header_size if hasattr(body, 'header_size') else None,
                 "max_stack": body.max_stack if hasattr(body, 'max_stack') else None,
                 "code_size": body.code_size if hasattr(body, 'code_size') else None,
-                "local_var_sig_tok": hex(body.local_var_sig_tok) if hasattr(body, 'local_var_sig_tok') and body.local_var_sig_tok else None,
+                "local_var_sig_tok": str(body.local_var_sig_tok) if hasattr(body, 'local_var_sig_tok') and body.local_var_sig_tok else None,
                 "instruction_count": len(instructions),
                 "instructions": instructions,
             }
@@ -387,8 +387,8 @@ async def dotnet_disassemble_method(
                 for eh in body.exception_handlers:
                     handlers.append({
                         "type": str(eh.clause_type) if hasattr(eh, 'clause_type') else None,
-                        "try_offset": hex(eh.try_offset) if hasattr(eh, 'try_offset') else None,
-                        "handler_offset": hex(eh.handler_offset) if hasattr(eh, 'handler_offset') else None,
+                        "try_offset": str(eh.try_offset) if hasattr(eh, 'try_offset') else None,
+                        "handler_offset": str(eh.handler_offset) if hasattr(eh, 'handler_offset') else None,
                     })
                 result["exception_handlers"] = handlers
 

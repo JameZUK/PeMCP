@@ -209,7 +209,7 @@ analysis.
 
 For cases where automated tools fail:
 1. Use `dotnet_analyze()` to identify which protections are applied
-2. Use `dotnet_disassemble_method(token)` to read the IL code
+2. Use `dotnet_disassemble_method(method_rva)` to read the IL code
 3. Identify the string decryption method (usually called from static constructors)
 4. Emulate or replicate the decryption to recover cleartext strings
 
