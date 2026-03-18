@@ -34,6 +34,9 @@ __all__ = [
     "DNFILE_AVAILABLE", "DNCIL_AVAILABLE",
     "RUSTBININFO_AVAILABLE", "RUST_DEMANGLER_AVAILABLE",
     "REFINERY_AVAILABLE",
+    "DE4DOT_AVAILABLE", "DE4DOT_IMPORT_ERROR",
+    "NETREACTORSLAYER_AVAILABLE", "NETREACTORSLAYER_IMPORT_ERROR",
+    "ILSPYCMD_AVAILABLE", "ILSPYCMD_IMPORT_ERROR",
     # Key imports re-exported via config.py
     "pefile", "nx",
     "FastMCP", "Context",
@@ -429,6 +432,69 @@ try:
     DOTNETFILE_AVAILABLE = True
 except ImportError:
     pass
+
+# --- .NET Deobfuscation CLI Tools (not Python packages) ---
+DE4DOT_AVAILABLE = None  # None = not yet checked; lazy-checked on first use
+DE4DOT_IMPORT_ERROR = ""
+_DE4DOT_PATH = Path("/app/dotnet-tools/de4dot/de4dot.dll")
+_de4dot_check_lock = threading.Lock()
+
+def _check_de4dot_available():
+    """Lazy check for de4dot-cex availability. Called on first use."""
+    global DE4DOT_AVAILABLE, DE4DOT_IMPORT_ERROR
+    if DE4DOT_AVAILABLE is not None:
+        return DE4DOT_AVAILABLE
+    with _de4dot_check_lock:
+        if DE4DOT_AVAILABLE is not None:
+            return DE4DOT_AVAILABLE
+        if _DE4DOT_PATH.is_file() and shutil.which("dotnet"):
+            DE4DOT_AVAILABLE = True
+        else:
+            DE4DOT_AVAILABLE = False
+            DE4DOT_IMPORT_ERROR = f"de4dot not found (expected {_DE4DOT_PATH})"
+        return DE4DOT_AVAILABLE
+
+NETREACTORSLAYER_AVAILABLE = None
+NETREACTORSLAYER_IMPORT_ERROR = ""
+_NETREACTORSLAYER_PATH = Path("/app/dotnet-tools/netreactorslayer/NETReactorSlayer.CLI.dll")
+_netreactorslayer_check_lock = threading.Lock()
+
+def _check_netreactorslayer_available():
+    """Lazy check for NETReactorSlayer availability. Called on first use."""
+    global NETREACTORSLAYER_AVAILABLE, NETREACTORSLAYER_IMPORT_ERROR
+    if NETREACTORSLAYER_AVAILABLE is not None:
+        return NETREACTORSLAYER_AVAILABLE
+    with _netreactorslayer_check_lock:
+        if NETREACTORSLAYER_AVAILABLE is not None:
+            return NETREACTORSLAYER_AVAILABLE
+        if _NETREACTORSLAYER_PATH.is_file() and shutil.which("dotnet"):
+            NETREACTORSLAYER_AVAILABLE = True
+        else:
+            NETREACTORSLAYER_AVAILABLE = False
+            NETREACTORSLAYER_IMPORT_ERROR = f"NETReactorSlayer not found (expected {_NETREACTORSLAYER_PATH})"
+        return NETREACTORSLAYER_AVAILABLE
+
+ILSPYCMD_AVAILABLE = None
+ILSPYCMD_IMPORT_ERROR = ""
+_ILSPYCMD_PATH = Path("/app/dotnet-tools/ilspy/ilspycmd")
+_ilspycmd_check_lock = threading.Lock()
+
+def _check_ilspycmd_available():
+    """Lazy check for ilspycmd (ILSpy CLI) availability. Called on first use."""
+    global ILSPYCMD_AVAILABLE, ILSPYCMD_IMPORT_ERROR
+    if ILSPYCMD_AVAILABLE is not None:
+        return ILSPYCMD_AVAILABLE
+    with _ilspycmd_check_lock:
+        if ILSPYCMD_AVAILABLE is not None:
+            return ILSPYCMD_AVAILABLE
+        if _ILSPYCMD_PATH.is_file():
+            ILSPYCMD_AVAILABLE = True
+        elif shutil.which("ilspycmd"):
+            ILSPYCMD_AVAILABLE = True
+        else:
+            ILSPYCMD_AVAILABLE = False
+            ILSPYCMD_IMPORT_ERROR = f"ilspycmd not found (expected {_ILSPYCMD_PATH} or on PATH)"
+        return ILSPYCMD_AVAILABLE
 
 PPDEEP_AVAILABLE = False
 try:

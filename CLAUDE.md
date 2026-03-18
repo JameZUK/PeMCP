@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 223 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
+Arkana is a Model Context Protocol (MCP) server exposing 226 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
 
 ## Project Structure
 
@@ -25,7 +25,7 @@ arkana/                  # Main package
 │   ├── templates/      # Jinja2 templates (overview, functions, callgraph, sections, strings, timeline, notes)
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
-└── mcp/                # MCP tool modules (223 tools across 55 files)
+└── mcp/                # MCP tool modules (226 tools across 56 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain
@@ -158,7 +158,7 @@ Dashboard triage flags are persisted to the analysis cache and restored when the
 ./run.sh --samples ~/dir  # Mount samples directory
 ```
 
-The Docker image uses 4 venvs to isolate incompatible unicorn versions (angr needs v2, Speakeasy/Unipacker/Qiling need v1).
+The Docker image uses 4 venvs to isolate incompatible unicorn versions (angr needs v2, Speakeasy/Unipacker/Qiling need v1). .NET deobfuscation tools (de4dot-cex, NETReactorSlayer, ilspycmd) are standalone .NET CLI executables invoked via `asyncio.create_subprocess_exec()` — no Python venv needed.
 
 ## CI
 

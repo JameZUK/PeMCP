@@ -163,6 +163,40 @@ RUN groupadd -g 1500 arkana && \
     chown -R root:arkana /app/qiling-rootfs && \
     chmod -R 775 /app/qiling-rootfs
 
+# --- .NET Runtime & Deobfuscation Tools ---
+# de4dot-cex (GPLv3) and NETReactorSlayer (GPLv3) are standalone .NET CLI
+# tools invoked via subprocess. ilspycmd (MIT) is a .NET global tool.
+# All three run as external processes — no Python dependency or venv needed.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget apt-transport-https && \
+    wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
+         -O /tmp/ms-prod.deb && \
+    dpkg -i /tmp/ms-prod.deb && rm /tmp/ms-prod.deb && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends dotnet-sdk-8.0 && \
+    rm -rf /var/lib/apt/lists/*
+
+# de4dot-cex — download latest release (best-effort)
+RUN mkdir -p /app/dotnet-tools/de4dot && \
+    wget -q "https://github.com/ViRb3/de4dot-cex/releases/latest/download/de4dot-cex-net6.0.zip" \
+         -O /tmp/de4dot.zip && \
+    unzip -q /tmp/de4dot.zip -d /app/dotnet-tools/de4dot/ && \
+    rm /tmp/de4dot.zip \
+    || echo "WARNING: de4dot-cex download failed — dotnet_deobfuscate(method='de4dot') will be unavailable"
+
+# NETReactorSlayer — download latest release (best-effort)
+RUN mkdir -p /app/dotnet-tools/netreactorslayer && \
+    wget -q "https://github.com/SychicBoy/NETReactorSlayer/releases/latest/download/NETReactorSlayer.CLI.zip" \
+         -O /tmp/nrs.zip && \
+    unzip -q /tmp/nrs.zip -d /app/dotnet-tools/netreactorslayer/ && \
+    rm /tmp/nrs.zip \
+    || echo "WARNING: NETReactorSlayer download failed — dotnet_deobfuscate(method='reactor_slayer') will be unavailable"
+
+# ilspycmd — install as .NET global tool (best-effort)
+RUN dotnet tool install --tool-path /app/dotnet-tools/ilspy ilspycmd \
+    || echo "WARNING: ilspycmd install failed — dotnet_decompile() will be unavailable"
+ENV PATH="${PATH}:/app/dotnet-tools/ilspy"
+
 # --- Install Binary Refinery optional sub-dependencies ---
 # These are optional packages that specific refinery units need at runtime.
 # Installed best-effort so a single failure doesn't block the build.

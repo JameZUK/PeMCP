@@ -46,6 +46,9 @@ __all__ = [
     "MAX_VULN_SCAN_FUNCTIONS", "MAX_VULN_FINDINGS",
     # Symbolic execution extensions
     "MAX_SYMBOLIC_STEPS", "MAX_SYMBOLIC_ACTIVE_STATES", "MAX_SYMBOLIC_FIND_ADDRESSES",
+    # .NET deobfuscation
+    "DOTNET_DEOBFUSCATE_TIMEOUT", "DOTNET_DECOMPILE_TIMEOUT",
+    "DOTNET_DECOMPILE_MAX_OUTPUT_LINES",
     "DEPENDENCIES",
 ]
 
@@ -175,6 +178,11 @@ MAX_VULN_FINDINGS = 200  # max findings per scan
 MAX_SYMBOLIC_STEPS = 100_000  # upper bound for max_steps parameter
 MAX_SYMBOLIC_ACTIVE_STATES = 100  # upper bound for max_active parameter
 MAX_SYMBOLIC_FIND_ADDRESSES = 20  # max find addresses for explore
+
+# --- .NET Deobfuscation ---
+DOTNET_DEOBFUSCATE_TIMEOUT = 120   # seconds for de4dot / NETReactorSlayer subprocess
+DOTNET_DECOMPILE_TIMEOUT = 120     # seconds for ilspycmd subprocess
+DOTNET_DECOMPILE_MAX_OUTPUT_LINES = 5000  # cap decompiled C# output lines
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

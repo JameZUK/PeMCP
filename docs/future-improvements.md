@@ -2,7 +2,7 @@
 
 Proposed enhancements and feature ideas for Arkana. Items are grouped by domain and prioritised within each section. Each proposal includes a value assessment to help determine whether the added complexity justifies the benefit over manual analysis.
 
-**Current state:** 212 MCP tools across 51 files, supporting PE/ELF/Mach-O with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy integrations.
+**Current state:** 226 MCP tools across 56 files, supporting PE/ELF/Mach-O with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy integrations.
 
 **Evaluation criteria for each proposal:**
 - **Value** — Does this enable analysis that's currently impossible, or just faster?
@@ -352,12 +352,13 @@ Implement Tool A (detection) first as a standalone feature. Tool B (deobfuscatio
 
 ---
 
-## 7. .NET Deobfuscation & Decompilation
+## 7. .NET Deobfuscation & Decompilation ✅ IMPLEMENTED
 
+**Status**: Implemented in `arkana/mcp/tools_dotnet_deobfuscate.py` (3 tools: `detect_dotnet_obfuscation`, `dotnet_deobfuscate`, `dotnet_decompile`)
 **Priority**: High
 **Complexity**: Medium-High
 **Docker image impact**: +80-400MB (.NET runtime required)
-**New tools**: 1-2
+**New tools**: ~~1-2~~ 3
 
 ### Integrate de4dot + NETReactorSlayer
 
@@ -917,7 +918,7 @@ Low priority unless analysts frequently encounter stripped binaries where angr's
 | 1 | Context aggregation | Low | Moderate | Very high |
 | 8 | Expose dashboard functions | Low | N/A | High |
 | 5 | Frida script generation | Low | High | Medium |
-| 7 | .NET deobfuscation | Medium-High | High | High |
+| 7 | ~~.NET deobfuscation~~ ✅ | Medium-High | High | High |
 | 2 | Symbolic execution extensions | Medium | Very high | Medium |
 
 ### Worth discussing (moderate value, some complexity)
