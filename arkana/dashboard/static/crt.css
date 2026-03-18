@@ -102,6 +102,7 @@ body {
 
 .nav-links {
     display: flex;
+    flex: 1 1 0;
     gap: 4px;
     min-width: 0;
     overflow: hidden;
@@ -111,6 +112,7 @@ body {
 .nav-more-wrap {
     position: relative;
     flex-shrink: 0;
+    margin-left: 8px;
     display: none; /* shown by JS when links overflow */
 }
 .nav-more-btn {
@@ -192,13 +194,14 @@ body {
 }
 
 .nav-filename {
-    margin-left: auto;
+    margin-left: 8px;
     font-size: 11px;
     letter-spacing: 1px;
     max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex-shrink: 0;
 }
 
 .sse-disconnect {
@@ -1494,8 +1497,9 @@ details[open] > .import-dll-header::before {
 
 .nav-search {
     position: relative;
-    margin-left: 16px;
+    margin-left: 12px;
     margin-right: 8px;
+    flex-shrink: 0;
 }
 
 .nav-search input {
@@ -2236,7 +2240,6 @@ button.btn-analysis:hover {
     .top-nav { padding: 0 8px; }
     .nav-brand { margin-right: 8px; }
     .nav-title { font-size: 13px; letter-spacing: 1px; }
-    .nav-search { margin-left: auto; }
     .nav-search input { width: 100px; }
     .nav-search input:focus-visible { width: 140px; }
     .nav-filename { display: none; }

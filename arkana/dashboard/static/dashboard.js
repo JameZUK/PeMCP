@@ -46,49 +46,40 @@ function _initNavOverflow() {
     // Snapshot original link order (never changes)
     var allLinks = Array.from(linksContainer.querySelectorAll('.nav-link'));
 
+    // Check if the last inline link extends past the container's right edge
+    function lastLinkOverflows() {
+        var inlineLinks = linksContainer.querySelectorAll('.nav-link');
+        if (inlineLinks.length === 0) return false;
+        var lastLink = inlineLinks[inlineLinks.length - 1];
+        var containerRight = linksContainer.getBoundingClientRect().right;
+        var linkRight = lastLink.getBoundingClientRect().right;
+        return linkRight > containerRight + 1;
+    }
+
     function redistribute() {
-        // 1. Move all links back to inline container, hide MORE
+        // 1. Reset: move all links back to inline container, hide MORE
         allLinks.forEach(function(link) { linksContainer.appendChild(link); });
         moreWrap.style.display = 'none';
         moreDropdown.classList.remove('open');
         moreBtn.classList.remove('active');
 
-        // 2. Force reflow, then find first link that overflows
-        var containerRight = linksContainer.getBoundingClientRect().right;
-        var firstOverflow = -1;
-        for (var i = 0; i < allLinks.length; i++) {
-            if (allLinks[i].getBoundingClientRect().right > containerRight + 1) {
-                firstOverflow = i;
-                break;
-            }
-        }
-        if (firstOverflow === -1) return; // Everything fits
+        // 2. Check if any link overflows the container visually
+        if (!lastLinkOverflows()) return;
 
-        // 3. Show MORE button (takes space, may push more links out)
-        moreWrap.style.display = '';
+        // 3. Show MORE button (this shrinks nav-links via flex)
+        //    Must use 'block' not '' — CSS base rule is display:none
+        moreWrap.style.display = 'block';
 
-        // 4. Re-measure with MORE visible
-        containerRight = linksContainer.getBoundingClientRect().right;
-        firstOverflow = -1;
-        for (var i = 0; i < allLinks.length; i++) {
-            if (allLinks[i].getBoundingClientRect().right > containerRight + 1) {
-                firstOverflow = i;
-                break;
-            }
+        // 4. Remove links from the end one-by-one until nothing overflows
+        //    Keep at least 1 link visible
+        var moved = 0;
+        for (var i = allLinks.length - 1; i >= 1; i--) {
+            moreDropdown.insertBefore(allLinks[i], moreDropdown.firstChild);
+            moved++;
+            if (!lastLinkOverflows()) break;
         }
 
-        // 5. Move overflow links into dropdown
-        if (firstOverflow === -1) {
-            // MORE button fits without pushing anything out — hide it
-            moreWrap.style.display = 'none';
-            return;
-        }
-        var overflowCount = 0;
-        for (var i = firstOverflow; i < allLinks.length; i++) {
-            moreDropdown.appendChild(allLinks[i]);
-            overflowCount++;
-        }
-        if (moreCount) moreCount.textContent = '(' + overflowCount + ') ';
+        if (moreCount) moreCount.textContent = '(' + moved + ') ';
     }
 
     moreBtn.addEventListener('click', function(e) {
@@ -115,6 +106,9 @@ function _initNavOverflow() {
 
     redistribute();
     window.addEventListener('resize', redistribute);
+
+    // Expose so SSE handler can re-run when filename changes
+    window._navRedistribute = redistribute;
 }
 
 // Skip DOM swap when server response is identical to current content (prevents scroll reset, selection loss)
@@ -199,7 +193,12 @@ function showToast(message, type) {
         // Update nav filename indicator
         var fnEl = document.getElementById('nav-filename');
         if (fnEl) {
+            var oldText = fnEl.textContent;
             fnEl.textContent = data.filename || '';
+            // Re-run nav overflow detection when filename changes
+            if (fnEl.textContent !== oldText && window._navRedistribute) {
+                window._navRedistribute();
+            }
         }
 
         // Toast: tool completed
