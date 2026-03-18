@@ -343,11 +343,11 @@ def _build_de4dot_command(
     """Build the de4dot CLI command line (runs via mono on Linux).
 
     de4dot CLI syntax: de4dot [options] -f <file> [-o <output>]
-    --detect-only must come before the -f flag.
+    -d (detect and exit) must come before the -f flag.
     """
     args = ["mono", str(_DE4DOT_PATH)]
     if detect_only:
-        args.append("--detect-only")
+        args.append("-d")
     args.extend(["-f", input_path])
     if not detect_only and output_path:
         args.extend(["-o", output_path])

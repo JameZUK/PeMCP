@@ -204,11 +204,11 @@ class TestBuildDe4dotCommand:
 
     def test_detect_only(self):
         args = _build_de4dot_command("/path/in.exe", detect_only=True)
-        assert "--detect-only" in args
+        assert "-d" in args
         assert "-f" in args
         assert "-o" not in args
-        # --detect-only must come before -f
-        assert args.index("--detect-only") < args.index("-f")
+        # -d (detect) must come before -f
+        assert args.index("-d") < args.index("-f")
 
     def test_no_output(self):
         args = _build_de4dot_command("/path/in.exe")
