@@ -52,6 +52,47 @@ def _save_script(output_path: Optional[str], script_text: str, tool_name: str) -
     )
 
 
+def _collect_import_names(pe_data):
+    """Extract (api_name, dll_name) tuples from pe_data imports.
+
+    Handles the canonical format:
+        [{"dll_name": "kernel32.dll", "symbols": [{"name": "CreateProcessA"}, ...]}]
+    And a defensive dict-keyed-by-DLL fallback:
+        {"kernel32.dll": [{"name": "CreateProcessA"}, ...]}
+    """
+    if not pe_data:
+        return set()
+    imports = pe_data.get("imports")
+    if not imports:
+        return set()
+    result = set()
+    if isinstance(imports, list):
+        for entry in imports:
+            if not isinstance(entry, dict):
+                continue
+            dll = entry.get("dll_name", "") or ""
+            symbols = entry.get("symbols")
+            if isinstance(symbols, list):
+                for sym in symbols:
+                    if isinstance(sym, dict):
+                        name = sym.get("name", "")
+                        if name:
+                            result.add((name, dll))
+                    elif isinstance(sym, str) and sym:
+                        result.add((sym, dll))
+    elif isinstance(imports, dict):
+        for dll_name, dll_imports in imports.items():
+            if isinstance(dll_imports, list):
+                for imp in dll_imports:
+                    if isinstance(imp, dict):
+                        name = imp.get("name", "")
+                        if name:
+                            result.add((name, dll_name))
+                    elif isinstance(imp, str) and imp:
+                        result.add((imp, dll_name))
+    return result
+
+
 @tool_decorator
 async def generate_frida_hook_script(
     ctx: Context,
@@ -182,20 +223,8 @@ async def generate_frida_bypass_script(
     elif auto_detect:
         # Detect from imports
         pe_data = state.pe_data or {}
-        imports = pe_data.get("imports", {})
-        import_names = set()
-        if isinstance(imports, dict):
-            for dll_imports in imports.values():
-                if isinstance(dll_imports, list):
-                    for imp in dll_imports:
-                        if isinstance(imp, dict):
-                            import_names.add(imp.get("name", ""))
-                        elif isinstance(imp, str):
-                            import_names.add(imp)
-        elif isinstance(imports, list):
-            for imp in imports:
-                if isinstance(imp, dict):
-                    import_names.add(imp.get("name", ""))
+        all_imports = _collect_import_names(pe_data)
+        import_names = {name for name, _dll in all_imports}
 
         # Match against known anti-debug APIs
         for api in import_names:
@@ -279,22 +308,7 @@ async def generate_frida_trace_script(
 
     # Gather APIs from imports
     pe_data = state.pe_data or {}
-    imports = pe_data.get("imports", {})
-    import_names = set()
-    if isinstance(imports, dict):
-        for dll_name, dll_imports in imports.items():
-            if isinstance(dll_imports, list):
-                for imp in dll_imports:
-                    name = imp.get("name", "") if isinstance(imp, dict) else str(imp)
-                    if name:
-                        import_names.add((name, dll_name))
-    elif isinstance(imports, list):
-        for imp in imports:
-            if isinstance(imp, dict):
-                name = imp.get("name", "")
-                dll = imp.get("dll", "")
-                if name:
-                    import_names.add((name, dll))
+    import_names = _collect_import_names(pe_data)
 
     # Match against signature database
     apis_to_trace: List[Dict[str, Any]] = []
