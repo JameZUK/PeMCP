@@ -319,20 +319,23 @@ class TestDecompileLock:
     def test_lock_mutual_exclusion(self):
         """Lock provides mutual exclusion between threads."""
         results = []
+        t1_acquired = threading.Event()
 
-        def worker(name, delay):
+        def worker(name, delay, acquired_event=None):
             self.state._decompile_lock.acquire()
             try:
+                if acquired_event:
+                    acquired_event.set()
                 results.append(f"{name}_start")
                 time.sleep(delay)
                 results.append(f"{name}_end")
             finally:
                 self.state._decompile_lock.release()
 
-        t1 = threading.Thread(target=worker, args=("t1", 0.1))
-        t2 = threading.Thread(target=worker, args=("t2", 0.1))
+        t1 = threading.Thread(target=worker, args=("t1", 0.1, t1_acquired))
         t1.start()
-        time.sleep(0.02)  # Ensure t1 acquires first
+        t1_acquired.wait(timeout=2)  # Wait until t1 holds the lock
+        t2 = threading.Thread(target=worker, args=("t2", 0.1))
         t2.start()
         t1.join(timeout=2)
         t2.join(timeout=2)

@@ -42,9 +42,9 @@ _SKIP_HISTORY_TOOLS = frozenset({
 
 # --- Heartbeat configuration ---
 # Delay before the first heartbeat fires (avoids noise for fast tools).
-_HEARTBEAT_START_DELAY_SECONDS = 10
+_HEARTBEAT_START_DELAY_SECONDS = _safe_env_int("ARKANA_HEARTBEAT_START_DELAY", 10)
 # Interval between subsequent heartbeat pings.
-_HEARTBEAT_INTERVAL_SECONDS = 15
+_HEARTBEAT_INTERVAL_SECONDS = _safe_env_int("ARKANA_HEARTBEAT_INTERVAL", 15)
 
 # Tools that manage their own MCP progress reporting.  The generic heartbeat
 # is skipped for these to avoid conflicting or redundant messages.

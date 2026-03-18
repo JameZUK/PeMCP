@@ -132,7 +132,13 @@ class ProgressBridge:
             fut = asyncio.run_coroutine_threadsafe(coro_fn(*args), self._loop)
             # Surface exceptions from fire-and-forget coroutines so they
             # don't silently disappear.
-            fut.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+            def _log_exception(f):
+                if f.cancelled():
+                    return
+                exc = f.exception()
+                if exc:
+                    logger.debug("ProgressBridge: coroutine failed: %s", exc)
+            fut.add_done_callback(_log_exception)
         except Exception:
             # Never let progress reporting break an analysis.
             logger.debug("ProgressBridge: notification dispatch failed", exc_info=True)

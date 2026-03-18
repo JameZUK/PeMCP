@@ -549,8 +549,8 @@ def _triage_capa_capabilities(indicator_limit: int) -> Tuple[List[Dict[str, Any]
 # ===================================================================
 
 _TRIAGE_IP_RE = re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b')
-_TRIAGE_URL_RE = re.compile(r'(?:https?|ftp)://[^\s\'"<>]+', re.IGNORECASE)
-_TRIAGE_DOMAIN_RE = re.compile(r'\b(?:[a-zA-Z0-9-]+\.)+(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion)\b', re.IGNORECASE)
+_TRIAGE_URL_RE = re.compile(r'(?:https?|ftp)://[^\s\'"<>]{1,2000}', re.IGNORECASE)
+_TRIAGE_DOMAIN_RE = re.compile(r'\b(?:[a-zA-Z0-9-]{1,63}\.){1,20}(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion)\b', re.IGNORECASE)
 _TRIAGE_REGISTRY_RE = re.compile(r'(?:HKLM|HKCU|HKCR|HKU|HKCC|Software)\\[^\s\'"]+', re.IGNORECASE)
 
 

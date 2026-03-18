@@ -14,6 +14,8 @@ def _persist_renames_to_cache() -> None:
     sha = (state.pe_data.get("file_hashes") or {}).get("sha256")
     if sha:
         analysis_cache.update_session_data(sha, renames=state.get_all_renames_snapshot())
+    else:
+        logger.debug("Skipping rename persistence: file SHA256 unavailable")
 
 
 @tool_decorator

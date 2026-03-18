@@ -183,7 +183,7 @@ def _run_vivisect_analysis_with_polling(
         if progress_callback:
             progress_callback(pct, msg)
 
-    t.join(timeout=5)
+    t.join(timeout=30)
 
     # Re-raise any exception from the analysis thread
     if analysis_error:

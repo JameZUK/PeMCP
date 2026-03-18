@@ -5,6 +5,7 @@ units for binary data transformation.  These MCP tools expose the most useful
 refinery capabilities for malware triage and binary analysis workflows.
 """
 import asyncio
+import importlib
 import os
 
 from typing import Dict, Any, Optional, List
@@ -1404,7 +1405,7 @@ async def refinery_list_units(
             if category and cat != category.lower():
                 continue
             try:
-                mod = __import__(f"refinery.units.{cat}", fromlist=[""])
+                mod = importlib.import_module(f"refinery.units.{cat}")
                 cat_path = os.path.dirname(mod.__file__)
                 units = sorted(name for _, name, _ in pkgutil.iter_modules([cat_path]))
                 result[cat] = {
