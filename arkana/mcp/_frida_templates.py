@@ -524,17 +524,27 @@ def generate_hook_for_address(
     include_backtrace: bool = True,
 ) -> str:
     """Generate Frida hook for a raw address."""
-    return f"""    // Hook raw address: {address}
-    Interceptor.attach(ptr("{address}"), {{
-        onEnter: function(args) {{
-            console.log("[HOOK] Hit address {address}");
-            console.log("  arg0=" + args[0] + " arg1=" + args[1] + " arg2=" + args[2]);
-{'''            console.log(Thread.backtrace(this.context, Backtracer.ACCURATE).map(DebugSymbol.fromAddress).join('\\n'));''' if include_backtrace else ''}
-        }},
-        onLeave: function(retval) {{
-            console.log("[HOOK] {address} returned: " + retval);
-        }}
-    }});"""
+    bt_line = (
+        "            console.log(Thread.backtrace(this.context, Backtracer.ACCURATE)"
+        ".map(DebugSymbol.fromAddress).join('\\n'));"
+    ) if include_backtrace else ""
+    lines = [
+        f"    // Hook raw address: {address}",
+        f'    Interceptor.attach(ptr("{address}"), {{',
+        "        onEnter: function(args) {",
+        f'            console.log("[HOOK] Hit address {address}");',
+        '            console.log("  arg0=" + args[0] + " arg1=" + args[1] + " arg2=" + args[2]);',
+    ]
+    if bt_line:
+        lines.append(bt_line)
+    lines.extend([
+        "        },",
+        "        onLeave: function(retval) {",
+        f'            console.log("[HOOK] {address} returned: " + retval);',
+        "        }",
+        "    });",
+    ])
+    return "\n".join(lines)
 
 
 def generate_bypass_js(techniques: List[str]) -> str:
