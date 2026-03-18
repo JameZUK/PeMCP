@@ -340,11 +340,16 @@ def _build_de4dot_command(
     output_path: Optional[str] = None,
     detect_only: bool = False,
 ) -> List[str]:
-    """Build the de4dot CLI command line (runs via mono on Linux)."""
-    args = ["mono", str(_DE4DOT_PATH), input_path]
+    """Build the de4dot CLI command line (runs via mono on Linux).
+
+    de4dot CLI syntax: de4dot [options] -f <file> [-o <output>]
+    --detect-only must come before the -f flag.
+    """
+    args = ["mono", str(_DE4DOT_PATH)]
     if detect_only:
         args.append("--detect-only")
-    elif output_path:
+    args.extend(["-f", input_path])
+    if not detect_only and output_path:
         args.extend(["-o", output_path])
     return args
 

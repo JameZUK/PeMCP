@@ -197,6 +197,7 @@ class TestBuildDe4dotCommand:
     def test_normal_mode(self):
         args = _build_de4dot_command("/path/in.exe", "/path/out.exe")
         assert args[0] == "mono"
+        assert "-f" in args
         assert "/path/in.exe" in args
         assert "-o" in args
         assert "/path/out.exe" in args
@@ -204,10 +205,14 @@ class TestBuildDe4dotCommand:
     def test_detect_only(self):
         args = _build_de4dot_command("/path/in.exe", detect_only=True)
         assert "--detect-only" in args
+        assert "-f" in args
         assert "-o" not in args
+        # --detect-only must come before -f
+        assert args.index("--detect-only") < args.index("-f")
 
     def test_no_output(self):
         args = _build_de4dot_command("/path/in.exe")
+        assert "-f" in args
         assert "-o" not in args
 
 
