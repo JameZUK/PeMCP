@@ -28,8 +28,72 @@ function applyDataWidths(root) {
         if (!isNaN(w)) el.style.width = w + '%';
     });
 }
-document.addEventListener('DOMContentLoaded', function() { applyDataWidths(); });
+document.addEventListener('DOMContentLoaded', function() {
+    applyDataWidths();
+    _initNavCollapse();
+});
 document.addEventListener('htmx:afterSwap', function(e) { applyDataWidths(e.detail.target); });
+
+// --- Nav collapse: dropdown when links don't fit ---
+function _initNavCollapse() {
+    var nav = document.getElementById('top-nav');
+    var links = document.getElementById('nav-links');
+    var toggle = document.getElementById('nav-menu-toggle');
+    if (!nav || !links || !toggle) return;
+
+    function checkOverflow() {
+        // Temporarily remove collapsed state to measure natural width
+        var wasCollapsed = nav.classList.contains('nav-collapsed');
+        var wasOpen = links.classList.contains('nav-open');
+        nav.classList.remove('nav-collapsed');
+        links.classList.remove('nav-open');
+
+        // Check if links overflow (scrollWidth > clientWidth)
+        var overflows = links.scrollWidth > links.clientWidth + 1;
+
+        if (overflows) {
+            nav.classList.add('nav-collapsed');
+            // Restore open state if it was open before
+            if (wasOpen) links.classList.add('nav-open');
+        }
+        // If not overflowing, leave collapsed off (links show inline)
+    }
+
+    toggle.addEventListener('click', function() {
+        links.classList.toggle('nav-open');
+        toggle.classList.toggle('active', links.classList.contains('nav-open'));
+    });
+
+    // Close dropdown when clicking a link
+    links.addEventListener('click', function(e) {
+        if (e.target.closest('.nav-link')) {
+            links.classList.remove('nav-open');
+            toggle.classList.remove('active');
+        }
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        if (!e.target.closest('#top-nav')) {
+            links.classList.remove('nav-open');
+            toggle.classList.remove('active');
+        }
+    });
+
+    checkOverflow();
+    window.addEventListener('resize', checkOverflow);
+}
+
+// Skip DOM swap when server response is identical to current content (prevents scroll reset, selection loss)
+document.addEventListener('htmx:beforeSwap', function(e) {
+    var target = e.detail.target;
+    var xhr = e.detail.xhr;
+    if (target && xhr && xhr.responseText != null) {
+        if (xhr.responseText.trim() === target.innerHTML.trim()) {
+            e.detail.shouldSwap = false;
+        }
+    }
+});
 
 // Strip ?token= from URL after login (if present)
 (function() {
@@ -91,7 +155,7 @@ function showToast(message, type) {
     function refreshPageElements() {
         if (!window.htmx) return;
         // Refresh whichever htmx-polled elements exist on the current page
-        var targets = ['#overview-stats', '#task-list', '#timeline-entries'];
+        var targets = ['#task-list', '#timeline-entries'];
         for (var i = 0; i < targets.length; i++) {
             var el = document.querySelector(targets[i]);
             if (el) htmx.trigger(el, 'htmx:load');

@@ -542,6 +542,13 @@ async def decompile_function_with_angr(
         meta["note"] = result["note"]
     _set_decompile_meta(cache_key, meta)
 
+    # Persist to disk cache (throttled, non-blocking)
+    try:
+        from arkana.enrichment import save_decompile_cache_async
+        save_decompile_cache_async(state)
+    except Exception:
+        pass
+
     # Apply user renames to output
     renamed_lines = apply_function_renames_to_lines(all_lines)
     renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))

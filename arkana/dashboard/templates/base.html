@@ -14,12 +14,13 @@
     <div class="scanlines"></div>
     <div class="vignette"></div>
 
-    <nav class="top-nav">
+    <nav class="top-nav" id="top-nav">
         <div class="nav-brand">
             <img src="/dashboard/static/logo_icon.svg" alt="Arkana" class="nav-logo">
             <span class="nav-title">ARKANA</span>
         </div>
-        <div class="nav-links">
+        <button class="nav-menu-toggle" id="nav-menu-toggle" aria-label="Toggle navigation">&#9776; NAV</button>
+        <div class="nav-links" id="nav-links">
             <a href="/dashboard/" class="nav-link {% if nav_active == 'overview' %}active{% endif %}">OVERVIEW</a>
             <a href="/dashboard/functions" class="nav-link {% if nav_active == 'functions' %}active{% endif %}">FUNCTIONS</a>
             <a href="/dashboard/callgraph" class="nav-link {% if nav_active == 'callgraph' %}active{% endif %}">CALL GRAPH</a>

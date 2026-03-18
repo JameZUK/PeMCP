@@ -24,7 +24,7 @@ Each function row has an **XREF** button that opens an inline analysis panel wit
 - **STRINGS** -- Strings associated with the function, with type badges (STATIC / STACK / TIGHT).
 - **CODE** -- Decompiled source (requires clicking DEC to trigger decompilation).
 
-The XREF panel opens without requiring decompilation, enabling fast cross-reference exploration. Panel state (open/closed, active tab) survives table filter and sort changes.
+The XREF panel opens without requiring decompilation, enabling fast cross-reference exploration. Panel state (open/closed, active tab) survives table filter and sort changes. Scroll position is preserved during SSE-triggered table reloads (e.g. during background enrichment).
 
 ![Dashboard Functions](screenshots/Arkana%20%E2%80%94%20Function%20Explorer.png)
 
@@ -130,6 +130,12 @@ Unified string explorer combining ASCII strings, FLOSS static, stack, decoded, a
 Category-filtered view of all analysis notes (general, function, tool_result, IOC, hypothesis, manual). Addresses are clickable when they resolve to a known function, linking to the Functions page.
 
 ![Dashboard Notes](screenshots/Arkana%20%E2%80%94%20Notes.png)
+
+---
+
+## Responsive Navigation
+
+The top navigation bar uses JS-based overflow detection. When the 13 page links exceed the available width (common on screens narrower than ~1700px), the links collapse behind a **NAV** dropdown toggle button. Clicking the toggle opens a vertical dropdown panel. The dropdown closes on outside click or when a link is selected. No horizontal scrollbar is shown.
 
 ---
 

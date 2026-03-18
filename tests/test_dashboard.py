@@ -429,13 +429,16 @@ class TestDecompileStateApi:
         assert "error" in result
 
     def test_get_decompiled_code_with_cache(self):
-        from arkana.dashboard.state_api import get_decompiled_code
+        from arkana.dashboard.state_api import get_decompiled_code, _get_state
         try:
-            from arkana.mcp.tools_angr import _decompile_meta, _make_decompile_key
+            from arkana.mcp.tools_angr import _decompile_meta
         except ImportError:
             pytest.skip("angr tools not importable")
-        # Inject a cached decompilation using session-scoped key
-        cache_key = _make_decompile_key(0x401000)
+        # Build cache key the same way the dashboard does — using
+        # _get_state()._state_uuid (not _make_decompile_key which uses
+        # StateProxy contextvar, unavailable in dashboard threads).
+        st = _get_state()
+        cache_key = (st._state_uuid, 0x401000)
         _decompile_meta[cache_key] = {
             "function_name": "test_func",
             "address": "0x401000",

@@ -53,6 +53,11 @@ function reloadFunctions() {
               '&asc=' + (_sortAsc ? '1' : '0');
     fetchJSON(url).then(function(data) {
         var tbody = document.getElementById('func-tbody');
+        // Preserve scroll position across DOM rebuild
+        var tableWrap = tbody.closest('.table-wrap');
+        var savedScrollTop = tableWrap ? tableWrap.scrollTop : 0;
+        var savedPageScroll = window.scrollY;
+
         document.getElementById('func-count').textContent = data.length;
         if (!data.length) {
             tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">No matching functions.</td></tr>';
@@ -98,6 +103,10 @@ function reloadFunctions() {
         });
         tbody.innerHTML = html;
         _restoreDetailPanels();
+
+        // Restore scroll position after DOM rebuild
+        if (tableWrap) tableWrap.scrollTop = savedScrollTop;
+        window.scrollTo(0, savedPageScroll);
     });
 }
 // escapeHtml is defined globally in dashboard.js
@@ -144,6 +153,10 @@ document.addEventListener('arkana-decompile-update', function(e) {
 // Layer 2: Table reload when explored count changes (via state-update SSE)
 var _exploredReloadTimer;
 document.addEventListener('arkana-explored-changed', function(e) {
+    // Skip auto-reload when detail panels are open — the user is reading
+    // decompiled code/xrefs/asm. Destroying the DOM causes scroll reset and
+    // flash. The user can manually reload via filter/sort changes.
+    if (Object.keys(_openDetailPanels).length > 0) return;
     // Debounce: reload at most every 3 seconds
     clearTimeout(_exploredReloadTimer);
     _exploredReloadTimer = setTimeout(function() {

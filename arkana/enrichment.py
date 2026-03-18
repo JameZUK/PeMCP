@@ -14,6 +14,16 @@ import time
 
 from typing import Dict, Any, Optional
 
+# Interval between periodic saves during the decompile sweep (seconds).
+_SWEEP_SAVE_INTERVAL = 60
+
+# Minimum interval between async (on-demand) saves (seconds).
+_ASYNC_SAVE_INTERVAL = 30
+
+# Module-level state for throttled async saves.
+_last_async_save: float = 0.0
+_async_save_lock = threading.Lock()
+
 from arkana.constants import ENRICHMENT_MAX_DECOMPILE, ENRICHMENT_TIMEOUT
 from arkana.state import (
     AnalyzerState, TASK_RUNNING, TASK_COMPLETED, TASK_FAILED,
@@ -202,6 +212,13 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             logger.warning("Enrichment: IOC collection failed: %s", e)
             phases_failed.append(("iocs", str(e)))
 
+        # ── Incremental save: persist fast-phase results ──────────────
+        try:
+            _save_enrichment_cache(state)
+            logger.debug("Enrichment: incremental save after fast phases")
+        except Exception as e:
+            logger.warning("Enrichment: incremental save failed: %s", e)
+
         # ── Phase 3: Wait for angr CFG ───────────────────────────────
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
@@ -346,6 +363,7 @@ def _decompile_sweep(
     max_funcs = min(len(scored), _MAX_DECOMPILE)
     decompiled = 0
     failed = 0
+    last_save_time = time.time()
 
     for i, func_info in enumerate(scored[:max_funcs]):
         if _cancelled(state, generation):
@@ -409,6 +427,16 @@ def _decompile_sweep(
                     _set_decompile_meta(cache_key, meta)
                     state._newly_decompiled.append(hex(addr_int))
                     decompiled += 1
+
+                    # Periodic save: persist progress every _SWEEP_SAVE_INTERVAL seconds
+                    now = time.time()
+                    if now - last_save_time >= _SWEEP_SAVE_INTERVAL:
+                        try:
+                            _save_enrichment_cache(state)
+                            last_save_time = now
+                            logger.debug("Enrichment: periodic sweep save (%d decompiled)", decompiled)
+                        except Exception:
+                            pass  # Best-effort; don't abort sweep
                 else:
                     failed += 1
             except Exception:
@@ -534,3 +562,48 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
 
     except Exception as e:
         logger.warning("Enrichment: cache save failed: %s", e)
+
+
+def save_decompile_cache_async(state: AnalyzerState) -> None:
+    """Trigger a throttled, non-blocking cache save after an on-demand decompile.
+
+    Called from ``tools_angr.decompile_function_with_angr`` and
+    ``state_api.trigger_decompile`` so that newly-decompiled functions are
+    persisted to disk without waiting for the enrichment pipeline to finish.
+
+    Throttled to at most one save per ``_ASYNC_SAVE_INTERVAL`` seconds.
+    Runs in a daemon thread so the caller is never blocked.
+    """
+    global _last_async_save
+
+    # Quick guard: nothing to save if no PE data or no file hash
+    if state.pe_data is None:
+        return
+    sha = state.pe_data.get("file_hashes", {}).get("sha256")
+    if not sha:
+        return
+
+    now = time.time()
+    if now - _last_async_save < _ASYNC_SAVE_INTERVAL:
+        return
+
+    # Non-blocking acquire — skip if another save is already running
+    if not _async_save_lock.acquire(blocking=False):
+        return
+    try:
+        # Re-check throttle inside lock (another thread may have saved)
+        if time.time() - _last_async_save < _ASYNC_SAVE_INTERVAL:
+            return
+        _last_async_save = time.time()
+
+        def _bg_save():
+            try:
+                _save_enrichment_cache(state)
+                logger.debug("Async decompile cache save completed")
+            except Exception as e:
+                logger.debug("Async decompile cache save failed: %s", e)
+
+        t = threading.Thread(target=_bg_save, daemon=True, name="arkana-async-save")
+        t.start()
+    finally:
+        _async_save_lock.release()

@@ -1442,7 +1442,7 @@ def get_notes_data(category: Optional[str] = None) -> List[Dict[str, Any]]:
 def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
     """Return cached decompilation for a function, or indicate not cached."""
     try:
-        from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines, _make_decompile_key
+        from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines
         from arkana.mcp._rename_helpers import (
             apply_function_renames_to_lines,
             apply_variable_renames_to_lines,
@@ -1456,7 +1456,10 @@ def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {"cached": False, "error": "invalid address"}
 
-    cache_key = _make_decompile_key(addr_int)
+    # Build cache key using _get_state() — not _make_decompile_key() which
+    # uses the StateProxy contextvar (not set in dashboard threads).
+    st = _get_state()
+    cache_key = (st._state_uuid, addr_int)
     cached_lines = _get_cached_lines(cache_key)
     if cached_lines is None:
         return {"cached": False}
@@ -1491,7 +1494,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {"cached": False, "error": "invalid address"}
 
-    from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock, _get_cached_lines, _set_decompile_meta, _make_decompile_key
+    from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock, _get_cached_lines, _set_decompile_meta
     from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg
     from arkana.mcp._rename_helpers import (
         apply_function_renames_to_lines,
@@ -1499,8 +1502,9 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
         get_display_name,
     )
 
-    # Check cache first (may have been populated since the GET)
-    cache_key = _make_decompile_key(addr_int)
+    # Build cache key using _get_state() — not _make_decompile_key() which
+    # uses the StateProxy contextvar (not set in dashboard threads).
+    cache_key = (st._state_uuid, addr_int)
     cached_lines = _get_cached_lines(cache_key)
     if cached_lines is not None:
         meta = _decompile_meta.get(cache_key, {})
@@ -1579,6 +1583,13 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
             meta["note"] = DECOMPILE_FALLBACK_NOTE
         _set_decompile_meta(cache_key, meta)
         st._newly_decompiled.append(hex(addr_to_use))
+
+        # Persist to disk cache (throttled, non-blocking)
+        try:
+            from arkana.enrichment import save_decompile_cache_async
+            save_decompile_cache_async(st)
+        except Exception:
+            pass
     except Exception:
         return {"cached": False, "error": "Decompilation failed"}
     finally:

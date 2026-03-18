@@ -103,16 +103,77 @@ body {
 .nav-links {
     display: flex;
     gap: 4px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Dropdown state: links shown as vertical panel below nav */
+.top-nav.nav-collapsed .nav-links {
+    display: none;
+}
+.top-nav.nav-collapsed .nav-links.nav-open {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--primary-muted);
+    padding: 4px 0;
+    z-index: 99;
+    gap: 0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.top-nav.nav-collapsed .nav-links.nav-open .nav-link {
+    padding: 8px 20px;
+    border-bottom: none;
+    border-left: 2px solid transparent;
+}
+.top-nav.nav-collapsed .nav-links.nav-open .nav-link.active {
+    border-left-color: var(--primary);
+    border-bottom: none;
+}
+
+/* Menu toggle button — hidden when links fit inline */
+.nav-menu-toggle {
+    display: none;
+    background: transparent;
+    border: 1px solid var(--primary-ghost);
+    color: var(--primary-dim);
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 11px;
+    letter-spacing: 1px;
+    padding: 4px 10px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.nav-menu-toggle:hover {
+    color: var(--primary);
+    border-color: var(--primary-muted);
+}
+.top-nav.nav-collapsed .nav-menu-toggle {
+    display: block;
+}
+.top-nav.nav-collapsed .nav-menu-toggle.active {
+    color: var(--highlight);
+    border-color: var(--primary);
 }
 
 .nav-link {
     color: var(--primary-dim);
     text-decoration: none;
-    padding: 12px 14px;
+    padding: 12px 10px;
     font-size: 12px;
     letter-spacing: 1px;
     border-bottom: 2px solid transparent;
     transition: color 0.2s, border-bottom-color 0.2s;
+    flex-shrink: 0;
+    white-space: nowrap;
 }
 
 .nav-link:hover {
@@ -2167,7 +2228,14 @@ button.btn-analysis:hover {
 @media (max-width: 768px) {
     .summary-grid { grid-template-columns: 1fr; }
     .summary-section + .summary-section { border-left: none; border-top: 1px solid var(--primary-ghost); }
-    .nav-links { overflow-x: auto; }
+    /* Nav: tighten spacing on mobile */
+    .top-nav { padding: 0 8px; }
+    .nav-brand { margin-right: 8px; }
+    .nav-title { font-size: 13px; letter-spacing: 1px; }
+    .nav-search { margin-left: auto; }
+    .nav-search input { width: 100px; }
+    .nav-search input:focus-visible { width: 140px; }
+    .nav-filename { display: none; }
     .stats-grid { grid-template-columns: 1fr; }
     .stats-grid-sm { grid-template-columns: 1fr; }
     .file-identity-name { flex-direction: column; gap: 4px; }
@@ -2176,8 +2244,14 @@ button.btn-analysis:hover {
     .graph-panel-full .cytoscape-container { min-height: 400px; }
     .graph-panel-full .node-sidebar { width: 100%; max-height: none; }
     .node-sidebar { width: 100%; border-left: none; border-top: 1px solid var(--primary-ghost); }
-    .filter-bar { flex-direction: column; }
-    .nav-filename { max-width: 100px; font-size: 10px; }
+    .filter-bar { flex-direction: column; gap: 8px; }
+    .filter-group { flex-wrap: wrap; }
+    .filter-group input[type="text"] { min-width: 0; max-width: 100%; }
+    .view-toggle { margin-left: 0; }
+    .content { padding: 12px 8px; }
+    /* Detail panel tabs: horizontal scroll */
+    .detail-tab-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .detail-tab { flex-shrink: 0; padding: 6px 10px; }
     .sse-disconnect { font-size: 9px; padding: 1px 4px; }
     .data-table tbody td { max-width: 150px; }
     .import-func-name { min-width: 120px; max-width: 200px; }
