@@ -40,7 +40,7 @@ arkana/
 │   ├── server.py       # MCP server setup + tool decorator
 │   ├── _format_helpers.py
 │   ├── _input_helpers.py
-│   └── tools_*.py      # MCP tool modules (209 tools)
+│   └── tools_*.py      # MCP tool modules (212 tools)
 ├── parsers/            # PE/FLOSS/capa/signature parsers
 ├── cli/                # CLI output formatting
 └── ...
@@ -78,7 +78,7 @@ Unit tests live in `tests/` and require only `requirements-ci.txt` + `requiremen
 pytest tests/integration/mcp_test_client.py -v
 ```
 
-Integration tests exercise all 209 MCP tools against a running Arkana server.
+Integration tests exercise all 212 MCP tools against a running Arkana server.
 
 ### Writing Tests
 
