@@ -411,6 +411,7 @@ async def _run_subprocess(
     """Run a subprocess with timeout, return (returncode, stdout, stderr)."""
     proc = await asyncio.create_subprocess_exec(
         *args,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
