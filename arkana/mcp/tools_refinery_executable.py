@@ -11,6 +11,7 @@ import threading
 from typing import Dict, Any, Optional
 
 from arkana.config import state, logger, Context
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
@@ -50,12 +51,13 @@ async def refinery_executable(
         offset: (Optional[str]) File offset as hex (for file_to_virtual, e.g. '0x400').
         size: (int) Bytes to read for virtual_read. Default 256.
         count: (int) Max instructions for disassemble. Default 50.
-        limit: (int) Max items for sections/stego. Default 50.
+        limit: (int) Max items for sections/stego. Default 20.
 
     Returns:
         Dictionary with operation-specific results.
     """
     _require_refinery("refinery_executable")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     op = operation.lower()
 

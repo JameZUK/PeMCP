@@ -15,10 +15,11 @@ from arkana.config import (
     _check_speakeasy_available, _check_unipacker_available,
     REFINERY_AVAILABLE,
 )
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._input_helpers import _parse_int_param
 from arkana.mcp._progress_bridge import ProgressBridge
-from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
+from arkana.mcp._refinery_helpers import _write_output_and_register_artifact, _hex_to_bytes
 
 
 # L: Use shared implementation from arkana.utils instead of duplicate
@@ -257,15 +258,10 @@ async def reconstruct_pe_from_dump(
             "LIEF library is required for PE reconstruction. Install with: pip install lief"
         )
 
-    # Check hex string size before decode to prevent transient OOM
-    _clean_hex = data_hex.replace(" ", "").replace("0x", "")
-    if len(_clean_hex) > 200 * 1024 * 1024:  # 200MB hex = 100MB decoded
+    # H5-v14: Use shared _hex_to_bytes to avoid stripping all 0x occurrences
+    if len(data_hex) > 200 * 1024 * 1024:  # 200MB hex = 100MB decoded
         raise ValueError("data_hex too large (max 200MB hex string = 100MB decoded).")
-
-    try:
-        data = bytes.fromhex(_clean_hex)
-    except ValueError as e:
-        raise ValueError(f"Invalid data_hex: {e}")
+    data = _hex_to_bytes(data_hex)
 
     if len(data) < 64:
         raise ValueError("Data too small to be a PE file (min 64 bytes).")
@@ -407,6 +403,7 @@ async def find_oep_heuristic(
         ctx: MCP Context.
         limit: Max OEP candidates to return. Default 10.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Detecting Original Entry Point (OEP) using heuristics")
     _check_pe_loaded("find_oep_heuristic")
 

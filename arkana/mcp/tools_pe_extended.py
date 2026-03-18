@@ -11,6 +11,7 @@ import os
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, pefile
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.utils import shannon_entropy
@@ -36,6 +37,7 @@ async def get_section_permissions(ctx: Context, limit: int = 20) -> Dict[str, An
     Args:
         limit: Max sections to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Mapping section permissions")
     _check_pe_loaded("get_section_permissions")
 
@@ -199,6 +201,7 @@ async def extract_resources(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     Args:
         limit: Max resources to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Extracting PE resources")
     _check_pe_loaded("extract_resources")
 
@@ -284,7 +287,11 @@ async def extract_manifest(ctx: Context) -> Dict[str, Any]:
     RT_MANIFEST = 24
     for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
         if entry.id == RT_MANIFEST:
+            if not hasattr(entry, 'directory'):
+                continue
             for sub in entry.directory.entries:
+                if not hasattr(sub, 'directory'):
+                    continue
                 for lang in sub.directory.entries:
                     data_rva = lang.data.struct.OffsetToData
                     data_size = lang.data.struct.Size
@@ -386,6 +393,7 @@ async def extract_wide_strings(
         min_length: Minimum string length in characters.
         limit: Max strings to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Extracting wide (UTF-16LE) strings, min_length={min_length}")
     _check_pe_loaded("extract_wide_strings")
     min_length = max(1, min(min_length, 1000))
@@ -442,6 +450,7 @@ async def detect_format_strings(ctx: Context, limit: int = 20) -> Dict[str, Any]
     Args:
         limit: Max findings to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for format string patterns")
     _check_pe_loaded("detect_format_strings")
 
@@ -527,6 +536,7 @@ async def detect_compression_headers(ctx: Context, limit: int = 30) -> Dict[str,
     Args:
         limit: Max findings to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for compression/archive headers")
     _check_pe_loaded("detect_compression_headers")
 
@@ -663,6 +673,7 @@ async def detect_crypto_constants(ctx: Context, limit: int = 20) -> Dict[str, An
     Args:
         limit: Max findings to return.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for cryptographic constants")
     _check_pe_loaded("detect_crypto_constants")
 
@@ -750,6 +761,10 @@ async def analyze_entropy_by_offset(
         step: Step size between windows.
         limit: Max data points to return.
     """
+    # H1-v14: Validate window_size and step to prevent ZeroDivisionError / infinite loop
+    window_size = max(1, min(window_size, 65536))
+    step = max(1, min(step, 65536))
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Computing entropy curve (window={window_size}, step={step})")
     _check_pe_loaded("analyze_entropy_by_offset")
 
@@ -871,6 +886,7 @@ async def scan_for_api_hashes(
             f"Supported: {', '.join(sorted(HASH_ALGORITHMS))}"
         )
 
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Scanning for API hashes ({hash_algorithm}"
                    f"{f', seed={seed}' if seed is not None else ''}"
                    f"{f', case={case_handling}' if case_handling else ''})")

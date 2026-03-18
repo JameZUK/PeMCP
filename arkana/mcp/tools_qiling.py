@@ -17,6 +17,7 @@ from arkana.config import (
     _check_qiling_available,
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp.tools_new_libs import _subprocess_progress_reporter
 
 
 _MAX_INSTRUCTIONS_LIMIT = 10_000_000
@@ -45,21 +46,7 @@ def _validate_timeout(timeout_seconds: int) -> int:
     return timeout_seconds
 
 
-async def _subprocess_progress_reporter(ctx: Context, tool_name: str, timeout_seconds: int):
-    """Report estimated progress for opaque subprocess operations."""
-    import time as _time
-    start = _time.monotonic()  # H5-v9: replace deprecated asyncio.get_event_loop().time()
-    interval = max(3, timeout_seconds // 20)
-    while True:
-        await asyncio.sleep(interval)
-        elapsed = _time.monotonic() - start
-        pct = min(int((elapsed / timeout_seconds) * 95), 95)
-        try:
-            await ctx.report_progress(pct, 100)
-            await ctx.info(f"[{tool_name}] Emulating... {int(elapsed)}s/{timeout_seconds}s elapsed")
-        except Exception:
-            break
-
+# L7-v14: _subprocess_progress_reporter imported from tools_new_libs (single source)
 
 # ---------------------------------------------------------------------------
 #  Subprocess helper (mirrors _run_speakeasy / _run_unipacker pattern)

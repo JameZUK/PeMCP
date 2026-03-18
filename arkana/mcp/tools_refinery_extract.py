@@ -10,6 +10,7 @@ import os
 from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _bytes_to_hex, _safe_decode,
@@ -86,7 +87,7 @@ async def refinery_extract(
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
         sub_operation: (Optional[str]) Sub-operation for archive/installer/office.
         password: (Optional[str]) Password for encrypted archives, Office docs, or PDFs.
-        limit: (int) Max items to extract. Default 100.
+        limit: (int) Max items to extract. Default 20.
         output_path: (Optional[str]) Directory to save extracted files. Each file is saved
             with its archive name (or file_N.bin if unnamed) and registered as an artifact.
             For single-output operations (office_decrypt, xlm_deobfuscate), saves as a file path.
@@ -95,6 +96,7 @@ async def refinery_extract(
         Dictionary with extracted file metadata.
     """
     _require_refinery("refinery_extract")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     op = operation.lower()
 

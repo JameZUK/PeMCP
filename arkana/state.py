@@ -38,7 +38,7 @@ SESSION_TTL_SECONDS = 3600
 # Maximum number of concurrent active sessions in the registry (HTTP mode).
 # Prevents unbounded memory growth from session flooding.
 try:
-    MAX_ACTIVE_SESSIONS = int(os.environ.get("ARKANA_MAX_SESSIONS", "100"))
+    MAX_ACTIVE_SESSIONS = max(1, int(os.environ.get("ARKANA_MAX_SESSIONS", "100")))
 except (TypeError, ValueError):
     MAX_ACTIVE_SESSIONS = 100
 
@@ -315,6 +315,9 @@ class AnalyzerState:
     def record_tool_call(self, tool_name: str, parameters: Dict[str, Any],
                          result_summary: str, duration_ms: int) -> None:
         """Thread-safe recording of a tool invocation."""
+        # M2-v14: Snapshot pe_data under lock to avoid racing with open_file
+        with self._pe_lock:
+            _pd = self.pe_data
         entry: Dict[str, Any] = {
             "tool_name": tool_name,
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -322,7 +325,7 @@ class AnalyzerState:
             "parameters": parameters,
             "result_summary": result_summary,
             "duration_ms": duration_ms,
-            "sha256": (self.pe_data or {}).get("file_hashes", {}).get("sha256"),
+            "sha256": (_pd or {}).get("file_hashes", {}).get("sha256"),
         }
         with self._history_lock:
             self.tool_history.append(entry)

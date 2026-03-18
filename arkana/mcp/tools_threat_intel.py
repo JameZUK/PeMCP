@@ -309,8 +309,8 @@ def _build_navigator_layer(techniques: List[Dict]) -> Dict[str, Any]:
     return {
         "name": "Arkana Analysis",
         "versions": {
-            "attack": "14",
-            "navigator": "4.9",
+            "attack": "16",
+            "navigator": "5.0",
             "layer": "4.5",
         },
         "domain": "enterprise-attack",
@@ -508,15 +508,18 @@ def _generate_file_event_rule(
             if isinstance(path, str) and len(path) > 5:
                 file_paths.append(path)
 
-    # Also check notes for file paths
+    # H3-v14: Check most recent 100 notes for file paths, cap at 20 results
     notes = state.get_notes()
-    for note in notes:
+    for note in notes[-100:]:
         content = note.get("content", "")
-        # Simple file path extraction
         for m in re.finditer(r'[A-Z]:\\[^\s"\'<>]{5,100}', content):
             path = m.group()
             if path not in file_paths:
                 file_paths.append(path)
+            if len(file_paths) >= 20:
+                break
+        if len(file_paths) >= 20:
+            break
 
     if not file_paths and filename == "unknown":
         return None

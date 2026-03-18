@@ -5,6 +5,7 @@ import struct
 from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context, pefile
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
 
@@ -51,6 +52,7 @@ async def analyze_relocations(
         ctx: MCP Context.
         limit: Max relocation blocks to return in detail. Default 30.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Analyzing relocation table")
     _check_pe_loaded("analyze_relocations")
 
@@ -248,6 +250,7 @@ async def analyze_seh_handlers(
         ctx: MCP Context.
         limit: Max entries to return. Default 30.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Analyzing SEH handlers")
     _check_pe_loaded("analyze_seh_handlers")
 
@@ -807,7 +810,7 @@ def _analyze_rich_header(pe: "pefile.PE") -> Optional[Dict[str, Any]]:
         "tool_count": len(tools),
         "tools": tools,
         "key_hex": pe.RICH_HEADER.key.hex() if isinstance(pe.RICH_HEADER.key, bytes) else str(pe.RICH_HEADER.key),
-        "checksum": hex(pe.RICH_HEADER.checksum) if pe.RICH_HEADER.checksum is not None else None,
+        "checksum": hex(getattr(pe.RICH_HEADER, 'checksum', None)) if getattr(pe.RICH_HEADER, 'checksum', None) is not None else None,
         "newest_build": max(build_numbers) if build_numbers else None,
     }
 

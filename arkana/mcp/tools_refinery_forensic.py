@@ -11,6 +11,7 @@ import hashlib
 from typing import Dict, Any, Optional
 
 from arkana.config import state, logger, Context
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
@@ -44,12 +45,13 @@ async def refinery_forensic(
         ctx: MCP Context.
         operation: (str) One of the operations listed above.
         data_hex: (Optional[str]) Input data as hex. If None, uses loaded file.
-        limit: (int) Max items to return (where applicable). Default 200.
+        limit: (int) Max items to return (where applicable). Default 20.
 
     Returns:
         Dictionary with operation-specific results.
     """
     _require_refinery("refinery_forensic")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     op = operation.lower()
 

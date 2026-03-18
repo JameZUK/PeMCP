@@ -20,6 +20,9 @@ from arkana.mcp._refinery_helpers import (
     _MAX_OUTPUT_ITEMS,
 )
 
+# L2-v14: Module-level constant (was inside function scope)
+_MAX_DECOMPRESS_OUTPUT = 100 * 1024 * 1024  # 100MB
+
 
 # ===================================================================
 #  Module-level constant maps (moved from inside tool functions for
@@ -518,8 +521,6 @@ async def refinery_decompress(
 
     mod_path, cls_name = _COMPRESS_MAP[algo].rsplit(":", 1)
 
-    _MAX_DECOMPRESS_OUTPUT = 100 * 1024 * 1024  # 100MB
-
     def _run():
         import importlib
         mod = importlib.import_module(mod_path)
@@ -541,8 +542,6 @@ async def refinery_decompress(
 
     result = await asyncio.to_thread(_run)
     original_output_size = len(result)
-    if original_output_size > _MAX_DECOMPRESS_OUTPUT:
-        result = result[:_MAX_DECOMPRESS_OUTPUT]
     response: Dict[str, Any] = {
         "algorithm": algo,
         "input_size": len(data),

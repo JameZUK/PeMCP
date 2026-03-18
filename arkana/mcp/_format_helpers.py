@@ -112,7 +112,8 @@ _EXTENDED_SIGNATURES_2 = {
     b'\x1f\x8b': ("gzip", "GZIP Compressed"),
     b'\xd0\xcf': ("ole", "OLE/MS-CFB (Office)"),
     b'\xfd7': ("xz", "XZ Compressed"),
-    b'de': ("dex", "Android DEX/ODEX"),     # dex\n or dey\n
+    # L1-v14: Removed b'de' — too short, causes false positives. DEX is matched
+    # by the 4-byte signatures b'dex\n' / b'dey\n' which are checked first.
 }
 
 # 4-byte signatures (checked first — more specific, fewer false positives)

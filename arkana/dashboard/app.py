@@ -1097,8 +1097,11 @@ def _create_routes(dashboard_token: str) -> list:
         st = _get_active_state()
         try:
             st.create_struct(name, fields, body.get("size", 0))
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return JSONResponse({"error": str(e)[:200]}, status_code=400)
+        except Exception:
+            logger.debug("Struct creation error", exc_info=True)
+            return JSONResponse({"error": "struct creation failed"}, status_code=400)
         return JSONResponse({"ok": True, "name": name})
 
     async def api_types_enum_post(request: Request) -> Response:
@@ -1121,8 +1124,11 @@ def _create_routes(dashboard_token: str) -> list:
         st = _get_active_state()
         try:
             st.create_enum(name, values, body.get("size", 4))
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             return JSONResponse({"error": str(e)[:200]}, status_code=400)
+        except Exception:
+            logger.debug("Enum creation error", exc_info=True)
+            return JSONResponse({"error": "enum creation failed"}, status_code=400)
         return JSONResponse({"ok": True, "name": name})
 
     async def api_types_delete(request: Request) -> Response:
@@ -1132,7 +1138,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
         name = request.query_params.get("name", "").strip()
-        if not name or len(name) > 128:
+        if not name or not re.fullmatch(r'[a-zA-Z_][a-zA-Z0-9_]*', name) or len(name) > 128:
             return JSONResponse({"error": "invalid name"}, status_code=400)
         st = _get_active_state()
         if st.delete_custom_type(name):

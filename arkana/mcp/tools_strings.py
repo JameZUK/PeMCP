@@ -198,6 +198,7 @@ async def search_floss_strings(
         raise ValueError("The 'regex_patterns' parameter must be a non-empty list of strings.")
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("The 'limit' parameter must be a positive integer.")
+    limit = max(1, min(limit, _MAX_LIMIT))
 
     # --- Data Retrieval ---
     _check_data_key_available("floss_analysis", "search_floss_strings")
@@ -834,6 +835,7 @@ async def extract_strings_from_binary(
 
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
+    limit = max(1, min(limit, _MAX_LIMIT))
     if rank_with_sifter and not STRINGSIFTER_AVAILABLE:
         raise RuntimeError("Ranking is requested, but StringSifter is not available on the server.")
     if min_sifter_score is not None and not rank_with_sifter:
@@ -938,7 +940,7 @@ async def search_for_specific_strings(ctx: Context, search_terms: List[str], lim
 
     effective_limit_pt = 100
     if limit_per_term is not None and isinstance(limit_per_term, int) and limit_per_term > 0:
-        effective_limit_pt = limit_per_term
+        effective_limit_pt = min(limit_per_term, _MAX_LIMIT)
     elif limit_per_term is not None:
         await ctx.warning(f"Invalid limit_per_term value '{limit_per_term}'. Using default of {effective_limit_pt}.")
 

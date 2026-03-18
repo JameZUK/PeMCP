@@ -12,6 +12,7 @@ import os
 from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
@@ -25,7 +26,7 @@ from arkana.mcp._refinery_helpers import (
 
 def _iter_chunks_with_meta(data, unit_cls, meta_keys, limit):
     """Run a refinery unit and collect chunk metadata up to *limit*."""
-    results = []
+    count = 0
     for chunk in data | unit_cls():
         raw = bytes(chunk)
         entry: Dict[str, Any] = {"size": len(raw)}
@@ -34,8 +35,8 @@ def _iter_chunks_with_meta(data, unit_cls, meta_keys, limit):
                 if key in chunk.meta:
                     entry[key] = str(chunk.meta[key])
         yield raw, entry
-        results.append(entry)
-        if len(results) >= limit:
+        count += 1
+        if count >= limit:
             break
 
 
@@ -78,7 +79,7 @@ async def refinery_dotnet(
         ctx: MCP Context.
         operation: (str) One of the operations listed above.
         data_hex: (Optional[str]) Data as hex. If None, uses the loaded file.
-        limit: (int) Max items to return (where applicable). Default 200.
+        limit: (int) Max items to return (where applicable). Default 20.
         output_path: (Optional[str]) Directory to save extracted files (resources/arrays/sfx).
             Each file is saved with its name or file_N.bin and registered as an artifact.
 
@@ -86,6 +87,7 @@ async def refinery_dotnet(
         Dictionary with operation-specific results.
     """
     _require_refinery("refinery_dotnet")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     op = operation.lower()
 

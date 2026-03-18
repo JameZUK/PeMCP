@@ -132,19 +132,26 @@ class AnalysisCache:
             return {}
 
     def _save_meta(self, meta: Dict[str, Any]) -> None:
-        tmp = META_FILE.with_suffix(".tmp")
+        # M3-v14: Use NamedTemporaryFile to avoid fixed temp path collisions
+        import tempfile
         try:
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(meta, f, indent=2)
-            # Path.replace() is atomic on POSIX (rename(2) syscall).
-            # On Windows this is NOT atomic and can fail if the target
-            # is locked by another process.  Since Arkana primarily targets
-            # Linux/Docker deployments this is acceptable; Windows users
-            # may see rare cache metadata corruption under high concurrency.
-            tmp.replace(META_FILE)
-            # M-E1: Update in-memory cache after successful write
-            self._meta_cache = meta
-            self._meta_mtime = META_FILE.stat().st_mtime
+            fd = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".tmp", dir=str(META_FILE.parent),
+                delete=False, encoding="utf-8",
+            )
+            tmp = Path(fd.name)
+            try:
+                json.dump(meta, fd, indent=2)
+                fd.close()
+                # Path.replace() is atomic on POSIX (rename(2) syscall).
+                tmp.replace(META_FILE)
+                self._meta_cache = meta
+                self._meta_mtime = META_FILE.stat().st_mtime
+            except BaseException:
+                fd.close()
+                # M4-v14: Clean up temp file on failure
+                tmp.unlink(missing_ok=True)
+                raise
         except OSError as e:
             logger.error("Cache meta write error: %s", e)
 

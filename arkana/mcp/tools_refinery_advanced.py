@@ -8,6 +8,7 @@ import asyncio
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
@@ -35,12 +36,13 @@ async def refinery_regex_extract(
         ctx: MCP Context.
         pattern: (str) Python regex pattern. Use (?P<name>...) for named groups.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
-        limit: (int) Max matches. Default 200.
+        limit: (int) Max matches. Default 20.
 
     Returns:
         Dictionary with all regex matches.
     """
     _require_refinery("refinery_regex_extract")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     # H1-v9: Validate regex against ReDoS before passing to refinery
     from arkana.utils import validate_regex_pattern
@@ -542,12 +544,13 @@ async def refinery_extract_domains(
     Args:
         ctx: MCP Context.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
-        limit: (int) Max domains. Default 200.
+        limit: (int) Max domains. Default 20.
 
     Returns:
         Dictionary with extracted domain names.
     """
     _require_refinery("refinery_extract_domains")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     data = _get_data_from_hex_or_file(data_hex)
     if len(data) > _MAX_INPUT_SIZE:

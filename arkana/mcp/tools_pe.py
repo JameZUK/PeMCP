@@ -372,7 +372,7 @@ async def open_file(
             if cached is not None:
                 cached_mode = cached.get("mode", "")
                 # Only use cache if the requested mode matches the cached mode
-                if mode == cached_mode or (mode == "pe" and cached_mode not in ("shellcode", "elf", "macho")):
+                if mode == cached_mode or (mode == "pe" and cached_mode and cached_mode not in ("shellcode", "elf", "macho")):
                     state.filepath = abs_path
                     state.pe_data = cached
                     state.loaded_from_cache = True

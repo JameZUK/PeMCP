@@ -145,17 +145,16 @@ class _ToolResultCache:
         Lock ordering: _global_lock (held by caller) -> inst._lock (acquired here).
         """
         now = time.time()
+        # M8-v14: Compute recount inside per-instance locks to avoid race
+        total = 0
         for inst in list(cls._all_instances):  # snapshot to avoid WeakSet mutation during iteration
             with inst._lock:
                 for _tool_name, bucket in list(inst._store.items()):
                     expired_keys = [k for k, v in bucket.items() if now - v["ts"] > _CACHE_TTL_SECONDS]
                     for k in expired_keys:
                         del bucket[k]
-                        cls._global_entry_count = max(0, cls._global_entry_count - 1)
-        # Recount actual entries to correct any drift in _global_entry_count
-        cls._global_entry_count = sum(
-            len(b) for inst in list(cls._all_instances) for b in inst._store.values()
-        )
+                total += sum(len(b) for b in inst._store.values())
+        cls._global_entry_count = total
 
 
 # ---------------------------------------------------------------------------

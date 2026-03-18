@@ -3331,6 +3331,9 @@ def _apply_list_files_filters(files: list, truncated: bool, search: str, sort_by
     if search:
         search_lower = search.lower()
         files = [f for f in files if search_lower in f["name"].lower()]
+    else:
+        # M13-v14: Shallow copy to avoid mutating the cached list during sort
+        files = list(files)
 
     sort_lower = sort_by.lower()
     if sort_lower == "size":

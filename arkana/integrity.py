@@ -551,7 +551,12 @@ def _check_macho_integrity(
         endian = "<" if magic_le == 0xFEEDFACE else ">"
         is_64 = False
     else:
-        endian = "<"
+        # M5-v14: Magic doesn't match expected Mach-O values — flag and bail
+        issues.append(
+            _issue("high", "MACHO_MAGIC_MISMATCH",
+                   f"Expected Mach-O magic not found (got {hex(magic_le)}).")
+        )
+        return issues, flags, details
 
     details["macho_type"] = "Mach-O 64" if is_64 else "Mach-O 32"
 
