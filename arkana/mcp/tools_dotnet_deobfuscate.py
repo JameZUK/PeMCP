@@ -408,13 +408,39 @@ async def _run_subprocess(
     timeout: int,
     label: str,
 ) -> Tuple[int, str, str]:
-    """Run a subprocess with timeout, return (returncode, stdout, stderr)."""
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    """Run a subprocess with timeout, return (returncode, stdout, stderr).
+
+    Uses a pseudo-terminal for stdin so .NET ``Console.ReadKey()`` sees a
+    real terminal instead of throwing ``InvalidOperationException`` when
+    stdin is redirected.  Falls back to DEVNULL if pty is unavailable.
+    """
+    master_fd = slave_fd = None
+    try:
+        master_fd, slave_fd = os.openpty()
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=slave_fd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        os.close(slave_fd)
+        slave_fd = None
+        # Send a keypress so any Console.ReadKey() returns immediately.
+        os.write(master_fd, b"\n")
+    except OSError:
+        # pty unavailable — fall back to DEVNULL.
+        if slave_fd is not None:
+            os.close(slave_fd)
+        if master_fd is not None:
+            os.close(master_fd)
+            master_fd = None
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
     try:
         stdout_bytes, stderr_bytes = await asyncio.wait_for(
             proc.communicate(),
@@ -427,6 +453,12 @@ async def _run_subprocess(
         except Exception:
             pass
         raise TimeoutError(f"{label} timed out after {timeout}s")
+    finally:
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
 
     stdout_str = stdout_bytes.decode("utf-8", errors="replace")
     stderr_str = stderr_bytes.decode("utf-8", errors="replace")
