@@ -196,7 +196,7 @@ class TestClassifyObfuscator:
 class TestBuildDe4dotCommand:
     def test_normal_mode(self):
         args = _build_de4dot_command("/path/in.exe", "/path/out.exe")
-        assert args[0] == "dotnet"
+        assert args[0] == "mono"
         assert "/path/in.exe" in args
         assert "-o" in args
         assert "/path/out.exe" in args
@@ -214,7 +214,7 @@ class TestBuildDe4dotCommand:
 class TestBuildNrsCommand:
     def test_basic(self):
         args = _build_nrs_command("/path/in.exe", "/tmp/output")
-        assert args[0] == "dotnet"
+        assert "NETReactorSlayer" in args[0]
         assert "/path/in.exe" in args
         assert "-o" in args
         assert "/tmp/output" in args

@@ -158,7 +158,7 @@ Dashboard triage flags are persisted to the analysis cache and restored when the
 ./run.sh --samples ~/dir  # Mount samples directory
 ```
 
-The Docker image uses 4 venvs to isolate incompatible unicorn versions (angr needs v2, Speakeasy/Unipacker/Qiling need v1). .NET deobfuscation tools (de4dot-cex, NETReactorSlayer, ilspycmd) are standalone .NET CLI executables invoked via `asyncio.create_subprocess_exec()` — no Python venv needed.
+The Docker image uses 4 venvs to isolate incompatible unicorn versions (angr needs v2, Speakeasy/Unipacker/Qiling need v1). .NET deobfuscation tools are invoked via `asyncio.create_subprocess_exec()` — no Python venv needed. de4dot-cex runs via `mono` (.NET Framework), NETReactorSlayer is a self-contained linux-x64 binary, ilspycmd is a `dotnet` global tool.
 
 ## CI
 

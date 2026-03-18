@@ -436,7 +436,8 @@ except ImportError:
 # --- .NET Deobfuscation CLI Tools (not Python packages) ---
 DE4DOT_AVAILABLE = None  # None = not yet checked; lazy-checked on first use
 DE4DOT_IMPORT_ERROR = ""
-_DE4DOT_PATH = Path("/app/dotnet-tools/de4dot/de4dot.dll")
+# de4dot-cex is a .NET Framework app — runs via mono on Linux
+_DE4DOT_PATH = Path("/app/dotnet-tools/de4dot/de4dot.exe")
 _de4dot_check_lock = threading.Lock()
 
 def _check_de4dot_available():
@@ -447,16 +448,22 @@ def _check_de4dot_available():
     with _de4dot_check_lock:
         if DE4DOT_AVAILABLE is not None:
             return DE4DOT_AVAILABLE
-        if _DE4DOT_PATH.is_file() and shutil.which("dotnet"):
+        if _DE4DOT_PATH.is_file() and shutil.which("mono"):
             DE4DOT_AVAILABLE = True
         else:
+            parts = []
+            if not _DE4DOT_PATH.is_file():
+                parts.append(f"de4dot.exe not found at {_DE4DOT_PATH}")
+            if not shutil.which("mono"):
+                parts.append("mono runtime not found on PATH")
             DE4DOT_AVAILABLE = False
-            DE4DOT_IMPORT_ERROR = f"de4dot not found (expected {_DE4DOT_PATH})"
+            DE4DOT_IMPORT_ERROR = "; ".join(parts) if parts else "de4dot not available"
         return DE4DOT_AVAILABLE
 
 NETREACTORSLAYER_AVAILABLE = None
 NETREACTORSLAYER_IMPORT_ERROR = ""
-_NETREACTORSLAYER_PATH = Path("/app/dotnet-tools/netreactorslayer/NETReactorSlayer.CLI.dll")
+# NRS linux64 is a self-contained .NET 6 binary — no runtime needed
+_NETREACTORSLAYER_PATH = Path("/app/dotnet-tools/netreactorslayer/NETReactorSlayer.CLI")
 _netreactorslayer_check_lock = threading.Lock()
 
 def _check_netreactorslayer_available():
@@ -467,7 +474,7 @@ def _check_netreactorslayer_available():
     with _netreactorslayer_check_lock:
         if NETREACTORSLAYER_AVAILABLE is not None:
             return NETREACTORSLAYER_AVAILABLE
-        if _NETREACTORSLAYER_PATH.is_file() and shutil.which("dotnet"):
+        if _NETREACTORSLAYER_PATH.is_file() and os.access(str(_NETREACTORSLAYER_PATH), os.X_OK):
             NETREACTORSLAYER_AVAILABLE = True
         else:
             NETREACTORSLAYER_AVAILABLE = False

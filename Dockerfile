@@ -164,31 +164,37 @@ RUN groupadd -g 1500 arkana && \
     chmod -R 775 /app/qiling-rootfs
 
 # --- .NET Runtime & Deobfuscation Tools ---
-# de4dot-cex (GPLv3) and NETReactorSlayer (GPLv3) are standalone .NET CLI
-# tools invoked via subprocess. ilspycmd (MIT) is a .NET global tool.
-# All three run as external processes — no Python dependency or venv needed.
+# de4dot-cex (GPLv3): .NET Framework app — needs mono to run on Linux.
+# NETReactorSlayer (GPLv3): self-contained .NET 6 linux-x64 binary — no runtime needed.
+# ilspycmd (MIT): .NET global tool — needs dotnet SDK.
+# All three run as external subprocesses — no Python dependency or venv needed.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget apt-transport-https && \
-    wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
-         -O /tmp/ms-prod.deb && \
-    dpkg -i /tmp/ms-prod.deb && rm /tmp/ms-prod.deb && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends dotnet-sdk-8.0 && \
-    rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends \
+        wget apt-transport-https unzip \
+        mono-runtime libmono-system-core4.0-cil \
+    && wget -q https://packages.microsoft.com/config/debian/12/packages-microsoft-prod.deb \
+         -O /tmp/ms-prod.deb \
+    && dpkg -i /tmp/ms-prod.deb && rm /tmp/ms-prod.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends dotnet-sdk-8.0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# de4dot-cex — download latest release (best-effort)
+# de4dot-cex v4.0.0 — .NET Framework build, runs via mono
+# Zip contains de4dot.exe at root + bin/ with support DLLs
 RUN mkdir -p /app/dotnet-tools/de4dot && \
-    wget -q "https://github.com/ViRb3/de4dot-cex/releases/latest/download/de4dot-cex-net6.0.zip" \
+    wget -q "https://github.com/ViRb3/de4dot-cex/releases/download/v4.0.0/de4dot-cex.zip" \
          -O /tmp/de4dot.zip && \
     unzip -q /tmp/de4dot.zip -d /app/dotnet-tools/de4dot/ && \
+    chmod +x /app/dotnet-tools/de4dot/de4dot.exe && \
     rm /tmp/de4dot.zip \
     || echo "WARNING: de4dot-cex download failed — dotnet_deobfuscate(method='de4dot') will be unavailable"
 
-# NETReactorSlayer — download latest release (best-effort)
+# NETReactorSlayer v6.4.0.0 — self-contained linux-x64 binary (no runtime needed)
 RUN mkdir -p /app/dotnet-tools/netreactorslayer && \
-    wget -q "https://github.com/SychicBoy/NETReactorSlayer/releases/latest/download/NETReactorSlayer.CLI.zip" \
+    wget -q "https://github.com/SychicBoy/NETReactorSlayer/releases/download/v6.4.0.0/NETReactorSlayer.CLI-net6.0-linux64.zip" \
          -O /tmp/nrs.zip && \
     unzip -q /tmp/nrs.zip -d /app/dotnet-tools/netreactorslayer/ && \
+    chmod +x /app/dotnet-tools/netreactorslayer/NETReactorSlayer.CLI && \
     rm /tmp/nrs.zip \
     || echo "WARNING: NETReactorSlayer download failed — dotnet_deobfuscate(method='reactor_slayer') will be unavailable"
 

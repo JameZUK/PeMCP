@@ -340,8 +340,8 @@ def _build_de4dot_command(
     output_path: Optional[str] = None,
     detect_only: bool = False,
 ) -> List[str]:
-    """Build the de4dot CLI command line."""
-    args = ["dotnet", str(_DE4DOT_PATH), input_path]
+    """Build the de4dot CLI command line (runs via mono on Linux)."""
+    args = ["mono", str(_DE4DOT_PATH), input_path]
     if detect_only:
         args.append("--detect-only")
     elif output_path:
@@ -350,9 +350,9 @@ def _build_de4dot_command(
 
 
 def _build_nrs_command(input_path: str, output_dir: str) -> List[str]:
-    """Build the NETReactorSlayer CLI command line."""
+    """Build the NETReactorSlayer CLI command line (self-contained binary)."""
     return [
-        "dotnet", str(_NETREACTORSLAYER_PATH),
+        str(_NETREACTORSLAYER_PATH),
         input_path,
         "-o", output_dir,
     ]
