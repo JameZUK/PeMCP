@@ -525,13 +525,24 @@ def _generate_file_event_rule(
         return None
 
     detection_items = []
+    target_filenames = []
     if filename and filename != "unknown":
         safe_fn = filename.replace("'", "''").replace("\\", "\\\\")
         detection_items.append(f"        TargetFilename|endswith: '\\\\{safe_fn}'")
     for path in file_paths[:3]:
+        # Skip PDB paths and debug info — not valid file drop indicators
+        if any(x in path.lower() for x in ['.pdb', '\\vc\\', '\\build\\', '\\debug\\']):
+            continue
         # H5: Escape YAML special chars to prevent injection
-        escaped = path.replace("\\", "\\\\").replace("'", "''")
-        detection_items.append(f"        TargetFilename|contains: '{escaped}'")
+        escaped = path.replace("\\", "\\\\").replace("'", "''").replace("`", "")
+        target_filenames.append(escaped)
+    # Use list syntax for OR logic when multiple file paths
+    if len(target_filenames) == 1:
+        detection_items.append(f"        TargetFilename|contains: '{target_filenames[0]}'")
+    elif target_filenames:
+        detection_items.append("        TargetFilename|contains:")
+        for tf in target_filenames:
+            detection_items.append(f"            - '{tf}'")
 
     if not detection_items:
         return None

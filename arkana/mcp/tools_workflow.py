@@ -143,7 +143,10 @@ async def generate_analysis_report(
     risk_score = triage.get("risk_score", 0)
     mode = pe_data.get("mode", "unknown")
 
-    key_findings = [n["content"] for n in notes if n.get("category") == "tool_result"][:10]
+    key_findings = [
+        n["content"].replace("\\n", "\n").replace("\\t", "\t")
+        for n in notes if n.get("category") == "tool_result"
+    ][:10]
 
     if fmt == "markdown":
         sections.append(f"# Malware Analysis Report: {filename}\n")

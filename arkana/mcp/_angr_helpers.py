@@ -170,7 +170,13 @@ def _resolve_function_address(target_addr: int):
             if potential_va in cfg.functions:
                 addr_to_use = potential_va
 
-    func = cfg.functions[addr_to_use]  # may raise KeyError
+    try:
+        func = cfg.functions[addr_to_use]
+    except KeyError:
+        raise KeyError(
+            f"No function found at address {hex(addr_to_use)}. "
+            f"Use get_function_map() to list known functions."
+        )
     return func, addr_to_use
 
 

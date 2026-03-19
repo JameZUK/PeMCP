@@ -855,6 +855,12 @@ async def auto_unpack_pe(
     if result.get("status") == "success":
         result["hint"] = "Use open_file() to load the unpacked binary for further analysis."
 
+    # Fix empty error messages from unipacker subprocess
+    if result.get("error") and isinstance(result["error"], str):
+        msg = result["error"].strip()
+        if msg.endswith(":") or msg.endswith(": "):
+            result["error"] = msg.rstrip(": ") + ": no packer signature matched or unpacking failed silently."
+
     return await _check_mcp_response_size(ctx, result, "auto_unpack_pe")
 
 

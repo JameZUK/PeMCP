@@ -704,6 +704,29 @@ async def get_value_set_analysis(
             if graph:
                 for node in list(graph.nodes())[:limit]:
                     entry = {"address": hex(node.addr) if hasattr(node, 'addr') else str(node)}
+                    # Extract actual value-set data from VFG node states
+                    try:
+                        if hasattr(node, 'final_states') and node.final_states:
+                            vs_data = {}
+                            for vs_state in list(node.final_states)[:3]:
+                                if hasattr(vs_state, 'register_region'):
+                                    regs = {}
+                                    for reg_name in ['rax', 'rbx', 'rcx', 'rdx', 'rsp', 'rbp',
+                                                     'eax', 'ebx', 'ecx', 'edx', 'esp', 'ebp']:
+                                        try:
+                                            val = getattr(vs_state.register_region, reg_name, None)
+                                            if val is not None:
+                                                regs[reg_name] = str(val)
+                                        except Exception:
+                                            pass
+                                    if regs:
+                                        vs_data["registers"] = regs
+                            if vs_data:
+                                entry["value_sets"] = vs_data
+                        elif hasattr(node, 'input_state') and node.input_state is not None:
+                            entry["has_input_state"] = True
+                    except Exception:
+                        pass
                     nodes_info.append(entry)
         except Exception as e:
             logger.debug("Skipped item during VFG graph node extraction: %s", e, exc_info=True)

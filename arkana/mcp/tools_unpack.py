@@ -330,8 +330,13 @@ async def reconstruct_pe_from_dump(
         bridge.report_progress(60, 100)
         bridge.info("Rebuilding PE...")
 
-        # Build the fixed PE
-        builder = lief.PE.Builder(pe)
+        # Build the fixed PE (LIEF API: newer versions require config_t)
+        try:
+            config = lief.PE.Builder.config_t()
+            builder = lief.PE.Builder(pe, config)
+        except (TypeError, AttributeError):
+            # Fallback for older LIEF versions
+            builder = lief.PE.Builder(pe)
         builder.build()
         fixed_data = bytes(builder.get_build())
 

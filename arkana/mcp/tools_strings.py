@@ -299,7 +299,14 @@ async def get_floss_analysis_info(ctx: Context,
     floss_data_block = state.pe_data.get('floss_analysis', {})
     status = floss_data_block.get("status", "Unknown")
 
-    if status != "FLOSS analysis complete." and "incomplete" not in status:
+    # Allow access to any available string data even if deep analysis hasn't finished.
+    # Only block if there's an actual error AND no string data at all.
+    strings_data = floss_data_block.get("strings", {})
+    has_any_strings = any(
+        isinstance(strings_data.get(k), list) and len(strings_data.get(k, [])) > 0
+        for k in ["static_strings", "stack_strings", "tight_strings", "decoded_strings"]
+    )
+    if not has_any_strings and status != "FLOSS analysis complete." and "incomplete" not in status:
          data_to_send = {"status": status, "error": floss_data_block.get("error", "FLOSS analysis did not complete successfully."), "data": {}}
          return await _check_mcp_response_size(ctx, data_to_send, "get_floss_analysis_info")
 

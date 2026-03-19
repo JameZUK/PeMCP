@@ -1356,9 +1356,32 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
             # This returns a dict: {node: immediate_dominator}
             dom_dict = nx.immediate_dominators(func.graph, entry_node)
 
+            # Find the target node IN func.graph (not from global CFG —
+            # different Python objects even for the same address)
+            func_target_node = None
+            for node in func.graph.nodes():
+                if node.addr == target_addr:
+                    func_target_node = node
+                    break
+            if func_target_node is None:
+                # Fallback: try block start address
+                try:
+                    blk = project_snap.factory.block(target_addr)
+                    for node in func.graph.nodes():
+                        if node.addr == blk.addr:
+                            func_target_node = node
+                            break
+                except Exception:
+                    pass
+            if func_target_node is None:
+                return {
+                    "error": f"Address {hex(target_addr)} not found in function graph.",
+                    "hint": "The address may be inside a block. Try the block start address.",
+                }
+
             # Trace back the dominator chain for our target
             dominators_list = []
-            curr = target_node
+            curr = func_target_node
 
             # Safety break to prevent infinite loops in malformed graphs
             iterations = 0
@@ -1750,6 +1773,19 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
                 state.angr_loop_cache = None
                 state.angr_loop_cache_config = None
             return {"status": "success", "message": f"Patched {len(patch_data)} bytes. CFG cache cleared."}
+        except KeyError as e:
+            # angr raises KeyError with raw address when VA is unmapped
+            try:
+                bad_addr = hex(int(str(e)))
+            except (ValueError, TypeError):
+                bad_addr = str(e)
+            valid_min = hex(state.angr_project.loader.min_addr)
+            valid_max = hex(state.angr_project.loader.max_addr)
+            return {
+                "error": f"Address {bad_addr} is not mapped in the binary's memory.",
+                "valid_range": f"{valid_min} - {valid_max}",
+                "hint": "Use get_section_permissions() or get_pe_data() to find valid addresses.",
+            }
         except Exception as e: return {"error": f"Patching failed: {e}"}
 
     result = await asyncio.to_thread(_patch)
@@ -2184,8 +2220,7 @@ async def solve_constraints_for_path(
 
         simgr = state.angr_project.factory.simulation_manager(entry_st)
 
-        # Apply techniques
-        simgr.use_technique(angr.exploration_techniques.DFS())
+        # Apply techniques — BFS by default (DFS triggers cffi pickle errors)
         simgr.use_technique(angr.exploration_techniques.LengthLimiter(max_length=5000))
         simgr.use_technique(angr.exploration_techniques.Explorer(
             find=target, avoid=list(avoid_set),

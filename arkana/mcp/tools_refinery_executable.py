@@ -201,6 +201,15 @@ async def refinery_executable(
 
         def _run_disasm():
             from refinery.units.sinks.asm import asm
+            # Detect PE bitness for correct disassembly mode
+            mode = None
+            pe_mode = (state.pe_data or {}).get("mode", "")
+            if "64" in str(pe_mode):
+                mode = 64
+            elif "32" in str(pe_mode):
+                mode = 32
+            if mode:
+                return data | asm(count=count, mode=mode) | bytes
             return data | asm(count=count) | bytes
 
         result = await asyncio.to_thread(_run_disasm)

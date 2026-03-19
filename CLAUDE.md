@@ -183,6 +183,12 @@ These are inherent limitations from underlying frameworks or architecture, not b
 - **`get_function_variables`**: Automatically filters VEX IR temporaries (`ir_N`, `tmp_N`); reports their count separately.
 - **`get_calling_conventions`**: May return no results for simprocedures/thunks. Includes diagnostic note when this occurs.
 - **`dotnet_analyze`**: CLR type/method flags displayed as compact pipe-separated format (e.g. `Public | Class | AutoLayout`).
+- **DFS symbolic execution**: angr's `DFS()` exploration technique triggers cffi pickle errors (`cannot pickle '_cffi_backend._CDataBase'`). `solve_constraints_for_path` uses BFS by default. `find_path_to_address` has `use_dfs` parameter (default True — set to False if pickle errors occur). `explore_symbolic_states` has `strategy` parameter.
+- **`reconstruct_pe_from_dump`**: LIEF Builder API varies between versions. Tool auto-detects constructor signature (`Builder(pe, config_t)` vs `Builder(pe)`).
+- **`get_value_set_analysis`**: VFG analysis has known angr compatibility issues. May return limited value-set data. Prefer `get_reaching_definitions` or `propagate_constants`.
+- **`detect_compression_headers`**: May produce false positives on code sections where instruction bytes match compression magic bytes.
+- **`save_patched_binary`**: `bytes_patched` count includes all differences between angr's in-memory loader state and the original file (loader alignment, padding), not just user-initiated patches.
+- **`refinery_executable` entropy_map**: Returns raw iemap output (visual entropy representation), not numeric entropy values. Use `get_entropy_analysis` for numeric data.
 
 ## CI
 

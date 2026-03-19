@@ -2174,12 +2174,12 @@ def get_function_strings_data(address_hex: str) -> Dict[str, Any]:
 
 def _section_permissions(section: dict) -> str:
     """Extract permission string from section data."""
+    # Try raw integer first (e.g. from pefile Characteristics attribute)
     chars = section.get("characteristics", 0)
     if isinstance(chars, str):
         return chars
     perms = ""
-    # PE section characteristic flags
-    if isinstance(chars, (int, float)):
+    if isinstance(chars, (int, float)) and int(chars) != 0:
         chars = int(chars)
         if chars & 0x20000000:
             perms += "X"
@@ -2187,6 +2187,34 @@ def _section_permissions(section: dict) -> str:
             perms += "R"
         if chars & 0x80000000:
             perms += "W"
+    if perms:
+        return perms
+    # Fallback: pefile dump_dict stores Characteristics in a sub-dict
+    # with key "Value" — also check characteristics_list from our parser
+    chars_dict = section.get("Characteristics", {})
+    if isinstance(chars_dict, dict):
+        raw = chars_dict.get("Value", 0)
+        if isinstance(raw, (int, float)) and int(raw) != 0:
+            raw = int(raw)
+            if raw & 0x20000000:
+                perms += "X"
+            if raw & 0x40000000:
+                perms += "R"
+            if raw & 0x80000000:
+                perms += "W"
+    if perms:
+        return perms
+    # Fallback: characteristics_list from pe.py parser
+    chars_list = section.get("characteristics_list", [])
+    if isinstance(chars_list, list):
+        for c in chars_list:
+            cs = str(c).upper()
+            if "EXECUTE" in cs and "X" not in perms:
+                perms += "X"
+            if "READ" in cs and "R" not in perms:
+                perms += "R"
+            if "WRITE" in cs and "W" not in perms:
+                perms += "W"
     return perms or "?"
 
 
