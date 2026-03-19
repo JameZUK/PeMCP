@@ -453,6 +453,57 @@ async def get_analysis_digest(
         "pct": f"{pct}%",
     }
 
+    # Coverage detail — decompile/FLOSS/enrichment breakdown
+    coverage_detail: Dict[str, Any] = {
+        "functions_decompiled": 0,
+        "decompile_fallback_count": 0,
+    }
+    try:
+        from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+        session_uuid = state._state_uuid
+        with _decompile_meta_lock:
+            for key, meta in _decompile_meta.items():
+                if isinstance(key, tuple) and len(key) == 2 and key[0] == session_uuid:
+                    coverage_detail["functions_decompiled"] += 1
+                    if meta.get("note"):
+                        coverage_detail["decompile_fallback_count"] += 1
+    except Exception:
+        pass
+
+    # FLOSS status
+    floss = (state.pe_data or {}).get("floss_analysis", {})
+    if isinstance(floss, dict) and floss:
+        status_str = floss.get("status", "")
+        if "complete" in str(status_str).lower():
+            coverage_detail["floss_status"] = "complete"
+            # Extract type counts
+            type_counts: Dict[str, int] = {}
+            for stype in ("static", "stack", "decoded", "tight"):
+                strings_list = floss.get(f"{stype}_strings", [])
+                type_counts[stype] = len(strings_list) if isinstance(strings_list, list) else 0
+            coverage_detail["floss_type_counts"] = type_counts
+        elif "fail" in str(status_str).lower() or "error" in str(status_str).lower():
+            coverage_detail["floss_status"] = "failed"
+        else:
+            coverage_detail["floss_status"] = "running"
+    else:
+        coverage_detail["floss_status"] = "not_performed"
+
+    # Enrichment status
+    enrich_task = state.get_task("auto-enrichment")
+    if enrich_task:
+        coverage_detail["enrichment_status"] = enrich_task.get("status", "unknown")
+        phases_completed = enrich_task.get("phases_completed", [])
+        if isinstance(phases_completed, list):
+            coverage_detail["enrichment_phases_completed"] = phases_completed
+        phases_failed = enrich_task.get("phases_failed", [])
+        if isinstance(phases_failed, list) and phases_failed:
+            coverage_detail["enrichment_phases_failed"] = phases_failed
+    else:
+        coverage_detail["enrichment_status"] = "not_started"
+
+    result["coverage_detail"] = coverage_detail
+
     # Unexplored high-priority functions (from cached function scores)
     scored = getattr(state, '_cached_function_scores', None)
     if scored:

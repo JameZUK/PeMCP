@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **226 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **229 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -471,7 +471,7 @@ These tools are designed for progressive, context-efficient analysis by AI clien
 | `get_function_map` | **Smart function ranking**  - scores every function by interestingness (complexity, suspicious API calls, string refs, xref count, entry point status) and groups by purpose. Falls back to import-based categorisation when angr is unavailable. Paginated (default limit 30). |
 | `get_cross_reference_map` | **Multi-dimensional cross-reference**  - for one or more functions, returns API calls, string refs, callers, callees, suspicious imports, and complexity in a single response. |
 | `auto_note_function` | **Auto-summarise a function**  - generates a one-line behavioural summary from API call patterns and saves it as a persistent note for later aggregation. |
-| `get_analysis_digest` | **Running analysis summary**  - aggregates triage findings, function notes, IOCs, coverage stats, and unexplored high-priority targets into a context-efficient digest. Call at phase transitions to refresh understanding. |
+| `get_analysis_digest` | **Running analysis summary**  - aggregates triage findings, function notes, IOCs, coverage stats (including `coverage_detail` with per-category breakdowns of decompiled, annotated, and triaged functions), and unexplored high-priority targets into a context-efficient digest. Call at phase transitions to refresh understanding. |
 | `get_function_complexity_list(compact=True)` | **Compact complexity list**  - returns minimal per-function data (addr, name, blocks) instead of the full structure. Paginated (default limit 20). |
 | `list_tools_by_phase(phase)` | **Tool discovery**  - browse all tools grouped by analysis phase (triage, explore, deep-dive, context, utility). Helps find the right tool for the current stage. |
 | `suggest_next_action()` | **Smart recommendations**  - analyses current session state (loaded file, notes, tool history) and recommends 3-5 specific next steps. |
@@ -517,7 +517,7 @@ Notes and tool history are the primary mechanism for preserving analysis context
 | `get_tool_history` | View the history of tools run during this session. Paginated (default limit 20). |
 | `clear_tool_history` | Clear the tool invocation history for the current session. |
 | `get_session_summary` | Full session state: file info, notes, tool history, angr status, analysis phase. |
-| `get_analysis_digest` | Accumulated findings digest  - what was *learned*, not just what tools ran. |
+| `get_analysis_digest` | Accumulated findings digest  - what was *learned*, not just what tools ran. Includes `coverage_detail` with per-category breakdowns of analysis completeness. |
 | `get_progress_overview` | Lightweight progress snapshot  - analysis phase, note count, tool history count, and coverage percentage. |
 | `list_tools_by_phase` | Browse available tools organised by analysis phase (triage, explore, deep-dive, context, utility). Helps discover the right tool for your current workflow stage. |
 | `suggest_next_action` | Analyse current session state and recommend 3-5 specific next steps based on what has already been done and what remains unexplored. |
@@ -578,14 +578,15 @@ Generate ready-to-run Frida JavaScript instrumentation scripts from static analy
 | `generate_frida_bypass_script` | Generate a Frida script that bypasses anti-debug techniques. Auto-detects anti-debug APIs from the binary's imports/triage data and generates targeted bypass code (IsDebuggerPresent, NtQueryInformationProcess, timing checks, PEB patches, etc.). |
 | `generate_frida_trace_script` | Generate a Frida API tracing script based on the binary's import table. Identifies suspicious/interesting APIs and creates a comprehensive tracing script filterable by category (networking, crypto, injection, file_io, registry, etc.). |
 
-## Vulnerability Detection (2 tools)
+## Vulnerability Detection & Data Flow (3 tools)
 
-Pattern-based vulnerability scanning and attack surface assessment using decompiled code.
+Pattern-based vulnerability scanning, attack surface assessment, and dangerous data flow detection using decompiled code.
 
 | Tool | Description |
 |---|---|
 | `scan_for_vulnerability_patterns` | Scan decompiled functions for 11 common vulnerability patterns: buffer overflows, format strings, command injection, memory corruption, integer overflows, path traversal, insecure crypto, hardcoded credentials, race conditions, DLL hijacking, and double-free. Filterable by severity and function address. |
 | `assess_function_attack_surface` | Assess the attack surface of a specific function by analysing input sources, dangerous sinks, source-to-sink connectivity, reachability (caller count), and complexity. Produces a risk score from 0 to 100. |
+| `find_dangerous_data_flows` | Trace data flow from input sources (recv, read, scanf, argv, etc.) to dangerous sinks (system, strcpy, sprintf, memcpy, WinExec, etc.) across decompiled functions. Identifies potential taint paths where user-controlled input may reach unsafe operations. Returns ranked source-sink pairs with propagation paths and confidence scores. |
 
 ## .NET Deobfuscation & Decompilation (3 tools)
 
@@ -596,6 +597,15 @@ Automated .NET deobfuscation via de4dot-cex and NETReactorSlayer, plus full C# s
 | `detect_dotnet_obfuscation` | Pure-Python obfuscation detection via dnfile metadata scanning. Identifies 10+ obfuscators by matching custom attributes, resource patterns, and name entropy: ConfuserEx, .NET Reactor, SmartAssembly, Dotfuscator, Babel .NET, Crypto Obfuscator, Agile.NET, Eazfuscator, Goliath.NET, Phoenix Protector, and generic obfuscation. |
 | `dotnet_deobfuscate` | Orchestrate .NET deobfuscation via external tools. Supports four methods: `auto` (detect obfuscator and choose best tool), `de4dot` (handles ~20 obfuscators including ConfuserEx), `reactor_slayer` (.NET Reactor specialist), and `detect_only`. Outputs a cleaned binary registered as an artifact. |
 | `dotnet_decompile` | C# source recovery via ILSpy CLI with pagination support. Two modes: stdout mode (returns paginated C# source lines, optionally filtered to a specific type) and project mode (writes `.csproj` + `.cs` files to a directory). |
+
+## Anti-Analysis & Obfuscation Detection (2 tools)
+
+Detect control flow obfuscation techniques commonly used by commercial protectors (OLLVM, Themida, VMProtect, Code Virtualizer) and malware packers.
+
+| Tool | Description |
+|---|---|
+| `detect_control_flow_flattening` | Analyse a function's CFG for control flow flattening (CFF) hallmarks: single-entry dispatcher block with high in-degree, state variable driving a switch/if-else chain, and real basic blocks routing back to the dispatcher. Returns confidence score, dispatcher address, state variable identification, and affected block count. |
+| `detect_opaque_predicates` | Identify always-true or always-false conditional branches using angr's constraint solver. Flags branches with only one feasible path, which are characteristic of dead-code insertions by obfuscators. Returns predicate locations with verdicts and solver confidence. |
 
 ## Learner Progress Tracking (4 tools)
 

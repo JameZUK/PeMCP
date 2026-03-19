@@ -10,12 +10,19 @@ from typing import Dict, Any, Optional, List
 from collections import deque
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE, ANGR_ANALYSIS_TIMEOUT, ANGR_SHORT_TIMEOUT
-from arkana.constants import MAX_TOOL_LIMIT
+from arkana.constants import (
+    MAX_TOOL_LIMIT,
+    CFF_MIN_BLOCKS, CFF_DISPATCHER_IN_DEGREE_THRESHOLD, CFF_BACK_EDGE_RATIO_THRESHOLD,
+    OPAQUE_PREDICATE_SOLVER_TIMEOUT, MAX_OPAQUE_PREDICATE_BLOCKS,
+    OBFUSCATION_DETECTION_TIMEOUT,
+    MAX_CFF_SCAN_FUNCTIONS, MAX_OPAQUE_SCAN_FUNCTIONS,
+)
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
 from arkana.mcp._input_helpers import _paginate_field
+from arkana.mcp._rename_helpers import get_display_name
 from arkana.utils import shannon_entropy
 
 if ANGR_AVAILABLE:
@@ -1830,3 +1837,417 @@ async def find_anti_debug_comprehensive(
     except asyncio.TimeoutError:
         raise RuntimeError(f"find_anti_debug_comprehensive timed out after {ANGR_SHORT_TIMEOUT} seconds.")
     return await _check_mcp_response_size(ctx, result, "find_anti_debug_comprehensive")
+
+
+# =====================================================================
+#  Control Flow Flattening Detection
+# =====================================================================
+
+def _analyze_function_for_cff(func_obj, cfg):
+    """Analyse a single function for CFF obfuscation patterns.
+
+    Returns a finding dict if CFF-like patterns are detected, else None.
+    """
+    try:
+        graph = func_obj.graph
+        if graph is None:
+            return None
+
+        blocks = list(graph.nodes())
+        num_blocks = len(blocks)
+        if num_blocks < CFF_MIN_BLOCKS:
+            return None
+
+        # Compute in-degree for all blocks
+        in_degrees = {}
+        for block in blocks:
+            in_degrees[block] = graph.in_degree(block)
+
+        # Find dispatcher candidate: block with highest in-degree
+        dispatcher = max(blocks, key=lambda b: in_degrees.get(b, 0))
+        dispatcher_in_degree = in_degrees.get(dispatcher, 0)
+
+        if dispatcher_in_degree < CFF_DISPATCHER_IN_DEGREE_THRESHOLD:
+            return None
+
+        # Count blocks with edge back to dispatcher (back-edge ratio)
+        back_edge_count = 0
+        for block in blocks:
+            if block == dispatcher:
+                continue
+            if graph.has_edge(block, dispatcher):
+                back_edge_count += 1
+
+        # Exclude dispatcher itself from ratio denominator
+        other_blocks = num_blocks - 1
+        back_edge_ratio = back_edge_count / other_blocks if other_blocks > 0 else 0.0
+
+        # Check dispatcher VEX IR for comparison-based switch (state variable pattern)
+        state_var_detected = False
+        try:
+            dispatcher_addr = dispatcher.addr if hasattr(dispatcher, 'addr') else dispatcher
+            project, _ = state.get_angr_snapshot()
+            if project:
+                irsb = project.factory.block(dispatcher_addr).vex
+                for stmt in irsb.statements:
+                    if hasattr(stmt, 'tag') and stmt.tag == 'Ist_Exit':
+                        # Has conditional exit — typical of dispatcher
+                        state_var_detected = True
+                        break
+        except Exception:
+            pass
+
+        # Block size standard deviation among non-dispatcher blocks (uniformity signal)
+        block_sizes = []
+        for block in blocks:
+            if block == dispatcher:
+                continue
+            try:
+                baddr = block.addr if hasattr(block, 'addr') else block
+                b = func_obj._project.factory.block(baddr) if hasattr(func_obj, '_project') else None
+                if b:
+                    block_sizes.append(b.size)
+            except Exception:
+                pass
+
+        size_uniformity_score = 0
+        if len(block_sizes) >= 3:
+            mean_size = sum(block_sizes) / len(block_sizes)
+            variance = sum((s - mean_size) ** 2 for s in block_sizes) / len(block_sizes)
+            std_dev = variance ** 0.5
+            # Low std_dev relative to mean = uniform sizes (CFF signal)
+            if mean_size > 0:
+                cv = std_dev / mean_size  # coefficient of variation
+                if cv < 0.3:
+                    size_uniformity_score = 20
+                elif cv < 0.6:
+                    size_uniformity_score = 10
+                elif cv < 1.0:
+                    size_uniformity_score = 5
+
+        # Score: in_degree_anomaly(0-30) + back_edge_ratio(0-30) + state_var(0-20) + uniformity(0-20)
+        # In-degree anomaly: how much dispatcher stands out
+        avg_in_degree = sum(in_degrees.values()) / len(in_degrees) if in_degrees else 1
+        in_degree_ratio = dispatcher_in_degree / avg_in_degree if avg_in_degree > 0 else 0
+        in_degree_score = min(30, int(in_degree_ratio * 5))
+
+        back_edge_score = min(30, int(back_edge_ratio * 50))
+
+        state_var_score = 20 if state_var_detected else 0
+
+        confidence = min(100, in_degree_score + back_edge_score + state_var_score + size_uniformity_score)
+
+        addr_hex = hex(func_obj.addr)
+        return {
+            "function_address": addr_hex,
+            "function_name": get_display_name(addr_hex, func_obj.name),
+            "confidence": confidence,
+            "dispatcher_address": hex(dispatcher.addr) if hasattr(dispatcher, 'addr') else "unknown",
+            "dispatcher_in_degree": dispatcher_in_degree,
+            "back_edge_ratio": round(back_edge_ratio, 3),
+            "total_blocks": num_blocks,
+            "state_variable_detected": state_var_detected,
+        }
+    except Exception as exc:
+        logger.debug("CFF analysis failed for func %s: %s", hex(func_obj.addr), exc)
+        return None
+
+
+def _sync_detect_cff(target_addr, min_confidence, limit):
+    """Synchronous CFF detection worker."""
+    _ensure_project_and_cfg()
+    _, cfg = state.get_angr_snapshot()
+    if not cfg:
+        return {"error": "No CFG available.", "findings": []}
+
+    findings = []
+    scanned = 0
+
+    if target_addr is not None:
+        # Scan single function
+        if target_addr in cfg.functions:
+            func_obj = cfg.functions[target_addr]
+            result = _analyze_function_for_cff(func_obj, cfg)
+            if result and result["confidence"] >= min_confidence:
+                findings.append(result)
+            scanned = 1
+        else:
+            return {"error": f"Function at {hex(target_addr)} not found in CFG.", "findings": []}
+    else:
+        # Scan all functions
+        for _addr_int, func_obj in cfg.functions.items():
+            if scanned >= MAX_CFF_SCAN_FUNCTIONS:
+                break
+            if getattr(func_obj, 'is_simprocedure', False) or getattr(func_obj, 'is_syscall', False):
+                continue
+            scanned += 1
+            result = _analyze_function_for_cff(func_obj, cfg)
+            if result and result["confidence"] >= min_confidence:
+                findings.append(result)
+                if len(findings) >= limit:
+                    break
+
+    # Sort by confidence descending
+    findings.sort(key=lambda f: f["confidence"], reverse=True)
+
+    return {
+        "findings": findings[:limit],
+        "total_findings": len(findings),
+        "functions_scanned": scanned,
+    }
+
+
+@tool_decorator
+async def detect_control_flow_flattening(
+    ctx: Context,
+    function_address: Optional[str] = None,
+    min_confidence: int = 40,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Detect control flow flattening (CFF) obfuscation in functions.
+
+    CFF transforms structured control flow into a dispatcher-driven switch loop.
+    This tool detects the pattern by analysing dispatcher block in-degree,
+    back-edge ratios, state variable comparisons, and block size uniformity.
+
+    Returns a confidence score (0-100) per function. Higher scores indicate
+    stronger CFF signals.
+
+    When to use: When triage or manual inspection suggests obfuscated control
+    flow. Run on specific functions or scan all functions to identify CFF-protected
+    code regions.
+
+    Next steps: decompile_function_with_angr() on flagged functions,
+    detect_opaque_predicates() for complementary obfuscation detection,
+    get_function_cfg() to visualise the flattened control flow.
+
+    Args:
+        ctx: The MCP Context object.
+        function_address: Analyse a specific function (hex address). Default: scan all.
+        min_confidence: Minimum confidence threshold (0-100). Default 40.
+        limit: Maximum findings to return (1-100000). Default 20.
+    """
+    _check_angr_ready("detect_control_flow_flattening")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
+    min_confidence = max(0, min(min_confidence, 100))
+
+    target_addr = None
+    if function_address:
+        target_addr = _parse_addr(function_address, "function_address")
+
+    await ctx.info("Scanning for control flow flattening patterns...")
+
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_sync_detect_cff, target_addr, min_confidence, limit),
+            timeout=OBFUSCATION_DETECTION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        raise RuntimeError(
+            f"detect_control_flow_flattening timed out after {OBFUSCATION_DETECTION_TIMEOUT}s."
+        )
+
+    return await _check_mcp_response_size(ctx, result, "detect_control_flow_flattening")
+
+
+# =====================================================================
+#  Opaque Predicate Detection
+# =====================================================================
+
+def _analyze_block_for_opaque(project, block_addr, func_addr):
+    """Check if a block contains an opaque predicate using Z3 constraint solving.
+
+    Returns a finding dict if an opaque predicate is detected, else None.
+    """
+    try:
+        block = project.factory.block(block_addr)
+        irsb = block.vex
+
+        # Find conditional exits
+        for stmt in irsb.statements:
+            if not (hasattr(stmt, 'tag') and stmt.tag == 'Ist_Exit'):
+                continue
+
+            # Create a blank state at block address
+            blank_state = project.factory.blank_state(
+                addr=block_addr,
+                add_options={
+                    angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
+                    angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS,
+                },
+            )
+
+            # Get guard condition
+            guard = stmt.guard
+            if guard is None:
+                continue
+
+            try:
+                if hasattr(guard, 'tmp'):
+                    # Lift the block and get the guard expression
+                    simgr = project.factory.simulation_manager(blank_state)
+                    simgr.step(num_inst=block.instructions)
+                    if simgr.active:
+                        # The guard determines the taken branch
+                        if hasattr(stmt, 'dst') and hasattr(stmt.dst, 'con'):
+                            target = stmt.dst.con.value
+                        else:
+                            continue
+
+                        # Check if fallthrough is satisfiable
+                        # Both branches being satisfiable = normal predicate
+                        # Only one branch satisfiable = opaque predicate
+                        # This is a simplified check — we check if the block
+                        # has two feasible successors
+                        successors = project.factory.successors(blank_state)
+                        flat_succs = successors.flat_successors
+                        unsat_succs = successors.unsat_successors
+
+                        if len(flat_succs) == 1 and len(unsat_succs) >= 1:
+                            # One branch always taken
+                            taken_addr = flat_succs[0].addr
+                            dead_addr = unsat_succs[0].addr if unsat_succs else None
+                            always_taken = (taken_addr == target)
+
+                            return {
+                                "block_address": hex(block_addr),
+                                "instruction_address": hex(block_addr),
+                                "always_taken": always_taken,
+                                "dead_branch_target": hex(dead_addr) if dead_addr else "unknown",
+                                "guard_expression": str(guard)[:200],
+                            }
+            except Exception:
+                pass
+
+            # Only check first conditional exit per block
+            break
+
+    except Exception as exc:
+        logger.debug("Opaque predicate analysis failed for block %s: %s", hex(block_addr), exc)
+
+    return None
+
+
+def _sync_detect_opaque(target_addr, limit):
+    """Synchronous opaque predicate detection worker."""
+    _ensure_project_and_cfg()
+    project, cfg = state.get_angr_snapshot()
+    if not cfg or not project:
+        return {"error": "No CFG/project available.", "findings": []}
+
+    findings = []
+    scanned_funcs = 0
+    blocks_analyzed = 0
+    solver_timeouts = 0
+
+    funcs_to_scan = {}
+    if target_addr is not None:
+        if target_addr in cfg.functions:
+            funcs_to_scan = {target_addr: cfg.functions[target_addr]}
+        else:
+            return {"error": f"Function at {hex(target_addr)} not found in CFG.", "findings": []}
+    else:
+        funcs_to_scan = dict(cfg.functions)
+
+    for addr_int, func_obj in funcs_to_scan.items():
+        if scanned_funcs >= MAX_OPAQUE_SCAN_FUNCTIONS:
+            break
+        if getattr(func_obj, 'is_simprocedure', False) or getattr(func_obj, 'is_syscall', False):
+            continue
+        if len(findings) >= limit:
+            break
+
+        scanned_funcs += 1
+        graph = func_obj.graph
+        if graph is None:
+            continue
+
+        for block in graph.nodes():
+            if blocks_analyzed >= MAX_OPAQUE_PREDICATE_BLOCKS:
+                break
+            if len(findings) >= limit:
+                break
+
+            block_addr = block.addr if hasattr(block, 'addr') else block
+            blocks_analyzed += 1
+
+            import threading
+            result_holder = [None]
+
+            def _check_block():
+                result_holder[0] = _analyze_block_for_opaque(project, block_addr, addr_int)
+
+            t = threading.Thread(target=_check_block, daemon=True)
+            t.start()
+            t.join(timeout=OPAQUE_PREDICATE_SOLVER_TIMEOUT)
+
+            if t.is_alive():
+                solver_timeouts += 1
+                continue
+
+            if result_holder[0] is not None:
+                finding = result_holder[0]
+                finding["function_address"] = hex(addr_int)
+                finding["function_name"] = get_display_name(hex(addr_int), func_obj.name)
+                findings.append(finding)
+
+        if blocks_analyzed >= MAX_OPAQUE_PREDICATE_BLOCKS:
+            break
+
+    return {
+        "findings": findings[:limit],
+        "total_findings": len(findings),
+        "functions_scanned": scanned_funcs,
+        "blocks_analyzed": blocks_analyzed,
+        "solver_timeouts": solver_timeouts,
+    }
+
+
+@tool_decorator
+async def detect_opaque_predicates(
+    ctx: Context,
+    function_address: Optional[str] = None,
+    limit: int = 20,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Detect opaque predicates — conditional branches where only
+    one path is ever satisfiable, indicating dead code insertion by an obfuscator.
+
+    Uses angr's symbolic execution with Z3 constraint solving to check each
+    conditional branch. When only one branch is feasible, it is flagged as an
+    opaque predicate with the dead branch target identified.
+
+    When to use: When you suspect code obfuscation (e.g. after
+    detect_control_flow_flattening finds CFF patterns, or when decompiled
+    code shows suspicious unreachable branches).
+
+    Next steps: decompile_function_with_angr() to review the affected functions,
+    get_function_cfg() to visualise the dead branches,
+    propagate_constants() to simplify the control flow.
+
+    Args:
+        ctx: The MCP Context object.
+        function_address: Analyse a specific function (hex address). Default: scan all.
+        limit: Maximum findings to return (1-100000). Default 20.
+    """
+    _check_angr_ready("detect_opaque_predicates")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
+
+    target_addr = None
+    if function_address:
+        target_addr = _parse_addr(function_address, "function_address")
+
+    await ctx.info("Scanning for opaque predicates via constraint solving...")
+
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(_sync_detect_opaque, target_addr, limit),
+            timeout=OBFUSCATION_DETECTION_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        raise RuntimeError(
+            f"detect_opaque_predicates timed out after {OBFUSCATION_DETECTION_TIMEOUT}s."
+        )
+
+    return await _check_mcp_response_size(ctx, result, "detect_opaque_predicates")

@@ -395,6 +395,86 @@ class TestAnalysisDigest:
         assert len(result["functions_explored"]) == 1
         assert result["functions_explored"][0]["one_liner"] == "Does process injection"
 
+    def test_coverage_detail_present(self, mock_ctx):
+        from arkana.mcp.tools_session import get_analysis_digest
+        result = _run(get_analysis_digest.__wrapped__(mock_ctx))
+        assert "coverage_detail" in result
+        cd = result["coverage_detail"]
+        assert "functions_decompiled" in cd
+        assert "decompile_fallback_count" in cd
+        assert "floss_status" in cd
+        assert "enrichment_status" in cd
+
+    def test_coverage_detail_defaults(self, mock_ctx):
+        from arkana.mcp.tools_session import get_analysis_digest
+        result = _run(get_analysis_digest.__wrapped__(mock_ctx))
+        cd = result["coverage_detail"]
+        assert cd["functions_decompiled"] == 0
+        assert cd["decompile_fallback_count"] == 0
+        assert cd["floss_status"] == "not_performed"
+        assert cd["enrichment_status"] == "not_started"
+
+    def test_coverage_detail_floss_complete(self, mock_ctx):
+        from arkana.config import state
+        from arkana.mcp.tools_session import get_analysis_digest
+        state.pe_data["floss_analysis"] = {
+            "status": "FLOSS analysis complete.",
+            "static_strings": ["a", "b", "c"],
+            "stack_strings": ["s1"],
+            "decoded_strings": ["d1", "d2"],
+            "tight_strings": [],
+        }
+        result = _run(get_analysis_digest.__wrapped__(mock_ctx))
+        cd = result["coverage_detail"]
+        assert cd["floss_status"] == "complete"
+        assert "floss_type_counts" in cd
+        assert cd["floss_type_counts"]["static"] == 3
+        assert cd["floss_type_counts"]["stack"] == 1
+        assert cd["floss_type_counts"]["decoded"] == 2
+        assert cd["floss_type_counts"]["tight"] == 0
+
+    def test_coverage_detail_floss_failed(self, mock_ctx):
+        from arkana.config import state
+        from arkana.mcp.tools_session import get_analysis_digest
+        state.pe_data["floss_analysis"] = {"status": "FLOSS analysis failed."}
+        result = _run(get_analysis_digest.__wrapped__(mock_ctx))
+        assert result["coverage_detail"]["floss_status"] == "failed"
+
+    def test_coverage_detail_floss_running(self, mock_ctx):
+        from arkana.config import state
+        from arkana.mcp.tools_session import get_analysis_digest
+        state.pe_data["floss_analysis"] = {"status": "Analysing stack strings..."}
+        result = _run(get_analysis_digest.__wrapped__(mock_ctx))
+        assert result["coverage_detail"]["floss_status"] == "running"
+
+    def test_coverage_detail_enrichment_with_task(self, mock_ctx):
+        from arkana.config import state
+        from arkana.mcp.tools_session import get_analysis_digest
+        state.set_task("auto-enrichment", {
+            "status": "completed",
+            "phases_completed": ["classify", "triage", "mitre"],
+            "phases_failed": [("iocs", "timeout")],
+        })
+        result = _run(get_analysis_digest.__wrapped__(mock_ctx))
+        cd = result["coverage_detail"]
+        assert cd["enrichment_status"] == "completed"
+        assert cd["enrichment_phases_completed"] == ["classify", "triage", "mitre"]
+        assert cd["enrichment_phases_failed"] == [("iocs", "timeout")]
+
+    def test_coverage_detail_enrichment_no_failed(self, mock_ctx):
+        from arkana.config import state
+        from arkana.mcp.tools_session import get_analysis_digest
+        state.set_task("auto-enrichment", {
+            "status": "running",
+            "phases_completed": ["classify"],
+            "phases_failed": [],
+        })
+        result = _run(get_analysis_digest.__wrapped__(mock_ctx))
+        cd = result["coverage_detail"]
+        assert cd["enrichment_status"] == "running"
+        assert cd["enrichment_phases_completed"] == ["classify"]
+        assert "enrichment_phases_failed" not in cd  # empty list omitted
+
 
 # ===================================================================
 # Fixtures

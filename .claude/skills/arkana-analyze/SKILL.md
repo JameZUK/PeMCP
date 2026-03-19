@@ -14,7 +14,7 @@ description: >
 # Arkana Binary Analysis Skill
 
 You are a binary analysis specialist using Arkana, a comprehensive binary analysis
-MCP server with 226 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 229 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -29,7 +29,7 @@ phases, adapting depth and tool selection to the analysis goal.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 226 MCP tools that cover these operations — use them.
+   analysis. Arkana has 229 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis is performed EXCLUSIVELY through
@@ -374,6 +374,11 @@ Use as needed based on goal:
   functions for specific capabilities without reading each fully. Only matching functions
   are returned. See [search-patterns.md](search-patterns.md) for regex patterns.
 
+- **Data flow risks** (vulnerability audit): `find_dangerous_data_flows(function_address)` — traces
+  untrusted input sources (recv, fread, ReadFile) to dangerous sinks (strcpy, sprintf, system).
+  Returns high-confidence results via reaching-definition analysis with structural fallback.
+  Use early in vulnerability audits to prioritise which functions to decompile in Phase 4.
+
 - **Synthesize**: `get_analysis_digest()` — aggregate findings so far before deep dive.
 
 See [tooling-reference.md](tooling-reference.md) for the full tool catalog with
@@ -446,6 +451,16 @@ Progressive depth — use the minimum tier needed to answer your question.
 - `create_struct(name, fields)` / `create_enum(name, values)` — define reusable named
   types for repeated parsing. `apply_type_at_offset(type_name, file_offset)` parses
   binary data using a custom type. Useful for C2 config structs, packet headers, etc.
+- `find_dangerous_data_flows(function_address)` — trace untrusted input sources
+  (recv, fread, ReadFile, etc.) to dangerous sinks (strcpy, sprintf, system, etc.)
+  via reaching-definition analysis with structural fallback. Use for vulnerability
+  auditing after `get_function_map` to prioritise functions for deeper review.
+- `detect_control_flow_flattening(function_address)` — detect CFF obfuscation
+  patterns including dispatcher blocks, state variables, and back-edges. Use when
+  triage indicates suspected obfuscation or abnormal control flow complexity.
+- `detect_opaque_predicates(function_address)` — detect opaque predicates via Z3
+  constraint solving, identifying conditional branches where only one path is
+  satisfiable. Use on functions with artificially inflated complexity.
 
 ### Tier 3: Dynamic / Emulation (when static + data-flow aren't enough)
 - `emulate_function_execution(address, args)` — concrete function execution
@@ -490,6 +505,9 @@ without needing a real execution environment.
 | Bypassing anti-debug for live analysis | Tier 4 (generate_frida_bypass_script) |
 | Broad runtime API tracing | Tier 4 (generate_frida_trace_script) |
 | Hooking specific APIs at runtime | Tier 4 (generate_frida_hook_script) |
+| Detecting control flow flattening | Tier 1 (detect_control_flow_flattening) |
+| Identifying opaque predicates in obfuscated code | Tier 2 (detect_opaque_predicates) |
+| Tracing untrusted input to dangerous sinks | Tier 2 (find_dangerous_data_flows) |
 | Identifying C++ vtable dispatch | Tier 1 (identify_cpp_classes + scan_for_indirect_jumps) |
 
 ## Phase 5: Extract
@@ -665,7 +683,7 @@ sideloading, campaign comparison, and shellcode extraction patterns.
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 226-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [tooling-reference.md](tooling-reference.md) — Complete 229-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to Arkana tool calls

@@ -117,6 +117,11 @@ _SELF_REPORTING_TOOLS = frozenset({
     # Symbolic execution extensions (background tasks)
     "solve_constraints_for_path",
     "explore_symbolic_states",
+    # Vulnerability analysis (long-running RDA)
+    "find_dangerous_data_flows",
+    # Obfuscation detection (long-running analysis)
+    "detect_control_flow_flattening",
+    "detect_opaque_predicates",
 })
 
 

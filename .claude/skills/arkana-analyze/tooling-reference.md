@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 226 MCP tools organized by use case.
+Complete catalog of all 229 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -26,6 +26,7 @@ Source files: `arkana/mcp/tools_*.py`
 | Paginating through full decompilation to find a pattern | `decompile_function_with_angr(address, search="pattern")` | Regex grep returns only matching lines with context — saves tokens |
 | Decompiling many functions looking for a pattern | `batch_decompile(addresses, search="pattern")` | Grep across up to 20 functions; only functions with matches are returned |
 | `get_hex_dump()` + manual byte matching | `search_hex_pattern(pattern)` | Direct hex pattern search with `??` wildcards, section filter support |
+| Manually checking each function for buffer overflows | `find_dangerous_data_flows()` | Automated source→sink tracing with RDA; covers all functions at once |
 
 ---
 
@@ -153,6 +154,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `get_forward_slice` | Trace data propagation forward | `address`, `variable` |
 | `get_dominators` | Dominator tree for CFG analysis | `address` |
 | `analyze_binary_loops` | Loop detection and analysis (background, timeout 300s) | — |
+| `find_dangerous_data_flows` | Trace untrusted input→dangerous sink flows. Use for vuln audit after `get_function_map`. High-confidence RDA + structural fallback. | `function_address` (optional — scan all if omitted), `limit` (default 30) |
 
 ## Emulation
 
@@ -319,6 +321,8 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `find_anti_debug_comprehensive` | Comprehensive anti-debug + anti-VM + instruction scan | `compact`, `limit` (default 60) |
 | `detect_self_modifying_code` | Detect self-modifying code patterns | — |
 | `find_code_caves` | Find executable gaps in code sections | — |
+| `detect_control_flow_flattening` | Detect CFF obfuscation patterns (dispatcher blocks, state vars, back-edges). Use when triage shows suspected obfuscation or abnormal control flow | `function_address` (optional), `min_confidence` (default 40), `limit` (default 20) |
+| `detect_opaque_predicates` | Detect opaque predicates via Z3 constraint solving — conditional branches where only one path is satisfiable | `function_address` (optional), `limit` (default 20) |
 
 ## PE Forensics & Detection Engineering
 
@@ -371,7 +375,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `get_analysis_digest` | Aggregated findings summary (call at phase transitions); includes `user_flagged_functions` from dashboard triage | `findings_offset/limit`, `functions_offset/limit`, `ioc_offset/limit`, `unexplored_offset/limit`, `notes_offset/limit` |
+| `get_analysis_digest` | Aggregated findings summary (call at phase transitions); includes `user_flagged_functions` from dashboard triage and `coverage_detail` field with per-area analysis progress | `findings_offset/limit`, `functions_offset/limit`, `ioc_offset/limit`, `unexplored_offset/limit`, `notes_offset/limit` |
 | `get_progress_overview` | Analysis coverage and gaps | — |
 | `suggest_next_action` | AI-suggested next analysis steps; prioritises dashboard-flagged functions | `max_suggestions` (default 5) |
 | `list_tools_by_phase` | Tools organized by workflow phase | — |

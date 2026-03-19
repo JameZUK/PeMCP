@@ -2,7 +2,7 @@
 
 Proposed enhancements and feature ideas for Arkana. Items are grouped by domain and prioritised within each section. Each proposal includes a value assessment to help determine whether the added complexity justifies the benefit over manual analysis.
 
-**Current state:** 226 MCP tools across 56 files, supporting PE/ELF/Mach-O with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy integrations.
+**Current state:** 229 MCP tools across 56 files, supporting PE/ELF/Mach-O with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy integrations.
 
 **Evaluation criteria for each proposal:**
 - **Value** — Does this enable analysis that's currently impossible, or just faster?
@@ -138,12 +138,13 @@ Arkana exposes `find_path_to_address` and `find_path_with_custom_input`, but the
 
 ---
 
-## 3. Taint Analysis
+## 3. Taint Analysis ⚡ PARTIALLY IMPLEMENTED
 
+**Status**: Partially implemented via `find_dangerous_data_flows` in `arkana/mcp/tools_vuln.py` (1 tool). Full angr RDA-based taint tracking (Tools B and C) remains unimplemented.
 **Priority**: High
 **Complexity**: Medium-High
 **New dependencies**: None (built on angr's RDA)
-**New tools**: 2-3
+**New tools**: ~~2-3~~ 1 implemented, 2 remaining
 
 ### Problem
 
@@ -151,10 +152,10 @@ Arkana has `get_reaching_definitions` and `get_data_dependencies` but these retu
 
 ### Proposal
 
-**Tool A: `track_taint_from_source`**
-- Given a taint source (function parameter, return value of `recv`/`read`/`scanf`/etc.), trace data flow forward
-- Report all sinks reached (dangerous functions: `system`, `strcpy`, `sprintf`, `memcpy`, `WinExec`, etc.)
-- Return the propagation path with intermediate transformations
+**Tool A: `find_dangerous_data_flows`** ✅ IMPLEMENTED
+- Traces data flow from known input sources (recv, read, scanf, argv, etc.) to dangerous sinks (system, strcpy, sprintf, memcpy, WinExec, etc.) across decompiled functions
+- Returns ranked source-sink pairs with propagation paths and confidence scores
+- Pattern-based approach using decompiled code (not full angr RDA)
 
 **Tool B: `find_tainted_sinks`**
 - Automatic mode: identify common source-sink pairs without manual source specification
@@ -184,7 +185,8 @@ Arkana has `get_reaching_definitions` and `get_data_dependencies` but these retu
 
 ### Implementation
 
-- Build on existing `get_reaching_definitions` infrastructure in `tools_angr_dataflow.py`
+- `find_dangerous_data_flows` provides pattern-based source-to-sink tracing via decompiled code
+- Full RDA-based taint tracking (Tools B and C) would build on existing `get_reaching_definitions` infrastructure in `tools_angr_dataflow.py`
 - Known source/sink API lists already partially exist in `_category_maps.py` (CATEGORIZED_IMPORTS_DB)
 - Background task pattern with progress reporting
 - Cache results per function (taint sources don't change for a given binary)
@@ -296,12 +298,13 @@ Analysts frequently need to transition from static analysis to dynamic instrumen
 
 ---
 
-## 6. Control Flow Deobfuscation
+## 6. Control Flow Deobfuscation ⚡ PARTIALLY IMPLEMENTED
 
+**Status**: Detection implemented (Tools A and C) in `arkana/mcp/tools_vuln.py` (2 tools: `detect_control_flow_flattening`, `detect_opaque_predicates`). Deobfuscation (Tool B) remains unimplemented.
 **Priority**: Medium
 **Complexity**: High
 **New dependencies**: None
-**New tools**: 2-3
+**New tools**: ~~2-3~~ 2 implemented, 1 remaining (research-grade)
 
 ### Problem
 
@@ -309,7 +312,7 @@ Control flow flattening (CFF) is the dominant commercial obfuscation technique (
 
 ### Proposal
 
-**Tool A: `detect_control_flow_flattening`**
+**Tool A: `detect_control_flow_flattening`** ✅ IMPLEMENTED
 - Analyse a function's CFG for CFF hallmarks:
   - Single-entry dispatcher block with high in-degree
   - State variable (usually a local integer) driving a switch/if-else chain
@@ -322,7 +325,7 @@ Control flow flattening (CFF) is the dominant commercial obfuscation technique (
 - Return the simplified CFG with recovered edges
 - Register a patched binary as an artifact (optional)
 
-**Tool C: `detect_opaque_predicates`**
+**Tool C: `detect_opaque_predicates`** ✅ IMPLEMENTED
 - Identify always-true/always-false conditional branches using angr's constraint solver
 - Flag branches with only one feasible path
 - Useful for cleaning up dead-code insertions from obfuscators
@@ -346,7 +349,7 @@ Control flow flattening (CFF) is the dominant commercial obfuscation technique (
 
 ### Recommendation
 
-Implement Tool A (detection) first as a standalone feature. Tool B (deobfuscation) should be deferred until there's demonstrated demand and a proven algorithm for the target obfuscators.
+~~Implement Tool A (detection) first as a standalone feature.~~ Tools A and C are implemented. Tool B (deobfuscation) should be deferred until there's demonstrated demand and a proven algorithm for the target obfuscators.
 
 ### References
 
@@ -512,12 +515,13 @@ Low urgency. Worth adding when legacy YARA becomes unmaintained, or when a YARA-
 
 ---
 
-## 10. Analysis Coverage Reporting
+## 10. Analysis Coverage Reporting ⚡ PARTIALLY IMPLEMENTED
 
+**Status**: Partially implemented via the `coverage_detail` field added to `get_analysis_digest`. Per-category breakdowns (decompiled, annotated, triaged functions) are now included in the digest response. A standalone `get_analysis_coverage_report` tool and `find_interesting_unanalyzed_regions` remain unimplemented.
 **Priority**: Medium
 **Complexity**: Low-Medium
 **New dependencies**: None
-**New tools**: 2
+**New tools**: ~~2~~ 0 new tools (enhanced existing tool instead)
 
 ### Problem
 
@@ -525,9 +529,9 @@ Neither the AI nor the human analyst has a clear picture of what has and hasn't 
 
 ### Proposal
 
-**Tool A: `get_analysis_coverage_report`**
+**Tool A: `get_analysis_coverage_report`** (partially covered by `get_analysis_digest` `coverage_detail`)
 - Report analysis completeness:
-  - Functions: identified / decompiled / annotated (renamed/noted) / triaged (FLAG/SUS/CLN)
+  - Functions: identified / decompiled / annotated (renamed/noted) / triaged (FLAG/SUS/CLN) — ✅ now in `coverage_detail`
   - Code: bytes covered by CFG vs total executable sections
   - Strings: analysed (FLOSS) vs raw extraction only
   - Enrichment: which auto-enrichment phases completed
@@ -546,11 +550,11 @@ Neither the AI nor the human analyst has a clear picture of what has and hasn't 
 | **Uniqueness** | Moderate — Ghidra MCP has "completeness scoring" |
 | **Complexity cost** | Low — aggregates existing analysis state |
 | **Frequency of use** | Medium — useful for thoroughness checks |
-| **Alternative** | `suggest_next_action` partially covers this; `get_analysis_digest` shows phase completion |
+| **Alternative** | `suggest_next_action` partially covers this; `get_analysis_digest` now includes `coverage_detail` |
 
 ### Recommendation
 
-Tool A overlaps significantly with `get_analysis_digest` + `get_progress_overview`. Consider enhancing those tools rather than adding a new one, unless the granularity of coverage data justifies a separate tool.
+~~Tool A overlaps significantly with `get_analysis_digest` + `get_progress_overview`. Consider enhancing those tools rather than adding a new one, unless the granularity of coverage data justifies a separate tool.~~ The `coverage_detail` enhancement to `get_analysis_digest` covers the core use case of Tool A. A standalone tool may still be warranted for byte-level CFG coverage and Tool B (unanalysed region ranking).
 
 ---
 
@@ -930,10 +934,10 @@ Low priority unless analysts frequently encounter stripped binaries where angr's
 
 | # | Proposal | Complexity | Unique? | Frequency |
 |---|----------|-----------|---------|-----------|
-| 3 | Taint analysis | Medium-High | High | Medium |
+| 3 | ~~Taint analysis~~ ⚡ (partial: `find_dangerous_data_flows`) | Medium-High | High | Medium |
 | 4 | ~~Vulnerability patterns~~ ✅ | Medium | High | Medium |
-| 6 | CFF detection (not deobfuscation) | Medium | Very high | Low-Medium |
-| 10 | Coverage reporting | Low-Medium | Moderate | Medium |
+| 6 | ~~CFF detection~~ ⚡ (partial: detection implemented, deobfuscation deferred) | Medium | Very high | Low-Medium |
+| 10 | ~~Coverage reporting~~ ⚡ (partial: `coverage_detail` in digest) | Low-Medium | Moderate | Medium |
 | 14 | Multi-binary campaign | Medium | High | Low-Medium |
 
 ### Likely not worth the complexity

@@ -49,6 +49,15 @@ __all__ = [
     # .NET deobfuscation
     "DOTNET_DEOBFUSCATE_TIMEOUT", "DOTNET_DECOMPILE_TIMEOUT",
     "DOTNET_DECOMPILE_MAX_OUTPUT_LINES",
+    # Data flow analysis
+    "MAX_DATA_FLOW_FUNCTIONS", "MAX_DATA_FLOW_FINDINGS",
+    "DATA_FLOW_PER_FUNC_TIMEOUT", "DATA_FLOW_AGGREGATE_TIMEOUT",
+    # Obfuscation detection
+    "CFF_MIN_BLOCKS", "CFF_DISPATCHER_IN_DEGREE_THRESHOLD",
+    "CFF_BACK_EDGE_RATIO_THRESHOLD",
+    "OPAQUE_PREDICATE_SOLVER_TIMEOUT", "MAX_OPAQUE_PREDICATE_BLOCKS",
+    "OBFUSCATION_DETECTION_TIMEOUT",
+    "MAX_CFF_SCAN_FUNCTIONS", "MAX_OPAQUE_SCAN_FUNCTIONS",
     "DEPENDENCIES",
 ]
 
@@ -183,6 +192,22 @@ MAX_SYMBOLIC_FIND_ADDRESSES = 20  # max find addresses for explore
 DOTNET_DEOBFUSCATE_TIMEOUT = 120   # seconds for de4dot / NETReactorSlayer subprocess
 DOTNET_DECOMPILE_TIMEOUT = 120     # seconds for ilspycmd subprocess
 DOTNET_DECOMPILE_MAX_OUTPUT_LINES = 5000  # cap decompiled C# output lines
+
+# --- Data Flow Analysis ---
+MAX_DATA_FLOW_FUNCTIONS = 50       # max functions to analyse for source→sink flows
+MAX_DATA_FLOW_FINDINGS = 100       # max flow findings to return
+DATA_FLOW_PER_FUNC_TIMEOUT = 30    # per-function RDA timeout (seconds)
+DATA_FLOW_AGGREGATE_TIMEOUT = 120  # overall tool timeout (seconds)
+
+# --- Obfuscation Detection ---
+CFF_MIN_BLOCKS = 6                              # skip functions with fewer blocks
+CFF_DISPATCHER_IN_DEGREE_THRESHOLD = 4           # min in-degree for dispatcher candidate
+CFF_BACK_EDGE_RATIO_THRESHOLD = 0.6              # ratio of blocks with edge to dispatcher
+OPAQUE_PREDICATE_SOLVER_TIMEOUT = 15             # Z3 solver timeout per block (seconds)
+MAX_OPAQUE_PREDICATE_BLOCKS = 500                # max blocks to analyse across all functions
+OBFUSCATION_DETECTION_TIMEOUT = 180              # overall tool timeout (seconds)
+MAX_CFF_SCAN_FUNCTIONS = 200                     # max functions to scan for CFF
+MAX_OPAQUE_SCAN_FUNCTIONS = 100                  # max functions to scan for opaque predicates
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

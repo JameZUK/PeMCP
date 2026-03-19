@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 226 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
+Arkana is a Model Context Protocol (MCP) server exposing 229 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
 
 ## Project Structure
 
@@ -25,7 +25,7 @@ arkana/                  # Main package
 │   ├── templates/      # Jinja2 templates (overview, functions, callgraph, sections, strings, timeline, notes)
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
-└── mcp/                # MCP tool modules (226 tools across 56 files)
+└── mcp/                # MCP tool modules (229 tools across 56 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain
@@ -72,6 +72,8 @@ ruff check arkana/ tests/ \
 - **`tool_decorator`**: Wraps every MCP tool — handles session activation, heartbeat, history recording, error enrichment, and sets `_current_tool_var` contextvar for warning attribution.
 - **Warning capture**: `arkana/warning_handler.py` installs a `logging.Handler` on the root logger that captures WARNING+ from known library loggers (angr, cle, capa, FLOSS, etc.) into `state.analysis_warnings`. Warnings are deduplicated by `(logger, level, msg[:100])` with count/last_seen tracking. `_current_tool_var` and `_current_task_var` contextvars attribute each warning to the MCP tool or background task that triggered it. `get_analysis_warnings` and `clear_analysis_warnings` MCP tools expose captured warnings. `get_session_summary` and `get_analysis_digest` surface warning counts when > 0. Session-scoped (not persisted to cache). Constant: `MAX_ANALYSIS_WARNINGS` (500).
 - **Background task timeout**: All 12 background tools (`find_path_to_address`, `emulate_function_execution`, `analyze_binary_loops`, `get_reaching_definitions`, `get_data_dependencies`, `get_value_set_analysis`, `diff_binaries`, `find_path_with_custom_input`, `emulate_with_watchpoints`, `identify_cpp_classes`, `find_similar_functions`, `build_function_signature_db`) time out automatically via `_run_background_task_wrapper(timeout=N)`. Default `BACKGROUND_TASK_TIMEOUT` is 1800s (30 min), overridable via `ARKANA_BACKGROUND_TASK_TIMEOUT`. BSim tools use `BSIM_BACKGROUND_TIMEOUT` (1800s, overridable via `ARKANA_BSIM_BACKGROUND_TIMEOUT`). Four tools support `on_timeout` callbacks that capture partial results (steps completed, active states, captured events). `_update_progress()` records `last_progress_epoch` on every call, enabling generic stall detection in `check_task_status()`. Tasks include `created_at_epoch` for elapsed time reporting.
+- **Data flow analysis**: `find_dangerous_data_flows` in `tools_vuln.py` traces untrusted input sources (recv, fread, ReadFile) to dangerous sinks (strcpy, sprintf, system) using angr reaching-definition analysis with structural fallback. Per-function RDA timeout (`DATA_FLOW_PER_FUNC_TIMEOUT`, 30s) and aggregate timeout (`DATA_FLOW_AGGREGATE_TIMEOUT`, 120s). Reuses `_INPUT_SOURCE_APIS` and `_DANGEROUS_SINK_APIS` from the same module.
+- **Obfuscation detection**: `detect_control_flow_flattening` and `detect_opaque_predicates` in `tools_angr_forensic.py`. CFF detection scores functions 0-100 based on dispatcher in-degree, back-edge ratio, state variable detection, and block size uniformity. Opaque predicate detection uses Z3 constraint solving with per-block timeout (`OPAQUE_PREDICATE_SOLVER_TIMEOUT`, 15s). Both tools follow the `find_anti_debug_comprehensive` pattern with `asyncio.to_thread()` and `OBFUSCATION_DETECTION_TIMEOUT` (180s).
 - **BSim function similarity**: `_bsim_features.py` provides architecture-independent function similarity matching inspired by Ghidra's BSim. 6 feature groups (CFG structural, API calls, VEX IR profile, string refs, constants, size metrics) with weighted scoring. SQLite DB at `~/.arkana/bsim/signatures.db` stores indexed function signatures for cross-binary queries. Two-phase query: SQL pre-filter eliminates ~80-90% of candidates, then full scoring on remainder. JSON serialization uses `_safe_json_loads()`/`_safe_json_dumps()` to gracefully handle corrupted DB rows or non-serializable feature objects.
 - **Notes system**: `add_note()` categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `conclusion`, `manual`. `hypothesis` is for a condensed one-paragraph verdict; `conclusion` is for a full detailed analysis write-up (supports markdown, rendered on dashboard overview).
 - **Artifacts system**: `state.register_artifact()` tracks extracted files (path, hashes, source tool, type detection). Artifacts persist via cache alongside notes/tool_history, and are included in `export_project` / `import_project` archives. Constants: `MAX_ARTIFACT_FILE_SIZE` (100 MB), `MAX_TOTAL_ARTIFACT_EXPORT_SIZE` (50 MB).

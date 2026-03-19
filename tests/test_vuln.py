@@ -227,3 +227,118 @@ class TestToolRegistration:
         import asyncio
         from arkana.mcp.tools_vuln import assess_function_attack_surface
         assert asyncio.iscoroutinefunction(assess_function_attack_surface)
+
+    def test_data_flow_tool(self):
+        import asyncio
+        from arkana.mcp.tools_vuln import find_dangerous_data_flows
+        assert asyncio.iscoroutinefunction(find_dangerous_data_flows)
+
+
+# =====================================================================
+#  Data Flow Analysis Tests
+# =====================================================================
+
+class TestDataFlowConstants:
+    """Test data flow analysis constants."""
+
+    def test_constants_exist(self):
+        from arkana.constants import (
+            MAX_DATA_FLOW_FUNCTIONS, MAX_DATA_FLOW_FINDINGS,
+            DATA_FLOW_PER_FUNC_TIMEOUT, DATA_FLOW_AGGREGATE_TIMEOUT,
+        )
+        assert MAX_DATA_FLOW_FUNCTIONS > 0
+        assert MAX_DATA_FLOW_FINDINGS > 0
+        assert DATA_FLOW_PER_FUNC_TIMEOUT > 0
+        assert DATA_FLOW_AGGREGATE_TIMEOUT > 0
+
+    def test_aggregate_timeout_greater_than_per_func(self):
+        from arkana.constants import DATA_FLOW_PER_FUNC_TIMEOUT, DATA_FLOW_AGGREGATE_TIMEOUT
+        assert DATA_FLOW_AGGREGATE_TIMEOUT > DATA_FLOW_PER_FUNC_TIMEOUT
+
+
+class TestFindSourceSinkCandidates:
+    """Test _find_source_sink_candidates helper."""
+
+    def test_returns_list(self):
+        """Without angr, the function should handle missing cfg gracefully."""
+        from arkana.mcp.tools_vuln import _find_source_sink_candidates
+
+        class MockCfg:
+            functions = {}
+
+        result = _find_source_sink_candidates(MockCfg(), target_addr=None)
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+    def test_target_addr_filters(self):
+        from arkana.mcp.tools_vuln import _find_source_sink_candidates
+
+        class MockCfg:
+            functions = {}
+
+        result = _find_source_sink_candidates(MockCfg(), target_addr=0x401000)
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+
+class TestStructuralFallback:
+    """Test _structural_fallback helper."""
+
+    def test_returns_dict(self):
+        from arkana.mcp.tools_vuln import _structural_fallback
+
+        class MockFunc:
+            graph = None
+            transition_graph = None
+            _function_manager = None
+
+        result = _structural_fallback(MockFunc(), ["recv"], ["strcpy"])
+        assert isinstance(result, dict)
+        assert result["method"] == "structural"
+        assert result["confidence"] == "medium"
+
+    def test_handles_no_graph(self):
+        from arkana.mcp.tools_vuln import _structural_fallback
+
+        class MockFunc:
+            graph = None
+            transition_graph = None
+            _function_manager = None
+
+        result = _structural_fallback(MockFunc(), ["fread"], ["system"])
+        assert result["method"] == "structural"
+        # Should not crash even with None graph
+
+
+class TestSyncFindFlows:
+    """Test _sync_find_flows helper."""
+
+    def test_no_angr_returns_error(self):
+        from arkana.mcp.tools_vuln import _sync_find_flows
+        import arkana.mcp.tools_vuln as tv
+        old_available = tv.ANGR_AVAILABLE
+        tv.ANGR_AVAILABLE = False
+        try:
+            result = _sync_find_flows(None, 30)
+            assert "error" in result
+            assert isinstance(result["flows"], list)
+        finally:
+            tv.ANGR_AVAILABLE = old_available
+
+    def test_returns_structure_without_cfg(self):
+        """When angr is available but no project loaded, should handle gracefully."""
+        from arkana.mcp.tools_vuln import _sync_find_flows
+        # Without a loaded project, get_angr_snapshot returns (None, None)
+        result = _sync_find_flows(None, 30)
+        assert "flows" in result
+        assert isinstance(result["flows"], list)
+
+    def test_limit_respected(self):
+        from arkana.mcp.tools_vuln import _sync_find_flows
+        result = _sync_find_flows(None, 1)
+        assert len(result.get("flows", [])) <= 1
+
+    def test_single_target_no_cfg(self):
+        from arkana.mcp.tools_vuln import _sync_find_flows
+        result = _sync_find_flows(0x401000, 30)
+        assert "flows" in result
