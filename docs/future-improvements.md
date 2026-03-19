@@ -35,12 +35,13 @@ Proposed enhancements and feature ideas for Arkana. Items are grouped by domain 
 
 ---
 
-## 1. Context Aggregation for AI Clients
+## 1. Context Aggregation for AI Clients ✅ IMPLEMENTED
 
+**Status**: Implemented in `arkana/mcp/tools_context.py` (1 tool: `get_analysis_context_for_function`)
 **Priority**: High
 **Complexity**: Low (uses only existing code)
 **New dependencies**: None
-**New tools**: 1 (`get_analysis_context_for_function`)
+**New tools**: ~~1~~ 1 (`get_analysis_context_for_function`)
 
 ### Problem
 
@@ -84,12 +85,13 @@ A single `get_analysis_context_for_function(address)` tool that returns a combin
 
 ---
 
-## 2. Symbolic Execution Extensions
+## 2. Symbolic Execution Extensions ✅ IMPLEMENTED
 
+**Status**: Implemented in `arkana/mcp/tools_angr.py` (2 tools: `solve_constraints_for_path`, `explore_symbolic_states`)
 **Priority**: High
 **Complexity**: Medium
 **New dependencies**: None (angr already available)
-**New tools**: 2-3
+**New tools**: ~~2-3~~ 2
 
 ### Problem
 
@@ -189,12 +191,13 @@ Arkana has `get_reaching_definitions` and `get_data_dependencies` but these retu
 
 ---
 
-## 4. Vulnerability Pattern Detection
+## 4. Vulnerability Pattern Detection ✅ IMPLEMENTED
 
+**Status**: Implemented in `arkana/mcp/tools_vuln.py` (2 tools: `scan_for_vulnerability_patterns`, `assess_function_attack_surface`)
 **Priority**: Medium-High
 **Complexity**: Medium
 **New dependencies**: None
-**New tools**: 2-3
+**New tools**: ~~2-3~~ 2
 
 ### Problem
 
@@ -240,12 +243,13 @@ Arkana identifies suspicious APIs via triage and `get_focused_imports`, but does
 
 ---
 
-## 5. Frida Script Generation
+## 5. Frida Script Generation ✅ IMPLEMENTED
 
+**Status**: Implemented in `arkana/mcp/tools_frida.py` (3 tools: `generate_frida_hook_script`, `generate_frida_bypass_script`, `generate_frida_trace_script`)
 **Priority**: Medium-High
 **Complexity**: Low
 **New dependencies**: None (generates JS code, doesn't run Frida)
-**New tools**: 2-3
+**New tools**: ~~2-3~~ 3
 
 ### Problem
 
@@ -410,8 +414,9 @@ Add a unified `dotnet_deobfuscate` MCP tool that automatically detects and remov
 
 ---
 
-## 8. Expose Dashboard-Only Functions as MCP Tools
+## 8. Expose Dashboard-Only Functions as MCP Tools ✅ IMPLEMENTED
 
+**Status**: Implemented in `arkana/mcp/tools_dashboard_exposed.py` (3 tools: `search_decompiled_code`, `get_entropy_analysis`, `generate_report`)
 **Priority**: Medium-High
 **Complexity**: Low
 **New dependencies**: None
@@ -915,18 +920,18 @@ Low priority unless analysts frequently encounter stripped binaries where angr's
 
 | # | Proposal | Complexity | Unique? | Frequency |
 |---|----------|-----------|---------|-----------|
-| 1 | Context aggregation | Low | Moderate | Very high |
-| 8 | Expose dashboard functions | Low | N/A | High |
-| 5 | Frida script generation | Low | High | Medium |
+| 1 | ~~Context aggregation~~ ✅ | Low | Moderate | Very high |
+| 8 | ~~Expose dashboard functions~~ ✅ | Low | N/A | High |
+| 5 | ~~Frida script generation~~ ✅ | Low | High | Medium |
 | 7 | ~~.NET deobfuscation~~ ✅ | Medium-High | High | High |
-| 2 | Symbolic execution extensions | Medium | Very high | Medium |
+| 2 | ~~Symbolic execution extensions~~ ✅ | Medium | Very high | Medium |
 
 ### Worth discussing (moderate value, some complexity)
 
 | # | Proposal | Complexity | Unique? | Frequency |
 |---|----------|-----------|---------|-----------|
 | 3 | Taint analysis | Medium-High | High | Medium |
-| 4 | Vulnerability patterns | Medium | High | Medium |
+| 4 | ~~Vulnerability patterns~~ ✅ | Medium | High | Medium |
 | 6 | CFF detection (not deobfuscation) | Medium | Very high | Low-Medium |
 | 10 | Coverage reporting | Low-Medium | Moderate | Medium |
 | 14 | Multi-binary campaign | Medium | High | Low-Medium |

@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **212 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **226 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -22,7 +22,7 @@ Arkana automatically detects and analyses binaries across all major platforms:
 
 ### Advanced Binary Analysis (Powered by Angr)
 
-41 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
+43 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
 
 - **Decompilation**  - Convert assembly into human-readable C-like pseudocode on the fly.
 - **Control Flow Graph (CFG)**  - Generate and traverse function blocks and edges.
@@ -189,7 +189,7 @@ All string tools that return lists support pagination via `limit` (default 20) a
 | `is_mostly_printable_ascii` | Check if a string is mostly printable. |
 | `get_hex_dump` | Hex dump of a file region. |
 
-## Binary Analysis  - Core Angr (18 tools)
+## Binary Analysis  - Core Angr (20 tools)
 
 All angr tools that return lists support pagination via `limit` and `offset` parameters. The default `limit` is 20 for most tools.
 
@@ -213,6 +213,8 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `scan_for_indirect_jumps` | Indirect jumps/calls (dynamic control flow) in a function. Paginated (default limit 20). |
 | `patch_binary_memory` | Patch the loaded binary in memory with new bytes. |
 | `get_cross_reference_map` | Multi-dimensional cross-reference  - for one or more functions, returns API calls, string refs, callers, callees, suspicious imports, and complexity in a single response. |
+| `solve_constraints_for_path` | Use angr's symbolic execution and constraint solver to find concrete input values (stdin, argv, symbolic registers) that cause execution to reach a target address. Returns detailed constraint solutions. Background task. |
+| `explore_symbolic_states` | Explore symbolic execution states across multiple target addresses simultaneously with selectable strategy (DFS, BFS, or directed). Reports all found states with constraint summaries and solved input values. Background task. |
 
 ## Binary Analysis  - Extended Angr (24 tools)
 
@@ -549,6 +551,51 @@ User-defined structs and enums for parsing binary data. Struct field types reuse
 | `apply_type_at_offset` | Parse binary data at a file offset using a previously defined custom type. Supports parsing multiple consecutive instances via `count` parameter (max 100). |
 | `list_custom_types` | List all defined structs and enums with their definitions. |
 | `delete_custom_type` | Remove a type definition by name. |
+
+## Context Aggregation (1 tool)
+
+| Tool | Description |
+|---|---|
+| `get_analysis_context_for_function` | Aggregates comprehensive analysis context for a single function in one call: decompiled code, cross-references (callers/callees), suspicious API usage with risk levels, strings, notes, triage status, enrichment score, and complexity. Avoids calling 5-10 separate tools. |
+
+## Dashboard-Exposed Analysis (3 tools)
+
+Functions previously only accessible via the web dashboard, now available as MCP tools for AI clients.
+
+| Tool | Description |
+|---|---|
+| `search_decompiled_code` | Full-text regex search across all cached decompiled function code. Finds specific code patterns, strings, or API calls without decompiling each function individually. Returns matching functions with line context. |
+| `get_entropy_analysis` | Per-section and overall entropy analysis for the loaded binary. Detects packed/encrypted sections (high entropy >7.0) or empty sections (near-zero entropy). Optionally includes byte-level heatmap data. |
+| `generate_report` | Generate a comprehensive markdown analysis report summarising findings, risk assessment, IOCs, function analysis, and timeline. Optionally saves to a file path. |
+
+## Frida Script Generation (3 tools)
+
+Generate ready-to-run Frida JavaScript instrumentation scripts from static analysis findings. No Frida dependency  - generates standalone `.js` code that can be used with `frida -l`.
+
+| Tool | Description |
+|---|---|
+| `generate_frida_hook_script` | Generate a Frida hook script for specified API functions or hex addresses (up to 50 targets). Produces code that intercepts API calls, logs arguments/return values with type-aware formatting for 50+ common APIs, and captures backtraces. |
+| `generate_frida_bypass_script` | Generate a Frida script that bypasses anti-debug techniques. Auto-detects anti-debug APIs from the binary's imports/triage data and generates targeted bypass code (IsDebuggerPresent, NtQueryInformationProcess, timing checks, PEB patches, etc.). |
+| `generate_frida_trace_script` | Generate a Frida API tracing script based on the binary's import table. Identifies suspicious/interesting APIs and creates a comprehensive tracing script filterable by category (networking, crypto, injection, file_io, registry, etc.). |
+
+## Vulnerability Detection (2 tools)
+
+Pattern-based vulnerability scanning and attack surface assessment using decompiled code.
+
+| Tool | Description |
+|---|---|
+| `scan_for_vulnerability_patterns` | Scan decompiled functions for 11 common vulnerability patterns: buffer overflows, format strings, command injection, memory corruption, integer overflows, path traversal, insecure crypto, hardcoded credentials, race conditions, DLL hijacking, and double-free. Filterable by severity and function address. |
+| `assess_function_attack_surface` | Assess the attack surface of a specific function by analysing input sources, dangerous sinks, source-to-sink connectivity, reachability (caller count), and complexity. Produces a risk score from 0 to 100. |
+
+## .NET Deobfuscation & Decompilation (3 tools)
+
+Automated .NET deobfuscation via de4dot-cex and NETReactorSlayer, plus full C# source recovery via ILSpy. Requires the Docker image (tools are invoked as subprocesses).
+
+| Tool | Description |
+|---|---|
+| `detect_dotnet_obfuscation` | Pure-Python obfuscation detection via dnfile metadata scanning. Identifies 10+ obfuscators by matching custom attributes, resource patterns, and name entropy: ConfuserEx, .NET Reactor, SmartAssembly, Dotfuscator, Babel .NET, Crypto Obfuscator, Agile.NET, Eazfuscator, Goliath.NET, Phoenix Protector, and generic obfuscation. |
+| `dotnet_deobfuscate` | Orchestrate .NET deobfuscation via external tools. Supports four methods: `auto` (detect obfuscator and choose best tool), `de4dot` (handles ~20 obfuscators including ConfuserEx), `reactor_slayer` (.NET Reactor specialist), and `detect_only`. Outputs a cleaned binary registered as an artifact. |
+| `dotnet_decompile` | C# source recovery via ILSpy CLI with pagination support. Two modes: stdout mode (returns paginated C# source lines, optionally filtered to a specific type) and project mode (writes `.csproj` + `.cs` files to a directory). |
 
 ## Learner Progress Tracking (4 tools)
 

@@ -123,7 +123,7 @@ Analyst: "Open this carved PE and analyse it"
 
 | Capability | Arkana | Ghidra | IDA Pro | pestudio | CyberChef | Binary Refinery CLI |
 |---|---|---|---|---|---|---|
-| **PE/ELF/Mach-O parsing** | 212 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
+| **PE/ELF/Mach-O parsing** | 226 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
 | **Decompilation** | Angr (auto, all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No | No | No |
 | **Symbolic execution** | Angr (automated) | Limited (Ghidra scripts) | No | No | No | No |
 | **Data transforms** | 200+ via Binary Refinery | Manual scripting | Manual scripting | No | 300+ (manual) | 200+ (CLI) |

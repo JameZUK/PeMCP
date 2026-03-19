@@ -51,7 +51,7 @@ arkana/
     ├── tools_pe.py               - File management, PE data retrieval & integrity (8 tools)
     ├── tools_pe_extended.py      - Extended PE analysis (14 tools)
     ├── tools_strings.py          - String analysis, capa, fuzzy search & custom YARA (13 tools)
-    ├── tools_angr.py             - Core angr tools (16 tools)
+    ├── tools_angr.py             - Core angr tools (18 tools, incl. symbolic execution)
     ├── tools_angr_disasm.py      - Angr disassembly & function recovery (6 tools)
     ├── tools_angr_dataflow.py    - Angr data flow analysis (5 tools)
     ├── tools_angr_hooks.py       - Angr function hooking (3 tools)
@@ -93,14 +93,28 @@ arkana/
     ├── tools_refinery_dotnet.py  - Refinery .NET analysis (1 dispatched tool)
     ├── tools_refinery_executable.py  - Refinery executable operations (1 dispatched tool)
     ├── tools_refinery_extract.py  - Refinery archive/document extraction (1 dispatched tool)
-    └── tools_refinery_forensic.py  - Refinery forensic parsing (1 dispatched tool)
+    ├── tools_refinery_forensic.py  - Refinery forensic parsing (1 dispatched tool)
+    ├── tools_context.py          - Context aggregation (1 tool)
+    ├── tools_dashboard_exposed.py - Dashboard-exposed analysis (3 tools)
+    ├── tools_frida.py            - Frida script generation (3 tools)
+    ├── tools_vuln.py             - Vulnerability pattern detection (2 tools)
+    ├── tools_dotnet_deobfuscate.py - .NET deobfuscation & decompilation (3 tools)
+    ├── tools_batch.py            - Batch analysis operations
+    ├── tools_bsim.py             - BSim function similarity internals
+    ├── tools_learning.py         - Learner progress tracking (4 tools)
+    ├── tools_malware_detect.py   - DGA/C2/kernel driver detection (3 tools)
+    ├── tools_malware_id.py       - Malware family identification (3 tools)
+    ├── tools_pe_forensic.py      - PE forensics (7 tools)
+    ├── tools_pe_structure.py     - PE structure parsing
+    ├── tools_threat_intel.py     - Threat intelligence & attribution (5 tools)
+    └── tools_warnings.py         - Analysis warning management (2 tools)
 ```
 
 ---
 
 ## Design Principles
 
-- **Modular Package**  - Clean `arkana/` package structure with 39 tool modules and separated concerns (parsers, MCP tools, CLI, configuration).
+- **Modular Package**  - Clean `arkana/` package structure with 56 tool modules and separated concerns (parsers, MCP tools, CLI, configuration).
 - **Docker-First Design**  - No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Single-File Analysis Context**  - The server holds one file in memory via `AnalyzerState`. All tools operate on this shared context. Use `open_file` and `close_file` to switch between files.
 - **Thread-Safe State**  - Centralised `AnalyzerState` class with locking for concurrent access.

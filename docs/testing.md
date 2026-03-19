@@ -1,6 +1,6 @@
 # Testing Guide
 
-Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 212 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
+Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 226 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
 
 ---
 
@@ -222,7 +222,7 @@ When adding new unit tests, follow these conventions:
 
 ## Integration Tests
 
-The integration test suite (`mcp_test_client.py`) covers all **212 MCP tools** across 19 test categories. Tests connect to a running Arkana server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
+The integration test suite (`mcp_test_client.py`) covers all **226 MCP tools** across 19 test categories. Tests connect to a running Arkana server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
 
 ### Prerequisites
 
@@ -288,7 +288,7 @@ pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
 pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
 pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
 pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 212 tools exist
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 226 tools exist
 ```
 
 ### Environment Variables
