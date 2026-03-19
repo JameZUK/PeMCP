@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 212 MCP tools organized by use case.
+Complete catalog of all 226 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -423,6 +423,36 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `apply_type_at_offset` | Parse binary at offset using a custom type | `type_name`, `file_offset`, `count` (default 1) |
 | `list_custom_types` | List all defined structs and enums | — |
 | `delete_custom_type` | Remove a type definition | `name` |
+
+## Frida Dynamic Instrumentation
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `generate_frida_hook_script` | Hook specific APIs or addresses for runtime interception | `targets` (API names or hex addresses), `include_backtrace`, `include_args`, `output_path` |
+| `generate_frida_bypass_script` | Bypass anti-debug techniques detected in imports/triage | `auto_detect` (default True), `techniques` (manual override), `output_path` |
+| `generate_frida_trace_script` | Generate broad API tracing script from binary's imports | `categories` (filter by behavior), `limit` (default 50), `output_path` |
+
+## Vulnerability Analysis
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `scan_for_vulnerability_patterns` | Scan for common vulnerability patterns (buffer overflow, format string, integer overflow, use-after-free, command injection, path traversal) | `categories`, `limit` |
+| `assess_function_attack_surface` | Assess attack surface of a specific function | `function_address` |
+
+## .NET Deobfuscation
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `detect_dotnet_obfuscation` | Detect .NET obfuscation tools (ConfuserEx, .NET Reactor, etc.) | — |
+| `dotnet_deobfuscate` | Run deobfuscation tools (de4dot, NETReactorSlayer) | `tool`, `output_path` |
+| `dotnet_decompile` | Decompile .NET assembly to C# via ILSpy | `type_name` (optional), `output_path` |
+
+## Code Search & Context
+
+| Tool | Use When | Key Parameters |
+|------|----------|----------------|
+| `search_decompiled_code` | Full-text search across all cached decompiled functions | `query`, `limit` |
+| `get_analysis_context_for_function` | Get comprehensive context for a function (decompilation, xrefs, strings, complexity) | `function_address` |
 
 ## Entropy Analysis
 

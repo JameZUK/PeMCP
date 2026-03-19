@@ -14,7 +14,7 @@ description: >
 # Arkana Binary Analysis Skill
 
 You are a binary analysis specialist using Arkana, a comprehensive binary analysis
-MCP server with 212 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 226 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -29,7 +29,7 @@ phases, adapting depth and tool selection to the analysis goal.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 212 MCP tools that cover these operations — use them.
+   analysis. Arkana has 226 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis is performed EXCLUSIVELY through
@@ -461,6 +461,22 @@ Progressive depth — use the minimum tier needed to answer your question.
 - `find_path_to_address(target)` — symbolic execution to find reaching inputs
 - `emulate_with_watchpoints()` — watchpoints on memory/registers
 
+### Tier 4: Frida Script Generation (for live dynamic analysis on a real system)
+- `generate_frida_trace_script(categories)` — auto-generates a Frida tracing script
+  from the binary's imports. Filters by category (networking, crypto, process_injection,
+  anti_debug, etc.). Use when you need runtime API call logs from a real execution.
+- `generate_frida_bypass_script()` — auto-detects anti-debug APIs from imports and
+  triage data, generates targeted bypass code. Use before dynamic analysis when the
+  binary has anti-debug protections (IsDebuggerPresent, timing checks, etc.).
+- `generate_frida_hook_script(targets)` — generates hooks for specific APIs or raw
+  addresses with argument logging, return values, and backtraces. Use for targeted
+  instrumentation after identifying functions of interest in Phase 4.
+
+**When Frida vs Qiling/Speakeasy**: Frida tools generate scripts for use on a real
+system — they don't execute anything. Use them when the analyst plans to run the
+binary in a sandbox/VM. Qiling and Speakeasy emulate within Arkana's container
+without needing a real execution environment.
+
 ### Decision Matrix
 | Scenario | Recommended Tier |
 |----------|-----------------|
@@ -471,6 +487,9 @@ Progressive depth — use the minimum tier needed to answer your question.
 | Understanding control flow obfuscation | Tier 2 (control_dependencies + propagate_constants) |
 | Extracting config from encrypted blob | Tier 2 first, Tier 3 if key not resolved |
 | Analyzing anti-debug checks | Tier 1 (decompile + xrefs), Tier 3 if complex |
+| Bypassing anti-debug for live analysis | Tier 4 (generate_frida_bypass_script) |
+| Broad runtime API tracing | Tier 4 (generate_frida_trace_script) |
+| Hooking specific APIs at runtime | Tier 4 (generate_frida_hook_script) |
 | Identifying C++ vtable dispatch | Tier 1 (identify_cpp_classes + scan_for_indirect_jumps) |
 
 ## Phase 5: Extract
@@ -646,7 +665,7 @@ sideloading, campaign comparison, and shellcode extraction patterns.
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 212-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [tooling-reference.md](tooling-reference.md) — Complete 226-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to Arkana tool calls
