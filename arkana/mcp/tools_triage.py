@@ -1463,21 +1463,20 @@ def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], i
             detected["detected_languages"].append(".NET")
 
     # --- VB6 detection (MSVBVM60/50.DLL imports) ---
-    imports_data = state.pe_data.get('imports', {})
+    # pe_data["imports"] is List[Dict] with keys: dll_name, struct, symbols
+    imports_data = state.pe_data.get('imports', [])
     vb6_dll_names = set()
     vb6_import_names = set()
-    if isinstance(imports_data, dict):
-        for dll_name, funcs in imports_data.items():
-            if isinstance(dll_name, str):
-                low = dll_name.lower()
-                if low in ('msvbvm60.dll', 'msvbvm50.dll'):
-                    vb6_dll_names.add(low)
-                    if isinstance(funcs, list):
-                        for f in funcs:
-                            if isinstance(f, dict):
-                                vb6_import_names.add(f.get('name', ''))
-                            elif isinstance(f, str):
-                                vb6_import_names.add(f)
+    for dll_entry in (imports_data if isinstance(imports_data, list) else []):
+        if isinstance(dll_entry, dict):
+            dll_name = dll_entry.get('dll_name', '').lower()
+            if dll_name in ('msvbvm60.dll', 'msvbvm50.dll'):
+                vb6_dll_names.add(dll_name)
+                for sym in dll_entry.get('symbols', []):
+                    if isinstance(sym, dict):
+                        name = sym.get('name', '')
+                        if name:
+                            vb6_import_names.add(name)
     if vb6_dll_names:
         vb6_evidence = [f"imports {', '.join(sorted(vb6_dll_names))}"]
         if 'DllFunctionCall' in vb6_import_names:

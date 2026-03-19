@@ -73,12 +73,14 @@ async def vb6_analyze(
         except (OSError, IOError) as exc:
             return {"error": f"Failed to read file: {exc}"}
 
-        # Check for MSVBVM import
-        imports = state.pe_data.get("imports", {})
+        # Check for MSVBVM import — pe_data["imports"] is List[Dict]
+        imports = state.pe_data.get("imports", [])
         vb_dlls = set()
-        for dll_name in imports:
-            if isinstance(dll_name, str) and dll_name.lower() in ("msvbvm60.dll", "msvbvm50.dll"):
-                vb_dlls.add(dll_name.lower())
+        for dll_entry in imports:
+            if isinstance(dll_entry, dict):
+                dll_name = dll_entry.get("dll_name", "").lower()
+                if dll_name in ("msvbvm60.dll", "msvbvm50.dll"):
+                    vb_dlls.add(dll_name)
 
         if not vb_dlls:
             return {
@@ -86,25 +88,19 @@ async def vb6_analyze(
                 "hint": "This tool is for Visual Basic 6 compiled executables only.",
             }
 
-        # Get image base and sections from pe_data
-        headers = state.pe_data.get("headers", {})
-        optional = headers.get("optional_header", {})
-        image_base = optional.get("image_base", 0x400000)
-        if isinstance(image_base, str):
-            try:
-                image_base = int(image_base, 16)
-            except (ValueError, TypeError):
-                image_base = 0x400000
-
-        sections_raw = state.pe_data.get("sections", [])
+        # Get image base and sections from pe_object (pefile)
+        pe = state.pe_object
+        image_base = 0x400000
         sections = []
-        for sec in sections_raw:
-            if isinstance(sec, dict):
+        if pe is not None:
+            if hasattr(pe, 'OPTIONAL_HEADER') and pe.OPTIONAL_HEADER:
+                image_base = getattr(pe.OPTIONAL_HEADER, 'ImageBase', 0x400000)
+            for sec in getattr(pe, 'sections', []):
                 sections.append({
-                    "virtual_address": sec.get("virtual_address", 0),
-                    "virtual_size": sec.get("virtual_size", 0),
-                    "pointer_to_raw_data": sec.get("pointer_to_raw_data", 0),
-                    "size_of_raw_data": sec.get("size_of_raw_data", 0),
+                    "virtual_address": sec.VirtualAddress,
+                    "virtual_size": sec.Misc_VirtualSize,
+                    "pointer_to_raw_data": sec.PointerToRawData,
+                    "size_of_raw_data": sec.SizeOfRawData,
                 })
 
         # Parse VB6 header
@@ -154,13 +150,13 @@ async def vb6_analyze(
 
         # Check DllFunctionCall in imports (not externals)
         all_imports = set()
-        for _dll_name, funcs in imports.items():
-            if isinstance(funcs, list):
-                for f in funcs:
-                    if isinstance(f, dict):
-                        all_imports.add(f.get("name", ""))
-                    elif isinstance(f, str):
-                        all_imports.add(f)
+        for dll_entry in imports:
+            if isinstance(dll_entry, dict):
+                for sym in dll_entry.get("symbols", []):
+                    if isinstance(sym, dict):
+                        name = sym.get("name", "")
+                        if name:
+                            all_imports.add(name)
 
         if "DllFunctionCall" in all_imports:
             security_notes.append(

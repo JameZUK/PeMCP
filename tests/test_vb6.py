@@ -475,7 +475,9 @@ class TestVb6TriageDetection:
 
         mock_state = MagicMock()
         mock_state.pe_data = {
-            "imports": {"MSVBVM60.DLL": []},
+            "imports": [{"dll_name": "MSVBVM60.DLL", "symbols": [
+                {"name": "DllFunctionCall"}, {"name": "__vbaStrCopy"},
+            ]}],
             "headers": {},
             "sections_data": [],
         }
