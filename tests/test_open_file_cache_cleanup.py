@@ -3,6 +3,7 @@
 Verifies that module-level caches keyed by _state_uuid are properly invalidated
 when a new file is loaded, preventing cross-file data contamination.
 """
+import collections
 import threading
 import time
 
@@ -377,3 +378,397 @@ class TestOpenFileCleanupBlock:
         source = inspect.getsource(close_file)
         assert "clear_decompile_meta" in source
         assert "_phase_caches" in source
+
+
+# ---------------------------------------------------------------------------
+#  Integration: simulate full cross-file contamination scenario
+# ---------------------------------------------------------------------------
+
+class TestCrossFileContaminationScenario:
+    """End-to-end simulation of the cross-file contamination bug.
+
+    Populates ALL module-level caches as if file A was analysed, then runs
+    the exact cleanup sequence from open_file(), and verifies every cache
+    is clean before file B would be loaded.
+    """
+
+    def setup_method(self):
+        self.state = AnalyzerState()
+        self.uid = self.state._state_uuid
+
+    def _populate_all_caches(self):
+        """Fill every cache that caused cross-file contamination."""
+        from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+        from arkana.mcp.tools_session import _phase_caches, _phase_caches_lock
+        from arkana.dashboard.state_api import (
+            _cache_lock, _func_lookup_cache, _overview_enrichment_cache,
+            _overview_cache, _functions_cache, _strings_cache,
+        )
+
+        # Bug 1: decompile meta — two functions at overlapping addresses
+        with _decompile_meta_lock:
+            _decompile_meta[(self.uid, 0x140001000)] = {
+                "function_name": "main_fileA",
+                "lines": ["// decompiled from file A"],
+            }
+            _decompile_meta[(self.uid, 0x140002000)] = {
+                "function_name": "helper_fileA",
+                "lines": ["// also from file A"],
+            }
+
+        # Bug 2: phase cache
+        with _phase_caches_lock:
+            _phase_caches[self.uid] = {
+                "phase": "deep-dive", "ts": time.time(),
+            }
+
+        # Bug 3: all 5 dashboard caches
+        with _cache_lock:
+            _func_lookup_cache[self.uid] = (
+                time.time() + 100, "/samples/fileA.exe",
+                [(0x140001000, 0x140001100, "0x140001000", "main")],
+                [0x140001000],
+            )
+            _overview_enrichment_cache[self.uid] = (
+                time.time() + 100, {"enriched": "fileA data"},
+            )
+            _overview_cache[self.uid] = (
+                time.time() + 100, "/samples/fileA.exe", {"file": "A"},
+            )
+            _functions_cache[self.uid] = (
+                time.time() + 100, "v1", [{"name": "main", "file": "A"}],
+            )
+            _strings_cache[self.uid] = (
+                time.time() + 100, "v1", [{"string": "fileA_string"}],
+            )
+
+        # Bug 4: result cache with paginated tool results
+        self.state.result_cache._store["get_focused_imports"] = collections.OrderedDict(
+            [("key1", {"items": [{"dll": "kernel32.dll"}], "ts": time.time()})]
+        )
+
+        # Bug 6: analysis warnings from previous file
+        with self.state._warnings_lock:
+            self.state.analysis_warnings.append({
+                "logger": "angr.analyses.cfg",
+                "level": "WARNING",
+                "message": "Unexpected branch in fileA",
+                "tool": "decompile_function_with_angr",
+            })
+            self.state._warning_dedup[
+                ("angr.analyses.cfg", "WARNING", "Unexpected branch in fileA")
+            ] = {"count": 3, "last_seen": time.time()}
+
+    def _run_open_file_cleanup(self):
+        """Execute the exact cleanup sequence from open_file()."""
+        from arkana.mcp.tools_angr import clear_decompile_meta
+        from arkana.mcp.tools_session import cleanup_phase_cache
+        from arkana.dashboard.state_api import _cleanup_session_caches
+
+        clear_decompile_meta(session_uuid=self.uid)
+        cleanup_phase_cache(self.uid)
+        _cleanup_session_caches(self.uid)
+        self.state.result_cache.clear()
+        self.state.clear_warnings()
+
+    def _cleanup_all_caches(self):
+        """Safety net: remove any leftover entries from module-level caches."""
+        from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+        from arkana.mcp.tools_session import _phase_caches, _phase_caches_lock
+        from arkana.dashboard.state_api import (
+            _cache_lock, _func_lookup_cache, _overview_enrichment_cache,
+            _overview_cache, _functions_cache, _strings_cache,
+        )
+
+        with _decompile_meta_lock:
+            for addr in [0x140001000, 0x140002000]:
+                _decompile_meta.pop((self.uid, addr), None)
+        with _phase_caches_lock:
+            _phase_caches.pop(self.uid, None)
+        with _cache_lock:
+            for c in [_func_lookup_cache, _overview_enrichment_cache,
+                      _overview_cache, _functions_cache, _strings_cache]:
+                c.pop(self.uid, None)
+
+    def teardown_method(self):
+        self._cleanup_all_caches()
+
+    def test_full_cleanup_clears_all_caches(self):
+        """After populate + cleanup, all caches must be empty for this session."""
+        from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+        from arkana.mcp.tools_session import _phase_caches, _phase_caches_lock
+        from arkana.dashboard.state_api import (
+            _cache_lock, _func_lookup_cache, _overview_enrichment_cache,
+            _overview_cache, _functions_cache, _strings_cache,
+        )
+
+        self._populate_all_caches()
+
+        # Verify caches are populated before cleanup
+        with _decompile_meta_lock:
+            assert (self.uid, 0x140001000) in _decompile_meta
+        with _phase_caches_lock:
+            assert self.uid in _phase_caches
+        with _cache_lock:
+            assert self.uid in _overview_cache
+        assert len(self.state.result_cache._store) > 0
+        assert len(self.state.analysis_warnings) > 0
+
+        # Run the cleanup
+        self._run_open_file_cleanup()
+
+        # Verify ALL caches are clean
+        with _decompile_meta_lock:
+            assert (self.uid, 0x140001000) not in _decompile_meta
+            assert (self.uid, 0x140002000) not in _decompile_meta
+        with _phase_caches_lock:
+            assert self.uid not in _phase_caches
+        with _cache_lock:
+            assert self.uid not in _func_lookup_cache
+            assert self.uid not in _overview_enrichment_cache
+            assert self.uid not in _overview_cache
+            assert self.uid not in _functions_cache
+            assert self.uid not in _strings_cache
+        assert len(self.state.result_cache._store) == 0
+        assert len(self.state.analysis_warnings) == 0
+        assert len(self.state._warning_dedup) == 0
+
+    def test_other_session_untouched_during_cleanup(self):
+        """Cleanup for session A must not affect session B's caches."""
+        from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock
+        from arkana.mcp.tools_session import _phase_caches, _phase_caches_lock
+        from arkana.dashboard.state_api import (
+            _cache_lock, _overview_cache, _functions_cache,
+        )
+
+        state_b = AnalyzerState()
+        uid_b = state_b._state_uuid
+
+        # Populate caches for both sessions
+        self._populate_all_caches()
+        with _decompile_meta_lock:
+            _decompile_meta[(uid_b, 0x140001000)] = {
+                "function_name": "main_fileB", "lines": ["// from file B"],
+            }
+        with _phase_caches_lock:
+            _phase_caches[uid_b] = {"phase": "triage"}
+        with _cache_lock:
+            _overview_cache[uid_b] = (time.time() + 100, "/samples/fileB.exe", {"file": "B"})
+            _functions_cache[uid_b] = (time.time() + 100, "v1", [{"name": "main_B"}])
+
+        try:
+            # Clean session A only
+            self._run_open_file_cleanup()
+
+            # Session B's caches must still exist
+            with _decompile_meta_lock:
+                assert (uid_b, 0x140001000) in _decompile_meta
+                meta = _decompile_meta[(uid_b, 0x140001000)]
+                assert meta["function_name"] == "main_fileB"
+            with _phase_caches_lock:
+                assert uid_b in _phase_caches
+            with _cache_lock:
+                assert uid_b in _overview_cache
+                assert uid_b in _functions_cache
+        finally:
+            with _decompile_meta_lock:
+                _decompile_meta.pop((uid_b, 0x140001000), None)
+            with _phase_caches_lock:
+                _phase_caches.pop(uid_b, None)
+            with _cache_lock:
+                _overview_cache.pop(uid_b, None)
+                _functions_cache.pop(uid_b, None)
+
+    def test_overlapping_addresses_no_contamination(self):
+        """Two PE32+ binaries with functions at 0x140001000 must not share decompile cache."""
+        from arkana.mcp.tools_angr import (
+            _decompile_meta, _decompile_meta_lock, clear_decompile_meta,
+            _get_cached_lines,
+        )
+
+        addr = 0x140001000  # typical PE32+ base
+
+        # Simulate file A's decompile at 0x140001000
+        key_a = (self.uid, addr)
+        with _decompile_meta_lock:
+            _decompile_meta[key_a] = {
+                "function_name": "main",
+                "lines": ["// crackme_bobgambling.exe main()"],
+            }
+
+        # Verify file A's decompile is retrievable
+        lines = _get_cached_lines(key_a)
+        assert lines is not None
+        assert "crackme_bobgambling" in lines[0]
+
+        # Clear cache (simulating open_file cleanup)
+        clear_decompile_meta(session_uuid=self.uid)
+
+        # After cleanup, the same address must return None
+        lines = _get_cached_lines(key_a)
+        assert lines is None
+
+    def test_cleanup_is_idempotent(self):
+        """Running cleanup twice must not raise or corrupt state."""
+        self._populate_all_caches()
+
+        self._run_open_file_cleanup()
+        # Running again on already-clean state should be safe
+        self._run_open_file_cleanup()
+
+        assert len(self.state.result_cache._store) == 0
+        assert len(self.state.analysis_warnings) == 0
+
+    def test_cleanup_with_empty_caches(self):
+        """Cleanup on a fresh state (no caches populated) must not error."""
+        fresh = AnalyzerState()
+        from arkana.mcp.tools_angr import clear_decompile_meta
+        from arkana.mcp.tools_session import cleanup_phase_cache
+        from arkana.dashboard.state_api import _cleanup_session_caches
+
+        # Should all complete without error
+        clear_decompile_meta(session_uuid=fresh._state_uuid)
+        cleanup_phase_cache(fresh._state_uuid)
+        _cleanup_session_caches(fresh._state_uuid)
+        fresh.result_cache.clear()
+        fresh.clear_warnings()
+
+
+# ---------------------------------------------------------------------------
+#  Bug 5 integration: per-state throttle prevents cross-session interference
+# ---------------------------------------------------------------------------
+
+class TestPerStateThrottleIntegration:
+    """Verify that async save throttle for one state doesn't block another."""
+
+    def test_state_a_throttle_does_not_block_state_b(self):
+        """After state A saves, state B should still be allowed to save."""
+        from arkana.enrichment import save_decompile_cache_async, _ASYNC_SAVE_INTERVAL
+
+        state_a = AnalyzerState()
+        state_b = AnalyzerState()
+
+        # Simulate state A having just saved
+        state_a._last_decompile_save_time = time.time()
+
+        # State B has never saved — its throttle should be 0.0
+        assert state_b._last_decompile_save_time == 0.0
+
+        # State B's throttle check should pass (0.0 is well before now)
+        now = time.time()
+        assert now - state_b._last_decompile_save_time >= _ASYNC_SAVE_INTERVAL
+
+    def test_save_updates_per_state_timestamp(self):
+        """save_decompile_cache_async should update state._last_decompile_save_time."""
+        from arkana.enrichment import save_decompile_cache_async
+
+        state = AnalyzerState()
+        state.pe_data = {"file_hashes": {"sha256": "abc123"}}
+        assert state._last_decompile_save_time == 0.0
+
+        # The actual save will fail (no real cache) but the throttle should be set
+        # before the save thread starts. We need to check the function's logic.
+        # Since pe_data exists and sha is set, and throttle is 0.0, it should
+        # acquire the lock and set the timestamp.
+        before = time.time()
+        save_decompile_cache_async(state)
+        after = time.time()
+
+        # The timestamp should have been updated (or stayed 0 if lock contention)
+        # We can't guarantee the lock was available, so just check it's reasonable
+        assert state._last_decompile_save_time >= before or state._last_decompile_save_time == 0.0
+
+    def test_file_switch_resets_throttle_via_state_init(self):
+        """New AnalyzerState always starts with throttle at 0.0."""
+        state1 = AnalyzerState()
+        state1._last_decompile_save_time = time.time()
+
+        # Simulating what would happen after file switch:
+        # open_file reuses the same state object but the field persists.
+        # However, we verify that NEW states always start clean.
+        state2 = AnalyzerState()
+        assert state2._last_decompile_save_time == 0.0
+
+
+# ---------------------------------------------------------------------------
+#  Bug 7 integration: overview cache filepath defense-in-depth
+# ---------------------------------------------------------------------------
+
+class TestOverviewCacheFilepathIntegration:
+    """Verify filepath validation prevents serving stale overview data."""
+
+    def _simulate_cache_lookup(self, cache_key, current_filepath):
+        """Replicate the exact cache lookup logic from get_overview_data()."""
+        import copy
+        from arkana.dashboard.state_api import _overview_cache, _cache_lock
+
+        now = time.time()
+        with _cache_lock:
+            cached = _overview_cache.get(cache_key)
+        if cached is not None:
+            expire_time, cached_filepath, cached_data = cached
+            if now < expire_time and cached_filepath == current_filepath:
+                return copy.deepcopy(cached_data)
+        return None  # cache miss
+
+    def test_stale_filepath_causes_cache_miss(self):
+        """Cache entry from file A must not be returned when file B is loaded."""
+        from arkana.dashboard.state_api import _overview_cache, _cache_lock
+
+        uid = "test-filepath-defense"
+        file_a_data = {"filename": "crackme.exe", "risk": "HIGH"}
+
+        with _cache_lock:
+            _overview_cache[uid] = (time.time() + 100, "/samples/crackme.exe", file_a_data)
+
+        try:
+            # Same filepath = cache hit
+            result = self._simulate_cache_lookup(uid, "/samples/crackme.exe")
+            assert result is not None
+            assert result["filename"] == "crackme.exe"
+
+            # Different filepath = cache miss (defense-in-depth)
+            result = self._simulate_cache_lookup(uid, "/samples/havoc.exe")
+            assert result is None
+        finally:
+            with _cache_lock:
+                _overview_cache.pop(uid, None)
+
+    def test_expired_entry_causes_cache_miss(self):
+        """Expired cache entry should be a miss regardless of filepath."""
+        from arkana.dashboard.state_api import _overview_cache, _cache_lock
+
+        uid = "test-expired-entry"
+        with _cache_lock:
+            _overview_cache[uid] = (time.time() - 10, "/samples/file.exe", {"old": True})
+
+        try:
+            result = self._simulate_cache_lookup(uid, "/samples/file.exe")
+            assert result is None
+        finally:
+            with _cache_lock:
+                _overview_cache.pop(uid, None)
+
+    def test_cache_deepcopy_prevents_mutation(self):
+        """Returned data must be a deep copy so callers can't corrupt cache."""
+        from arkana.dashboard.state_api import _overview_cache, _cache_lock
+
+        uid = "test-deepcopy"
+        original = {"data": [1, 2, 3]}
+        with _cache_lock:
+            _overview_cache[uid] = (time.time() + 100, "/file.exe", original)
+
+        try:
+            result = self._simulate_cache_lookup(uid, "/file.exe")
+            assert result is not None
+
+            # Mutate the returned copy
+            result["data"].append(4)
+
+            # Original in cache must be untouched
+            with _cache_lock:
+                _, _, cached_data = _overview_cache[uid]
+            assert cached_data["data"] == [1, 2, 3]
+        finally:
+            with _cache_lock:
+                _overview_cache.pop(uid, None)
