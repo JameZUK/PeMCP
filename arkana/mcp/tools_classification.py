@@ -133,6 +133,11 @@ def _classify_core() -> Dict[str, Any]:
         classifications.append(".NET Assembly")
         evidence.append("COM/.NET descriptor (IMAGE_COR20_HEADER) present")
 
+    vb6_runtime_dlls = {'msvbvm60.dll', 'msvbvm50.dll'}
+    if all_dll_names & vb6_runtime_dlls:
+        classifications.append("VB6 Application")
+        evidence.append(f"VB6 runtime DLL imports: {all_dll_names & vb6_runtime_dlls}")
+
     driver_dlls = {'ntoskrnl.exe', 'hal.dll', 'ndis.sys', 'wdm.sys', 'ntdll.dll'}
     driver_imports = {'IoCreateDevice', 'IoDeleteDevice', 'IoCreateSymbolicLink',
                       'KeInitializeDpc', 'MmMapIoSpace', 'ExAllocatePool',
@@ -187,7 +192,7 @@ def _classify_core() -> Dict[str, Any]:
         evidence.append(f"GUI DLLs: {all_dll_names & gui_dlls}")
 
     priority_order = ["Device Driver", "Native/Kernel-mode", "Windows Service",
-                      ".NET Assembly", "Installer/SFX", "DLL/Library",
+                      ".NET Assembly", "VB6 Application", "Installer/SFX", "DLL/Library",
                       "GUI Application", "Console Application", "EFI Application"]
     primary = "Unknown PE"
     for p in priority_order:

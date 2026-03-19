@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 229 MCP tools organized by use case.
+Complete catalog of all 230 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -87,6 +87,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `macho_analyze` | Analyzing Mach-O binaries | — |
 | `dotnet_analyze` | .NET assembly analysis (dnfile + dotnetfile fallback) | — |
 | `dotnet_disassemble_method` | Disassemble specific .NET CIL method by RVA (from `dotnet_analyze` method_definitions) | `method_rva` |
+| `vb6_analyze` | VB6 binary analysis: project metadata, forms/modules, Declare Function externals, security-relevant API flagging. Use when MSVBVM60/50.DLL in imports. | `limit` |
 | `go_analyze` | Go binary analysis (packages, version) | — |
 | `rust_analyze` | Rust binary metadata | — |
 | `rust_demangle_symbols` | Demangle Rust symbol names | — |

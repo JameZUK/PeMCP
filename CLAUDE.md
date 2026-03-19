@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 229 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
+Arkana is a Model Context Protocol (MCP) server exposing 230 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
 
 ## Project Structure
 
@@ -25,7 +25,7 @@ arkana/                  # Main package
 │   ├── templates/      # Jinja2 templates (overview, functions, callgraph, sections, strings, timeline, notes)
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
-└── mcp/                # MCP tool modules (229 tools across 56 files)
+└── mcp/                # MCP tool modules (230 tools across 56 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain
@@ -80,6 +80,7 @@ ruff check arkana/ tests/ \
 - **Rename/annotation layer**: `state.renames` stores function renames (`addr→name`), variable renames (`func_addr→{old→new}`), and address labels (`addr→{name, category}`). All persisted via cache alongside notes. `_rename_helpers.py` provides `apply_function_renames_to_lines()` / `apply_variable_renames_to_lines()` / `get_display_name()` / `normalize_address()` for integrating renames into decompilation and disassembly output. `apply_variable_renames_to_lines()` uses a single-pass combined regex to prevent cascading substitutions (e.g. renaming `v1→counter` then `counter→total` would incorrectly transform `v1` to `total` with sequential replacement). `batch_rename` uses two-pass validate-then-apply for atomicity. 6 tools in `tools_rename.py`.
 - **Custom types system**: `state.custom_types` stores user-defined structs and enums. Structs reuse `_parse_fields` from `tools_struct.py` for parsing (with padding bounds 0–10MB, UTF-8/Latin-1 cstring decode). Field names validated against `[a-zA-Z_][a-zA-Z0-9_]*`. Enum values checked against declared byte size with duplicate detection. Cycle detection prevents recursive struct references. Persisted via cache. 5 tools in `tools_types.py`.
 - **Decompiler cffi fallback**: `_safe_decompile()` in `_angr_helpers.py` wraps `project.analyses.Decompiler()` with a retry for cffi pickle errors. angr's Clinic pass uses `copy.copy()` on AIL blocks, which falls back to pickle (`__reduce__`) — fails when blocks contain cffi-backed VEX/capstone data (`_CDataBase`). More likely on local/region-scoped CFGs. On pickle error, retries with `cfg=None` (minimal internal CFG path). Returns `(decompiler_result, used_fallback)` tuple. When `used_fallback=True`, a `note` field (`DECOMPILE_FALLBACK_NOTE`) is added to the MCP response warning that pseudocode quality may be reduced. All 4 Decompiler call sites use this helper: `tools_angr.py` (2), `enrichment.py` (1), `state_api.py` (1). The note is persisted in `_decompile_meta` cache so cached results also carry the warning.
+- **VB6 support**: `arkana/parsers/vb6.py` provides pure-struct VB6 header parsing (project metadata, forms/modules, Declare Function externals). `tools_vb6.py` exposes `vb6_analyze` MCP tool. `_triage_compiler_language()` detects VB6 via MSVBVM60/50.DLL imports. `_classify_core()` classifies as "VB6 Application". `_category_maps.py` includes 13 MSVBVM APIs (DllFunctionCall=CRITICAL, rtcShell/rtcCreateObject/rtcURLDownload=HIGH, file/registry APIs=MEDIUM).
 - **Batch decompile**: `batch_decompile` in `tools_angr.py` decompiles up to 20 functions per call with per-function timeout (60s). Caches per-function results via `_ToolResultCache`. Applies rename helpers to output. Supports `search` param to grep across all functions and return only those with matches.
 - **Hex pattern search**: `search_hex_pattern` in `tools_strings.py` searches binary data for hex byte patterns with `??` wildcards. Runs in `asyncio.to_thread()`. Constants: `MAX_HEX_PATTERN_TOKENS` (200), `MAX_HEX_PATTERN_MATCHES` (5000), `MAX_TOOL_LIMIT` (100K, centralized in `constants.py`).
 - **Systemic limit clamping**: All ~60 tool functions that accept a `limit` parameter clamp it via `limit = max(1, min(limit, MAX_TOOL_LIMIT))` to prevent unbounded output. `MAX_TOOL_LIMIT` (100,000) is imported from `arkana.constants`.

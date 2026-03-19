@@ -1462,6 +1462,29 @@ def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], i
         if ".NET" not in detected["detected_languages"]:
             detected["detected_languages"].append(".NET")
 
+    # --- VB6 detection (MSVBVM60/50.DLL imports) ---
+    imports_data = state.pe_data.get('imports', {})
+    vb6_dll_names = set()
+    vb6_import_names = set()
+    if isinstance(imports_data, dict):
+        for dll_name, funcs in imports_data.items():
+            if isinstance(dll_name, str):
+                low = dll_name.lower()
+                if low in ('msvbvm60.dll', 'msvbvm50.dll'):
+                    vb6_dll_names.add(low)
+                    if isinstance(funcs, list):
+                        for f in funcs:
+                            if isinstance(f, dict):
+                                vb6_import_names.add(f.get('name', ''))
+                            elif isinstance(f, str):
+                                vb6_import_names.add(f)
+    if vb6_dll_names:
+        vb6_evidence = [f"imports {', '.join(sorted(vb6_dll_names))}"]
+        if 'DllFunctionCall' in vb6_import_names:
+            vb6_evidence.append("imports DllFunctionCall (dynamic API resolver)")
+        detected["detected_languages"].append("Visual Basic 6")
+        detected["vb6_indicators"] = vb6_evidence
+
     # --- Rich header compiler hints (Delphi, MSVC) ---
     # Rich header entries contain product_id_dec and build_number, not human-readable
     # names. Known product IDs: Delphi linker prod_ids are in the 0x00-0x04 range,
@@ -1539,6 +1562,8 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
             suggested.append("rust_demangle_symbols — demangle Rust symbol names for readability")
         if triage_report.get("dotnet_indicators", {}).get("is_dotnet") or ".NET" in detected_langs:
             suggested.append("dotnet_analyze — extract .NET types, methods, and user strings")
+        if "Visual Basic 6" in detected_langs:
+            suggested.append("vb6_analyze — extract VB6 project info, forms, modules, and Declare Function APIs")
         if triage_report.get("tls_callbacks", {}).get("present") and triage_report["tls_callbacks"].get("callback_count", 0) > 0:
             suggested.append("get_pe_data(key='tls_info') — inspect TLS callback addresses")
         suggested.append("classify_binary_purpose — determine if GUI app, service, DLL, etc.")

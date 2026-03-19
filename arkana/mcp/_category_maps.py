@@ -109,6 +109,21 @@ CATEGORIZED_IMPORTS_DB = {
     # --- Clipboard access ---
     "GetClipboardData": ("MEDIUM", "clipboard_access"),
     "SetClipboardData": ("MEDIUM", "clipboard_access"),
+
+    # --- VB6 runtime (MSVBVM60.DLL) ---
+    "DllFunctionCall": ("CRITICAL", "vb6_dynamic_api"),
+    "rtcShell": ("HIGH", "execution"),
+    "rtcCreateObject": ("HIGH", "vb6_com"),
+    "rtcCreateObject2": ("HIGH", "vb6_com"),
+    "rtcURLDownload": ("HIGH", "networking"),
+    "__vbaFileOpen": ("MEDIUM", "file_io"),
+    "__vbaFileClose": ("MEDIUM", "file_io"),
+    "__vbaFileCopy": ("MEDIUM", "file_io"),
+    "__vbaKill": ("MEDIUM", "file_io"),
+    "rtcFileCopy": ("MEDIUM", "file_io"),
+    "rtcKillFiles": ("MEDIUM", "file_io"),
+    "rtcMkDir": ("MEDIUM", "file_io"),
+    "rtcEnviron": ("MEDIUM", "registry"),
 }
 
 
@@ -144,6 +159,8 @@ CATEGORY_DESCRIPTIONS = {
     "process_enumeration": "Process Enumeration — enumerating running processes",
     "keylogging": "Keylogging — capturing keyboard input",
     "clipboard_access": "Clipboard Access — reading/writing clipboard data",
+    "vb6_dynamic_api": "VB6 Dynamic API — runtime API resolution via DllFunctionCall",
+    "vb6_com": "VB6 COM — late-bound COM object creation",
 }
 
 # Risk level ordering (for sorting)
