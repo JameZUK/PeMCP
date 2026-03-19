@@ -17,6 +17,47 @@ if DOTNETFILE_AVAILABLE:
     import dotnetfile
 
 
+def _compact_flags(flags_obj) -> str:
+    """Return a compact string for dnfile flag enums.
+
+    dnfile's ClrTypeAttr/ClrMethodAttr str() can be extremely verbose
+    (25+ lines of individual boolean flags).  This extracts just the
+    meaningful True flag names into a pipe-separated string.
+    """
+    s = str(flags_obj)
+    # If str() is short enough already (single-line, reasonable length), use it
+    if '\n' not in s and len(s) < 120:
+        return s
+    # Try to extract the repr which often has the compact pipe form
+    r = repr(flags_obj)
+    if '|' in r and len(r) < 200:
+        return r
+    # Parse the multi-line "flagName    True/False" format and keep only True flags
+    if '\n' in s:
+        true_flags = []
+        for line in s.strip().splitlines():
+            line = line.strip()
+            if line.endswith('True'):
+                name = line.rsplit(None, 1)[0].strip()
+                true_flags.append(name)
+        if true_flags:
+            return ' | '.join(true_flags)
+    # Fall back to hex value if available
+    try:
+        return hex(int(flags_obj))
+    except (TypeError, ValueError):
+        pass
+    # Try .value attribute (common in Python enums)
+    val = getattr(flags_obj, 'value', None)
+    if val is not None:
+        try:
+            return hex(int(val))
+        except (TypeError, ValueError):
+            pass
+    # Last resort: truncate
+    return s[:100] + "..." if len(s) > 100 else s
+
+
 @tool_decorator
 async def dotnet_analyze(
     ctx: Context,
@@ -115,7 +156,7 @@ async def dotnet_analyze(
                             types.append({
                                 "name": str(row.TypeName) if hasattr(row, 'TypeName') else None,
                                 "namespace": str(row.TypeNamespace) if hasattr(row, 'TypeNamespace') else None,
-                                "flags": str(row.Flags) if hasattr(row, 'Flags') else None,
+                                "flags": _compact_flags(row.Flags) if hasattr(row, 'Flags') else None,
                             })
                             if len(types) >= limit:
                                 break
@@ -133,8 +174,8 @@ async def dotnet_analyze(
                             methods.append({
                                 "name": str(row.Name) if hasattr(row, 'Name') else None,
                                 "rva": hex(row.Rva) if hasattr(row, 'Rva') else None,
-                                "flags": str(row.Flags) if hasattr(row, 'Flags') else None,
-                                "impl_flags": str(row.ImplFlags) if hasattr(row, 'ImplFlags') else None,
+                                "flags": _compact_flags(row.Flags) if hasattr(row, 'Flags') else None,
+                                "impl_flags": _compact_flags(row.ImplFlags) if hasattr(row, 'ImplFlags') else None,
                             })
                             if len(methods) >= limit:
                                 break

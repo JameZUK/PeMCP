@@ -297,14 +297,34 @@ async def get_function_variables(
             except (AttributeError, TypeError):
                 pass
 
-        return {
+        # Separate meaningful variables from VEX IR temporaries
+        # (ir_0, ir_1, etc.) which are compiler/lifter artifacts, not
+        # source-level variables.
+        meaningful_vars = []
+        ir_temps = []
+        for v in variables:
+            name = v.get("name", "")
+            if name.startswith("ir_") or name.startswith("tmp_"):
+                ir_temps.append(v)
+            else:
+                meaningful_vars.append(v)
+
+        result = {
             "function_name": func.name,
             "address": hex(addr_used),
-            "local_variable_count": len(variables),
+            "local_variable_count": len(meaningful_vars),
             "parameter_count": len(params),
             "parameters": params[:limit],
-            "local_variables": variables[:limit],
+            "local_variables": meaningful_vars[:limit],
         }
+        if ir_temps:
+            result["ir_temporary_count"] = len(ir_temps)
+            result["note"] = (
+                f"{len(ir_temps)} VEX IR temporaries (ir_N/tmp_N) were "
+                f"filtered from the output. These are lifter artifacts, not "
+                f"source-level variables."
+            )
+        return result
 
     result = await asyncio.to_thread(_recover)
     _raise_on_error_dict(result)

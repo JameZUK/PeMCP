@@ -423,6 +423,32 @@ async def parse_custom_container(
         "structure": structure,
     }
 
+    if len(chunks) == 0:
+        hints = []
+        if structure == "delimiter_size_payload" and delim_bytes:
+            count = data.count(delim_bytes)
+            if count == 0:
+                hints.append(f"Delimiter '{delimiter}' not found in data.")
+            else:
+                hints.append(
+                    f"Delimiter found {count} time(s), but size fields pointed "
+                    f"past data end. Check size_endian ('{size_endian}') and "
+                    f"size_width ({size_width}) — the parsed sizes may be "
+                    f"byte-swapped or the wrong width."
+                )
+        elif structure == "size_payload":
+            if len(data) >= size_width:
+                first_size = struct.unpack_from(endian + size_fmt, data, 0)[0]
+                hints.append(
+                    f"First size field = {first_size} (0x{first_size:x}), but data "
+                    f"is only {len(data)} bytes. Check size_endian ('{size_endian}') "
+                    f"and size_width ({size_width})."
+                )
+        elif structure == "fixed_chunks":
+            hints.append("No repeating pattern detected for fixed-size chunks.")
+        if hints:
+            response["diagnostic"] = " ".join(hints)
+
     if output_path and raw_items:
         import os
         from pathlib import Path

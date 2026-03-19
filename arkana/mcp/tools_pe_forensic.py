@@ -264,40 +264,62 @@ async def generate_yara_rule(
 def _collect_string_candidates(
     pe_data: Dict, triage: Dict, min_length: int,
 ) -> List[str]:
-    """Collect distinctive strings suitable for YARA rules."""
+    """Collect distinctive strings from the binary suitable for YARA rules.
+
+    Sources (in priority order):
+    1. FLOSS decoded/stack strings (strongest signal — runtime-extracted)
+    2. Suspicious strings identified by triage (flagged by heuristics)
+    3. Network IOCs from triage (URLs, domains, IPs found in binary)
+    4. Basic ASCII strings from PE parse (fallback)
+    """
+    _MAX_CANDIDATES = 60
     candidates: List[str] = []
     seen: set = set()
 
-    # Prioritize strings from triage network IOCs
-    net_iocs = triage.get("network_iocs", {})
-    if isinstance(net_iocs, dict):
-        for key in ["urls", "domains", "ip_addresses"]:
-            for item in net_iocs.get(key, []):
-                if isinstance(item, str) and len(item) >= min_length and item not in seen:
-                    candidates.append(item)
-                    seen.add(item)
+    def _add(s: str) -> None:
+        if (isinstance(s, str) and len(s) >= min_length
+                and s not in seen and s.isprintable()
+                and len(candidates) < _MAX_CANDIDATES):
+            candidates.append(s)
+            seen.add(s)
 
-    # Add strings from notes (tool_result, ioc categories)
-    notes = state.get_notes()
-    for note in notes:
-        if note.get("category") in ("ioc", "tool_result"):
-            content = note.get("content", "")
-            # Extract quoted strings from notes
-            for part in content.split('"'):
-                if len(part) >= min_length and part not in seen and part.isprintable():
-                    candidates.append(part)
-                    seen.add(part)
-                    if len(candidates) >= 30:
-                        break
+    # 1. FLOSS decoded and stack strings (highest value for detection)
+    floss = pe_data.get("floss_analysis") or {}
+    floss_strings = floss.get("strings", {})
+    if isinstance(floss_strings, dict):
+        for s_entry in floss_strings.get("decoded_strings", []):
+            s = s_entry.get("string", s_entry) if isinstance(s_entry, dict) else str(s_entry)
+            _add(s)
+        for s_entry in floss_strings.get("stack_strings", []):
+            s = s_entry.get("string", s_entry) if isinstance(s_entry, dict) else str(s_entry)
+            _add(s)
 
-    # Add suspicious strings from triage
+    # 2. Suspicious strings from triage (heuristic-flagged binary strings)
     sus_strings = triage.get("suspicious_strings", [])
     if isinstance(sus_strings, list):
         for item in sus_strings:
             s = item.get("string", item) if isinstance(item, dict) else str(item)
-            if isinstance(s, str) and len(s) >= min_length and s not in seen:
-                candidates.append(s)
-                seen.add(s)
+            _add(s)
+
+    # 3. Network IOCs extracted from binary by triage
+    net_iocs = triage.get("network_iocs", {})
+    if isinstance(net_iocs, dict):
+        for key in ["urls", "domains", "ip_addresses"]:
+            for item in net_iocs.get(key, []):
+                if isinstance(item, str):
+                    _add(item)
+
+    # 4. Fallback: basic ASCII strings from PE parse
+    if len(candidates) < 5:
+        basic_strings = pe_data.get("basic_ascii_strings", [])
+        if isinstance(basic_strings, list):
+            # Prefer longer, more distinctive strings
+            sorted_strings = sorted(
+                (s for s in basic_strings if isinstance(s, str) and len(s) >= min_length),
+                key=len, reverse=True,
+            )
+            for s in sorted_strings:
+                _add(s)
 
     return candidates
 

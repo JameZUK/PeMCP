@@ -1466,6 +1466,56 @@ def _extract_utf16(data: bytes) -> str:
     return data.decode('utf-16-le', errors='replace')
 
 
+def _extract_string_at_file_offset(pe, filepath: str, offset: int, max_length: int, encoding: str) -> Dict[str, Any]:
+    """Extract a string directly at a file offset. Returns result dict."""
+    try:
+        with open(filepath, "rb") as f:
+            f.seek(offset)
+            raw = f.read(max_length)
+    except Exception as e:
+        return {"error": f"Failed to read at file offset {hex(offset)}: {e}"}
+
+    if not raw:
+        return {"error": f"No data at file offset {hex(offset)}."}
+
+    # Try to compute the VA for cross-reference
+    va_hex = None
+    try:
+        rva = pe.get_rva_from_offset(offset)
+        if rva is not None:
+            va_hex = hex(pe.OPTIONAL_HEADER.ImageBase + rva)
+    except Exception:
+        pass
+
+    result: Dict[str, Any] = {
+        "file_offset": hex(offset),
+    }
+    if va_hex:
+        result["virtual_address"] = va_hex
+
+    if encoding == "auto":
+        ascii_str = _extract_ascii(raw)
+        utf16_str = _extract_utf16(raw)
+        ascii_printable = sum(1 for c in ascii_str if c.isprintable())
+        utf16_printable = sum(1 for c in utf16_str if c.isprintable())
+        if utf16_printable > ascii_printable and len(utf16_str) > 1:
+            result["string"] = utf16_str
+            result["encoding"] = "utf-16-le"
+        else:
+            result["string"] = ascii_str
+            result["encoding"] = "ascii"
+    elif encoding == "utf16le":
+        result["string"] = _extract_utf16(raw)
+        result["encoding"] = "utf-16-le"
+    else:
+        result["string"] = _extract_ascii(raw)
+        result["encoding"] = "ascii"
+
+    result["length"] = len(result["string"])
+    result["hex_preview"] = raw[:32].hex()
+    return result
+
+
 def _extract_string_at_va(pe, filepath: str, va: int, max_length: int, encoding: str) -> Dict[str, Any]:
     """Core logic to extract a string at a single VA. Returns result dict."""
     try:
@@ -1515,21 +1565,26 @@ async def get_string_at_va(
     virtual_addresses: Optional[List[str]] = None,
     max_length: int = 256,
     encoding: str = "auto",
+    address_type: str = "va",
 ) -> Dict[str, Any]:
     """
-    [Phase: deep-dive] Extracts a string at a given virtual address by resolving
-    the VA to a file offset and reading bytes until a null terminator or max_length.
+    [Phase: deep-dive] Extracts a string at a given virtual address or file offset
+    by reading bytes until a null terminator or max_length.
 
-    When to use: When decompilation or disassembly references a string at a VA
-    and you want to see the actual string content without manually calculating offsets.
+    When to use: When decompilation, disassembly, or string analysis references a
+    string at a VA or file offset and you want to see the actual string content.
 
     Args:
         ctx: The MCP Context object.
-        virtual_address: (str) Virtual address as hex string (e.g. '0x401000').
-        virtual_addresses: (Optional[List[str]]) Batch mode: list of hex VA strings
+        virtual_address: (str) Address as hex string (e.g. '0x401000' for VA, '0xcf06' for file offset).
+        virtual_addresses: (Optional[List[str]]) Batch mode: list of hex address strings
             to extract in one call. Up to 50 items. Returns results keyed by address.
         max_length: (int) Maximum bytes to read (default 256).
         encoding: (str) 'ascii', 'utf16le', or 'auto' (tries both).
+        address_type: (str) 'va' (default) for virtual addresses, or 'file_offset'
+            to read directly at file offsets. Use 'file_offset' when working with
+            offsets from string analysis tools (e.g. search_for_specific_strings,
+            get_top_sifted_strings).
     """
     _check_pe_loaded("get_string_at_va")
 
@@ -1539,18 +1594,27 @@ async def get_string_at_va(
 
     from arkana.mcp._input_helpers import _parse_int_param
 
+    use_file_offset = address_type.lower() in ("file_offset", "offset", "file")
+
+    def _extract_at_address(addr_val: int) -> Dict[str, Any]:
+        """Resolve address and extract string."""
+        if use_file_offset:
+            return _extract_string_at_file_offset(pe, state.filepath, addr_val, max_length, encoding)
+        return _extract_string_at_va(pe, state.filepath, addr_val, max_length, encoding)
+
     # ── Batch mode ──
     if virtual_addresses is not None:
         items = list(virtual_addresses[:_MAX_BATCH_STRING_VA])
-        await ctx.info(f"Batch extracting strings at {len(items)} VAs")
+        label = "file offsets" if use_file_offset else "VAs"
+        await ctx.info(f"Batch extracting strings at {len(items)} {label}")
 
         batch_results: Dict[str, Any] = {}
         succeeded = 0
         for va_str in items:
             try:
-                va = _parse_int_param(va_str, "virtual_address")
-                entry = _extract_string_at_va(pe, state.filepath, va, max_length, encoding)
-                batch_results[hex(va)] = entry
+                addr_val = _parse_int_param(va_str, "address")
+                entry = _extract_at_address(addr_val)
+                batch_results[hex(addr_val)] = entry
                 if "error" not in entry:
                     succeeded += 1
             except Exception as e:
@@ -1560,17 +1624,19 @@ async def get_string_at_va(
             "batch_results": batch_results,
             "total": len(batch_results),
             "succeeded": succeeded,
+            "address_type": "file_offset" if use_file_offset else "va",
         }
         return await _check_mcp_response_size(ctx, response, "get_string_at_va")
 
-    # ── Single-address mode (original behaviour) ──
-    await ctx.info(f"Extracting string at VA {virtual_address}")
+    # ── Single-address mode ──
+    label = "file offset" if use_file_offset else "VA"
+    await ctx.info(f"Extracting string at {label} {virtual_address}")
 
     if not virtual_address:
-        raise ValueError("virtual_address is required (e.g. '0x401000').")
+        raise ValueError("virtual_address is required (e.g. '0x401000' for VA or '0xcf06' for file offset).")
 
-    va = _parse_int_param(virtual_address, "virtual_address")
-    return _extract_string_at_va(pe, state.filepath, va, max_length, encoding)
+    addr_val = _parse_int_param(virtual_address, "address")
+    return _extract_at_address(addr_val)
 
 
 # ---- Hex Pattern Search -----------------------------------------

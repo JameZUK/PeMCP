@@ -152,17 +152,36 @@ async def unhook_function(ctx: Context, address_or_name: str) -> Dict[str, Any]:
             proj.unhook(addr)
             key = hex(addr)
         except ValueError:
-            # It's a symbol name; angr doesn't expose unhook_symbol directly,
-            # but we can find the symbol address and unhook that
-            try:
-                sym = proj.loader.find_symbol(address_or_name)
-                if sym:
-                    proj.unhook(sym.rebased_addr)
-                    key = address_or_name
-                else:
-                    return {"error": f"Symbol '{address_or_name}' not found."}
-            except Exception as e:
-                return {"error": f"Failed to unhook '{address_or_name}': {e}"}
+            # It's a symbol name.  hook_function() used proj.hook_symbol()
+            # which resolves the symbol internally and hooks the resolved
+            # address.  proj.loader.find_symbol() uses different resolution
+            # and often fails.  Instead, search angr's internal hook table
+            # for a SimProcedure whose display_name matches the symbol.
+            unhooked = False
+            for hooked_addr, sim_proc in list(proj._sim_procedures.items()):
+                proc_name = getattr(sim_proc, 'display_name', '') or ''
+                cls_name = type(sim_proc).__name__ if sim_proc else ''
+                if address_or_name in (proc_name, cls_name):
+                    proj.unhook(hooked_addr)
+                    unhooked = True
+                    break
+
+            if not unhooked:
+                # Fallback: check state.angr_hooks for the stored key
+                with state._angr_lock:
+                    if address_or_name in state.angr_hooks:
+                        # The hook was registered but we can't find it in
+                        # angr's table — just clean up our tracking
+                        state.angr_hooks.pop(address_or_name, None)
+                        state.angr_cfg = None
+                        state.angr_loop_cache = None
+                        return {
+                            "status": "success",
+                            "message": f"Removed tracking for {address_or_name}. CFG cache cleared.",
+                            "note": "Hook was not found in angr's internal table (may have been cleared already).",
+                        }
+                return {"error": f"No hook found for symbol '{address_or_name}'. Use list_hooks() to see active hooks."}
+            key = address_or_name
 
         with state._angr_lock:
             state.angr_hooks.pop(key, None)

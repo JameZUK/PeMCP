@@ -104,7 +104,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `get_top_sifted_strings` | ML-ranked strings by relevance (StringSifter) | `limit` |
 | `get_strings_for_function` | Strings referenced by a specific function | `address` |
 | `get_string_usage_context` | Disassembly context around a string reference | `string_value` |
-| `get_string_at_va` | Read string at specific virtual address | `address` |
+| `get_string_at_va` | Read string at specific virtual address or file offset | `address`, `address_type` (`va` or `file_offset`) |
 | `get_floss_analysis_info` | FLOSS decoded/stacked strings | — |
 | `search_floss_strings` | Regex search against FLOSS results | `pattern` |
 | `search_yara_custom` | Custom YARA rule scanning | `rule` |
@@ -126,12 +126,12 @@ Source files: `arkana/mcp/tools_*.py`
 | `get_function_cfg` | Control flow graph for a function | `address`, `node_limit` (default 50), `edge_limit` (default 100) |
 | `get_function_xrefs` | Cross-references (callers + callees) | `address` |
 | `get_cross_reference_map` | Batch cross-reference lookup | `function_addresses` |
-| `get_function_variables` | Stack and register variables | `address` |
+| `get_function_variables` | Stack and register variables (VEX IR temporaries filtered) | `address` |
 | `get_calling_conventions` | Recovered calling conventions and params | `address` |
 | `identify_library_functions` | Identify standard library functions | — |
 | `extract_function_constants` | Constant values used in a function | `address` |
 | `get_global_data_refs` | Global data references across binary | — |
-| `scan_for_indirect_jumps` | Find jump tables, vtables, indirect calls | — |
+| `scan_for_indirect_jumps` | Find indirect jumps/calls (filters constant targets and returns, classifies flow_type) | — |
 | `identify_cpp_classes` | C++ class structure identification (background, timeout 300s) | `method_limit` (default 20) |
 | `get_call_graph` | Inter-procedural call graph from a function | `address`, `limit` (default 20) |
 
@@ -153,7 +153,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `get_value_set_analysis` | Pointer target tracking (background, timeout 600s) | `address` |
 | `get_backward_slice` | Trace data origin backward from a point | `address`, `variable` |
 | `get_forward_slice` | Trace data propagation forward | `address`, `variable` |
-| `get_dominators` | Dominator tree for CFG analysis | `address` |
+| `get_dominators` | Dominator tree for CFG analysis (diagnostic note when empty) | `address` |
 | `analyze_binary_loops` | Loop detection and analysis (background, timeout 300s) | — |
 | `find_dangerous_data_flows` | Trace untrusted input→dangerous sink flows. Use for vuln audit after `get_function_map`. High-confidence RDA + structural fallback. | `function_address` (optional — scan all if omitted), `limit` (default 30) |
 
@@ -190,7 +190,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
 | `find_and_decode_encoded_strings` | Decode Base64/hex/XOR obfuscated strings | — |
-| `deobfuscate_base64` | Decode hex-encoded Base64 data | `data` |
+| `deobfuscate_base64` | Decode hex-encoded Base64 data | `data_hex` |
 | `deobfuscate_xor_single_byte` | Single-byte XOR decryption | `data`, `key` |
 | `deobfuscate_xor_multi_byte` | Multi-byte XOR decryption | `data`, `key` |
 | `brute_force_simple_crypto` | Brute-force XOR/RC4/ADD/SUB/ROL/ROR with known-plaintext support | `data_hex`, `known_plaintext` |
@@ -464,3 +464,15 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
 | `analyze_entropy_by_offset` | Entropy visualization by file offset | `window_size` |
+
+---
+
+## Known Limitations
+
+**Data flow tools**: `get_data_dependencies` returns raw angr internals — prefer `get_reaching_definitions` or `propagate_constants`. `get_backward_slice`/`get_forward_slice` return CFG reachability, not true data-flow slices. `extract_function_constants` includes code addresses alongside data constants.
+
+**Emulation**: Qiling requires manual rootfs setup (`qiling_setup_check()`). FSG-packed binaries may fail with `auto_unpack_pe` — use `qiling_dump_unpacked_binary` as fallback. Speakeasy/Qiling have limited success with complex anti-emulation packers.
+
+**External deps**: `get_virustotal_report_for_loaded_file` requires API key via `set_api_key()`. `scan_for_embedded_files` requires binwalk v3+.
+
+**Output**: `analyze_batch` can be truncated by the 8KB response limit for large file sets. `search_decompiled_code` searches C pseudocode, not assembly — use `get_annotated_disassembly(search=...)` for assembly. `refinery_carve`/`refinery_extract_iocs` may have false positives on raw binary data.

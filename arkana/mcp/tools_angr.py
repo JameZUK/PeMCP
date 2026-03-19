@@ -1373,7 +1373,20 @@ async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
                 curr = dom
                 iterations += 1
 
-            return {"target": hex(target_addr), "function": func.name, "dominators": dominators_list}
+            result = {"target": hex(target_addr), "function": func.name, "dominators": dominators_list}
+            if not dominators_list:
+                if target_node.addr == func.addr:
+                    result["note"] = (
+                        "Target is the function entry point — it has no dominators "
+                        "(it dominates all other blocks, nothing dominates it)."
+                    )
+                else:
+                    result["note"] = (
+                        "No dominator chain found. The target address may not correspond "
+                        "to a basic block boundary in the function's CFG. Try using the "
+                        "exact start address of a basic block."
+                    )
+            return result
 
         except Exception as e: return {"error": f"Dominator analysis failed: {e}"}
 
@@ -1661,23 +1674,38 @@ async def scan_for_indirect_jumps(
         indirect_flow = []
 
         for block in func.blocks:
-            # VEX Jumpkind 'Ijk_Boring' is standard, 'Ijk_Call' is call.
-            # We look for cases where the target is NOT a constant value.
-
-            # Note: 'block.vex' lifts the block. This can be slow for huge functions.
+            # We look for blocks with indirect control flow: the exit target
+            # is NOT a constant (i.e. computed from a register or temporary).
+            # This detects jump tables, vtable calls, and obfuscated branches.
             try:
                 vex_block = block.vex
-                # If the exit target is not a constant (e.g. it is a temporary variable or register)
-                # and it's not a strict fallthrough
-                if not isinstance(vex_block.next, int) and not hasattr(vex_block.next, 'value'):
-                     # It is symbolic/dynamic
-                     indirect_flow.append({
-                         "block_addr": hex(block.addr),
-                         "jump_kind": vex_block.jumpkind,
-                         "instruction_count": len(vex_block.statements)
-                     })
+                if vex_block.next is None:
+                    continue
+
+                # pyvex.expr.Const has a .value attribute — these are direct jumps.
+                # pyvex.expr.RdTmp / Get / other expressions are indirect.
+                target_is_const = hasattr(vex_block.next, 'value') or isinstance(vex_block.next, int)
+                if target_is_const:
+                    continue
+
+                # Classify the type of indirect flow
+                jk = vex_block.jumpkind or "Ijk_Boring"
+                if jk == "Ijk_Call":
+                    flow_type = "indirect_call"
+                elif jk == "Ijk_Boring":
+                    flow_type = "indirect_jump"
+                elif jk == "Ijk_Ret":
+                    continue  # Returns are always indirect (pop from stack)
+                else:
+                    flow_type = f"indirect_{jk}"
+
+                indirect_flow.append({
+                    "block_addr": hex(block.addr),
+                    "jump_kind": jk,
+                    "flow_type": flow_type,
+                    "instruction_count": vex_block.instructions,
+                })
             except Exception:
-                # Lifting failed or other error
                 logger.debug("scan_for_indirect_jumps: VEX lifting failed for block at %s", hex(block.addr), exc_info=True)
                 continue
 

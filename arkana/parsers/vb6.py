@@ -399,14 +399,52 @@ def _parse_object_table(
         result["parse_errors"].append("Failed to read object count")
         return
 
+    # Reject obviously bogus counts early (typical VB6 apps have <50 objects)
+    if obj_count > 500:
+        result["parse_errors"].append(
+            f"Object count {obj_count} exceeds reasonable limit (500), likely corrupt header"
+        )
+        obj_count = 0
     obj_count = min(obj_count, _MAX_OBJECTS)
 
     # Object descriptors start after a fixed header.
     # The header size varies by VB version, but commonly 0x38 (56) bytes.
-    # We try 0x38 first; if the first descriptor doesn't look valid we try 0x14.
+    # We probe both 0x38 and 0x14 and pick whichever yields a valid first descriptor.
+    _KNOWN_TYPES = {0x02, 0x08, 0x10, 0x20}
+    type_map = {0x02: "Module", 0x08: "Form", 0x10: "Class", 0x20: "UserControl"}
+
+    def _probe_descriptor(start: int) -> bool:
+        """Check if the first object descriptor at `start` looks valid."""
+        if start + _OBJECT_DESC_SIZE > len(data):
+            return False
+        try:
+            probe_name_va = struct.unpack_from("<I", data, start + 0x18)[0]
+            probe_type = struct.unpack_from("<H", data, start + 0x24)[0]
+        except struct.error:
+            return False
+        # name_va should be 0 or a plausible VA (within image range)
+        if probe_name_va != 0:
+            probe_off = _va_to_offset(probe_name_va, image_base, sections)
+            if probe_off is None:
+                return False
+        return probe_type in _KNOWN_TYPES
+
     objects: List[Dict[str, Any]] = []
     module_count = 0
+
     desc_start = tbl_off + 0x38  # common header size
+    if obj_count > 0 and not _probe_descriptor(desc_start):
+        # Try alternative header size
+        alt_start = tbl_off + 0x14
+        if _probe_descriptor(alt_start):
+            desc_start = alt_start
+        else:
+            result["parse_errors"].append(
+                "Object descriptors not found at expected offsets (0x38 or 0x14)"
+            )
+            result["objects"] = []
+            result["module_count"] = 0
+            return
 
     for i in range(obj_count):
         d_off = desc_start + i * _OBJECT_DESC_SIZE
@@ -419,8 +457,6 @@ def _parse_object_table(
         except struct.error:
             continue
 
-        # Decode object type
-        type_map = {0x02: "Module", 0x08: "Form", 0x10: "Class", 0x20: "UserControl"}
         obj_type = type_map.get(obj_type_raw, f"Unknown(0x{obj_type_raw:02X})")
 
         name = ""

@@ -47,7 +47,7 @@ Several tools support batch mode to avoid repeated single-item calls:
 | Tool | Batch Parameter | Cap | Use Case |
 |------|----------------|-----|----------|
 | `refinery_pipeline` | `data_hex_list` | 100 | Decrypt/decode many blobs with the same pipeline (e.g., 95 Base64+RC4 config entries) |
-| `get_string_at_va` | `virtual_addresses` | 50 | Extract strings at multiple VAs from decompilation/disassembly output |
+| `get_string_at_va` | `virtual_addresses` | 50 | Extract strings at multiple VAs or file offsets from decompilation/disassembly output. Use `address_type='file_offset'` when FLOSS gives file offsets instead of VAs |
 | `batch_decompile` | `addresses` | 20 | Decompile many functions in one call (per-function 60s timeout) |
 | `auto_note_function` | `function_addresses` | 20 | Auto-note many functions after batch decompilation |
 | `get_capa_rule_match_details` | `rule_ids` | 20 | Get match details for multiple capa rules at once |

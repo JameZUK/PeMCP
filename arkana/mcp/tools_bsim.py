@@ -81,6 +81,7 @@ async def extract_function_features_tool(
 
         results = []
 
+        failed_count = 0
         if function_address:
             addr = _parse_addr(function_address)
             func, _ = _resolve_function_address(addr)
@@ -98,7 +99,6 @@ async def extract_function_features_tool(
             all_funcs.sort(key=lambda f: f.addr)
             selected = all_funcs[:limit]
 
-            failed_count = 0
             for func in selected:
                 try:
                     feat = extract_function_features(

@@ -169,7 +169,7 @@ All string tools that return lists support pagination via `limit` (default 20) a
 | `find_and_decode_encoded_strings` | Multi-layer Base64/Hex/XOR decoding with heuristics. |
 | `get_strings_summary` | Categorised string intelligence  - groups strings by type (URLs, IPs, file paths, registry keys, mutex names, base64 blobs) with counts and top examples. |
 | `search_yara_custom` | Compile and run custom YARA rules (provided as a string) against the loaded binary. Returns matching rules with offsets. Useful for validating hypotheses about byte patterns or structures. Paginated (default limit 20). |
-| `get_string_at_va` | Extract a string at a virtual address by resolving VA to file offset. Reads bytes until null terminator with auto-encoding detection (ASCII/UTF-16LE). Useful when decompilation references a string pointer. |
+| `get_string_at_va` | Extract a string at a virtual address or file offset. Reads bytes until null terminator with auto-encoding detection (ASCII/UTF-16LE). Supports `address_type='va'` (default, resolves VA to file offset) or `address_type='file_offset'` (reads directly at file offset, also computes VA for cross-reference). Useful when decompilation references a string pointer or when FLOSS gives file offsets. |
 | `search_hex_pattern` | Search the loaded binary for hex byte patterns with `??` wildcards. Example: `"4D 5A ?? ?? ?? ?? ?? ?? 50 45"` finds PE headers at any offset. Optional section filter restricts search to a named PE section. Max 200 tokens, 5000 matches. |
 
 ## Triage & Forensics
@@ -184,7 +184,7 @@ All string tools that return lists support pagination via `limit` (default 20) a
 
 | Tool | Description |
 |---|---|
-| `deobfuscate_base64` | Decode hex-encoded Base64 data. |
+| `deobfuscate_base64` | Decode hex-encoded Base64 data. Parameter: `data_hex` (hex string of Base64-encoded bytes). Returns a structured dict with `decoded_text`, `input_hex_length`, and `decoded_length`. |
 | `deobfuscate_xor_single_byte` | XOR-decrypt hex data with a single byte key. |
 | `is_mostly_printable_ascii` | Check if a string is mostly printable. |
 | `get_hex_dump` | Hex dump of a file region. |
@@ -206,11 +206,11 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `get_function_xrefs` | Cross-references (callers and callees) for a function. Paginated (default limit 20). |
 | `get_backward_slice` | All code blocks that can reach a target address. Paginated (default limit 20). |
 | `get_forward_slice` | All code reachable from a source address. Paginated (default limit 20). |
-| `get_dominators` | Dominator blocks that must execute to reach a target. |
+| `get_dominators` | Dominator blocks that must execute to reach a target. Returns diagnostic notes when the result is empty (e.g. target is the function entry, or address doesn't correspond to a block boundary). |
 | `get_function_complexity_list` | Functions ranked by complexity (block/edge count). Paginated (default limit 20). |
 | `extract_function_constants` | Hardcoded constants and string references in a function. Paginated (default limit 20). |
 | `get_global_data_refs` | Global memory addresses read/written by a function. Paginated (default limit 20). |
-| `scan_for_indirect_jumps` | Indirect jumps/calls (dynamic control flow) in a function. Paginated (default limit 20). |
+| `scan_for_indirect_jumps` | Indirect jumps/calls (dynamic control flow) in a function. Filters out constant-target exits and return instructions (`Ijk_Ret`), classifies results by `flow_type` (`indirect_call`, `indirect_jump`). Paginated (default limit 20). |
 | `patch_binary_memory` | Patch the loaded binary in memory with new bytes. |
 | `get_cross_reference_map` | Multi-dimensional cross-reference  - for one or more functions, returns API calls, string refs, callers, callees, suspicious imports, and complexity in a single response. |
 | `solve_constraints_for_path` | Use angr's symbolic execution and constraint solver to find concrete input values (stdin, argv, symbolic registers) that cause execution to reach a target address. Returns detailed constraint solutions. Background task. |
@@ -224,9 +224,9 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `get_data_dependencies` | Data dependency analysis (def-use chains) for a function. Paginated (default limit 20). |
 | `hook_function` | Replace a function with a custom SimProcedure. |
 | `list_hooks` | List all active function hooks. |
-| `unhook_function` | Remove a previously set hook. |
-| `get_calling_conventions` | Detect calling conventions for functions. Paginated (default limit 20). |
-| `get_function_variables` | Recover local variables and parameters. Paginated (default limit 80). |
+| `unhook_function` | Remove a previously set hook. Resolves symbol names by searching angr's internal `_sim_procedures` table (more reliable than `find_symbol`). Falls back to cleaning tracking state if the hook was already cleared. |
+| `get_calling_conventions` | Detect calling conventions for functions. Includes diagnostic notes when CC analysis produces no results (e.g. for simprocedures or thunks). Paginated (default limit 20). |
+| `get_function_variables` | Recover local variables and parameters. Automatically filters VEX IR temporaries (`ir_N`, `tmp_N`) from results and reports their count separately. Paginated (default limit 80). |
 | `disassemble_at_address` | Disassemble N instructions at a given address (default 30 instructions). |
 | `identify_library_functions` | Identify standard library functions (libc, etc.). Paginated (default limit 20). |
 | `get_control_dependencies` | Control dependency analysis for a function. Paginated (default limit 20). |
@@ -249,7 +249,7 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 
 | Tool | Description |
 |---|---|
-| `generate_yara_rule` | Auto-generate a YARA detection rule from the loaded binary's analysis findings: unique strings, import combinations, section names, Rich header hash, PDB path, file size range, and byte patterns. Outputs valid YARA syntax. Use `scan_after_generate=True` to immediately compile and scan the loaded binary with the generated rule, returning match results inline. |
+| `generate_yara_rule` | Auto-generate a YARA detection rule from the loaded binary's analysis findings: FLOSS decoded/stack strings, triage suspicious strings, network IOCs (URLs, domains, IPs), import combinations, section names, Rich header hash, PDB path, file size range, and byte patterns. Outputs valid YARA syntax. Use `scan_after_generate=True` to immediately compile and scan the loaded binary with the generated rule, returning match results inline. |
 | `generate_sigma_rule` | Generate draft Sigma detection rules from analysis findings: process creation patterns, file paths, registry keys, and network indicators. Supports `rule_type`: `process_creation`, `file_event`, `registry`, or `all`. Includes confidence annotations. |
 | `parse_authenticode` | Parse PE authenticode signatures: certificate details (subject, issuer, serial, thumbprint, validity), countersignature timestamps, PE hash validation, and anomaly detection (expired, self-signed, mismatched hashes). |
 | `unify_artifact_timeline` | Correlate all temporal artifacts: PE compile timestamp, debug directory timestamps, Rich header build info, resource timestamps, export table timestamp, digital signature timestamps, and .NET metadata. Flags timestomping, future dates, and component mismatches. |
@@ -306,7 +306,7 @@ All multi-format analysis tools support pagination via `limit` (default 20) and 
 | Tool | Description |
 |---|---|
 | `detect_binary_format` | Auto-detect format (PE/.NET/ELF/Mach-O/Go/Rust) from magic bytes. |
-| `dotnet_analyze` | Comprehensive .NET metadata: CLR header, types, methods, assembly refs, user strings. Paginated (default limit 20). |
+| `dotnet_analyze` | Comprehensive .NET metadata: CLR header, types, methods, assembly refs, user strings. Type/method attribute flags are displayed in compact pipe-separated format (e.g. `Public | Class | AutoLayout`). Paginated (default limit 20). |
 | `dotnet_disassemble_method` | Disassemble .NET CIL bytecode to human-readable opcodes. Paginated (default limit 20). |
 | `go_analyze` | Go binary analysis: compiler version, packages, functions (works on stripped binaries). Paginated (default limit 20). |
 | `rust_analyze` | Rust binary metadata: compiler version, crate dependencies, toolchain. |
@@ -364,7 +364,7 @@ The `refinery_dotnet` tool provides deep .NET/CLR analysis  - critical for analy
 
 | Tool | Operations |
 |---|---|
-| `refinery_executable` | **sections**  - extract sections/segments from PE, ELF, or Mach-O with entropy calculation per section. **virtual_read**  - read bytes at a virtual address. **file_to_virtual**  - convert file offset to virtual address (and back). **disassemble**  - native disassembly (x86/x64/ARM) via Capstone. **disassemble_cil**  - .NET CIL/MSIL bytecode disassembly. **entropy_map**  - visual entropy heatmap of the binary (identifies packed/encrypted regions at a glance). **stego**  - extract hidden data from images via LSB steganography. |
+| `refinery_executable` | **sections**  - extract sections/segments from PE, ELF, or Mach-O with entropy calculation per section. **virtual_read**  - read bytes at a virtual address. **file_to_virtual**  - convert file offset to virtual address (and back). **disassemble**  - native disassembly (x86/x64/ARM) via Capstone; supports `address` parameter to disassemble at a specific virtual address (reads data via `vsnip`). **disassemble_cil**  - .NET CIL/MSIL bytecode disassembly. **entropy_map**  - visual entropy heatmap of the binary (identifies packed/encrypted regions at a glance). **stego**  - extract hidden data from images via LSB steganography. |
 
 ### Archive & Document Extraction (1 dispatched tool, 7 operations)
 
@@ -409,7 +409,7 @@ The real power of Arkana's Binary Refinery integration emerges when tools are ch
 | Tool | Description |
 |---|---|
 | `extract_steganography` | Detect data hidden after image EOF markers (PNG IEND, JPEG FFD9, GIF trailer), BMP size mismatches, and PE overlay data. Returns payload entropy, magic bytes, and extraction hints. Paginated (default limit 10). |
-| `parse_custom_container` | Parse binary data following common malware container patterns: `delimiter_size_payload`, `size_payload`, or `fixed_chunks`. Auto-detects delimiters and chunk sizes with entropy analysis. Paginated (default limit 20). |
+| `parse_custom_container` | Parse binary data following common malware container patterns: `delimiter_size_payload`, `size_payload`, or `fixed_chunks`. Auto-detects delimiters and chunk sizes with entropy analysis. Returns diagnostic hints when 0 chunks are found (e.g. delimiter not found, size field points past data end). Paginated (default limit 20). |
 | `extract_config_automated` | Extract potential C2 configuration data using regex patterns  - IPs, URLs, domains, registry keys, file paths, mutexes, and base64-encoded config blobs. Auto-saves significant findings as notes. Paginated (default limit 20). |
 
 ## Malware Family Identification (3 tools)
@@ -617,3 +617,48 @@ These tools support the [learning skill](claude-code.md#learning-skill-for-claud
 | `update_concept_mastery` | Record mastery of a concept at a given level (`introduced`, `practiced`, `understood`, `mastered`). Accepts optional notes. |
 | `get_learning_suggestions` | Get personalised learning suggestions based on current mastery and optional focus area. Returns recommended modules, concepts to revisit, and next steps. |
 | `reset_learner_profile` | Reset the learner profile to start fresh. Requires `confirm=true` to execute. |
+
+---
+
+## Known Tool Limitations
+
+The following limitations have been identified through comprehensive testing. They are inherent to the underlying analysis frameworks or architectural constraints.
+
+### Data Flow & Slicing
+
+| Tool | Limitation |
+|------|-----------|
+| `get_data_dependencies` | Returns raw angr internal representations (`SimEngineRDVEX`, `LocalVariableTag` atoms). Output is useful for programmatic analysis but not human-readable summaries. Prefer `get_reaching_definitions` or `propagate_constants` for more interpretable results. |
+| `get_backward_slice` / `get_forward_slice` | Returns CFG reachability (all blocks that *can* reach or *be reached from* a target), not true data-flow slices. The `variable` parameter selects the starting point but the slice follows control flow, not data dependencies. |
+| `extract_function_constants` | Includes code addresses (call targets, branch destinations) alongside actual data constants. Filter by checking whether values fall within code section ranges. |
+
+### Emulation & Unpacking
+
+| Tool | Limitation |
+|------|-----------|
+| Qiling tools (`emulate_binary_with_qiling`, etc.) | Requires manual rootfs setup with real Windows DLLs. Use `qiling_setup_check()` to verify. See [QILING_ROOTFS.md](QILING_ROOTFS.md) for setup. |
+| `auto_unpack_pe` / `try_all_unpackers` | FSG-packed binaries may fail to unpack with Unipacker. Use Qiling-based unpacking (`qiling_dump_unpacked_binary`) or manual OEP recovery as fallback. |
+| Speakeasy / Qiling emulation | Complex packers with anti-emulation checks may cause emulation to stall or produce incomplete results. Timeouts and partial results are captured automatically. |
+
+### External Dependencies
+
+| Tool | Limitation |
+|------|-----------|
+| `get_virustotal_report_for_loaded_file` | Requires a VirusTotal API key. Configure with `set_api_key(service="virustotal", key="...")`. |
+| `scan_for_embedded_files` | Requires binwalk v3+. Uses `--signature --quiet` flags for structured output. |
+
+### Output & Response Limits
+
+| Tool | Limitation |
+|------|-----------|
+| `analyze_batch` | The 8KB MCP response soft limit can truncate comparison data for large file sets. Use smaller `file_paths` lists (5-10 files) or filter by specific metrics. |
+| `search_decompiled_code` | Searches angr-decompiled C pseudocode, not assembly mnemonics. For assembly-level search, use `get_annotated_disassembly(search="pattern")` on specific functions. |
+| `refinery_list_units` | Returns a simplified category-level view of Binary Refinery's unit tree. Individual unit parameters are not listed — refer to Binary Refinery's documentation for detailed unit options. |
+
+### Analysis Quality
+
+| Tool | Limitation |
+|------|-----------|
+| `refinery_carve` / `refinery_extract_iocs` | May produce false positives when run on raw binary data (e.g. detecting Base64 patterns in code sections). Validate extracted IOCs against context. |
+| `get_calling_conventions` | May return no results for simprocedures, library stubs, or very small functions. A diagnostic note is included when this occurs. |
+| `get_dominators` | Returns empty results when the target address is the function entry point or doesn't correspond to a basic block boundary. Diagnostic notes explain the cause. |

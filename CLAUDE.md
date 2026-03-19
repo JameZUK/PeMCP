@@ -166,6 +166,24 @@ Dashboard triage flags are persisted to the analysis cache and restored when the
 
 The Docker image uses 4 venvs to isolate incompatible unicorn versions (angr needs v2, Speakeasy/Unipacker/Qiling need v1). .NET deobfuscation tools are invoked via `asyncio.create_subprocess_exec()` — no Python venv needed. de4dot-cex runs via `mono` (.NET Framework), NETReactorSlayer is a self-contained linux-x64 binary, ilspycmd is a `dotnet` global tool.
 
+## Known Tool Limitations
+
+These are inherent limitations from underlying frameworks or architecture, not bugs:
+
+- **`get_data_dependencies`**: Returns raw angr internals (`SimEngineRDVEX`, `LocalVariableTag`). Prefer `get_reaching_definitions` or `propagate_constants` for readable output.
+- **`get_backward_slice` / `get_forward_slice`**: Returns CFG reachability, not true data-flow slices. The `variable` parameter selects the start point but slicing follows control flow.
+- **`extract_function_constants`**: Includes code addresses (call/branch targets) alongside data constants. Filter by checking section ranges.
+- **Qiling emulation**: Requires manual rootfs setup with real Windows DLLs. `qiling_setup_check()` verifies. See `docs/QILING_ROOTFS.md`.
+- **`auto_unpack_pe`**: FSG-packed binaries may fail with Unipacker. Use `qiling_dump_unpacked_binary()` as fallback.
+- **`get_virustotal_report_for_loaded_file`**: Requires API key via `set_api_key(service="virustotal", key="...")`.
+- **`analyze_batch`**: 8KB MCP response soft limit can truncate data for large file sets. Use smaller lists (5-10 files).
+- **`search_decompiled_code`**: Searches C pseudocode, not assembly. Use `get_annotated_disassembly(search=...)` for assembly-level search.
+- **`refinery_carve` / `refinery_extract_iocs`**: May produce false positives on raw binary data. Validate extracted IOCs.
+- **`scan_for_indirect_jumps`**: Filters constant-target exits and `Ijk_Ret` (returns). Classifies results as `indirect_call` or `indirect_jump`.
+- **`get_function_variables`**: Automatically filters VEX IR temporaries (`ir_N`, `tmp_N`); reports their count separately.
+- **`get_calling_conventions`**: May return no results for simprocedures/thunks. Includes diagnostic note when this occurs.
+- **`dotnet_analyze`**: CLR type/method flags displayed as compact pipe-separated format (e.g. `Public | Class | AutoLayout`).
+
 ## CI
 
 GitHub Actions runs on every push/PR (plus manual `workflow_dispatch`): unit tests (Python 3.10-3.12), ruff lint, and smoke tests. Coverage floor is 65% with branch coverage enabled. Dependabot is configured for weekly pip dependency updates.

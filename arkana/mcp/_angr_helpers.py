@@ -271,7 +271,15 @@ def _format_cc_info(func) -> Dict[str, Any]:
             info["block_count"] = func.graph.number_of_nodes() if func.graph else len(list(func.blocks))  # L6-v10: O(1)
             info["has_return"] = func.has_return
             info["is_plt"] = getattr(func, 'is_plt', False)
+            info["is_simprocedure"] = func.is_simprocedure
+            info["binary_name"] = getattr(func, 'binary_name', None)
         except Exception:
             logger.debug("_format_cc_info: failed to get heuristic func data", exc_info=True)
+        info["note"] = (
+            "Calling convention analysis did not produce results for this function. "
+            "This typically happens with small/leaf functions, thunks, or functions "
+            "without clear parameter passing patterns. Try decompile_function_with_angr() "
+            "for pseudocode that infers parameters from usage context."
+        )
 
     return info

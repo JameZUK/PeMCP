@@ -178,6 +178,20 @@ async def refinery_executable(
             if cleaned.startswith(("0x", "0X")):
                 cleaned = cleaned[2:]
             data = bytes.fromhex(cleaned)
+        elif address:
+            # Read bytes at the specified virtual address
+            _check_pe_loaded("refinery_executable")
+            full_data = _get_file_data()
+            addr = int(address, 0) if isinstance(address, str) else address
+            await ctx.info(f"Reading {size} bytes at VA {hex(addr)} for disassembly...")
+
+            def _vsnip():
+                from refinery.units.formats.exe.vsnip import vsnip
+                return full_data | vsnip(slice(addr, addr + size)) | bytes
+
+            data = await asyncio.to_thread(_vsnip)
+            if not data:
+                return {"error": f"No data found at virtual address {hex(addr)}. Check the address is valid."}
         else:
             _check_pe_loaded("refinery_executable")
             data = _get_file_data()

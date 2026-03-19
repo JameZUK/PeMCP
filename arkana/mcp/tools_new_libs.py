@@ -894,10 +894,10 @@ async def scan_for_embedded_files(
 
     def _scan_cli():
         """Fallback: parse output of the binwalk CLI tool."""
-        # L1-v8: Add '--' to prevent filepath starting with '-' from being
-        # interpreted as a binwalk command-line flag.
+        # binwalk v3 treats '--' as a literal filename, so we omit it.
+        # Use --signature explicitly for clarity across binwalk versions.
         proc = subprocess.run(
-            ["binwalk", "--quiet", "--", state.filepath],
+            ["binwalk", "--signature", "--quiet", state.filepath],
             capture_output=True, text=True, timeout=60,
         )
         _cli_warning = None

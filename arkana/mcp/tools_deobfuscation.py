@@ -103,7 +103,7 @@ async def get_hex_dump(ctx: Context, start_offset: Union[int, str] = 0, length: 
         raise RuntimeError(f"Failed during hex dump generation: {e}") from e
 
 @tool_decorator
-async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
+async def deobfuscate_base64(ctx: Context, data_hex: str) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Decodes hex-encoded Base64 data back to plaintext.
 
@@ -113,44 +113,45 @@ async def deobfuscate_base64(ctx: Context, hex_string: str) -> Optional[str]:
     Next steps: If decoded data is printable → add_note() to record finding.
     If it contains further encoding → call recursively or use find_and_decode_encoded_strings().
 
-    The input 'hex_string' should be the hexadecimal representation of a Base64 string.
+    The input 'data_hex' should be the hexadecimal representation of a Base64 string.
     Example: hex of "dGVzdA==" is "6447567a64413d3d".
 
     Args:
         ctx: The MCP Context object.
-        hex_string: (str) The hex-encoded string of the Base64 data.
+        data_hex: (str) The hex-encoded string of the Base64 data.
 
     Returns:
-        (Optional[str]) The deobfuscated string (UTF-8 decoded, errors ignored).
-        Returns None if deobfuscation fails (e.g., invalid hex, not valid Base64).
-    Raises:
-        ValueError: If the response size exceeds the server limit.
+        Dictionary with 'decoded_text' on success, or 'error' on failure.
     """
-    await ctx.info(f"Attempting to deobfuscate Base64 from hex string: {hex_string[:60]}...")
-    if len(hex_string) > _MAX_HEX_INPUT_LEN:
+    await ctx.info(f"Attempting to deobfuscate Base64 from hex string: {data_hex[:60]}...")
+    if len(data_hex) > _MAX_HEX_INPUT_LEN:
         raise ValueError(
-            f"Hex input too large ({len(hex_string):,} chars, "
+            f"Hex input too large ({len(data_hex):,} chars, "
             f"limit {_MAX_HEX_INPUT_LEN:,})."
         )
     try:
-        base64_encoded_bytes = bytes.fromhex(hex_string)
+        base64_encoded_bytes = bytes.fromhex(data_hex)
         decoded_payload_bytes = codecs.decode(base64_encoded_bytes, 'base64') # pyright: ignore [reportUnknownMemberType]
-        result = decoded_payload_bytes.decode('utf-8', 'ignore')
+        decoded_text = decoded_payload_bytes.decode('utf-8', 'ignore')
         await ctx.info("Base64 deobfuscation successful.")
 
-        limit_info_str = "a shorter 'hex_string' if the decoded content is too large (this tool has no direct data limiting parameters)"
-        # Note: `result` can be None if decoding fails in a way that doesn't raise an exception but returns None (though unlikely for base64)
-        # The _check_mcp_response_size helper handles `None` by attempting to JSON serialize it, which is fine.
+        result: Dict[str, Any] = {
+            "status": "success",
+            "decoded_text": decoded_text,
+            "input_hex_length": len(data_hex),
+            "decoded_length": len(decoded_text),
+        }
+        limit_info_str = "a shorter 'data_hex' if the decoded content is too large"
         return await _check_mcp_response_size(ctx, result, "deobfuscate_base64", limit_info_str)
 
-    except ValueError as e: # Handles bytes.fromhex error or other ValueErrors
+    except ValueError as e:
         await ctx.error(f"Invalid hex string or Base64 content for deobfuscation: {e!s}")
-        logger.warning("MCP: Invalid hex/Base64 for deobfuscation: %s... - %s", hex_string[:60], e)
-        return None # Return None on decoding failure before size check
-    except Exception as e: # Catch other errors like binascii.Error from codecs.decode
+        logger.warning("MCP: Invalid hex/Base64 for deobfuscation: %s... - %s", data_hex[:60], e)
+        return {"error": f"Invalid hex or Base64 content: {str(e)[:200]}"}
+    except Exception as e:
         await ctx.error(f"Base64 deobfuscation error: {e!s}")
-        logger.error("MCP: Base64 deobfuscation error for %s... - %s", hex_string[:60], e, exc_info=True)
-        return None # Return None on decoding failure
+        logger.error("MCP: Base64 deobfuscation error for %s... - %s", data_hex[:60], e, exc_info=True)
+        return {"error": f"Base64 deobfuscation failed: {str(e)[:200]}"}
 
 @tool_decorator
 async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> Dict[str, Optional[str]]:

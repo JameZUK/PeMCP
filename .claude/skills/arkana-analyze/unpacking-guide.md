@@ -61,6 +61,7 @@ auto_unpack_pe()
 - Handles most common commercial and open-source packers
 - Returns the unpacked binary ready for analysis
 - If it fails, falls through to Method 2
+- **Known limitation**: FSG-packed binaries may fail with Unipacker. Use Method 3 (Qiling emulation) as fallback
 
 **After success**: Re-run `open_file()` on the unpacked binary, then Phase 1.
 
