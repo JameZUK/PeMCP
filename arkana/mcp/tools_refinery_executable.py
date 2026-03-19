@@ -205,12 +205,17 @@ async def refinery_executable(
         def _run_disasm():
             from refinery.units.sinks.asm import asm
             # Detect PE bitness for correct disassembly mode
+            # refinery asm expects mode as string: 'x32' or 'x64'
             mode = None
-            pe_mode = (state.pe_data or {}).get("mode", "")
-            if "64" in str(pe_mode):
-                mode = 64
-            elif "32" in str(pe_mode):
-                mode = 32
+            pe_obj = state.pe_object
+            if pe_obj and hasattr(pe_obj, 'FILE_HEADER'):
+                machine = pe_obj.FILE_HEADER.Machine
+                # 0x8664 = AMD64, 0xAA64 = ARM64
+                if machine in (0x8664, 0xAA64):
+                    mode = 'x64'
+                # 0x14C = i386, 0x1C0 = ARM
+                elif machine in (0x14C, 0x1C0):
+                    mode = 'x32'
             if mode:
                 return data | asm(count=count, mode=mode) | bytes
             return data | asm(count=count) | bytes

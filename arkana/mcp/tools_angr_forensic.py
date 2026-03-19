@@ -144,27 +144,35 @@ async def diff_binaries(
             unmatched_b = []
             _diff_warnings = []
 
+            def _addr(x):
+                """Extract address — handles both function objects and raw ints."""
+                return hex(x.addr) if hasattr(x, 'addr') else hex(x)
+
+            def _name(x):
+                """Extract name — handles both function objects and raw ints."""
+                return str(x.name) if hasattr(x, 'name') else f"sub_{x:x}"
+
             try:
                 for fa, fb in list(getattr(diff, 'identical_functions', []))[:limit]:
-                    identical.append({"a": hex(fa.addr), "b": hex(fb.addr), "name": str(fa.name)})
+                    identical.append({"a": _addr(fa), "b": _addr(fb), "name": _name(fa)})
             except Exception as e:
                 logger.warning("BinDiff: failed to extract identical_functions: %s", e)
                 _diff_warnings.append(f"identical_functions extraction failed: {e}")
             try:
                 for fa, fb in list(getattr(diff, 'differing_functions', []))[:limit]:
-                    differing.append({"a": hex(fa.addr), "b": hex(fb.addr), "name_a": str(fa.name), "name_b": str(fb.name)})
+                    differing.append({"a": _addr(fa), "b": _addr(fb), "name_a": _name(fa), "name_b": _name(fb)})
             except Exception as e:
                 logger.warning("BinDiff: failed to extract differing_functions: %s", e)
                 _diff_warnings.append(f"differing_functions extraction failed: {e}")
             try:
                 for f in list(getattr(diff, 'unmatched_from_a', getattr(diff, 'unmatched_a', [])))[:limit]:
-                    unmatched_a.append({"address": hex(f.addr), "name": str(f.name)})
+                    unmatched_a.append({"address": _addr(f), "name": _name(f)})
             except Exception as e:
                 logger.warning("BinDiff: failed to extract unmatched_from_a: %s", e)
                 _diff_warnings.append(f"unmatched_from_a extraction failed: {e}")
             try:
                 for f in list(getattr(diff, 'unmatched_from_b', getattr(diff, 'unmatched_b', [])))[:limit]:
-                    unmatched_b.append({"address": hex(f.addr), "name": str(f.name)})
+                    unmatched_b.append({"address": _addr(f), "name": _name(f)})
             except Exception as e:
                 logger.warning("BinDiff: failed to extract unmatched_from_b: %s", e)
                 _diff_warnings.append(f"unmatched_from_b extraction failed: {e}")

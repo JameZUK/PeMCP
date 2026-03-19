@@ -330,15 +330,20 @@ async def reconstruct_pe_from_dump(
         bridge.report_progress(60, 100)
         bridge.info("Rebuilding PE...")
 
-        # Build the fixed PE (LIEF API: newer versions require config_t)
+        # Build the fixed PE (LIEF API varies across versions)
         try:
             config = lief.PE.Builder.config_t()
             builder = lief.PE.Builder(pe, config)
         except (TypeError, AttributeError):
-            # Fallback for older LIEF versions
             builder = lief.PE.Builder(pe)
         builder.build()
-        fixed_data = bytes(builder.get_build())
+        # Extract bytes: newer LIEF uses .bytes(), older uses .get_build()
+        if hasattr(builder, 'bytes') and callable(builder.bytes):
+            fixed_data = bytes(builder.bytes())
+        elif hasattr(builder, 'get_build'):
+            fixed_data = bytes(builder.get_build())
+        else:
+            raise RuntimeError("LIEF Builder has no recognized output method (tried bytes(), get_build())")
 
         bridge.report_progress(90, 100)
         bridge.info("Formatting results...")

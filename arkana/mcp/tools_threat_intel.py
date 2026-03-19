@@ -530,8 +530,13 @@ def _generate_file_event_rule(
         safe_fn = filename.replace("'", "''").replace("\\", "\\\\")
         detection_items.append(f"        TargetFilename|endswith: '\\\\{safe_fn}'")
     for path in file_paths[:3]:
-        # Skip PDB paths and debug info — not valid file drop indicators
-        if any(x in path.lower() for x in ['.pdb', '\\vc\\', '\\build\\', '\\debug\\']):
+        # Skip build artifacts and debug info — not valid file drop indicators
+        path_lower = path.lower()
+        if any(x in path_lower for x in [
+            '.pdb', '.h', '.c', '.cpp', '.obj', '.lib',
+            '\\vc\\', '\\build', '\\debug\\', '\\release\\',
+            '\\src\\', '\\source\\', 'builder',
+        ]):
             continue
         # H5: Escape YAML special chars to prevent injection
         escaped = path.replace("\\", "\\\\").replace("'", "''").replace("`", "")
