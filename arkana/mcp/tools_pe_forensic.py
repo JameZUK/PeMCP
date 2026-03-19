@@ -294,10 +294,10 @@ def _collect_string_candidates(
             s = s_entry.get("string", s_entry) if isinstance(s_entry, dict) else str(s_entry)
             _add(s)
 
-    # 2. Suspicious strings from triage (heuristic-flagged binary strings)
-    sus_strings = triage.get("suspicious_strings", [])
-    if isinstance(sus_strings, list):
-        for item in sus_strings:
+    # 2. High-value strings from triage (ML-ranked by StringSifter)
+    hvs = triage.get("high_value_strings", [])
+    if isinstance(hvs, list):
+        for item in hvs:
             s = item.get("string", item) if isinstance(item, dict) else str(item)
             _add(s)
 
@@ -313,9 +313,16 @@ def _collect_string_candidates(
     if len(candidates) < 5:
         basic_strings = pe_data.get("basic_ascii_strings", [])
         if isinstance(basic_strings, list):
+            # Items are dicts: {"offset": "0x...", "string": "...", "source_type": "..."}
+            raw = []
+            for item in basic_strings:
+                if isinstance(item, dict):
+                    raw.append(item.get("string", ""))
+                elif isinstance(item, str):
+                    raw.append(item)
             # Prefer longer, more distinctive strings
             sorted_strings = sorted(
-                (s for s in basic_strings if isinstance(s, str) and len(s) >= min_length),
+                (s for s in raw if isinstance(s, str) and len(s) >= min_length),
                 key=len, reverse=True,
             )
             for s in sorted_strings:
