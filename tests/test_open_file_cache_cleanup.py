@@ -672,7 +672,6 @@ class TestPerStateThrottleIntegration:
         # acquire the lock and set the timestamp.
         before = time.time()
         save_decompile_cache_async(state)
-        after = time.time()
 
         # The timestamp should have been updated (or stayed 0 if lock contention)
         # We can't guarantee the lock was available, so just check it's reasonable
