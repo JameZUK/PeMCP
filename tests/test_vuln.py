@@ -219,19 +219,19 @@ class TestToolRegistration:
     """Test that vuln tools are properly decorated."""
 
     def test_scan_tool(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_vuln import scan_for_vulnerability_patterns
-        assert asyncio.iscoroutinefunction(scan_for_vulnerability_patterns)
+        assert inspect.iscoroutinefunction(scan_for_vulnerability_patterns)
 
     def test_assess_tool(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_vuln import assess_function_attack_surface
-        assert asyncio.iscoroutinefunction(assess_function_attack_surface)
+        assert inspect.iscoroutinefunction(assess_function_attack_surface)
 
     def test_data_flow_tool(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_vuln import find_dangerous_data_flows
-        assert asyncio.iscoroutinefunction(find_dangerous_data_flows)
+        assert inspect.iscoroutinefunction(find_dangerous_data_flows)
 
 
 # =====================================================================

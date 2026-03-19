@@ -28,13 +28,6 @@ from arkana.imports import (  # noqa: E402,F401
 
 from arkana.state import AnalyzerState, StateProxy
 
-# --- Auto-migrate ~/.pemcp/ → ~/.arkana/ before any config/cache access ---
-from arkana.migration import migrate_data_dir  # noqa: E402
-try:
-    migrate_data_dir()
-except Exception:
-    logging.getLogger("Arkana").warning("migrate_data_dir() failed at import time", exc_info=True)
-
 from arkana.user_config import get_config_value
 
 # --- Logging (frequently imported from config) ---

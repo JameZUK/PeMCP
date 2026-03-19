@@ -12,9 +12,9 @@ class TestSearchDecompiledCode:
         assert callable(search_decompiled_code)
 
     def test_is_async(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_dashboard_exposed import search_decompiled_code
-        assert asyncio.iscoroutinefunction(search_decompiled_code)
+        assert inspect.iscoroutinefunction(search_decompiled_code)
 
     def test_validate_regex_pattern_imported(self):
         """validate_regex_pattern is available for query validation."""
@@ -41,9 +41,9 @@ class TestGetEntropyAnalysis:
         assert callable(get_entropy_analysis)
 
     def test_is_async(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_dashboard_exposed import get_entropy_analysis
-        assert asyncio.iscoroutinefunction(get_entropy_analysis)
+        assert inspect.iscoroutinefunction(get_entropy_analysis)
 
 
 class TestGenerateReport:
@@ -54,9 +54,9 @@ class TestGenerateReport:
         assert callable(generate_report)
 
     def test_is_async(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_dashboard_exposed import generate_report
-        assert asyncio.iscoroutinefunction(generate_report)
+        assert inspect.iscoroutinefunction(generate_report)
 
 
 class TestDashboardStateApi:

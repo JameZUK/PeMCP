@@ -267,19 +267,19 @@ class TestToolRegistration:
     """Test that all Frida tools are properly decorated."""
 
     def test_hook_tool(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_frida import generate_frida_hook_script
-        assert asyncio.iscoroutinefunction(generate_frida_hook_script)
+        assert inspect.iscoroutinefunction(generate_frida_hook_script)
 
     def test_bypass_tool(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_frida import generate_frida_bypass_script
-        assert asyncio.iscoroutinefunction(generate_frida_bypass_script)
+        assert inspect.iscoroutinefunction(generate_frida_bypass_script)
 
     def test_trace_tool(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_frida import generate_frida_trace_script
-        assert asyncio.iscoroutinefunction(generate_frida_trace_script)
+        assert inspect.iscoroutinefunction(generate_frida_trace_script)
 
 
 # =====================================================================

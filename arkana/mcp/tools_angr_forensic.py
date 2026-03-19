@@ -1,6 +1,7 @@
 """MCP tools for angr-based forensic and advanced binary analysis."""
 import datetime
 import re
+import threading
 import time
 import uuid
 import asyncio
@@ -2140,6 +2141,7 @@ def _sync_detect_opaque(target_addr, limit):
     scanned_funcs = 0
     blocks_analyzed = 0
     solver_timeouts = 0
+    orphaned_threads = []
 
     funcs_to_scan = {}
     if target_addr is not None:
@@ -2172,11 +2174,10 @@ def _sync_detect_opaque(target_addr, limit):
             block_addr = block.addr if hasattr(block, 'addr') else block
             blocks_analyzed += 1
 
-            import threading
             result_holder = [None]
 
-            def _check_block():
-                result_holder[0] = _analyze_block_for_opaque(project, block_addr, addr_int)
+            def _check_block(_ba=block_addr, _ai=addr_int):
+                result_holder[0] = _analyze_block_for_opaque(project, _ba, _ai)
 
             t = threading.Thread(target=_check_block, daemon=True)
             t.start()
@@ -2184,6 +2185,7 @@ def _sync_detect_opaque(target_addr, limit):
 
             if t.is_alive():
                 solver_timeouts += 1
+                orphaned_threads.append(t)
                 continue
 
             if result_holder[0] is not None:
@@ -2194,6 +2196,22 @@ def _sync_detect_opaque(target_addr, limit):
 
         if blocks_analyzed >= MAX_OPAQUE_PREDICATE_BLOCKS:
             break
+
+    # Best-effort cleanup: give orphaned solver threads a brief grace period
+    if orphaned_threads:
+        logger.debug(
+            "Waiting for %d orphaned Z3 solver thread(s) to finish...",
+            len(orphaned_threads),
+        )
+        for t in orphaned_threads:
+            t.join(timeout=1.0)
+        still_alive = sum(1 for t in orphaned_threads if t.is_alive())
+        if still_alive:
+            logger.warning(
+                "%d Z3 solver thread(s) still running after cleanup; "
+                "they will be reaped on process exit.",
+                still_alive,
+            )
 
     return {
         "findings": findings[:limit],

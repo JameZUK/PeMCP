@@ -132,10 +132,7 @@ def _get_cached_flat_strings(include_basic_ascii: bool = True, deduplicate: bool
 def _get_sifter_models():
     """Return cached (featurizer, ranker) tuple, loading from disk on first call."""
     global _sifter_featurizer, _sifter_ranker
-    if _sifter_featurizer is not None and _sifter_ranker is not None:
-        return _sifter_featurizer, _sifter_ranker
     with _sifter_lock:
-        # Double-check after acquiring lock
         if _sifter_featurizer is not None and _sifter_ranker is not None:
             return _sifter_featurizer, _sifter_ranker
         modeldir = os.path.join(sifter_util.package_base(), "model")

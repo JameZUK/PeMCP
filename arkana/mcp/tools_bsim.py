@@ -98,6 +98,7 @@ async def extract_function_features_tool(
             all_funcs.sort(key=lambda f: f.addr)
             selected = all_funcs[:limit]
 
+            failed_count = 0
             for func in selected:
                 try:
                     feat = extract_function_features(
@@ -107,17 +108,23 @@ async def extract_function_features_tool(
                     feat["address"] = hex(feat["address"])
                     results.append(feat)
                 except Exception as e:
+                    failed_count += 1
                     logger.debug(
                         "Feature extraction failed for %#x: %s", func.addr, e
                     )
 
-        return {
+        result = {
             "status": "success",
             "binary": os.path.basename(state.filepath or "unknown"),
             "functions": results,
             "count": len(results),
             "include_vex": include_vex,
         }
+        if failed_count > 0:
+            result["warnings"] = [
+                f"{failed_count} function(s) failed feature extraction"
+            ]
+        return result
 
     result = await asyncio.to_thread(_extract)
     _raise_on_error_dict(result)

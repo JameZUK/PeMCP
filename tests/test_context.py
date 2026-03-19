@@ -125,9 +125,9 @@ class TestToolDecoratorRegistration:
         assert callable(get_analysis_context_for_function)
 
     def test_tool_is_async(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_context import get_analysis_context_for_function
-        assert asyncio.iscoroutinefunction(get_analysis_context_for_function)
+        assert inspect.iscoroutinefunction(get_analysis_context_for_function)
 
 
 class TestParseAddr:

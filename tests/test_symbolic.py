@@ -25,9 +25,9 @@ class TestSolveConstraintsForPath:
         assert callable(solve_constraints_for_path)
 
     def test_is_async(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_angr import solve_constraints_for_path
-        assert asyncio.iscoroutinefunction(solve_constraints_for_path)
+        assert inspect.iscoroutinefunction(solve_constraints_for_path)
 
     def test_address_parsing(self):
         """_parse_addr handles hex and decimal."""
@@ -69,9 +69,9 @@ class TestExploreSymbolicStates:
         assert callable(explore_symbolic_states)
 
     def test_is_async(self):
-        import asyncio
+        import inspect
         from arkana.mcp.tools_angr import explore_symbolic_states
-        assert asyncio.iscoroutinefunction(explore_symbolic_states)
+        assert inspect.iscoroutinefunction(explore_symbolic_states)
 
     def test_strategy_validation(self):
         """Only dfs, bfs, directed should be valid."""

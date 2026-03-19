@@ -5,6 +5,7 @@ triggered each warning, and a logging.Handler that filters by logger prefix.
 """
 import contextvars
 import logging
+import sys
 from typing import Optional, FrozenSet
 
 from arkana.state import get_current_state
@@ -68,7 +69,11 @@ class LibraryWarningHandler(logging.Handler):
                 task_id=task_id,
             )
         except Exception:
-            pass  # Never crash the application
+            # Never crash the application, but log to stderr for debuggability
+            try:
+                print(f"[Arkana] LibraryWarningHandler.emit() failed: {record.name}", file=sys.stderr)
+            except Exception:
+                pass
 
 
 def install_warning_handler() -> None:

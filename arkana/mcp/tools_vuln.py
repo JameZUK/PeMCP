@@ -173,13 +173,14 @@ for _pat in _VULN_PATTERNS:
                 "description": _pat["description"],
             })
 
-# Precompile regex patterns
+# Precompile regex patterns (validated for ReDoS safety)
 _COMPILED_PATTERNS: Dict[str, Any] = {}
 for _pat in _VULN_PATTERNS:
     if _pat["pattern_type"] == "decompile_pattern" and _pat.get("regex"):
         try:
+            validate_regex_pattern(_pat["regex"])
             _COMPILED_PATTERNS[_pat["id"]] = re.compile(_pat["regex"], re.IGNORECASE | re.DOTALL)
-        except re.error:
+        except (re.error, ValueError):
             pass
 
 # Input source APIs for attack surface analysis
@@ -706,6 +707,8 @@ def _try_rda_flow(project, func_obj, sources, sinks, timeout):
     t.join(timeout=timeout)
 
     if t.is_alive():
+        logger.debug("RDA thread timed out after %ds for %s; thread will finish in background.",
+                      timeout, getattr(func_obj, 'name', '?'))
         return None  # timed out
 
     if error_holder[0] is not None or result_holder[0] is None:
