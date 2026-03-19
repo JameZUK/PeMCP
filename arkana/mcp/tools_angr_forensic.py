@@ -1,5 +1,6 @@
 """MCP tools for angr-based forensic and advanced binary analysis."""
 import datetime
+import pickle
 import re
 import threading
 import time
@@ -94,6 +95,43 @@ async def diff_binaries(
                 diff = state.angr_project.analyses.BinDiff(
                     proj_b, cfg_a=state.angr_cfg.model, cfg_b=cfg_b.model,
                 )
+            except (pickle.PicklingError, TypeError) as e:
+                if "pickle" in str(e).lower() or "_CDataBase" in str(e):
+                    # cffi objects can't be pickled — fall back to basic
+                    # function-level comparison by name/size.
+                    if task_id_for_progress:
+                        _update_progress(task_id_for_progress, 70,
+                                         "BinDiff pickle error — falling back to name-based comparison...",
+                                         bridge=_progress_bridge)
+                    funcs_a = {f.name: f for f in state.angr_cfg.functions.values()
+                               if not f.is_simprocedure and not f.is_syscall}
+                    funcs_b = {f.name: f for f in cfg_b.functions.values()
+                               if not f.is_simprocedure and not f.is_syscall}
+                    names_a = set(funcs_a.keys())
+                    names_b = set(funcs_b.keys())
+                    common = names_a & names_b
+                    identical = [{"a": hex(funcs_a[n].addr), "b": hex(funcs_b[n].addr),
+                                  "name": n} for n in sorted(common)[:limit]]
+                    unmatched_a = [{"address": hex(funcs_a[n].addr), "name": n}
+                                   for n in sorted(names_a - names_b)[:limit]]
+                    unmatched_b = [{"address": hex(funcs_b[n].addr), "name": n}
+                                   for n in sorted(names_b - names_a)[:limit]]
+                    return {
+                        "file_a": str(state.filepath),
+                        "file_b": str(file_path_b),
+                        "method": "name_based_fallback",
+                        "note": "BinDiff failed due to cffi serialization error. "
+                                "Results are based on function name matching only.",
+                        "identical_count": len(identical),
+                        "differing_count": 0,
+                        "unmatched_a_count": len(unmatched_a),
+                        "unmatched_b_count": len(unmatched_b),
+                        "identical_functions": identical,
+                        "differing_functions": [],
+                        "unmatched_in_a": unmatched_a,
+                        "unmatched_in_b": unmatched_b,
+                    }
+                return {"error": f"BinDiff failed: {type(e).__name__}: {e}"}
             except Exception as e:
                 return {"error": f"BinDiff failed: {type(e).__name__}: {e}"}
 
@@ -211,9 +249,12 @@ async def detect_self_modifying_code(
         exec_ranges = []
         loader = state.angr_project.loader
         for obj in loader.all_objects:
-            for seg in obj.segments:
-                if seg.is_executable:
-                    exec_ranges.append((seg.min_addr, seg.max_addr))
+            try:
+                for seg in obj.segments:
+                    if seg.is_executable:
+                        exec_ranges.append((seg.min_addr, seg.max_addr))
+            except Exception as e:
+                logger.debug("Skipped object during exec range gathering: %s", e)
 
         def _addr_in_exec(addr_val):
             for lo, hi in exec_ranges:
@@ -235,6 +276,11 @@ async def detect_self_modifying_code(
             for block in func.blocks:
                 try:
                     vex = block.vex
+                except (pickle.PicklingError, TypeError, Exception) as e:
+                    # VEX lifting can trigger cffi pickle errors intermittently
+                    logger.debug("Skipped block %#x VEX lift: %s", block.addr, e)
+                    continue
+                try:
                     for stmt in vex.statements:
                         # Look for Store (memory write) statements
                         if stmt.tag == 'Ist_Store':
@@ -250,7 +296,7 @@ async def detect_self_modifying_code(
                                         "type": "direct_write_to_executable",
                                     })
                 except Exception as e:
-                    logger.debug("Skipped function during self-modifying code scan: %s", e)
+                    logger.debug("Skipped block %#x during SMC scan: %s", block.addr, e)
                     continue
 
             scanned += 1

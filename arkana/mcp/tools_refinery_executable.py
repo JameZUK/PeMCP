@@ -116,7 +116,10 @@ async def refinery_executable(
 
         def _run_vread():
             from refinery.units.formats.exe.vsnip import vsnip
-            return data | vsnip(slice(addr, addr + size)) | bytes
+            # vsnip extracts the full virtual segment containing the range;
+            # we must slice the result to the requested size ourselves.
+            raw = data | vsnip(slice(addr, addr + size)) | bytes
+            return raw[:size] if len(raw) > size else raw
 
         result = await asyncio.to_thread(_run_vread)
         return {
@@ -269,28 +272,54 @@ async def refinery_executable(
         await ctx.info(f"Generating entropy map for {len(data)} bytes...")
 
         def _run_entropy():
-            from refinery.lib.environment import environment
-            from refinery.units.sinks.iemap import iemap
-            # Directly set the cached terminal width value.  Setting the
-            # REFINERY_TERM_SIZE env var is insufficient because the EVInt
-            # descriptor reads it once at import time and caches the result;
-            # later os.environ changes are never picked up.
-            # Lock protects the global term_size mutation from concurrent calls.
-            with _entropy_lock:
-                old_val = environment.term_size.value
-                try:
-                    environment.term_size.value = 120
-                    return data | iemap() | bytes
-                finally:
-                    environment.term_size.value = old_val
+            import math
+            # Compute actual numeric entropy per block instead of using
+            # iemap (which produces ANSI terminal art, not numeric data).
+            block_count = min(256, max(1, len(data) // 256))
+            block_size = max(1, len(data) // block_count)
+            blocks = []
+            for i in range(block_count):
+                start = i * block_size
+                end = min(start + block_size, len(data))
+                chunk = data[start:end]
+                if not chunk:
+                    break
+                # Shannon entropy
+                freq = [0] * 256
+                for b in chunk:
+                    freq[b] += 1
+                length = len(chunk)
+                entropy = 0.0
+                for count in freq:
+                    if count > 0:
+                        p = count / length
+                        entropy -= p * math.log2(p)
+                blocks.append({
+                    "offset": hex(start),
+                    "size": len(chunk),
+                    "entropy": round(entropy, 3),
+                })
+            # Overall entropy
+            freq = [0] * 256
+            for b in data:
+                freq[b] += 1
+            length = len(data)
+            overall = 0.0
+            for count in freq:
+                if count > 0:
+                    p = count / length
+                    overall -= p * math.log2(p)
+            return {
+                "overall_entropy": round(overall, 3),
+                "block_count": len(blocks),
+                "block_size": block_size,
+                "blocks": blocks,
+            }
 
         result = await asyncio.to_thread(_run_entropy)
-        return await _check_mcp_response_size(ctx, {
-            "operation": op,
-            "input_size": len(data),
-            "output_size": len(result),
-            "entropy_map": _safe_decode(result, max_len=8000),
-        }, "refinery_executable")
+        result["operation"] = op
+        result["input_size"] = len(data)
+        return await _check_mcp_response_size(ctx, result, "refinery_executable")
 
     # ── stego: steganography extraction ─────────────────────────────
     # op == "stego"
