@@ -299,6 +299,25 @@ async def open_file(
         with state._types_lock:
             state.custom_types = {"structs": {}, "enums": {}}
         state.previous_session_history = []
+        # Clear module-level caches keyed by _state_uuid to prevent
+        # cross-file data contamination when switching files without close_file()
+        try:
+            from arkana.mcp.tools_angr import clear_decompile_meta
+            clear_decompile_meta(session_uuid=state._state_uuid)
+        except ImportError:
+            pass
+        try:
+            from arkana.mcp.tools_session import cleanup_phase_cache
+            cleanup_phase_cache(state._state_uuid)
+        except ImportError:
+            pass
+        try:
+            from arkana.dashboard.state_api import _cleanup_session_caches
+            _cleanup_session_caches(state._state_uuid)
+        except (ImportError, AttributeError):
+            pass
+        state.result_cache.clear()
+        state.clear_warnings()
 
     _loaded_from_cache = False
 

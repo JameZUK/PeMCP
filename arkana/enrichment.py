@@ -20,8 +20,7 @@ _SWEEP_SAVE_INTERVAL = 60
 # Minimum interval between async (on-demand) saves (seconds).
 _ASYNC_SAVE_INTERVAL = 30
 
-# Module-level state for throttled async saves.
-_last_async_save: float = 0.0
+# Module-level lock for throttled async saves (throttle moved to per-state field).
 _async_save_lock = threading.Lock()
 
 from arkana.constants import ENRICHMENT_MAX_DECOMPILE, ENRICHMENT_TIMEOUT
@@ -574,8 +573,6 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
     Throttled to at most one save per ``_ASYNC_SAVE_INTERVAL`` seconds.
     Runs in a daemon thread so the caller is never blocked.
     """
-    global _last_async_save
-
     # Quick guard: nothing to save if no PE data or no file hash
     if state.pe_data is None:
         return
@@ -584,7 +581,7 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
         return
 
     now = time.time()
-    if now - _last_async_save < _ASYNC_SAVE_INTERVAL:
+    if now - state._last_decompile_save_time < _ASYNC_SAVE_INTERVAL:
         return
 
     # Non-blocking acquire — skip if another save is already running
@@ -592,9 +589,9 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
         return
     try:
         # Re-check throttle inside lock (another thread may have saved)
-        if time.time() - _last_async_save < _ASYNC_SAVE_INTERVAL:
+        if time.time() - state._last_decompile_save_time < _ASYNC_SAVE_INTERVAL:
             return
-        _last_async_save = time.time()
+        state._last_decompile_save_time = time.time()
 
         def _bg_save():
             try:

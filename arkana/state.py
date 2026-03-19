@@ -173,6 +173,9 @@ class AnalyzerState:
         self.last_active: float = time.time()
         self._closing: bool = False  # True when session is being cleaned up
 
+        # Per-state throttle for async decompile cache saves (enrichment.py)
+        self._last_decompile_save_time: float = 0.0
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Thread-safe read of a background task."""
         with self._task_lock:

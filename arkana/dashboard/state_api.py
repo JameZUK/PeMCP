@@ -481,8 +481,8 @@ def get_overview_data() -> Dict[str, Any]:
     with _cache_lock:
         cached = _overview_cache.get(cache_key)
     if cached is not None:
-        expire_time, cached_data = cached
-        if now < expire_time:
+        expire_time, cached_filepath, cached_data = cached
+        if now < expire_time and cached_filepath == st.filepath:
             return copy.deepcopy(cached_data)
 
     pe_data = st.pe_data or {}
@@ -954,7 +954,7 @@ def get_overview_data() -> Dict[str, Any]:
     # M-E5: Cache the result — deep copy only on write (callers get deep copy on read).
     # This avoids the previous double-copy pattern where both write and read did deepcopy.
     with _cache_lock:
-        _overview_cache[cache_key] = (time.time() + _OVERVIEW_TTL, copy.deepcopy(result))
+        _overview_cache[cache_key] = (time.time() + _OVERVIEW_TTL, st.filepath, copy.deepcopy(result))
         # Evict stale entries
         if len(_overview_cache) > _MAX_OVERVIEW_CACHE:
             stale = [k for k, (exp, _) in _overview_cache.items() if time.time() > exp]
