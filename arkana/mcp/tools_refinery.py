@@ -871,7 +871,8 @@ async def refinery_pe_operations(
         except Exception as e:
             if op == "signature":
                 return [{"error": f"No valid Authenticode signature found: {e}"}]
-            raise
+            msg = str(e) or f"PE {op} operation failed (is this a valid PE file?)"
+            raise RuntimeError(msg) from e
         return results
 
     results = await asyncio.to_thread(_run)

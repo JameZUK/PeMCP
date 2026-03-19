@@ -208,7 +208,7 @@ async def refinery_executable(
             # refinery asm expects mode as string: 'x32' or 'x64'
             mode = None
             pe_obj = state.pe_object
-            if pe_obj and hasattr(pe_obj, 'FILE_HEADER'):
+            if pe_obj and hasattr(pe_obj, 'FILE_HEADER') and pe_obj.FILE_HEADER is not None:
                 machine = pe_obj.FILE_HEADER.Machine
                 # 0x8664 = AMD64, 0xAA64 = ARM64
                 if machine in (0x8664, 0xAA64):

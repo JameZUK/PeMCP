@@ -679,6 +679,12 @@ async def unify_artifact_timeline(
     pe = state.pe_object
     pe_data = state.pe_data or {}
 
+    if pe is None or not hasattr(pe, 'FILE_HEADER') or pe.FILE_HEADER is None:
+        raise RuntimeError(
+            "unify_artifact_timeline requires a PE file with valid headers. "
+            "The loaded binary does not have PE metadata."
+        )
+
     def _analyze():
         artifacts: List[Dict[str, Any]] = []
         anomalies: List[Dict[str, Any]] = []

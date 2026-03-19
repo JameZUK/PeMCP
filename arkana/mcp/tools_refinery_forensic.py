@@ -116,7 +116,11 @@ async def refinery_forensic(
             import importlib
             mod = importlib.import_module(mod_path)
             unit_cls = getattr(mod, cls_name)
-            return data | unit_cls() | bytes
+            try:
+                return data | unit_cls() | bytes
+            except Exception as exc:
+                msg = str(exc) or f"{op} decoding failed (input may not be valid {op} data)"
+                raise RuntimeError(msg) from exc
 
         result = await asyncio.to_thread(_run_decode)
         return await _check_mcp_response_size(ctx, {

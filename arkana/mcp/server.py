@@ -241,10 +241,21 @@ def tool_decorator(func):
             result = await func(*args, **kwargs)
         except (RuntimeError, ValueError) as exc:
             # Enrich error messages with actionable hints
-            enriched = _enrich_error_message(str(exc))
+            msg = str(exc)
+            if not msg:
+                msg = f"{tool_name} failed: {type(exc).__name__} (no details available)"
+            enriched = _enrich_error_message(msg)
             if enriched != str(exc):
                 raise type(exc)(enriched) from exc
+            if not str(exc):
+                raise type(exc)(msg) from exc
             raise
+        except (AssertionError, AttributeError, TypeError, KeyError) as exc:
+            # Catch common internal errors that surface with empty messages
+            msg = str(exc)
+            if not msg:
+                msg = f"{tool_name} failed: {type(exc).__name__} (internal error — the binary may be incompatible with this analysis)"
+            raise RuntimeError(msg) from exc
         finally:
             _current_tool_var.reset(_tool_token)
             # Always cancel the heartbeat when the tool finishes
