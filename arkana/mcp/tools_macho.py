@@ -51,7 +51,7 @@ async def macho_analyze(
         # Header
         header = macho.header
         result["header"] = {
-            "magic": hex(header.magic) if hasattr(header, 'magic') else None,
+            "magic": hex(int(header.magic)) if hasattr(header, 'magic') else None,
             "cpu_type": str(header.cpu_type).split(".")[-1] if hasattr(header, 'cpu_type') else None,
             "file_type": str(header.file_type).split(".")[-1] if hasattr(header, 'file_type') else None,
             "number_of_commands": header.nb_cmds if hasattr(header, 'nb_cmds') else None,
