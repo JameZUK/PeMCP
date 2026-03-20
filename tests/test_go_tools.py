@@ -1,9 +1,11 @@
 """Unit tests for Go binary analysis tool helpers."""
+import os
+import tempfile
 import pytest
 
 pytest.importorskip("pefile", reason="pefile not installed")
 
-from arkana.mcp.tools_go import _safe_str, _safe_int
+from arkana.mcp.tools_go import _safe_str, _safe_int, _go_string_scan
 
 
 class TestSafeStr:
@@ -58,3 +60,63 @@ class TestSafeInt:
         class Obj:
             pass
         assert _safe_int(Obj()) is None
+
+
+class TestGoStringScan:
+    def _make_binary(self, content: bytes) -> str:
+        """Write content to a temp file and return path."""
+        fd, path = tempfile.mkstemp(suffix=".elf")
+        os.write(fd, content)
+        os.close(fd)
+        return path
+
+    def test_detects_go_with_multiple_markers(self):
+        data = b"\x00" * 100 + b"runtime.main" + b"\x00" * 50 + b"runtime.goexit"
+        path = self._make_binary(data)
+        try:
+            result = _go_string_scan(path)
+            assert result["is_go_binary"] is True
+            assert result["detection_method"] == "string_scan"
+            assert result["marker_count"] >= 2
+        finally:
+            os.unlink(path)
+
+    def test_detects_go_version(self):
+        data = b"\x00" * 100 + b"go1.21.5" + b"\x00" * 50 + b"runtime.main"
+        path = self._make_binary(data)
+        try:
+            result = _go_string_scan(path)
+            assert result["is_go_binary"] is True
+            assert result["go_version"] == "go1.21.5"
+        finally:
+            os.unlink(path)
+
+    def test_not_go_on_empty_binary(self):
+        data = b"\x00" * 200
+        path = self._make_binary(data)
+        try:
+            result = _go_string_scan(path)
+            assert result["is_go_binary"] is False
+            assert result["marker_count"] == 0
+        finally:
+            os.unlink(path)
+
+    def test_single_marker_not_enough(self):
+        data = b"\x00" * 100 + b"runtime.main"
+        path = self._make_binary(data)
+        try:
+            result = _go_string_scan(path)
+            assert result["is_go_binary"] is False
+            assert result["marker_count"] == 1
+        finally:
+            os.unlink(path)
+
+    def test_version_alone_is_sufficient(self):
+        data = b"\x00" * 100 + b"go1.22.0"
+        path = self._make_binary(data)
+        try:
+            result = _go_string_scan(path)
+            assert result["is_go_binary"] is True
+            assert result["go_version"] == "go1.22.0"
+        finally:
+            os.unlink(path)

@@ -90,8 +90,8 @@ async def macho_analyze(
                     "virtual_address": hex(seg.virtual_address),
                     "virtual_size": seg.virtual_size,
                     "file_size": seg.file_size,
-                    "max_protection": seg.max_protection,
-                    "init_protection": seg.init_protection,
+                    "max_protection": int(seg.max_protection) if hasattr(seg.max_protection, '__int__') else str(seg.max_protection),
+                    "init_protection": int(seg.init_protection) if hasattr(seg.init_protection, '__int__') else str(seg.init_protection),
                     "sections": sections,
                 })
                 if len(segments) >= limit:
@@ -108,7 +108,7 @@ async def macho_analyze(
                     symbols.append({
                         "name": sym.name,
                         "value": hex(sym.value) if hasattr(sym, 'value') else None,
-                        "type": sym.type if hasattr(sym, 'type') else None,
+                        "type": int(sym.type) if hasattr(sym, 'type') and hasattr(sym.type, '__int__') else str(sym.type) if hasattr(sym, 'type') else None,
                     })
                     if len(symbols) >= limit:
                         break

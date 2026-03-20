@@ -1,6 +1,7 @@
 """MCP tools for Go binary analysis using pygore."""
 import asyncio
 import os
+import re
 from typing import Dict, Any, Optional
 from arkana.config import state, logger, Context, PYGORE_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
@@ -9,6 +10,63 @@ from arkana.constants import MAX_TOOL_LIMIT
 
 if PYGORE_AVAILABLE:
     import pygore
+
+
+def _go_string_scan(filepath: str, scan_limit: int = 2 * 1024 * 1024) -> Dict[str, Any]:
+    """Fallback Go detection by scanning binary for Go-specific strings.
+
+    Works when pygore cannot parse the binary (e.g. newer Go versions).
+    Returns a dict with detection results and any extracted info.
+    """
+    markers_found = []
+    go_version = None
+
+    with open(filepath, 'rb') as f:
+        data = f.read(scan_limit)
+
+    marker_checks = [
+        (b'runtime.main', "runtime.main (Go runtime entry)"),
+        (b'runtime.goexit', "runtime.goexit"),
+        (b'runtime/internal/', "runtime/internal/ (Go runtime internals)"),
+        (b'go.buildid', "go.buildid"),
+        (b'Go build', "Go build marker"),
+        (b'go.itab.', "go.itab (interface tables)"),
+        (b'go.string.', "go.string (string pool)"),
+        (b'runtime.gcBgMarkWorker', "runtime.gcBgMarkWorker (GC)"),
+        (b'runtime.newproc', "runtime.newproc (goroutine spawn)"),
+        (b'runtime.mstart', "runtime.mstart (M scheduler)"),
+        (b'sync.(*Mutex)', "sync.Mutex"),
+        (b'fmt.Sprintf', "fmt.Sprintf"),
+        (b'net/http', "net/http"),
+    ]
+
+    for marker_bytes, description in marker_checks:
+        if marker_bytes in data:
+            markers_found.append(description)
+
+    # Try to extract Go version string (e.g. "go1.21.5" or "Go cmd/compile go1.22")
+    version_patterns = [
+        rb'go(1\.\d+(?:\.\d+)?)',
+        rb'Go cmd/compile go(1\.\d+(?:\.\d+)?)',
+    ]
+    for pat in version_patterns:
+        match = re.search(pat, data)
+        if match:
+            try:
+                go_version = "go" + match.group(1).decode('utf-8', 'ignore').strip()[:20]
+            except Exception:
+                pass
+            break
+
+    is_go = len(markers_found) >= 2 or go_version is not None
+
+    return {
+        "is_go_binary": is_go,
+        "detection_method": "string_scan" if is_go else None,
+        "markers_found": markers_found,
+        "marker_count": len(markers_found),
+        "go_version": go_version,
+    }
 
 
 def _safe_str(val, fallback=""):
@@ -63,6 +121,21 @@ async def go_analyze(
         try:
             f = pygore.GoFile(target)
         except Exception as e:
+            # Fallback: string-based detection for binaries pygore can't parse
+            try:
+                scan_result = _go_string_scan(target)
+                if scan_result["is_go_binary"]:
+                    return {
+                        "file": os.path.basename(target),
+                        **scan_result,
+                        "note": (
+                            "Detected as Go via string patterns (pygore parsing failed). "
+                            "Use elf_analyze() for symbol and dependency information."
+                        ),
+                        "pygore_error": str(e)[:200],
+                    }
+            except Exception:
+                pass
             return {"error": f"Not a Go binary or pygore parsing failed: {e}"}
 
         try:
