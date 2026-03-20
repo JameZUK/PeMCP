@@ -267,6 +267,20 @@ async def go_analyze(
             result["is_go_binary"] = has_go_artifacts
 
             if not has_go_artifacts:
+                # Fallback: string-based detection when pygore parses but finds nothing
+                try:
+                    scan_result = _go_string_scan(target)
+                    if scan_result["is_go_binary"]:
+                        return {
+                            "file": os.path.basename(target),
+                            **scan_result,
+                            "note": (
+                                "Detected as Go via string patterns (pygore found no metadata). "
+                                "Use elf_analyze() for symbol and dependency information."
+                            ),
+                        }
+                except Exception:
+                    pass
                 return {
                     "error": "Not a Go binary or pygore could not find Go metadata.",
                     "is_go_binary": False,
