@@ -368,7 +368,7 @@ available version is *below* the minimum you might naively expect:
 | **nampa** | 0.1.1 | Last release 2017  - unmaintained but functional |
 | **dotnetfile** | 0.2.10 | Active; still pre-1.0 |
 | **binwalk** | 2.1.0 | PyPI release is from 2015; 2.3.x+ only via GitHub |
-| **pygore** | 0.5.0 | Last release Oct 2021 |
+| **pygore** | 0.5.0 | Last release Oct 2021; cannot parse modern Go binaries. `go_analyze` has a string-scan fallback |
 | **keystone-engine** | 0.9.2 | Last release 2020 |
 
 The `requirements.txt` minimum constraints are set to values that can

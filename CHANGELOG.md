@@ -15,6 +15,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `search_hex_pattern` — search binary data for hex byte patterns with `??` wildcards. Optional section filter for PE binaries. Max 200 tokens, 5000 matches
 
 ### Fixed
+- `macho_analyze` — LIEF returns enum objects (`MACHO_TYPES`, `CPU_TYPE`) for header, segment, and symbol fields that cannot be passed to `hex()` or serialized directly. Fixed by converting with `int()`/`str()` before JSON serialization
+- `go_analyze` — pygore (last release Oct 2021) fails on modern Go binaries either by throwing on construction or by parsing successfully but returning no metadata. Added `_go_string_scan()` fallback that detects Go via 13 runtime markers and version string extraction (threshold: 2+ markers or version found)
+- 5 additional tool bugs found during comprehensive 230-tool retest (tool_decorator empty errors, unify_artifact_timeline ELF guard, refinery_executable FILE_HEADER guard, refinery_pe_operations empty error, refinery_forensic empty error)
+- 4 remaining tool bugs (refinery_executable virtual_read/entropy_map, diff_binaries cffi pickle, detect_self_modifying_code VEX lift)
+- 11 tool bugs found during initial 230-tool audit (LIEF Builder API, DFS→BFS default, descriptive KeyErrors, FLOSS static strings, and more)
 - Unified address/offset parsing: all tools now accept both hex (`0x401000`) and decimal (`4198400`) for address parameters. Previously 7 tools required hex-only input for some parameters (e.g. `unhook_function` used hex-only while `hook_function` accepted both)
 - `get_strings_for_function` and `get_string_usage_context` now accept hex string addresses in addition to plain integers
 - Bare `except Exception` in `server.py` response truncation now logs via `logger.debug`

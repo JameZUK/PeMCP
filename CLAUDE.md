@@ -189,6 +189,7 @@ These are inherent limitations from underlying frameworks or architecture, not b
 - **`detect_compression_headers`**: May produce false positives on code sections where instruction bytes match compression magic bytes.
 - **`save_patched_binary`**: `bytes_patched` count includes all differences between angr's in-memory loader state and the original file (loader alignment, padding), not just user-initiated patches.
 - **`refinery_executable` entropy_map**: Returns raw iemap output (visual entropy representation), not numeric entropy values. Use `get_entropy_analysis` for numeric data.
+- **`go_analyze`**: pygore (last release Oct 2021) cannot parse modern Go binaries. Falls back to `_go_string_scan()` which detects Go via 13 runtime markers and version strings (detection threshold: 2+ markers OR version string). When fallback triggers, returns marker list and Go version but no package/type metadata — use `elf_analyze()` for full symbol info.
 
 ## CI
 

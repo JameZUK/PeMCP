@@ -88,7 +88,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `dotnet_analyze` | .NET assembly analysis (dnfile + dotnetfile fallback) | — |
 | `dotnet_disassemble_method` | Disassemble specific .NET CIL method by RVA (from `dotnet_analyze` method_definitions) | `method_rva` |
 | `vb6_analyze` | VB6 binary analysis: project metadata, forms/modules, Declare Function externals, security-relevant API flagging. Use when MSVBVM60/50.DLL in imports. | `limit` |
-| `go_analyze` | Go binary analysis (packages, version) | — |
+| `go_analyze` | Go binary analysis (packages, version). Falls back to string-scan detection when pygore can't parse modern Go versions — use `elf_analyze()` for full symbols in that case | — |
 | `rust_analyze` | Rust binary metadata | — |
 | `rust_demangle_symbols` | Demangle Rust symbol names | — |
 

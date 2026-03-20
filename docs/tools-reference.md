@@ -308,7 +308,7 @@ All multi-format analysis tools support pagination via `limit` (default 20) and 
 | `detect_binary_format` | Auto-detect format (PE/.NET/ELF/Mach-O/Go/Rust) from magic bytes. |
 | `dotnet_analyze` | Comprehensive .NET metadata: CLR header, types, methods, assembly refs, user strings. Type/method attribute flags are displayed in compact pipe-separated format (e.g. `Public | Class | AutoLayout`). Paginated (default limit 20). |
 | `dotnet_disassemble_method` | Disassemble .NET CIL bytecode to human-readable opcodes. Paginated (default limit 20). |
-| `go_analyze` | Go binary analysis: compiler version, packages, functions (works on stripped binaries). Paginated (default limit 20). |
+| `go_analyze` | Go binary analysis: compiler version, packages, functions (works on stripped binaries). Falls back to string-scanning detection when pygore cannot parse modern Go versions. Paginated (default limit 20). |
 | `rust_analyze` | Rust binary metadata: compiler version, crate dependencies, toolchain. |
 | `rust_demangle_symbols` | Demangle Rust symbol names to human-readable form. Paginated (default limit 20). |
 | `elf_analyze` | Comprehensive ELF analysis: headers, sections, segments, symbols, dynamic deps. Paginated (default limit 20). |
