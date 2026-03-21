@@ -162,6 +162,51 @@ The AI decodes the reversed config: *"C2 server is 8.136.41[.]104:3323 (Alibaba 
 
 ---
 
+## Scenario 7: Unpacking and Extracting C2 Config from Brute Ratel C4
+
+**The situation:** A threat hunter has a suspected Brute Ratel C4 packed loader. The sample resolves all APIs dynamically via hash-based resolution, making automated triage tools report almost no suspicious indicators. The C2 configuration is RC4-encrypted with a key derived from the decrypted payload itself.
+
+**Traditional workflow:** Load in IDA/Ghidra, manually trace the PIC shellcode bootstrap through self-injection, identify the RC4 decryption routine, determine the key (last 8 bytes of encrypted payload), decrypt the 245KB payload, patch the zeroed MZ header, load the unpacked DLL in a new session, trace the config parser, determine the second RC4 key (derived from the decrypted payload's tail), decrypt the config blob — easily a multi-day effort requiring deep x64 shellcode analysis skills.
+
+**With Arkana (multi-session):**
+
+*Session 1 — Analyse the packed loader:*
+```
+Analyst: "Analyse this binary — it's suspected Brute Ratel C4"
+```
+1. `open_file("bruteratel.exe")` — PE64 DLL with export name `badger_x64_wait.bin.packed.dll`
+2. `get_triage_report()` — CRITICAL risk, only 3 meaningful imports (FreeConsole, GetModuleHandleW, GetProcAddress)
+3. `get_pe_data()` — .data section has 0x3D600 bytes of high-entropy data (encrypted payload)
+4. `decompile_function_with_angr(DllMain)` — reveals self-injection pattern (VirtualAllocEx + WriteProcessMemory + CreateRemoteThread with handle -1)
+5. `get_hex_dump(offset=0x1A00)` — maps .data section layout: PIC shellcode + encrypted config blob + encrypted payload + loader stub
+
+*Session 2 — Unpack the badger payload:*
+```
+Analyst: "Try dynamic unpacking to extract the payload"
+```
+6. `emulate_pe_with_windows_apis()` — 0 API calls (PEB walking bypasses hooks)
+7. `emulate_shellcode_with_speakeasy()` — 0 API calls (indirect syscalls bypass emulation)
+8. `disassemble_raw_bytes()` — traces PIC shellcode: identifies RC4 KSA with `AND EAX, 7` (8-byte key), key = last 8 bytes of encrypted data
+9. Custom Python RC4 decryption on host + MZ magic patch → `bruteratel_unpacked.dll`
+
+*Session 3 — Extract C2 configuration from unpacked badger:*
+```
+Analyst: "Load the unpacked badger and extract the C2 config"
+```
+10. `open_file("bruteratel_unpacked.dll")` — 936 functions, 14 capa rules (RC4 KSA, HTTP, anti-VM)
+11. `decompile_function_with_angr(0x100071b0)` — entry point: FreeConsole, CreateThread to worker
+12. `decompile_function_with_angr(0x10007bf0)` — worker: copies 8-byte key from struct, calls config parser
+13. `decompile_function_with_angr(0x10007f70)` — config parser: RC4 decrypt then split by pipe delimiter (27 fields)
+14. `decompile_function_with_angr(0x10004b10)` — RC4 function: default key `{-l," +r3/#~&;v_`, 8-byte override
+15. `disassemble_raw_bytes()` — traces PIC decryptor: `LEA RAX, [R11+RBX-0x10]` saves pointer to last 16 bytes of decrypted payload for config key
+16. Custom Python: RC4 decrypt 403-byte config blob with key `7a3e24647a292175` → 5 C2 domains, auth tokens, URI paths, license hash
+
+The AI maps the full execution chain: *"BRc4 badger with 5 C2 domains (2 via Tyk API gateways in US/EU, 3 direct), HTTPS/443 with JSON beacons. Auth tokens 6J1D1M4P9A57JGC2/LDTPTF78OUCCVQ0I, URI paths /api/azure and /content.php. Config RC4 key derived from the last 16 bytes of the decrypted payload — a two-key scheme where the packer appends the config key to the payload."*
+
+**Full report:** [Brute Ratel C4 Badger Implant](example-report-bruteratel.md)
+
+---
+
 ## Arkana vs Traditional Tools
 
 ### Comparison Matrix
