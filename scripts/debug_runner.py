@@ -42,6 +42,7 @@ except ImportError:
     class QL_INTERCEPT:
         CALL = 0
         EXIT = 1
+        ENTER = 2
 
 # --- Capstone imports (bundled with Qiling) ---
 try:
@@ -85,6 +86,24 @@ _mem_write_hook = None
 
 # Capstone disassembler instance (created on init)
 _cs = None
+
+# --- I/O stubs state ---
+_stub_io = False                     # Whether I/O stubs are installed
+_captured_output = []                # [{seq, api, text, byte_count, timestamp}]
+_pending_input = []                  # [bytes, ...] — queued input data
+_io_seq_counter = 0                  # Sequence counter for captured output
+
+# --- API trace state ---
+_api_trace = []                      # [{seq, api, args, retval, timestamp}]
+_api_trace_seq = 0                   # Sequence counter for trace entries
+_api_trace_filter = None             # None = trace all, set = whitelist
+_api_trace_enabled = True            # Master enable flag
+
+# Limits (matching constants.py)
+_MAX_CAPTURED_OUTPUT = 10_000
+_MAX_PENDING_INPUT = 1_000
+_MAX_API_TRACE = 10_000
+_MAX_SEARCH_MATCHES = 100
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +340,291 @@ def _instruction_counter_hook(ql, address, size):
 
 
 # ---------------------------------------------------------------------------
+#  I/O stub helpers
+# ---------------------------------------------------------------------------
+
+def _read_string_from_memory(addr, max_len=4096):
+    """Read a null-terminated ASCII string from memory."""
+    try:
+        data = bytes(_ql.mem.read(addr, max_len))
+        null_idx = data.find(b'\x00')
+        if null_idx >= 0:
+            data = data[:null_idx]
+        return data.decode('utf-8', errors='replace')
+    except Exception:
+        return ""
+
+
+def _read_wstring_from_memory(addr, max_len=4096):
+    """Read a null-terminated UTF-16LE string from memory."""
+    try:
+        data = bytes(_ql.mem.read(addr, max_len * 2))
+        # Find null terminator (two zero bytes aligned)
+        for i in range(0, len(data) - 1, 2):
+            if data[i] == 0 and data[i + 1] == 0:
+                data = data[:i]
+                break
+        return data.decode('utf-16-le', errors='replace')
+    except Exception:
+        return ""
+
+
+def _capture_output(api, text, byte_count=0):
+    """Append to captured output buffer (capped)."""
+    global _io_seq_counter
+    if len(_captured_output) >= _MAX_CAPTURED_OUTPUT:
+        return
+    _io_seq_counter += 1
+    _captured_output.append({
+        "seq": _io_seq_counter,
+        "api": api,
+        "text": text[:4096],
+        "byte_count": byte_count or len(text),
+        "timestamp": time.time(),
+    })
+
+
+def _consume_input(n):
+    """Pop up to n bytes from pending input queue."""
+    result = b""
+    while len(result) < n and _pending_input:
+        chunk = _pending_input[0]
+        needed = n - len(result)
+        if len(chunk) <= needed:
+            result += _pending_input.pop(0)
+        else:
+            result += chunk[:needed]
+            _pending_input[0] = chunk[needed:]
+    return result
+
+
+def _install_io_stubs():
+    """Install Win32 console API stubs to prevent crashes from console I/O."""
+    global _stub_io
+    if _ql is None:
+        return
+
+    # Virtual handles for stdin/stdout/stderr
+    STD_INPUT_HANDLE = 0xFFFFFFF6   # -10
+    STD_OUTPUT_HANDLE = 0xFFFFFFF5  # -11
+    STD_ERROR_HANDLE = 0xFFFFFFF4   # -12
+
+    _VIRTUAL_HANDLES = {
+        STD_INPUT_HANDLE & 0xFFFFFFFF: 0x100,
+        STD_OUTPUT_HANDLE & 0xFFFFFFFF: 0x200,
+        STD_ERROR_HANDLE & 0xFFFFFFFF: 0x300,
+    }
+
+    def _stub_GetStdHandle(ql, address, params):
+        nStdHandle = params.get("nStdHandle", 0) & 0xFFFFFFFF
+        handle = _VIRTUAL_HANDLES.get(nStdHandle, 0x200)
+        return handle
+
+    def _stub_WriteConsoleA(ql, address, params):
+        buf_addr = params.get("lpBuffer", 0)
+        n_chars = params.get("nNumberOfCharsToWrite", 0)
+        if buf_addr and n_chars > 0:
+            text = _read_string_from_memory(buf_addr, min(n_chars, 4096))
+            _capture_output("WriteConsoleA", text, n_chars)
+        # Write chars written count
+        written_addr = params.get("lpNumberOfCharsWritten", 0)
+        if written_addr:
+            try:
+                ql.mem.write(written_addr, n_chars.to_bytes(4, "little"))
+            except Exception:
+                pass
+        return 1  # TRUE
+
+    def _stub_WriteConsoleW(ql, address, params):
+        buf_addr = params.get("lpBuffer", 0)
+        n_chars = params.get("nNumberOfCharsToWrite", 0)
+        if buf_addr and n_chars > 0:
+            text = _read_wstring_from_memory(buf_addr, min(n_chars, 4096))
+            _capture_output("WriteConsoleW", text, n_chars)
+        written_addr = params.get("lpNumberOfCharsWritten", 0)
+        if written_addr:
+            try:
+                ql.mem.write(written_addr, n_chars.to_bytes(4, "little"))
+            except Exception:
+                pass
+        return 1
+
+    def _stub_ReadConsoleA(ql, address, params):
+        buf_addr = params.get("lpBuffer", 0)
+        n_chars = params.get("nNumberOfCharsToRead", 0)
+        if not buf_addr or n_chars <= 0:
+            return 0
+        input_data = _consume_input(n_chars)
+        if not input_data:
+            input_data = b"\n"  # Default: empty line
+        try:
+            ql.mem.write(buf_addr, input_data)
+        except Exception:
+            return 0
+        read_addr = params.get("lpNumberOfCharsRead", 0)
+        if read_addr:
+            try:
+                ql.mem.write(read_addr, len(input_data).to_bytes(4, "little"))
+            except Exception:
+                pass
+        _capture_output("ReadConsoleA", input_data.decode('utf-8', errors='replace'), len(input_data))
+        return 1
+
+    def _stub_SetConsoleMode(ql, address, params):
+        return 1
+
+    def _stub_GetConsoleMode(ql, address, params):
+        mode_addr = params.get("lpMode", 0)
+        if mode_addr:
+            try:
+                ql.mem.write(mode_addr, (0x3).to_bytes(4, "little"))
+            except Exception:
+                pass
+        return 1
+
+    def _stub_AllocConsole(ql, address, params):
+        return 1
+
+    def _stub_FreeConsole(ql, address, params):
+        return 1
+
+    try:
+        _ql.os.set_api("GetStdHandle", _stub_GetStdHandle, QL_INTERCEPT.CALL)
+        _ql.os.set_api("WriteConsoleA", _stub_WriteConsoleA, QL_INTERCEPT.CALL)
+        _ql.os.set_api("WriteConsoleW", _stub_WriteConsoleW, QL_INTERCEPT.CALL)
+        _ql.os.set_api("ReadConsoleA", _stub_ReadConsoleA, QL_INTERCEPT.CALL)
+        _ql.os.set_api("SetConsoleMode", _stub_SetConsoleMode, QL_INTERCEPT.CALL)
+        _ql.os.set_api("GetConsoleMode", _stub_GetConsoleMode, QL_INTERCEPT.CALL)
+        _ql.os.set_api("AllocConsole", _stub_AllocConsole, QL_INTERCEPT.CALL)
+        _ql.os.set_api("FreeConsole", _stub_FreeConsole, QL_INTERCEPT.CALL)
+        _stub_io = True
+    except Exception:
+        _stub_io = False
+
+
+# ---------------------------------------------------------------------------
+#  API trace hooks
+# ---------------------------------------------------------------------------
+
+def _install_api_trace():
+    """Install wildcard API hooks to trace all Windows API calls."""
+    global _api_trace_enabled
+
+    if _ql is None:
+        return
+
+    def _trace_enter(ql, address, params):
+        """Wildcard ENTER hook — log API call with args."""
+        global _api_trace_seq
+        if not _api_trace_enabled:
+            return
+        if len(_api_trace) >= _MAX_API_TRACE:
+            return
+
+        # Get API name from Qiling's internal state
+        api_name = ""
+        try:
+            # Qiling stores the current API name during dispatch
+            api_name = getattr(ql.os, 'fname', '') or ""
+        except Exception:
+            pass
+
+        if _api_trace_filter is not None and api_name not in _api_trace_filter:
+            return
+
+        _api_trace_seq += 1
+        # Serialize params safely
+        safe_params = {}
+        if isinstance(params, dict):
+            for k, v in params.items():
+                try:
+                    if isinstance(v, int):
+                        safe_params[k] = _hex(v)
+                    else:
+                        safe_params[k] = str(v)[:200]
+                except Exception:
+                    safe_params[k] = "?"
+        _api_trace.append({
+            "seq": _api_trace_seq,
+            "api": api_name,
+            "args": safe_params,
+            "retval": None,
+            "address": _hex(address) if address else None,
+            "timestamp": time.time(),
+        })
+
+    def _trace_exit(ql, address, params, retval):
+        """Wildcard EXIT hook — record return value."""
+        if not _api_trace_enabled:
+            return
+
+        api_name = ""
+        try:
+            api_name = getattr(ql.os, 'fname', '') or ""
+        except Exception:
+            pass
+
+        if _api_trace_filter is not None and api_name not in _api_trace_filter:
+            return
+
+        # Find the most recent entry for this API to add retval
+        for entry in reversed(_api_trace):
+            if entry["api"] == api_name and entry["retval"] is None:
+                try:
+                    entry["retval"] = _hex(retval) if isinstance(retval, int) else str(retval)[:200]
+                except Exception:
+                    entry["retval"] = "?"
+                break
+
+    def _trace_call(ql, address, params):
+        """Fallback CALL hook — used if ENTER/EXIT not supported."""
+        global _api_trace_seq
+        if not _api_trace_enabled:
+            return
+        if len(_api_trace) >= _MAX_API_TRACE:
+            return
+
+        api_name = ""
+        try:
+            api_name = getattr(ql.os, 'fname', '') or ""
+        except Exception:
+            pass
+
+        if _api_trace_filter is not None and api_name not in _api_trace_filter:
+            return
+
+        _api_trace_seq += 1
+        safe_params = {}
+        if isinstance(params, dict):
+            for k, v in params.items():
+                try:
+                    if isinstance(v, int):
+                        safe_params[k] = _hex(v)
+                    else:
+                        safe_params[k] = str(v)[:200]
+                except Exception:
+                    safe_params[k] = "?"
+        _api_trace.append({
+            "seq": _api_trace_seq,
+            "api": api_name,
+            "args": safe_params,
+            "retval": None,
+            "address": _hex(address) if address else None,
+            "timestamp": time.time(),
+        })
+
+    try:
+        _ql.os.set_api("*", _trace_enter, QL_INTERCEPT.ENTER)
+        _ql.os.set_api("*", _trace_exit, QL_INTERCEPT.EXIT)
+    except Exception:
+        # ENTER/EXIT not supported — fall back to CALL
+        try:
+            _ql.os.set_api("*", _trace_call, QL_INTERCEPT.CALL)
+        except Exception:
+            _api_trace_enabled = False
+
+
+# ---------------------------------------------------------------------------
 #  Breakpoint callbacks
 # ---------------------------------------------------------------------------
 
@@ -462,6 +766,8 @@ def cmd_init(cmd):
     global _bp_counter, _wp_counter, _snap_counter
     global _stop_reason, _hit_bp_id, _hit_wp_id, _wp_access_info
     global _mem_read_hook, _mem_write_hook
+    global _stub_io, _captured_output, _pending_input, _io_seq_counter
+    global _api_trace, _api_trace_seq, _api_trace_filter, _api_trace_enabled
 
     filepath = cmd["filepath"]
     rootfs_path = cmd.get("rootfs_path")
@@ -491,11 +797,29 @@ def cmd_init(cmd):
     _mem_read_hook = None
     _mem_write_hook = None
 
+    # Reset I/O and trace state
+    _stub_io = False
+    _captured_output = []
+    _pending_input = []
+    _io_seq_counter = 0
+    _api_trace = []
+    _api_trace_seq = 0
+    _api_trace_filter = None
+    _api_trace_enabled = True
+
     # Initialize capstone disassembler
     _init_capstone(arch)
 
     # Install global instruction counter
     _ql.hook_code(_instruction_counter_hook)
+
+    # Install I/O stubs (before API trace so specific hooks take priority)
+    stub_io = cmd.get("stub_io", True)
+    if stub_io:
+        _install_io_stubs()
+
+    # Install API call tracing
+    _install_api_trace()
 
     pc = _get_pc()
     result = {
@@ -507,6 +831,8 @@ def cmd_init(cmd):
         "registers": _get_registers(),
         "next_instructions": _disassemble_at(pc, 5),
         "memory_map": _get_memory_map(),
+        "stub_io": _stub_io,
+        "api_trace_enabled": _api_trace_enabled,
     }
     if _dll_warning:
         result["warning"] = _dll_warning
@@ -1179,11 +1505,298 @@ def cmd_snapshot_diff(cmd):
 def cmd_stop(cmd):
     """Clean up and signal exit."""
     global _ql, _staged_path
+    global _captured_output, _pending_input, _api_trace
     if _staged_path:
         _cleanup_staged_binary(_staged_path)
         _staged_path = None
+    _captured_output = []
+    _pending_input = []
+    _api_trace = []
     _ql = None
     return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
+#  I/O and trace command handlers
+# ---------------------------------------------------------------------------
+
+def cmd_set_input(cmd):
+    """Queue input data for stubbed ReadConsole."""
+    global _pending_input
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    data_str = cmd.get("data", "")
+    encoding = cmd.get("encoding", "utf-8")
+
+    if not data_str:
+        return {"error": "'data' is required"}
+
+    try:
+        if encoding == "hex":
+            if len(data_str) % 2 != 0:
+                return {"error": "Hex data must have even length"}
+            data_bytes = bytes.fromhex(data_str)
+        elif encoding == "utf-8":
+            data_bytes = data_str.encode("utf-8")
+        else:
+            data_bytes = data_str.encode("utf-8")
+    except (ValueError, UnicodeEncodeError) as e:
+        return {"error": f"Failed to encode input data: {e}"}
+
+    if len(_pending_input) >= _MAX_PENDING_INPUT:
+        return {"error": f"Pending input queue full (max {_MAX_PENDING_INPUT} entries)"}
+
+    _pending_input.append(data_bytes)
+    total_bytes = sum(len(c) for c in _pending_input)
+    return {
+        "status": "ok",
+        "bytes_queued": len(data_bytes),
+        "total_pending_bytes": total_bytes,
+        "queue_entries": len(_pending_input),
+    }
+
+
+def cmd_get_output(cmd):
+    """Return captured output (paginated, optional clear)."""
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    offset = max(0, cmd.get("offset", 0))
+    limit = max(1, min(cmd.get("limit", 100), 1000))
+    do_clear = cmd.get("clear", False)
+
+    entries = _captured_output[offset:offset + limit]
+    total = len(_captured_output)
+
+    result = {
+        "status": "ok",
+        "entries": entries,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "returned": len(entries),
+        "has_more": offset + limit < total,
+    }
+
+    if do_clear:
+        _captured_output.clear()
+        result["cleared"] = True
+
+    return result
+
+
+def cmd_get_api_trace(cmd):
+    """Return API trace entries (paginated, optional filter)."""
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    offset = max(0, cmd.get("offset", 0))
+    limit = max(1, min(cmd.get("limit", 100), 1000))
+    api_filter = cmd.get("filter")  # Optional API name filter
+
+    if api_filter:
+        # Filter entries by API name (case-insensitive substring)
+        api_filter_lower = api_filter.lower()
+        filtered = [e for e in _api_trace if api_filter_lower in e.get("api", "").lower()]
+    else:
+        filtered = _api_trace
+
+    entries = filtered[offset:offset + limit]
+    total = len(filtered)
+
+    return {
+        "status": "ok",
+        "entries": entries,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "returned": len(entries),
+        "has_more": offset + limit < total,
+        "trace_enabled": _api_trace_enabled,
+        "filter_active": _api_trace_filter is not None,
+    }
+
+
+def cmd_clear_api_trace(cmd):
+    """Clear the API trace buffer."""
+    global _api_trace, _api_trace_seq
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    count = len(_api_trace)
+    _api_trace = []
+    _api_trace_seq = 0
+    return {"status": "ok", "entries_cleared": count}
+
+
+def cmd_set_trace_filter(cmd):
+    """Set API trace filter (whitelist) or enable/disable tracing."""
+    global _api_trace_filter, _api_trace_enabled
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    # Handle enable/disable
+    if "enabled" in cmd:
+        _api_trace_enabled = bool(cmd["enabled"])
+
+    # Handle filter
+    apis = cmd.get("apis")
+    if apis is not None:
+        if isinstance(apis, list) and len(apis) > 0:
+            _api_trace_filter = set(apis)
+        else:
+            _api_trace_filter = None  # Clear filter = trace all
+
+    return {
+        "status": "ok",
+        "trace_enabled": _api_trace_enabled,
+        "filter": sorted(_api_trace_filter) if _api_trace_filter else None,
+    }
+
+
+def cmd_search_memory(cmd):
+    """Search across all mapped memory for a pattern."""
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    pattern = cmd.get("pattern", "")
+    pattern_type = cmd.get("pattern_type", "string")
+    max_matches = max(1, min(cmd.get("max_matches", _MAX_SEARCH_MATCHES), _MAX_SEARCH_MATCHES))
+    context_bytes = max(0, min(cmd.get("context_bytes", 32), 256))
+    region_filter = cmd.get("region_filter")  # Optional label substring filter
+
+    if not pattern:
+        return {"error": "'pattern' is required"}
+
+    # Build search patterns
+    search_patterns = []
+    if pattern_type == "string":
+        # Search both UTF-8 and UTF-16LE
+        try:
+            search_patterns.append(("utf-8", pattern.encode("utf-8")))
+            search_patterns.append(("utf-16le", pattern.encode("utf-16-le")))
+        except UnicodeEncodeError as e:
+            return {"error": f"Failed to encode pattern: {e}"}
+    elif pattern_type == "hex":
+        # Support ?? wildcards
+        hex_str = pattern.replace(" ", "")
+        if len(hex_str) % 2 != 0:
+            return {"error": "Hex pattern must have even length (use ?? for wildcards)"}
+        tokens = [hex_str[i:i+2] for i in range(0, len(hex_str), 2)]
+        if len(tokens) > 200:
+            return {"error": "Hex pattern too long (max 200 bytes)"}
+        # Build bytes and mask
+        pattern_bytes = bytearray()
+        mask = bytearray()
+        for token in tokens:
+            if token == "??":
+                pattern_bytes.append(0)
+                mask.append(0)
+            else:
+                try:
+                    pattern_bytes.append(int(token, 16))
+                    mask.append(0xFF)
+                except ValueError:
+                    return {"error": f"Invalid hex byte: {token}"}
+        search_patterns.append(("hex", (bytes(pattern_bytes), bytes(mask))))
+    else:
+        return {"error": f"Invalid pattern_type: {pattern_type}. Must be 'string' or 'hex'"}
+
+    # Search memory regions
+    matches = []
+    try:
+        regions = _ql.mem.get_mapinfo()
+    except Exception:
+        return {"error": "Failed to get memory map"}
+
+    for region in regions:
+        if len(matches) >= max_matches:
+            break
+        if len(region) < 2:
+            continue
+        start, end = region[0], region[1]
+        label = str(region[3]) if len(region) > 3 else ""
+
+        if region_filter and region_filter.lower() not in label.lower():
+            continue
+
+        size = end - start
+        if size <= 0 or size > 64 * 1024 * 1024:  # Skip regions > 64MB
+            continue
+
+        try:
+            data = bytes(_ql.mem.read(start, size))
+        except Exception:
+            continue
+
+        for encoding_label, pat in search_patterns:
+            if len(matches) >= max_matches:
+                break
+
+            if encoding_label == "hex":
+                pat_bytes, pat_mask = pat
+                pat_len = len(pat_bytes)
+                if pat_len == 0:
+                    continue
+                # Manual search with mask
+                for i in range(len(data) - pat_len + 1):
+                    if len(matches) >= max_matches:
+                        break
+                    match = True
+                    for j in range(pat_len):
+                        if (data[i + j] & pat_mask[j]) != (pat_bytes[j] & pat_mask[j]):
+                            match = False
+                            break
+                    if match:
+                        ctx_start = max(0, i - context_bytes)
+                        ctx_end = min(len(data), i + pat_len + context_bytes)
+                        matches.append({
+                            "address": _hex(start + i),
+                            "region_start": _hex(start),
+                            "region_label": label,
+                            "encoding": "hex",
+                            "match_hex": data[i:i + pat_len].hex(),
+                            "context_hex": data[ctx_start:ctx_end].hex(),
+                            "context_offset": i - ctx_start,
+                        })
+            else:
+                # Byte string search
+                pat_bytes = pat
+                idx = 0
+                while idx < len(data) and len(matches) < max_matches:
+                    pos = data.find(pat_bytes, idx)
+                    if pos < 0:
+                        break
+                    ctx_start = max(0, pos - context_bytes)
+                    ctx_end = min(len(data), pos + len(pat_bytes) + context_bytes)
+                    # ASCII context
+                    match_data = data[pos:pos + len(pat_bytes)]
+                    context_data = data[ctx_start:ctx_end]
+                    ascii_ctx = ""
+                    for b in context_data:
+                        ascii_ctx += chr(b) if 32 <= b < 127 else "."
+                    matches.append({
+                        "address": _hex(start + pos),
+                        "region_start": _hex(start),
+                        "region_label": label,
+                        "encoding": encoding_label,
+                        "match_hex": match_data.hex(),
+                        "context_hex": context_data.hex(),
+                        "context_ascii": ascii_ctx,
+                        "context_offset": pos - ctx_start,
+                    })
+                    idx = pos + 1
+
+    return {
+        "status": "ok",
+        "pattern": pattern,
+        "pattern_type": pattern_type,
+        "matches": matches,
+        "total_matches": len(matches),
+        "max_matches": max_matches,
+        "truncated": len(matches) >= max_matches,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1209,6 +1822,12 @@ DISPATCH = {
     "snapshot_restore": cmd_snapshot_restore,
     "snapshot_list": cmd_snapshot_list,
     "snapshot_diff": cmd_snapshot_diff,
+    "set_input": cmd_set_input,
+    "get_output": cmd_get_output,
+    "get_api_trace": cmd_get_api_trace,
+    "clear_api_trace": cmd_clear_api_trace,
+    "set_trace_filter": cmd_set_trace_filter,
+    "search_memory": cmd_search_memory,
     "stop": cmd_stop,
 }
 

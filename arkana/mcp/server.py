@@ -88,6 +88,7 @@ _SELF_REPORTING_TOOLS = frozenset({
     "debug_run_until",
     "debug_step",
     "debug_step_over",
+    "debug_search_memory",
     # Speakeasy / unipacker tools (Group D subprocess progress)
     "emulate_pe_with_windows_apis",
     "emulate_shellcode_with_speakeasy",

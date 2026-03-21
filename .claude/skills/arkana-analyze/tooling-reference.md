@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 250 MCP tools organized by use case.
+Complete catalog of all 256 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -193,6 +193,12 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `debug_snapshot_restore` | Restore saved snapshot | `snapshot_id`, `session_id` |
 | `debug_snapshot_list` | List snapshots with metadata | `session_id` |
 | `debug_snapshot_diff` | Compare two snapshots (registers + memory regions) | `snapshot_id_a`, `snapshot_id_b`, `session_id` |
+| `debug_set_input` | Queue input for stubbed ReadConsole (stdin/cin/scanf) | `data`, `encoding` (utf-8/hex), `session_id` |
+| `debug_get_output` | Retrieve captured console output (WriteConsoleA/W → printf/cout/puts) | `clear`, `offset`, `limit`, `session_id` |
+| `debug_get_api_trace` | Get paginated API call trace log (all Windows API calls with args/retval) | `offset`, `limit`, `filter`, `session_id` |
+| `debug_clear_api_trace` | Clear API trace buffer | `session_id` |
+| `debug_set_trace_filter` | Configure API trace whitelist or enable/disable tracing | `apis` (comma-sep), `enabled`, `session_id` |
+| `debug_search_memory` | Search all mapped memory for string (UTF-8+UTF-16LE) or hex patterns with ?? wildcards | `pattern`, `pattern_type`, `max_matches`, `context_bytes`, `region_filter`, `session_id` |
 | `find_path_to_address` | Symbolic execution to find reaching inputs (timeout 600s, partial results on timeout: steps/active states) | `target_address` |
 | `find_path_with_custom_input` | Path finding with custom constraints (timeout 600s, partial results on timeout: steps/active states) | `target`, `constraints` |
 

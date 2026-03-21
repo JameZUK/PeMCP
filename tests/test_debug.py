@@ -860,3 +860,348 @@ class TestMCPToolIntegration:
         self._setup_session(clean_state, [resp])
         result = _run(debug_snapshot_list(mock_ctx))
         assert result["total_snapshots"] == 0
+
+    def test_debug_start_stub_io_param(self, clean_state, mock_ctx):
+        """Verify stub_io is forwarded to create_session."""
+        from arkana.mcp.tools_debug import debug_start
+        init_resp = _make_init_response()
+        init_resp["stub_io"] = True
+        init_resp["api_trace_enabled"] = True
+        mock_proc = MockProcess([init_resp])
+
+        with patch("arkana.mcp.tools_debug._check_qiling_available", return_value=True), \
+             patch("os.path.isdir", return_value=True), \
+             patch("arkana.mcp.tools_debug.asyncio.create_subprocess_exec",
+                   new_callable=AsyncMock, return_value=mock_proc):
+            result = _run(debug_start(mock_ctx, stub_io=True))
+        assert result["stub_io"] is True
+        assert result["api_trace_enabled"] is True
+
+    def test_create_session_forwards_stub_io(self):
+        """Verify create_session passes stub_io in init command."""
+        _DebugSessionManager = _import_manager_cls()
+        init_resp = _make_init_response()
+        init_resp["stub_io"] = False
+        init_resp["api_trace_enabled"] = True
+        mock_proc = MockProcess([init_resp])
+
+        async def _test():
+            mgr = _DebugSessionManager()
+            with patch("arkana.mcp.tools_debug.asyncio.create_subprocess_exec",
+                        new_callable=AsyncMock, return_value=mock_proc):
+                session = await mgr.create_session("/tmp/test.exe", stub_io=False)
+            # Check the init command sent
+            written = mock_proc.stdin.written[0].decode()
+            cmd = json.loads(written)
+            assert cmd["stub_io"] is False
+            assert session.stub_io is False
+
+        _run(_test())
+
+
+# ===================================================================
+#  10. I/O Stubs Tests (subprocess-level)
+# ===================================================================
+
+class TestDebugIOStubs:
+
+    def _make_session(self, responses):
+        _DebugSession = _import_session_cls()
+        proc = MockProcess(responses)
+        return _DebugSession("debug-1", proc, "x86", "windows", "/tmp/test.exe")
+
+    def test_set_input_utf8(self):
+        resp = {"status": "ok", "bytes_queued": 12, "total_pending_bytes": 12, "queue_entries": 1}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "set_input", "data": "Hello World\n", "encoding": "utf-8"}))
+        assert result["status"] == "ok"
+        assert result["bytes_queued"] == 12
+
+    def test_set_input_hex(self):
+        resp = {"status": "ok", "bytes_queued": 4, "total_pending_bytes": 4, "queue_entries": 1}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "set_input", "data": "DEADBEEF", "encoding": "hex"}))
+        assert result["status"] == "ok"
+        assert result["bytes_queued"] == 4
+
+    def test_set_input_empty_error(self):
+        resp = {"error": "'data' is required"}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "set_input", "data": ""}))
+        assert "error" in result
+
+    def test_get_output_empty(self):
+        resp = {"status": "ok", "entries": [], "total": 0, "offset": 0, "limit": 100, "returned": 0, "has_more": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "get_output"}))
+        assert result["total"] == 0
+        assert result["entries"] == []
+
+    def test_get_output_with_data(self):
+        entries = [
+            {"seq": 1, "api": "WriteConsoleA", "text": "Hello World", "byte_count": 11, "timestamp": 1234567890.0},
+            {"seq": 2, "api": "WriteConsoleW", "text": "Wide text", "byte_count": 9, "timestamp": 1234567891.0},
+        ]
+        resp = {"status": "ok", "entries": entries, "total": 2, "offset": 0, "limit": 100, "returned": 2, "has_more": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "get_output"}))
+        assert result["total"] == 2
+        assert result["entries"][0]["api"] == "WriteConsoleA"
+
+    def test_get_output_with_clear(self):
+        resp = {"status": "ok", "entries": [], "total": 0, "offset": 0, "limit": 100, "returned": 0,
+                "has_more": False, "cleared": True}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "get_output", "clear": True}))
+        assert result.get("cleared") is True
+
+    def test_get_output_pagination(self):
+        resp = {"status": "ok", "entries": [{"seq": 6, "api": "WriteConsoleA", "text": "x"}],
+                "total": 10, "offset": 5, "limit": 1, "returned": 1, "has_more": True}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "get_output", "offset": 5, "limit": 1}))
+        assert result["has_more"] is True
+        assert result["offset"] == 5
+
+
+# ===================================================================
+#  11. API Trace Tests (subprocess-level)
+# ===================================================================
+
+class TestDebugAPITrace:
+
+    def _make_session(self, responses):
+        _DebugSession = _import_session_cls()
+        proc = MockProcess(responses)
+        return _DebugSession("debug-1", proc, "x86", "windows", "/tmp/test.exe")
+
+    def test_get_trace_empty(self):
+        resp = {"status": "ok", "entries": [], "total": 0, "offset": 0, "limit": 100,
+                "returned": 0, "has_more": False, "trace_enabled": True, "filter_active": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "get_api_trace"}))
+        assert result["total"] == 0
+        assert result["trace_enabled"] is True
+
+    def test_get_trace_with_data(self):
+        entries = [
+            {"seq": 1, "api": "CreateFileA", "args": {"lpFileName": "test.txt"}, "retval": "0x100",
+             "address": "0x7ff00000", "timestamp": 1234567890.0},
+            {"seq": 2, "api": "ReadFile", "args": {"hFile": "0x100"}, "retval": "0x1",
+             "address": "0x7ff00100", "timestamp": 1234567891.0},
+        ]
+        resp = {"status": "ok", "entries": entries, "total": 2, "offset": 0, "limit": 100,
+                "returned": 2, "has_more": False, "trace_enabled": True, "filter_active": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "get_api_trace"}))
+        assert result["total"] == 2
+        assert result["entries"][0]["api"] == "CreateFileA"
+
+    def test_get_trace_pagination(self):
+        resp = {"status": "ok", "entries": [{"seq": 51, "api": "VirtualAlloc"}],
+                "total": 100, "offset": 50, "limit": 1, "returned": 1, "has_more": True,
+                "trace_enabled": True, "filter_active": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "get_api_trace", "offset": 50, "limit": 1}))
+        assert result["has_more"] is True
+
+    def test_get_trace_with_filter(self):
+        entries = [{"seq": 1, "api": "CreateFileA", "args": {}, "retval": None}]
+        resp = {"status": "ok", "entries": entries, "total": 1, "offset": 0, "limit": 100,
+                "returned": 1, "has_more": False, "trace_enabled": True, "filter_active": True}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "get_api_trace", "filter": "Create"}))
+        assert result["returned"] == 1
+
+    def test_clear_trace(self):
+        resp = {"status": "ok", "entries_cleared": 42}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "clear_api_trace"}))
+        assert result["entries_cleared"] == 42
+
+    def test_set_trace_filter_specific_apis(self):
+        resp = {"status": "ok", "trace_enabled": True, "filter": ["CreateFileA", "WriteFile"]}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "set_trace_filter", "apis": ["CreateFileA", "WriteFile"]}))
+        assert result["filter"] == ["CreateFileA", "WriteFile"]
+
+    def test_set_trace_filter_clear(self):
+        resp = {"status": "ok", "trace_enabled": True, "filter": None}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "set_trace_filter", "apis": []}))
+        assert result["filter"] is None
+
+    def test_set_trace_filter_disable(self):
+        resp = {"status": "ok", "trace_enabled": False, "filter": None}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "set_trace_filter", "enabled": False}))
+        assert result["trace_enabled"] is False
+
+    def test_set_trace_filter_enable(self):
+        resp = {"status": "ok", "trace_enabled": True, "filter": None}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "set_trace_filter", "enabled": True}))
+        assert result["trace_enabled"] is True
+
+
+# ===================================================================
+#  12. Memory Search Tests (subprocess-level)
+# ===================================================================
+
+class TestDebugMemorySearch:
+
+    def _make_session(self, responses):
+        _DebugSession = _import_session_cls()
+        proc = MockProcess(responses)
+        return _DebugSession("debug-1", proc, "x86", "windows", "/tmp/test.exe")
+
+    def test_search_string_pattern(self):
+        matches = [{"address": "0x404100", "region_start": "0x404000", "region_label": ".data",
+                     "encoding": "utf-8", "match_hex": "48656c6c6f", "context_hex": "0000" + "48656c6c6f" + "0000",
+                     "context_ascii": "..Hello..", "context_offset": 2}]
+        resp = {"status": "ok", "pattern": "Hello", "pattern_type": "string",
+                "matches": matches, "total_matches": 1, "max_matches": 100, "truncated": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "search_memory", "pattern": "Hello", "pattern_type": "string"}))
+        assert result["total_matches"] == 1
+        assert result["matches"][0]["encoding"] == "utf-8"
+
+    def test_search_hex_pattern(self):
+        matches = [{"address": "0x401000", "region_start": "0x400000", "region_label": ".text",
+                     "encoding": "hex", "match_hex": "deadbeef", "context_hex": "0000deadbeef0000",
+                     "context_offset": 2}]
+        resp = {"status": "ok", "pattern": "DEADBEEF", "pattern_type": "hex",
+                "matches": matches, "total_matches": 1, "max_matches": 100, "truncated": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "search_memory", "pattern": "DEADBEEF", "pattern_type": "hex"}))
+        assert result["total_matches"] == 1
+
+    def test_search_hex_wildcard(self):
+        matches = [{"address": "0x401000", "encoding": "hex", "match_hex": "de01be02"}]
+        resp = {"status": "ok", "pattern": "DE??BE??", "pattern_type": "hex",
+                "matches": matches, "total_matches": 1, "max_matches": 100, "truncated": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "search_memory", "pattern": "DE??BE??", "pattern_type": "hex"}))
+        assert result["total_matches"] == 1
+
+    def test_search_empty_pattern_error(self):
+        resp = {"error": "'pattern' is required"}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "search_memory", "pattern": ""}))
+        assert "error" in result
+
+    def test_search_invalid_type_error(self):
+        resp = {"error": "Invalid pattern_type: regex. Must be 'string' or 'hex'"}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "search_memory", "pattern": "test", "pattern_type": "regex"}))
+        assert "error" in result
+
+    def test_search_with_region_filter(self):
+        resp = {"status": "ok", "pattern": "secret", "pattern_type": "string",
+                "matches": [], "total_matches": 0, "max_matches": 100, "truncated": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "search_memory", "pattern": "secret",
+                                             "pattern_type": "string", "region_filter": ".data"}))
+        assert result["total_matches"] == 0
+
+    def test_search_max_matches_clamp(self):
+        resp = {"status": "ok", "pattern": "A", "pattern_type": "string",
+                "matches": [], "total_matches": 0, "max_matches": 100, "truncated": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "search_memory", "pattern": "A",
+                                             "pattern_type": "string", "max_matches": 9999}))
+        assert result["max_matches"] == 100
+
+    def test_search_no_matches(self):
+        resp = {"status": "ok", "pattern": "NONEXISTENT", "pattern_type": "string",
+                "matches": [], "total_matches": 0, "max_matches": 100, "truncated": False}
+        session = self._make_session([resp])
+        result = _run(session.send_command({"action": "search_memory", "pattern": "NONEXISTENT"}))
+        assert result["total_matches"] == 0
+
+
+# ===================================================================
+#  13. MCP Tool Integration Tests — New Tools
+# ===================================================================
+
+class TestMCPToolIntegrationNew:
+
+    def _setup_session(self, clean_state, responses):
+        _DebugSession = _import_session_cls()
+        _DebugSessionManager = _import_manager_cls()
+        mgr = _DebugSessionManager()
+        proc = MockProcess(responses)
+        session = _DebugSession("debug-1", proc, "x86", "windows", "/tmp/test.exe")
+        mgr._sessions["debug-1"] = session
+        clean_state._debug_manager = mgr
+        return session
+
+    def test_debug_set_input_tool(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_set_input
+        resp = {"status": "ok", "bytes_queued": 5, "total_pending_bytes": 5, "queue_entries": 1}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_set_input(mock_ctx, data="hello", encoding="utf-8"))
+        assert result["bytes_queued"] == 5
+
+    def test_debug_set_input_empty(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_set_input
+        self._setup_session(clean_state, [])
+        result = _run(debug_set_input(mock_ctx, data=""))
+        assert "error" in result
+
+    def test_debug_set_input_invalid_encoding(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_set_input
+        self._setup_session(clean_state, [])
+        result = _run(debug_set_input(mock_ctx, data="test", encoding="base64"))
+        assert "error" in result
+
+    def test_debug_get_output_tool(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_get_output
+        resp = {"status": "ok", "entries": [], "total": 0, "offset": 0, "limit": 100, "returned": 0, "has_more": False}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_get_output(mock_ctx))
+        assert result["total"] == 0
+
+    def test_debug_get_api_trace_tool(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_get_api_trace
+        resp = {"status": "ok", "entries": [], "total": 0, "offset": 0, "limit": 100,
+                "returned": 0, "has_more": False, "trace_enabled": True, "filter_active": False}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_get_api_trace(mock_ctx))
+        assert result["total"] == 0
+        assert result["trace_enabled"] is True
+
+    def test_debug_clear_api_trace_tool(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_clear_api_trace
+        resp = {"status": "ok", "entries_cleared": 10}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_clear_api_trace(mock_ctx))
+        assert result["entries_cleared"] == 10
+
+    def test_debug_set_trace_filter_tool(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_set_trace_filter
+        resp = {"status": "ok", "trace_enabled": True, "filter": ["CreateFileA"]}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_set_trace_filter(mock_ctx, apis="CreateFileA"))
+        assert result["filter"] == ["CreateFileA"]
+
+    def test_debug_search_memory_tool(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_search_memory
+        resp = {"status": "ok", "pattern": "password", "pattern_type": "string",
+                "matches": [{"address": "0x404100", "encoding": "utf-8"}],
+                "total_matches": 1, "max_matches": 100, "truncated": False}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_search_memory(mock_ctx, pattern="password"))
+        assert result["total_matches"] == 1
+
+    def test_debug_search_memory_empty_pattern(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_search_memory
+        self._setup_session(clean_state, [])
+        result = _run(debug_search_memory(mock_ctx, pattern=""))
+        assert "error" in result
+
+    def test_debug_search_memory_invalid_type(self, clean_state, mock_ctx):
+        from arkana.mcp.tools_debug import debug_search_memory
+        self._setup_session(clean_state, [])
+        result = _run(debug_search_memory(mock_ctx, pattern="test", pattern_type="regex"))
+        assert "error" in result

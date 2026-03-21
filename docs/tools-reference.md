@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **250 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **256 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -307,7 +307,7 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 
 | Tool | Description |
 |---|---|
-| `debug_start` | Start an interactive debug session on the loaded binary. Spawns a persistent Qiling subprocess, pauses at entry point. Returns initial PC, registers, and architecture info. Max 3 concurrent sessions. |
+| `debug_start` | Start an interactive debug session on the loaded binary. Spawns a persistent Qiling subprocess, pauses at entry point. `stub_io` (default True) installs Win32 console API stubs to prevent crashes from printf/cout/cin. API tracing is enabled by default. Returns initial PC, registers, architecture, and stub/trace status. Max 3 concurrent sessions. |
 | `debug_stop` | Stop and destroy a debug session. Kills the subprocess and frees resources. |
 | `debug_status` | Check if a debug session is alive and return its current state (PC, status, instructions executed, architecture). |
 
@@ -347,6 +347,27 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 | `debug_snapshot_restore` | Restore a previously saved snapshot, rewinding execution to that point. |
 | `debug_snapshot_list` | List all saved snapshots with metadata (PC, instruction count, timestamp). |
 | `debug_snapshot_diff` | Compare two snapshots  - shows register differences and changed memory regions. |
+
+### I/O Stubs
+
+| Tool | Description |
+|---|---|
+| `debug_set_input` | Queue input data for stubbed console input (ReadConsoleA). Supports UTF-8 and hex encoding. Queue input before stepping through stdin/cin/scanf code. |
+| `debug_get_output` | Retrieve captured console output from I/O stubs. All text from WriteConsoleA/W (printf, puts, cout) is captured. Paginated with optional clear. |
+
+### API Call Tracing
+
+| Tool | Description |
+|---|---|
+| `debug_get_api_trace` | Retrieve the API call trace log. All Windows API calls are logged with function name, arguments, and return value. Paginated with optional name filter. |
+| `debug_clear_api_trace` | Clear the API call trace buffer. |
+| `debug_set_trace_filter` | Configure API trace filtering. Set a whitelist of specific API names, or enable/disable tracing entirely. |
+
+### Memory Search
+
+| Tool | Description |
+|---|---|
+| `debug_search_memory` | Search all mapped memory for string patterns (UTF-8 + UTF-16LE) or hex byte patterns with `??` wildcards. Returns matches with address, region label, and context bytes. Max 100 matches. |
 
 > **Note:** Debug sessions use the same isolated Qiling venv (`/app/qiling-venv`) as the fire-and-forget emulation tools. Sessions time out after 30 minutes of inactivity (`ARKANA_DEBUG_SESSION_TTL`). Each debug command has a 5-minute timeout (`ARKANA_DEBUG_COMMAND_TIMEOUT`). Emulation fidelity limitations apply  - complex anti-emulation, threading, and some Windows APIs may not work correctly.
 

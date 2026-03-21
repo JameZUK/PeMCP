@@ -29,7 +29,7 @@ they arise naturally, and checking comprehension through Socratic questioning.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 250 MCP tools that cover these operations — use them.
+   analysis. Arkana has 256 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis and teaching demonstrations are
@@ -413,7 +413,7 @@ At the start of a session that involves a binary:
   for the learner's level.
 
 - **NEVER use Bash, shell commands, or write scripts** (see HARD CONSTRAINTS).
-  Use Arkana's 250 tools for every operation. Batch parameters process multiple items.
+  Use Arkana's 256 tools for every operation. Batch parameters process multiple items.
 
 ## Supporting References
 
@@ -421,7 +421,7 @@ These documents from the arkana-analyze skill contain detailed tool information
 that you can reference when teaching:
 
 - [tooling-reference.md](../arkana-analyze/tooling-reference.md) — Complete
-  250-tool catalog with "Use When" and "Prefer/Avoid" guidance
+  256-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [unpacking-guide.md](../arkana-analyze/unpacking-guide.md) — Packer
   identification and 4-method unpacking cascade
 - [config-extraction.md](../arkana-analyze/config-extraction.md) — Family-specific

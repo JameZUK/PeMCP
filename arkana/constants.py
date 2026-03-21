@@ -225,6 +225,11 @@ DEBUG_DISASM_PREVIEW = 5             # Instructions to preview in read_state
 MAX_DEBUG_WATCHPOINT_SIZE = 1_048_576  # 1MB max watchpoint region
 MAX_DEBUG_BREAKPOINTS = 100          # Max breakpoints per session
 MAX_DEBUG_WATCHPOINTS = 50           # Max watchpoints per session
+MAX_DEBUG_CAPTURED_OUTPUT = 10_000   # Max captured I/O output entries
+MAX_DEBUG_PENDING_INPUT = 1_000      # Max pending input entries for stubbed stdin
+MAX_DEBUG_API_TRACE = 10_000         # Max API trace entries per session
+MAX_DEBUG_SEARCH_MATCHES = 100       # Max memory search matches returned
+DEBUG_SEARCH_CONTEXT_BYTES = 32      # Context bytes around memory search matches
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

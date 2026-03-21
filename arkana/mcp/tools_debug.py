@@ -24,6 +24,8 @@ from arkana.constants import (
     MAX_DEBUG_SESSIONS, DEBUG_SESSION_TTL, DEBUG_COMMAND_TIMEOUT,
     MAX_DEBUG_SNAPSHOTS, MAX_DEBUG_INSTRUCTIONS, MAX_DEBUG_MEMORY_READ,
     MAX_DEBUG_BREAKPOINTS, MAX_DEBUG_WATCHPOINTS, MAX_DEBUG_WATCHPOINT_SIZE,
+    MAX_DEBUG_CAPTURED_OUTPUT, MAX_DEBUG_PENDING_INPUT, MAX_DEBUG_API_TRACE,
+    MAX_DEBUG_SEARCH_MATCHES,
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
@@ -86,6 +88,8 @@ class _DebugSession:
         self.pc: Optional[str] = None
         self.status = "paused"  # paused | running | exited | error
         self.instructions_executed = 0
+        self.stub_io = False
+        self.api_trace_enabled = False
         self._cmd_lock = asyncio.Lock()
 
     async def send_command(self, cmd: dict, timeout: int = DEBUG_COMMAND_TIMEOUT) -> dict:
@@ -142,7 +146,8 @@ class _DebugSessionManager:
         self._lock = asyncio.Lock()
         self._counter = 0
 
-    async def create_session(self, filepath: str, rootfs_path: str = None) -> _DebugSession:
+    async def create_session(self, filepath: str, rootfs_path: str = None,
+                             stub_io: bool = True) -> _DebugSession:
         """Spawn a new debug subprocess and initialise Qiling."""
         async with self._lock:
             if len(self._sessions) >= MAX_DEBUG_SESSIONS:
@@ -169,6 +174,7 @@ class _DebugSessionManager:
                 "action": "init",
                 "filepath": filepath,
                 "rootfs_path": rootfs_path or str(_QILING_DEFAULT_ROOTFS),
+                "stub_io": stub_io,
             }
             result = await session.send_command(init_cmd, timeout=120)
 
@@ -179,6 +185,8 @@ class _DebugSessionManager:
             session.arch = result.get("architecture", "")
             session.os_type = result.get("os_type", "")
             session.pc = result.get("pc")
+            session.stub_io = result.get("stub_io", False)
+            session.api_trace_enabled = result.get("api_trace_enabled", False)
             session.status = "paused"
             self._sessions[session_id] = session
             return session
@@ -273,6 +281,7 @@ def _update_session_from_result(session: _DebugSession, result: dict) -> None:
 async def debug_start(
     ctx: Context,
     rootfs_path: str = "",
+    stub_io: bool = True,
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Start an interactive debug session for the loaded binary.
@@ -280,8 +289,17 @@ async def debug_start(
     Creates a persistent emulation environment using Qiling Framework.
     The binary is loaded and paused at entry point, ready for stepping.
 
+    I/O stubs (enabled by default) hook Windows console APIs (WriteConsoleA,
+    ReadConsoleA, GetStdHandle, etc.) to prevent crashes from printf/cout/cin
+    and capture all console output. Use debug_get_output to read captured text
+    and debug_set_input to queue input for ReadConsole.
+
+    API call tracing is enabled by default — all Windows API calls are logged
+    with arguments and return values. Use debug_get_api_trace to view the trace.
+
     Args:
         rootfs_path: Custom rootfs path (optional, uses default if empty)
+        stub_io: Install console I/O stubs to prevent crashes (default True)
         session_id: Ignored (auto-generated). Use debug_status to see session IDs.
 
     Returns:
@@ -296,6 +314,7 @@ async def debug_start(
     session = await mgr.create_session(
         filepath=state.filepath,
         rootfs_path=rootfs_path or None,
+        stub_io=stub_io,
     )
 
     await ctx.report_progress(100, 100)
@@ -307,8 +326,12 @@ async def debug_start(
         "os_type": session.os_type,
         "pc": session.pc,
         "status": session.status,
+        "stub_io": session.stub_io,
+        "api_trace_enabled": session.api_trace_enabled,
         "note": "Debug session started. Binary loaded and paused at entry point. "
-                "Use debug_step, debug_continue, debug_set_breakpoint, etc. to control execution.",
+                "Use debug_step, debug_continue, debug_set_breakpoint to control execution. "
+                "Use debug_get_output for captured console I/O, debug_get_api_trace for API calls, "
+                "debug_search_memory to search emulated memory.",
     }
 
 
@@ -893,3 +916,225 @@ async def debug_snapshot_diff(
         "snapshot_id_b": snapshot_id_b,
     })
     return await _check_mcp_response_size(ctx, result, "debug_snapshot_diff")
+
+
+# ---------------------------------------------------------------------------
+#  MCP Tools — I/O Stubs
+# ---------------------------------------------------------------------------
+
+@tool_decorator
+async def debug_set_input(
+    ctx: Context,
+    data: str = "",
+    encoding: str = "utf-8",
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Queue input data for stubbed console input (ReadConsoleA).
+
+    When I/O stubs are enabled (stub_io=True on debug_start), ReadConsoleA
+    consumes data from this input queue instead of crashing. Queue input
+    before stepping through code that reads from stdin/cin/scanf.
+
+    Args:
+        data: Input data to queue (string or hex-encoded bytes)
+        encoding: "utf-8" (default) or "hex" (hex-encoded bytes)
+        session_id: Session to use (uses most recent if empty)
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    if not data:
+        return {"error": "data is required"}
+    if encoding not in ("utf-8", "hex"):
+        return {"error": f"Invalid encoding: {encoding}. Must be 'utf-8' or 'hex'"}
+
+    return await session.send_command({
+        "action": "set_input",
+        "data": data,
+        "encoding": encoding,
+    })
+
+
+@tool_decorator
+async def debug_get_output(
+    ctx: Context,
+    clear: bool = False,
+    offset: int = 0,
+    limit: int = 100,
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Retrieve captured console output from I/O stubs.
+
+    When I/O stubs are enabled, all text written via WriteConsoleA/W
+    (covering printf, puts, cout, etc.) is captured. This tool returns
+    the captured output buffer.
+
+    Args:
+        clear: Clear the buffer after reading (default False)
+        offset: Start offset for pagination (default 0)
+        limit: Max entries to return (1-1000, default 100)
+        session_id: Session to use (uses most recent if empty)
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    offset = max(0, offset)
+    limit = max(1, min(limit, 1000))
+
+    result = await session.send_command({
+        "action": "get_output",
+        "offset": offset,
+        "limit": limit,
+        "clear": clear,
+    })
+    return await _check_mcp_response_size(ctx, result, "debug_get_output", "'limit' parameter")
+
+
+# ---------------------------------------------------------------------------
+#  MCP Tools — API Call Tracing
+# ---------------------------------------------------------------------------
+
+@tool_decorator
+async def debug_get_api_trace(
+    ctx: Context,
+    offset: int = 0,
+    limit: int = 100,
+    filter: str = "",
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Retrieve the API call trace log.
+
+    All Windows API calls are logged with function name, arguments, and
+    return value. Use this to see what the binary is doing at the API level
+    without setting individual breakpoints.
+
+    Args:
+        offset: Start offset for pagination (default 0)
+        limit: Max entries to return (1-1000, default 100)
+        filter: Optional API name filter (case-insensitive substring match)
+        session_id: Session to use (uses most recent if empty)
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    offset = max(0, offset)
+    limit = max(1, min(limit, 1000))
+
+    cmd = {
+        "action": "get_api_trace",
+        "offset": offset,
+        "limit": limit,
+    }
+    if filter:
+        cmd["filter"] = filter
+
+    result = await session.send_command(cmd)
+    return await _check_mcp_response_size(ctx, result, "debug_get_api_trace", "'limit' parameter")
+
+
+@tool_decorator
+async def debug_clear_api_trace(
+    ctx: Context,
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Clear the API call trace buffer.
+
+    Args:
+        session_id: Session to use (uses most recent if empty)
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    return await session.send_command({"action": "clear_api_trace"})
+
+
+@tool_decorator
+async def debug_set_trace_filter(
+    ctx: Context,
+    apis: str = "",
+    enabled: bool = True,
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Configure API trace filtering.
+
+    By default all API calls are traced. Use this to whitelist specific APIs
+    or disable/enable tracing entirely.
+
+    Args:
+        apis: Comma-separated API names to whitelist (empty = trace all)
+        enabled: Enable or disable tracing (default True)
+        session_id: Session to use (uses most recent if empty)
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    cmd: Dict[str, Any] = {
+        "action": "set_trace_filter",
+        "enabled": enabled,
+    }
+
+    if apis:
+        api_list = [a.strip() for a in apis.split(",") if a.strip()]
+        cmd["apis"] = api_list
+    else:
+        cmd["apis"] = []  # Empty list = clear filter (trace all)
+
+    return await session.send_command(cmd)
+
+
+# ---------------------------------------------------------------------------
+#  MCP Tools — Memory Search
+# ---------------------------------------------------------------------------
+
+@tool_decorator
+async def debug_search_memory(
+    ctx: Context,
+    pattern: str = "",
+    pattern_type: str = "string",
+    max_matches: int = 100,
+    context_bytes: int = 32,
+    region_filter: str = "",
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Search emulated memory for strings or byte patterns.
+
+    Searches across all mapped memory regions. For string patterns, searches
+    both UTF-8 and UTF-16LE encodings. For hex patterns, supports ?? wildcards.
+
+    Use cases: finding decrypted strings, config data, C2 URLs, encryption keys
+    after stepping through decryption/unpacking routines.
+
+    Args:
+        pattern: Search pattern (string text or hex bytes)
+        pattern_type: "string" (UTF-8 + UTF-16LE, default) or "hex" (with ?? wildcards)
+        max_matches: Maximum matches to return (1-100, default 100)
+        context_bytes: Bytes of context around each match (0-256, default 32)
+        region_filter: Only search regions whose label contains this substring
+        session_id: Session to use (uses most recent if empty)
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    if not pattern:
+        return {"error": "pattern is required"}
+    if pattern_type not in ("string", "hex"):
+        return {"error": f"Invalid pattern_type: {pattern_type}. Must be 'string' or 'hex'"}
+
+    max_matches = max(1, min(max_matches, MAX_DEBUG_SEARCH_MATCHES))
+    context_bytes = max(0, min(context_bytes, 256))
+
+    await ctx.info(f"Searching memory for {pattern_type} pattern...")
+
+    cmd: Dict[str, Any] = {
+        "action": "search_memory",
+        "pattern": pattern,
+        "pattern_type": pattern_type,
+        "max_matches": max_matches,
+        "context_bytes": context_bytes,
+    }
+    if region_filter:
+        cmd["region_filter"] = region_filter
+
+    result = await session.send_command(cmd)
+    await ctx.report_progress(100, 100)
+    return await _check_mcp_response_size(ctx, result, "debug_search_memory", "'max_matches' parameter")
