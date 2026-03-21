@@ -17,6 +17,7 @@ Protocol:
 """
 import json
 import os
+import struct
 import sys
 import time
 import traceback
@@ -43,6 +44,14 @@ except ImportError:
         CALL = 0
         EXIT = 1
         ENTER = 2
+
+# --- Windows API decorator imports (for I/O stubs) ---
+try:
+    from qiling.os.windows.fncc import winsdkapi, STDCALL
+    from qiling.os.windows.api import DWORD, HANDLE, LPDWORD, LPVOID, BOOL
+    _WINSDKAPI_AVAILABLE = True
+except ImportError:
+    _WINSDKAPI_AVAILABLE = False
 
 # --- Capstone imports (bundled with Qiling) ---
 try:
@@ -398,13 +407,55 @@ def _consume_input(n):
     return result
 
 
+def _stub_read_param(index):
+    """Read the Nth parameter (0-indexed) for the current architecture.
+
+    For x86 STDCALL: params are on the stack at ESP+4, ESP+8, etc.
+    For x86-64 fastcall: first 4 params in RCX, RDX, R8, R9; rest on stack.
+    """
+    if _arch == "x8664":
+        regs = [_ql.arch.regs.rcx, _ql.arch.regs.rdx,
+                _ql.arch.regs.r8, _ql.arch.regs.r9]
+        if index < 4:
+            return regs[index] & 0xFFFFFFFFFFFFFFFF
+        rsp = _ql.arch.regs.rsp
+        data = _ql.mem.read(rsp + 8 + index * 8, 8)
+        return struct.unpack('<Q', bytes(data))[0]
+    else:
+        esp = _ql.arch.regs.esp
+        data = _ql.mem.read(esp + 4 + index * 4, 4)
+        return struct.unpack('<I', bytes(data))[0]
+
+
+def _stub_set_retval(retval):
+    """Set the API return value register for the current architecture."""
+    if _arch == "x8664":
+        _ql.arch.regs.rax = retval & 0xFFFFFFFFFFFFFFFF
+    else:
+        _ql.arch.regs.eax = retval & 0xFFFFFFFF
+
+
 def _install_io_stubs():
-    """Install Win32 console API stubs to prevent crashes from console I/O."""
+    """Install Win32 console API stubs to prevent crashes from console I/O.
+
+    Strategy: register CALL hooks that set the return value in EAX/RAX, then
+    patch the simprocedure memory with `ret N` (STDCALL) or `ret` (fastcall).
+    The CALL hook fires before the instruction at the simprocedure address.
+    After the hook sets EAX and returns, the `ret N` instruction executes,
+    performing the standard STDCALL return (pop return addr, clean params).
+
+    This avoids the Unicorn 1.x limitation where emu_stop() takes effect
+    AFTER the current instruction executes (so changing EIP in a hook_code
+    callback and calling emu_stop doesn't prevent the old instruction from
+    running).
+
+    CALL hooks preempt ENTER hooks in hook_winapi, so trace entries are
+    added manually inside each stub.
+    """
     global _stub_io
     if _ql is None:
         return
 
-    # Virtual handles for stdin/stdout/stderr
     STD_INPUT_HANDLE = 0xFFFFFFF6   # -10
     STD_OUTPUT_HANDLE = 0xFFFFFFF5  # -11
     STD_ERROR_HANDLE = 0xFFFFFFF4   # -12
@@ -415,88 +466,143 @@ def _install_io_stubs():
         STD_ERROR_HANDLE & 0xFFFFFFFF: 0x300,
     }
 
-    def _stub_GetStdHandle(ql, address, params):
-        nStdHandle = params.get("nStdHandle", 0) & 0xFFFFFFFF
+    def _stub_GetStdHandle(ql, address, _api_name):
+        nStdHandle = _stub_read_param(0) & 0xFFFFFFFF
         handle = _VIRTUAL_HANDLES.get(nStdHandle, 0x200)
-        return handle
+        _add_trace_entry("GetStdHandle", address,
+                         {"nStdHandle": _hex(nStdHandle)}, handle)
+        _stub_set_retval(handle)
 
-    def _stub_WriteConsoleA(ql, address, params):
-        buf_addr = params.get("lpBuffer", 0)
-        n_chars = params.get("nNumberOfCharsToWrite", 0)
+    def _stub_WriteConsoleA(ql, address, _api_name):
+        buf_addr = _stub_read_param(1)
+        n_chars = _stub_read_param(2) & 0xFFFFFFFF
+        written_addr = _stub_read_param(3)
         if buf_addr and n_chars > 0:
             text = _read_string_from_memory(buf_addr, min(n_chars, 4096))
             _capture_output("WriteConsoleA", text, n_chars)
-        # Write chars written count
-        written_addr = params.get("lpNumberOfCharsWritten", 0)
         if written_addr:
             try:
                 ql.mem.write(written_addr, n_chars.to_bytes(4, "little"))
             except Exception:
                 pass
-        return 1  # TRUE
+        _add_trace_entry("WriteConsoleA", address,
+                         {"lpBuffer": _hex(buf_addr),
+                          "nNumberOfCharsToWrite": str(n_chars)}, 1)
+        _stub_set_retval(1)
 
-    def _stub_WriteConsoleW(ql, address, params):
-        buf_addr = params.get("lpBuffer", 0)
-        n_chars = params.get("nNumberOfCharsToWrite", 0)
+    def _stub_WriteConsoleW(ql, address, _api_name):
+        buf_addr = _stub_read_param(1)
+        n_chars = _stub_read_param(2) & 0xFFFFFFFF
+        written_addr = _stub_read_param(3)
         if buf_addr and n_chars > 0:
             text = _read_wstring_from_memory(buf_addr, min(n_chars, 4096))
             _capture_output("WriteConsoleW", text, n_chars)
-        written_addr = params.get("lpNumberOfCharsWritten", 0)
         if written_addr:
             try:
                 ql.mem.write(written_addr, n_chars.to_bytes(4, "little"))
             except Exception:
                 pass
-        return 1
+        _add_trace_entry("WriteConsoleW", address,
+                         {"lpBuffer": _hex(buf_addr),
+                          "nNumberOfCharsToWrite": str(n_chars)}, 1)
+        _stub_set_retval(1)
 
-    def _stub_ReadConsoleA(ql, address, params):
-        buf_addr = params.get("lpBuffer", 0)
-        n_chars = params.get("nNumberOfCharsToRead", 0)
+    def _stub_ReadConsoleA(ql, address, _api_name):
+        buf_addr = _stub_read_param(1)
+        n_chars = _stub_read_param(2) & 0xFFFFFFFF
+        read_addr = _stub_read_param(3)
+        retval = 1
         if not buf_addr or n_chars <= 0:
-            return 0
-        input_data = _consume_input(n_chars)
-        if not input_data:
-            input_data = b"\n"  # Default: empty line
-        try:
-            ql.mem.write(buf_addr, input_data)
-        except Exception:
-            return 0
-        read_addr = params.get("lpNumberOfCharsRead", 0)
-        if read_addr:
+            retval = 0
+        else:
+            input_data = _consume_input(n_chars)
+            if not input_data:
+                input_data = b"\n"
             try:
-                ql.mem.write(read_addr, len(input_data).to_bytes(4, "little"))
+                ql.mem.write(buf_addr, input_data)
             except Exception:
-                pass
-        _capture_output("ReadConsoleA", input_data.decode('utf-8', errors='replace'), len(input_data))
-        return 1
+                retval = 0
+                input_data = b""
+            if read_addr and retval:
+                try:
+                    ql.mem.write(read_addr,
+                                 len(input_data).to_bytes(4, "little"))
+                except Exception:
+                    pass
+            if retval:
+                _capture_output("ReadConsoleA",
+                                input_data.decode('utf-8', errors='replace'),
+                                len(input_data))
+        _add_trace_entry("ReadConsoleA", address,
+                         {"lpBuffer": _hex(buf_addr),
+                          "nNumberOfCharsToRead": str(n_chars)}, retval)
+        _stub_set_retval(retval)
 
-    def _stub_SetConsoleMode(ql, address, params):
-        return 1
+    def _stub_SetConsoleMode(ql, address, _api_name):
+        _add_trace_entry("SetConsoleMode", address, {}, 1)
+        _stub_set_retval(1)
 
-    def _stub_GetConsoleMode(ql, address, params):
-        mode_addr = params.get("lpMode", 0)
+    def _stub_GetConsoleMode(ql, address, _api_name):
+        mode_addr = _stub_read_param(1)
         if mode_addr:
             try:
                 ql.mem.write(mode_addr, (0x3).to_bytes(4, "little"))
             except Exception:
                 pass
-        return 1
+        _add_trace_entry("GetConsoleMode", address, {}, 1)
+        _stub_set_retval(1)
 
-    def _stub_AllocConsole(ql, address, params):
-        return 1
+    def _stub_AllocConsole(ql, address, _api_name):
+        _add_trace_entry("AllocConsole", address, {}, 1)
+        _stub_set_retval(1)
 
-    def _stub_FreeConsole(ql, address, params):
-        return 1
+    def _stub_FreeConsole(ql, address, _api_name):
+        _add_trace_entry("FreeConsole", address, {}, 1)
+        _stub_set_retval(1)
+
+    # Map API name → (num_params, stub_function)
+    stub_map = {
+        "GetStdHandle": (1, _stub_GetStdHandle),
+        "WriteConsoleA": (5, _stub_WriteConsoleA),
+        "WriteConsoleW": (5, _stub_WriteConsoleW),
+        "ReadConsoleA": (5, _stub_ReadConsoleA),
+        "SetConsoleMode": (2, _stub_SetConsoleMode),
+        "GetConsoleMode": (2, _stub_GetConsoleMode),
+        "AllocConsole": (0, _stub_AllocConsole),
+        "FreeConsole": (0, _stub_FreeConsole),
+    }
 
     try:
-        _ql.os.set_api("GetStdHandle", _stub_GetStdHandle, QL_INTERCEPT.CALL)
-        _ql.os.set_api("WriteConsoleA", _stub_WriteConsoleA, QL_INTERCEPT.CALL)
-        _ql.os.set_api("WriteConsoleW", _stub_WriteConsoleW, QL_INTERCEPT.CALL)
-        _ql.os.set_api("ReadConsoleA", _stub_ReadConsoleA, QL_INTERCEPT.CALL)
-        _ql.os.set_api("SetConsoleMode", _stub_SetConsoleMode, QL_INTERCEPT.CALL)
-        _ql.os.set_api("GetConsoleMode", _stub_GetConsoleMode, QL_INTERCEPT.CALL)
-        _ql.os.set_api("AllocConsole", _stub_AllocConsole, QL_INTERCEPT.CALL)
-        _ql.os.set_api("FreeConsole", _stub_FreeConsole, QL_INTERCEPT.CALL)
+        # Register CALL hooks
+        for api_name, (_np, stub_fn) in stub_map.items():
+            _ql.os.set_api(api_name, stub_fn, QL_INTERCEPT.CALL)
+
+        # Patch simprocedure addresses with `ret N` so the instruction that
+        # executes after our CALL hook performs a clean STDCALL return.
+        # Without this, the real DLL code at the simprocedure address runs
+        # and crashes (Unicorn 1.x emu_stop doesn't prevent instruction exec).
+        patched = 0
+        if hasattr(_ql, 'loader') and hasattr(_ql.loader, 'import_symbols'):
+            for _sym_addr, entry in _ql.loader.import_symbols.items():
+                name = entry.get('name')
+                if not name:
+                    continue
+                sym_name = name.decode() if isinstance(name, bytes) else str(name)
+                if sym_name in stub_map:
+                    num_params = stub_map[sym_name][0]
+                    if _arch == "x8664":
+                        # x64 fastcall: caller cleanup, just `ret` (C3)
+                        _ql.mem.write(_sym_addr, b'\xc3')
+                    else:
+                        # x86 STDCALL: `ret N` where N = num_params * 4
+                        n_bytes = num_params * 4
+                        if n_bytes == 0:
+                            _ql.mem.write(_sym_addr, b'\xc3')
+                        else:
+                            _ql.mem.write(_sym_addr,
+                                          b'\xc2' + struct.pack('<H', n_bytes))
+                    patched += 1
+
         _stub_io = True
     except Exception:
         _stub_io = False
@@ -506,122 +612,107 @@ def _install_io_stubs():
 #  API trace hooks
 # ---------------------------------------------------------------------------
 
+def _add_trace_entry(api_name, address=None, params=None, retval=None):
+    """Add an entry to the API trace from any hook or stub."""
+    global _api_trace_seq
+    if not _api_trace_enabled:
+        return
+    if len(_api_trace) >= _MAX_API_TRACE:
+        return
+    if _api_trace_filter is not None and api_name not in _api_trace_filter:
+        return
+
+    _api_trace_seq += 1
+    safe_params = {}
+    if isinstance(params, dict):
+        for k, v in list(params.items())[:10]:
+            try:
+                if k.startswith("__"):
+                    continue  # Skip Qiling internal keys
+                if isinstance(v, int):
+                    safe_params[k] = _hex(v)
+                else:
+                    safe_params[k] = str(v)[:200]
+            except Exception:
+                safe_params[k] = "?"
+    _api_trace.append({
+        "seq": _api_trace_seq,
+        "api": api_name,
+        "args": safe_params,
+        "retval": _hex(retval) if isinstance(retval, int) else str(retval)[:200] if retval is not None else None,
+        "address": _hex(address) if isinstance(address, int) and address else str(address) if address else None,
+        "timestamp": time.time(),
+    })
+
+
 def _install_api_trace():
-    """Install wildcard API hooks to trace all Windows API calls."""
+    """Install per-API ENTER hooks to trace all Windows API calls.
+
+    Qiling 1.4.6 does not support wildcard "*" matching in set_api().
+    The @winsdkapi decorator dispatches ENTER/EXIT by exact API name only.
+    We install ENTER hooks for every imported API found in loader.import_symbols.
+    """
     global _api_trace_enabled
 
     if _ql is None:
         return
 
-    def _trace_enter(ql, address, params):
-        """Wildcard ENTER hook — log API call with args."""
-        global _api_trace_seq
-        if not _api_trace_enabled:
-            return
-        if len(_api_trace) >= _MAX_API_TRACE:
-            return
+    def _make_enter_hook(api_name):
+        """Create an ENTER hook closure for a specific API."""
+        def _trace_enter(ql, address, params):
+            _add_trace_entry(api_name, address, params)
+        return _trace_enter
 
-        # Get API name from Qiling's internal state
-        api_name = ""
-        try:
-            # Qiling stores the current API name during dispatch
-            api_name = getattr(ql.os, 'fname', '') or ""
-        except Exception:
-            pass
+    def _make_exit_hook(api_name):
+        """Create an EXIT hook closure for a specific API."""
+        def _trace_exit(ql, address, params):
+            if not _api_trace_enabled:
+                return
+            if _api_trace_filter is not None and api_name not in _api_trace_filter:
+                return
+            # Read return value from register
+            retval = None
+            try:
+                if hasattr(ql.arch.regs, 'rax'):
+                    retval = ql.arch.regs.rax
+                elif hasattr(ql.arch.regs, 'eax'):
+                    retval = ql.arch.regs.eax
+            except Exception:
+                pass
+            # Patch retval onto the most recent entry for this API
+            for entry in reversed(_api_trace):
+                if entry["api"] == api_name and entry["retval"] is None:
+                    try:
+                        entry["retval"] = _hex(retval) if isinstance(retval, int) else None
+                    except Exception:
+                        entry["retval"] = "?"
+                    break
+        return _trace_exit
 
-        if _api_trace_filter is not None and api_name not in _api_trace_filter:
-            return
-
-        _api_trace_seq += 1
-        # Serialize params safely
-        safe_params = {}
-        if isinstance(params, dict):
-            for k, v in params.items():
-                try:
-                    if isinstance(v, int):
-                        safe_params[k] = _hex(v)
-                    else:
-                        safe_params[k] = str(v)[:200]
-                except Exception:
-                    safe_params[k] = "?"
-        _api_trace.append({
-            "seq": _api_trace_seq,
-            "api": api_name,
-            "args": safe_params,
-            "retval": None,
-            "address": _hex(address) if address else None,
-            "timestamp": time.time(),
-        })
-
-    def _trace_exit(ql, address, params, retval):
-        """Wildcard EXIT hook — record return value."""
-        if not _api_trace_enabled:
-            return
-
-        api_name = ""
-        try:
-            api_name = getattr(ql.os, 'fname', '') or ""
-        except Exception:
-            pass
-
-        if _api_trace_filter is not None and api_name not in _api_trace_filter:
-            return
-
-        # Find the most recent entry for this API to add retval
-        for entry in reversed(_api_trace):
-            if entry["api"] == api_name and entry["retval"] is None:
-                try:
-                    entry["retval"] = _hex(retval) if isinstance(retval, int) else str(retval)[:200]
-                except Exception:
-                    entry["retval"] = "?"
-                break
-
-    def _trace_call(ql, address, params):
-        """Fallback CALL hook — used if ENTER/EXIT not supported."""
-        global _api_trace_seq
-        if not _api_trace_enabled:
-            return
-        if len(_api_trace) >= _MAX_API_TRACE:
-            return
-
-        api_name = ""
-        try:
-            api_name = getattr(ql.os, 'fname', '') or ""
-        except Exception:
-            pass
-
-        if _api_trace_filter is not None and api_name not in _api_trace_filter:
-            return
-
-        _api_trace_seq += 1
-        safe_params = {}
-        if isinstance(params, dict):
-            for k, v in params.items():
-                try:
-                    if isinstance(v, int):
-                        safe_params[k] = _hex(v)
-                    else:
-                        safe_params[k] = str(v)[:200]
-                except Exception:
-                    safe_params[k] = "?"
-        _api_trace.append({
-            "seq": _api_trace_seq,
-            "api": api_name,
-            "args": safe_params,
-            "retval": None,
-            "address": _hex(address) if address else None,
-            "timestamp": time.time(),
-        })
-
+    # Collect all imported API names from the PE loader
+    hooked_count = 0
     try:
-        _ql.os.set_api("*", _trace_enter, QL_INTERCEPT.ENTER)
-        _ql.os.set_api("*", _trace_exit, QL_INTERCEPT.EXIT)
+        if hasattr(_ql, 'loader') and hasattr(_ql.loader, 'import_symbols'):
+            seen_names = set()
+            for _addr, entry in _ql.loader.import_symbols.items():
+                name = entry.get('name')
+                if not name:
+                    continue
+                api_name = name.decode() if isinstance(name, bytes) else str(name)
+                if api_name in seen_names:
+                    continue
+                seen_names.add(api_name)
+                try:
+                    _ql.os.set_api(api_name, _make_enter_hook(api_name), QL_INTERCEPT.ENTER)
+                    _ql.os.set_api(api_name, _make_exit_hook(api_name), QL_INTERCEPT.EXIT)
+                    hooked_count += 1
+                except Exception:
+                    pass  # Skip APIs that can't be hooked
     except Exception:
-        # ENTER/EXIT not supported — fall back to CALL
-        try:
-            _ql.os.set_api("*", _trace_call, QL_INTERCEPT.CALL)
-        except Exception:
-            _api_trace_enabled = False
+        _api_trace_enabled = False
+
+    if hooked_count == 0:
+        _api_trace_enabled = False
 
 
 # ---------------------------------------------------------------------------
@@ -839,6 +930,57 @@ def cmd_init(cmd):
     return result
 
 
+def _run_with_reentry(max_insns):
+    """Run emulation with re-entry loop for API hook processing.
+
+    Qiling's ql.run() returns after each API hook dispatch (simprocedure
+    handling). This loop re-enters ql.run() until we either hit max_insns,
+    a stop reason is set (breakpoint/watchpoint), or the emulation exits.
+
+    Returns (error_extra: dict or None). If None, check _stop_reason.
+    """
+    remaining = max_insns
+    stall_count = 0
+    max_stalls = 200  # Safety: avoid infinite loop if emulation is stuck
+    reentries = 0
+    max_reentries = 500  # Hard cap on total loop iterations
+
+    while remaining > 0 and reentries < max_reentries:
+        reentries += 1
+        prev_count = _insn_count
+        prev_pc = _get_pc()
+
+        try:
+            _ql.run(count=remaining)
+        except Exception as e:
+            err_str = str(e)
+            if "unmapped" in err_str.lower() or "exit" in err_str.lower():
+                return {"stop_reason": "exited", "exit_reason": err_str[:500]}
+            return {"stop_reason": "exception", "error_detail": err_str[:500]}
+
+        # Check if a stop reason was set (breakpoint, watchpoint, temp bp)
+        if _stop_reason:
+            return None
+
+        delta = _insn_count - prev_count
+        remaining -= max(delta, 0)
+
+        if remaining <= 0:
+            break
+
+        # Check for stall (no progress — emulation returned without advancing)
+        current_pc = _get_pc()
+        if delta == 0 and current_pc == prev_pc:
+            stall_count += 1
+            if stall_count >= max_stalls:
+                return {"stop_reason": "stalled",
+                        "note": "Emulation not making progress after repeated re-entry"}
+        else:
+            stall_count = 0
+
+    return None  # max_insns reached normally
+
+
 def cmd_step(cmd):
     """Execute N instructions."""
     global _stop_reason, _hit_bp_id, _hit_wp_id, _wp_access_info
@@ -852,14 +994,9 @@ def cmd_step(cmd):
     _hit_wp_id = None
     _wp_access_info = None
 
-    try:
-        _ql.run(count=count)
-    except Exception as e:
-        err_str = str(e)
-        # Qiling may raise on program exit or unmapped access — expected
-        if "unmapped" in err_str.lower() or "invalid" in err_str.lower():
-            return _build_execution_state({"stop_reason": "memory_error", "error_detail": err_str[:500]})
-        return _build_execution_state({"stop_reason": "exception", "error_detail": err_str[:500]})
+    error_extra = _run_with_reentry(count)
+    if error_extra:
+        return _build_execution_state(error_extra)
 
     extra = {}
     if _stop_reason:
@@ -910,16 +1047,16 @@ def cmd_step_over(cmd):
         return {"error": f"Failed to set temp breakpoint: {e}"}
 
     max_insns = cmd.get("max_instructions", 1_000_000)
-    try:
-        _ql.run(count=max_insns)
-    except Exception:
-        pass
+    error_extra = _run_with_reentry(max_insns)
 
     # Remove temp hook
     try:
         _ql.hook_del(hook)
     except Exception:
         pass
+
+    if error_extra:
+        return _build_execution_state(error_extra)
 
     extra = {"stop_reason": "step_over_completed"}
     if _stop_reason == "breakpoint_hit":
@@ -946,13 +1083,9 @@ def cmd_continue(cmd):
     _hit_wp_id = None
     _wp_access_info = None
 
-    try:
-        _ql.run(count=max_insns)
-    except Exception as e:
-        err_str = str(e)
-        if "unmapped" in err_str.lower() or "exit" in err_str.lower():
-            return _build_execution_state({"stop_reason": "exited", "exit_reason": err_str[:500]})
-        return _build_execution_state({"stop_reason": "exception", "error_detail": err_str[:500]})
+    error_extra = _run_with_reentry(max_insns)
+    if error_extra:
+        return _build_execution_state(error_extra)
 
     extra = {}
     if _stop_reason:
@@ -989,18 +1122,16 @@ def cmd_run_until(cmd):
     except Exception as e:
         return {"error": f"Failed to set temp breakpoint at {_hex(address)}: {e}"}
 
+    error_extra = _run_with_reentry(max_insns)
+
+    # Remove temp hook
     try:
-        _ql.run(count=max_insns)
-    except Exception as e:
-        err_str = str(e)
-        if "unmapped" in err_str.lower() or "exit" in err_str.lower():
-            return _build_execution_state({"stop_reason": "exited", "exit_reason": err_str[:500]})
-        return _build_execution_state({"stop_reason": "exception", "error_detail": err_str[:500]})
-    finally:
-        try:
-            _ql.hook_del(hook)
-        except Exception:
-            pass
+        _ql.hook_del(hook)
+    except Exception:
+        pass
+
+    if error_extra:
+        return _build_execution_state(error_extra)
 
     extra = {}
     if _stop_reason == "temporary_breakpoint":
