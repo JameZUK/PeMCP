@@ -111,6 +111,7 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 | [AsyncRAT .NET RAT](docs/examples/example-report-asyncrat.md) | .NET RAT | C2 config extraction despite obfuscated metadata |
 | [StealC Info Stealer](docs/examples/example-report-stealc.md) | Credential stealer | 32 capa rules, browser/Steam targeting, crypto toolkit |
 | [ValleyRAT Multi-Stage Loader](docs/examples/example-report-valleyrat.md) | Chinese APT RAT | 5-stage unpacking, custom ARX cipher reversal, C2 config extraction |
+| [Brute Ratel C4 Badger](docs/examples/example-report-bruteratel.md) | Commercial C2 implant | PIC shellcode tracing, RC4 unpacking, C2 config extraction, 17 ATT&CK techniques |
 
 ---
 
@@ -173,7 +174,7 @@ For other MCP clients, local Python installation, and detailed configuration, se
 | **[Claude Code Integration](docs/claude-code.md)** | Setup via CLI and JSON config; analysis and learning skills; typical workflows and example queries |
 | **[Configuration](docs/configuration.md)** | API keys, analysis cache, and command-line options |
 | **[Tools Reference](docs/tools-reference.md)** | Complete catalog of all 230 MCP tools organised by category |
-| **[Scenarios & Comparisons](docs/examples/scenarios.md)** | Five real-world analysis walkthroughs; Arkana vs Ghidra, IDA Pro, CyberChef |
+| **[Scenarios & Comparisons](docs/examples/scenarios.md)** | Seven real-world analysis walkthroughs; Arkana vs Ghidra, IDA Pro, CyberChef |
 | **[Architecture](docs/architecture.md)** | Package structure, design principles, pagination and result limits |
 | **[Security & Testing](docs/security.md)** | Path sandboxing, security measures, testing and CI/CD |
 | **[Web Dashboard](docs/dashboard.md)** | Real-time analysis dashboard on port 8082; function triage, call graph, timeline, notes |
