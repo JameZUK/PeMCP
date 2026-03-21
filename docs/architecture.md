@@ -58,6 +58,7 @@ arkana/
     ├── tools_angr_forensic.py    - Angr forensic & advanced analysis (10 tools)
     ├── tools_new_libs.py         - LIEF/Capstone/Keystone/Speakeasy (13 tools)
     ├── tools_qiling.py           - Qiling cross-platform emulation (8 tools)
+    ├── tools_debug.py            - Interactive emulation debugger (20 tools)
     ├── tools_dotnet.py           - .NET analysis (dnfile/dncil, 2 tools)
     ├── tools_go.py               - Go binary analysis (pygore, 1 tool)
     ├── tools_rust.py             - Rust binary analysis (2 tools)
@@ -114,7 +115,7 @@ arkana/
 
 ## Design Principles
 
-- **Modular Package**  - Clean `arkana/` package structure with 56 tool modules and separated concerns (parsers, MCP tools, CLI, configuration).
+- **Modular Package**  - Clean `arkana/` package structure with 57 tool modules and separated concerns (parsers, MCP tools, CLI, configuration).
 - **Docker-First Design**  - No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Single-File Analysis Context**  - The server holds one file in memory via `AnalyzerState`. All tools operate on this shared context. Use `open_file` and `close_file` to switch between files. Calling `open_file` on a new file without `close_file` is safe — all module-level caches (`_decompile_meta`, `_phase_caches`, dashboard caches, `result_cache`, analysis warnings) are cleared automatically to prevent cross-file data contamination.
 - **Thread-Safe State**  - Centralised `AnalyzerState` class with locking for concurrent access.
@@ -230,3 +231,10 @@ Paginated results are cached in an **LRU cache** (5 slots per tool) so that pagi
 | `MAX_ANALYSIS_WARNINGS` | 500 | Maximum unique library warnings captured per session (deduplicated) |
 | `_MAX_DECOMPILE_META` | 2,000 | Maximum cached decompilation results (LRU eviction via OrderedDict, session-scoped keys) |
 | `MAX_TOOL_LIMIT` | 100,000 | Hard upper bound for `limit` parameters across all ~60 tool functions |
+| `MAX_DEBUG_SESSIONS` | 3 | Maximum concurrent interactive debug sessions (overridable via `ARKANA_MAX_DEBUG_SESSIONS`). Oldest evicted when limit reached. |
+| `DEBUG_SESSION_TTL` | 1,800 | Debug session idle timeout in seconds (overridable via `ARKANA_DEBUG_SESSION_TTL`) |
+| `DEBUG_COMMAND_TIMEOUT` | 300 | Per-command timeout for debug operations (overridable via `ARKANA_DEBUG_COMMAND_TIMEOUT`) |
+| `MAX_DEBUG_SNAPSHOTS` | 10 | Maximum saved snapshots per debug session (overridable via `ARKANA_MAX_DEBUG_SNAPSHOTS`) |
+| `MAX_DEBUG_INSTRUCTIONS` | 10,000,000 | Maximum instructions per continue/run_until operation |
+| `MAX_DEBUG_BREAKPOINTS` | 100 | Maximum breakpoints per debug session |
+| `MAX_DEBUG_WATCHPOINTS` | 50 | Maximum watchpoints per debug session |

@@ -72,6 +72,7 @@ Arkana applies defence-in-depth input validation across all layers:
 - **Refinery pipeline loop limits**: Pipeline iteration loops break when item count reaches the configured `limit`, preventing unbounded output accumulation.
 - **IOC IP filtering**: `_is_non_routable_ip()` uses Python's `ipaddress` module to correctly filter CGNAT (100.64.0.0/10), multicast, and other non-routable ranges.
 - **Session limits**: `MAX_ACTIVE_SESSIONS` (default 100) caps concurrent HTTP sessions with oldest-session eviction. Overridable via `ARKANA_MAX_SESSIONS` env var.
+- **Debug session limits**: `MAX_DEBUG_SESSIONS` (3) caps concurrent debug sessions with oldest-session eviction. `DEBUG_SESSION_TTL` (1800s) auto-cleans idle sessions. `DEBUG_COMMAND_TIMEOUT` (300s) prevents hung commands. `MAX_DEBUG_INSTRUCTIONS` (10M) caps execution per continue/run_until. `MAX_DEBUG_MEMORY_READ` (1MB) and `MAX_DEBUG_WATCHPOINT_SIZE` (1MB) cap memory operations. `MAX_DEBUG_BREAKPOINTS` (100) and `MAX_DEBUG_WATCHPOINTS` (50) cap per-session hook counts. `MAX_DEBUG_SNAPSHOTS` (10) caps saved states.
 - **Cache atomic writes**: `cache.put()` and `update_session_data()` use `tempfile.NamedTemporaryFile()` + `os.replace()` for atomic writes, preventing `.tmp` file collisions and partial writes on crash.
 - **Resource entry cap**: PE resource directory traversal is bounded at 1,000 entries (`_MAX_RESOURCE_ENTRIES`).
 - **Config atomic writes**: `user_config.py` uses `tempfile.mkstemp()` + `os.replace()` for atomic config file writes.
@@ -84,7 +85,7 @@ Arkana applies defence-in-depth input validation across all layers:
 Arkana has two layers of testing, with automated CI via **GitHub Actions**:
 
 - **Unit tests** (`tests/`)  - 1117 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrised edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
-- **Integration tests** (`mcp_test_client.py`)  - End-to-end tests for all 230 MCP tools against a running server, organised into 19 test categories with pytest markers.
+- **Integration tests** (`mcp_test_client.py`)  - End-to-end tests for all 250 MCP tools against a running server, organised into 19 test categories with pytest markers.
 - **CI/CD** (`.github/workflows/ci.yml`)  - Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (65% floor with branch coverage), and syntax checking on every push, PR, and manual dispatch. Dependabot monitors pip dependencies weekly.
 
 ```bash

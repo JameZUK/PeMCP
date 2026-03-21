@@ -82,6 +82,12 @@ _SELF_REPORTING_TOOLS = frozenset({
     "qiling_dump_unpacked_binary",
     "qiling_resolve_api_hashes",
     "qiling_memory_search",
+    # Debug tools (persistent subprocess progress)
+    "debug_start",
+    "debug_continue",
+    "debug_run_until",
+    "debug_step",
+    "debug_step_over",
     # Speakeasy / unipacker tools (Group D subprocess progress)
     "emulate_pe_with_windows_apis",
     "emulate_shellcode_with_speakeasy",

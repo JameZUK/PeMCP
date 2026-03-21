@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 230 MCP tools organized by use case.
+Complete catalog of all 250 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -173,6 +173,26 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `emulate_pe_with_windows_apis` | PE emulation with Windows API sim (Speakeasy) | — |
 | `emulate_shellcode_with_speakeasy` | Shellcode with Speakeasy | `shellcode`, `arch` |
 | `emulate_with_watchpoints` | Emulation with memory/register breakpoints (timeout 300s, partial results on timeout: captured events) | `address`, `watchpoints` |
+| `debug_start` | Start interactive debug session — persistent Qiling subprocess, pauses at entry | `rootfs_path`, `arch`, `os_type` |
+| `debug_stop` | Stop and destroy a debug session | `session_id` |
+| `debug_status` | Check session liveness and current state | `session_id` |
+| `debug_step` | Step N instructions (default 1) | `count`, `session_id` |
+| `debug_step_over` | Step over CALL (temp BP after call) | `session_id` |
+| `debug_continue` | Continue until BP/WP hit or max instructions | `max_instructions`, `session_id` |
+| `debug_run_until` | Run until specific address reached | `address`, `max_instructions`, `session_id` |
+| `debug_set_breakpoint` | Set address/API/conditional breakpoint | `address`, `api_name`, `conditions`, `session_id` |
+| `debug_remove_breakpoint` | Remove breakpoint by ID | `breakpoint_id`, `session_id` |
+| `debug_set_watchpoint` | Set memory read/write watchpoint | `address`, `size`, `watch_type`, `session_id` |
+| `debug_remove_watchpoint` | Remove watchpoint by ID | `watchpoint_id`, `session_id` |
+| `debug_list_breakpoints` | List all breakpoints and watchpoints | `session_id` |
+| `debug_read_state` | Full state: registers, flags, PC, stack, next 5 insns, memory map | `session_id` |
+| `debug_read_memory` | Read N bytes at address (hex + optional disasm, max 1MB) | `address`, `length`, `format`, `session_id` |
+| `debug_write_memory` | Write bytes to memory | `address`, `hex_bytes`, `session_id` |
+| `debug_write_register` | Set register value (arch-validated) | `register`, `value`, `session_id` |
+| `debug_snapshot_save` | Save full emulation state with metadata | `name`, `note`, `session_id` |
+| `debug_snapshot_restore` | Restore saved snapshot | `snapshot_id`, `session_id` |
+| `debug_snapshot_list` | List snapshots with metadata | `session_id` |
+| `debug_snapshot_diff` | Compare two snapshots (registers + memory regions) | `snapshot_id_a`, `snapshot_id_b`, `session_id` |
 | `find_path_to_address` | Symbolic execution to find reaching inputs (timeout 600s, partial results on timeout: steps/active states) | `target_address` |
 | `find_path_with_custom_input` | Path finding with custom constraints (timeout 600s, partial results on timeout: steps/active states) | `target`, `constraints` |
 

@@ -1,6 +1,6 @@
 # Testing Guide
 
-Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 230 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
+Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 250 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
 
 ---
 
@@ -173,6 +173,7 @@ exclude_lines =
 | `test_triage_helpers.py` | `arkana/mcp/tools_triage.py` | 14 | Triage helper functions for compiler/language detection (Go, Rust, .NET, MSVC, Delphi) and mode normalisation for PE parser output |
 | `test_truncation.py` | `arkana/mcp/server.py` | 14 | MCP response size checking and smart truncation logic for large lists, strings, dicts, and deeply nested structures |
 | `test_auth.py` | `arkana/auth.py` | 7 | Bearer token authentication middleware for ASGI with constant-time token comparison |
+| `test_debug.py` | `arkana/mcp/tools_debug.py` | 76 | Debug session lifecycle (creation, eviction, cleanup, auto-select), execution control (step, step_over, continue, run_until), breakpoints (address, API, conditional, max enforcement), watchpoints (read, write, size validation), inspection (registers, memory hex/disasm, write), snapshots (save, restore, list, diff, max enforcement), error handling (no file, Qiling unavailable, subprocess crash, timeout), session state updates, MCP tool integration (all 20 tools) |
 
 ### Writing New Unit Tests
 
@@ -222,7 +223,7 @@ When adding new unit tests, follow these conventions:
 
 ## Integration Tests
 
-The integration test suite (`mcp_test_client.py`) covers all **230 MCP tools** across 19 test categories. Tests connect to a running Arkana server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
+The integration test suite (`mcp_test_client.py`) covers all **250 MCP tools** across 19 test categories. Tests connect to a running Arkana server over streamable-http (or SSE) and exercise every tool end-to-end. Tests gracefully skip when a tool is unavailable or a required library is not installed.
 
 ### Prerequisites
 
@@ -288,7 +289,7 @@ pytest mcp_test_client.py -v -k "TestPEData"          # All 25 get_pe_data keys
 pytest mcp_test_client.py -v -k "TestAngrCore"         # Core Angr tools
 pytest mcp_test_client.py -v -k "TestMultiFormat"       # ELF/Mach-O/Go/Rust/.NET
 pytest mcp_test_client.py -v -k "TestStringAnalysis"    # String analysis tools
-pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 230 tools exist
+pytest mcp_test_client.py -v -k "TestToolDiscovery"     # Verify all 250 tools exist
 ```
 
 ### Environment Variables

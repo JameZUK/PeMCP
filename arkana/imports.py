@@ -396,6 +396,7 @@ QILING_AVAILABLE = None  # None = not yet checked; will be lazy-checked
 QILING_IMPORT_ERROR = ""
 _QILING_VENV_PYTHON = Path("/app/qiling-venv/bin/python")
 _QILING_RUNNER = DATA_DIR / "scripts" / "qiling_runner.py"
+_DEBUG_RUNNER = DATA_DIR / "scripts" / "debug_runner.py"
 _QILING_DEFAULT_ROOTFS = Path("/app/qiling-rootfs")
 _qiling_check_lock = threading.Lock()
 

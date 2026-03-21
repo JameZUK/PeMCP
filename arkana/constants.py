@@ -58,6 +58,11 @@ __all__ = [
     "OPAQUE_PREDICATE_SOLVER_TIMEOUT", "MAX_OPAQUE_PREDICATE_BLOCKS",
     "OBFUSCATION_DETECTION_TIMEOUT",
     "MAX_CFF_SCAN_FUNCTIONS", "MAX_OPAQUE_SCAN_FUNCTIONS",
+    # Debug session
+    "MAX_DEBUG_SESSIONS", "DEBUG_SESSION_TTL", "DEBUG_COMMAND_TIMEOUT",
+    "MAX_DEBUG_SNAPSHOTS", "MAX_DEBUG_INSTRUCTIONS", "MAX_DEBUG_MEMORY_READ",
+    "DEBUG_DISASM_PREVIEW", "MAX_DEBUG_WATCHPOINT_SIZE",
+    "MAX_DEBUG_BREAKPOINTS", "MAX_DEBUG_WATCHPOINTS",
     "DEPENDENCIES",
 ]
 
@@ -208,6 +213,18 @@ MAX_OPAQUE_PREDICATE_BLOCKS = 500                # max blocks to analyse across 
 OBFUSCATION_DETECTION_TIMEOUT = 180              # overall tool timeout (seconds)
 MAX_CFF_SCAN_FUNCTIONS = 200                     # max functions to scan for CFF
 MAX_OPAQUE_SCAN_FUNCTIONS = 100                  # max functions to scan for opaque predicates
+
+# --- Debug Session Constants ---
+MAX_DEBUG_SESSIONS = 3               # Max concurrent debug sessions per state (env: ARKANA_MAX_DEBUG_SESSIONS)
+DEBUG_SESSION_TTL = 1800             # 30-minute idle timeout (env: ARKANA_DEBUG_SESSION_TTL)
+DEBUG_COMMAND_TIMEOUT = 300          # 5-minute timeout per debug command (env: ARKANA_DEBUG_COMMAND_TIMEOUT)
+MAX_DEBUG_SNAPSHOTS = 10             # Max snapshots per session (env: ARKANA_MAX_DEBUG_SNAPSHOTS)
+MAX_DEBUG_INSTRUCTIONS = 10_000_000  # Max instructions per continue/run_until
+MAX_DEBUG_MEMORY_READ = 1_048_576    # 1MB max memory read per call
+DEBUG_DISASM_PREVIEW = 5             # Instructions to preview in read_state
+MAX_DEBUG_WATCHPOINT_SIZE = 1_048_576  # 1MB max watchpoint region
+MAX_DEBUG_BREAKPOINTS = 100          # Max breakpoints per session
+MAX_DEBUG_WATCHPOINTS = 50           # Max watchpoints per session
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

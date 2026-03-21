@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 230 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
+Arkana is a Model Context Protocol (MCP) server exposing 250 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy.
 
 ## Project Structure
 
@@ -25,7 +25,7 @@ arkana/                  # Main package
 │   ├── templates/      # Jinja2 templates (overview, functions, callgraph, sections, strings, timeline, notes)
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
-└── mcp/                # MCP tool modules (230 tools across 56 files)
+└── mcp/                # MCP tool modules (250 tools across 57 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain
@@ -74,6 +74,7 @@ ruff check arkana/ tests/ \
 - **Background task timeout**: All 12 background tools (`find_path_to_address`, `emulate_function_execution`, `analyze_binary_loops`, `get_reaching_definitions`, `get_data_dependencies`, `get_value_set_analysis`, `diff_binaries`, `find_path_with_custom_input`, `emulate_with_watchpoints`, `identify_cpp_classes`, `find_similar_functions`, `build_function_signature_db`) time out automatically via `_run_background_task_wrapper(timeout=N)`. Default `BACKGROUND_TASK_TIMEOUT` is 1800s (30 min), overridable via `ARKANA_BACKGROUND_TASK_TIMEOUT`. BSim tools use `BSIM_BACKGROUND_TIMEOUT` (1800s, overridable via `ARKANA_BSIM_BACKGROUND_TIMEOUT`). Four tools support `on_timeout` callbacks that capture partial results (steps completed, active states, captured events). `_update_progress()` records `last_progress_epoch` on every call, enabling generic stall detection in `check_task_status()`. Tasks include `created_at_epoch` for elapsed time reporting.
 - **Data flow analysis**: `find_dangerous_data_flows` in `tools_vuln.py` traces untrusted input sources (recv, fread, ReadFile) to dangerous sinks (strcpy, sprintf, system) using angr reaching-definition analysis with structural fallback. Per-function RDA timeout (`DATA_FLOW_PER_FUNC_TIMEOUT`, 30s) and aggregate timeout (`DATA_FLOW_AGGREGATE_TIMEOUT`, 120s). Reuses `_INPUT_SOURCE_APIS` and `_DANGEROUS_SINK_APIS` from the same module.
 - **Obfuscation detection**: `detect_control_flow_flattening` and `detect_opaque_predicates` in `tools_angr_forensic.py`. CFF detection scores functions 0-100 based on dispatcher in-degree, back-edge ratio, state variable detection, and block size uniformity. Opaque predicate detection uses Z3 constraint solving with per-block timeout (`OPAQUE_PREDICATE_SOLVER_TIMEOUT`, 15s). Both tools follow the `find_anti_debug_comprehensive` pattern with `asyncio.to_thread()` and `OBFUSCATION_DETECTION_TIMEOUT` (180s).
+- **Emulation debugger**: `tools_debug.py` provides 20 MCP tools for interactive step-through debugging via a persistent Qiling subprocess (`scripts/debug_runner.py`). Unlike fire-and-forget Qiling tools, debug sessions persist across multiple MCP calls using JSONL over stdin/stdout. Key classes: `_DebugSessionManager` (session lifecycle, eviction) and `_DebugSession` (subprocess handle, JSONL IPC). State stored in `state._debug_manager` (lazily created). Session reaper cleans up debug sessions via `cleanup_all()`. Tools: `debug_start`/`debug_stop`/`debug_status` (lifecycle), `debug_step`/`debug_step_over`/`debug_continue`/`debug_run_until` (execution), `debug_set_breakpoint`/`debug_set_watchpoint`/`debug_remove_breakpoint`/`debug_remove_watchpoint`/`debug_list_breakpoints` (breakpoints/watchpoints), `debug_read_state`/`debug_read_memory`/`debug_write_memory`/`debug_write_register` (inspection), `debug_snapshot_save`/`debug_snapshot_restore`/`debug_snapshot_list`/`debug_snapshot_diff` (snapshots). Constants: `MAX_DEBUG_SESSIONS` (3), `DEBUG_SESSION_TTL` (1800s), `DEBUG_COMMAND_TIMEOUT` (300s), `MAX_DEBUG_SNAPSHOTS` (10), `MAX_DEBUG_INSTRUCTIONS` (10M), `MAX_DEBUG_MEMORY_READ` (1MB), `MAX_DEBUG_BREAKPOINTS` (100), `MAX_DEBUG_WATCHPOINTS` (50).
 - **BSim function similarity**: `_bsim_features.py` provides architecture-independent function similarity matching inspired by Ghidra's BSim. 6 feature groups (CFG structural, API calls, VEX IR profile, string refs, constants, size metrics) with weighted scoring. SQLite DB at `~/.arkana/bsim/signatures.db` stores indexed function signatures for cross-binary queries. Two-phase query: SQL pre-filter eliminates ~80-90% of candidates, then full scoring on remainder. JSON serialization uses `_safe_json_loads()`/`_safe_json_dumps()` to gracefully handle corrupted DB rows or non-serializable feature objects.
 - **Notes system**: `add_note()` categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `conclusion`, `manual`. `hypothesis` is for a condensed one-paragraph verdict; `conclusion` is for a full detailed analysis write-up (supports markdown, rendered on dashboard overview).
 - **Artifacts system**: `state.register_artifact()` tracks extracted files (path, hashes, source tool, type detection). Artifacts persist via cache alongside notes/tool_history, and are included in `export_project` / `import_project` archives. Constants: `MAX_ARTIFACT_FILE_SIZE` (100 MB), `MAX_TOTAL_ARTIFACT_EXPORT_SIZE` (50 MB).
@@ -102,6 +103,7 @@ ruff check arkana/ tests/ \
 ## Input Validation & Safety Guards
 
 - **Emulation limits**: Qiling tools validate `max_instructions` (0–10M) via `_validate_max_instructions()` to prevent CPU/memory exhaustion.
+- **Debug session limits**: Max 3 concurrent debug sessions (`MAX_DEBUG_SESSIONS`), 1MB max memory read (`MAX_DEBUG_MEMORY_READ`), 1MB max watchpoint region (`MAX_DEBUG_WATCHPOINT_SIZE`), 100 max breakpoints (`MAX_DEBUG_BREAKPOINTS`), 50 max watchpoints (`MAX_DEBUG_WATCHPOINTS`), 10 max snapshots (`MAX_DEBUG_SNAPSHOTS`). Debug addresses validated to ≤40 chars. Oldest session evicted when limit reached.
 - **Auth header handling**: `BearerAuthMiddleware` lowercases ASGI header keys defensively before matching.
 - **Error message sanitization**: Crypto tool errors truncate user input to 50 chars to prevent information disclosure.
 - **Address validation**: Dashboard endpoints reject address parameters longer than 40 characters.
@@ -174,6 +176,7 @@ These are inherent limitations from underlying frameworks or architecture, not b
 - **`get_backward_slice` / `get_forward_slice`**: Returns CFG reachability, not true data-flow slices. The `variable` parameter selects the start point but slicing follows control flow.
 - **`extract_function_constants`**: Includes code addresses (call/branch targets) alongside data constants. Filter by checking section ranges.
 - **Qiling emulation**: Requires manual rootfs setup with real Windows DLLs. `qiling_setup_check()` verifies. See `docs/QILING_ROOTFS.md`.
+- **Debug sessions**: Emulation fidelity limited by Qiling/Unicorn — anti-emulation techniques, threading, and complex Windows APIs may not work. Memory watchpoints have performance overhead (global hook per type). Snapshots consume memory proportional to mapped regions. `ql.save()`/`ql.restore()` may not fully restore complex states (file handles, network sockets). API breakpoints cannot be cleanly removed in Qiling.
 - **`auto_unpack_pe`**: FSG-packed binaries may fail with Unipacker. Use `qiling_dump_unpacked_binary()` as fallback.
 - **`get_virustotal_report_for_loaded_file`**: Requires API key via `set_api_key(service="virustotal", key="...")`.
 - **`analyze_batch`**: 8KB MCP response soft limit can truncate data for large file sets. Use smaller lists (5-10 files).

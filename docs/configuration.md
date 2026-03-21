@@ -123,6 +123,15 @@ Beyond the cache and API key settings above, Arkana supports several environment
 |---|---|---|
 | `ARKANA_MAX_FILE_SIZE_MB` | `256` | Maximum file size (in MB) accepted by `open_file`. Parsed safely via `_safe_env_int()`. |
 
+### Debug Sessions
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARKANA_MAX_DEBUG_SESSIONS` | `3` | Maximum concurrent interactive debug sessions. When reached, the oldest session is evicted. |
+| `ARKANA_DEBUG_SESSION_TTL` | `1800` | Idle timeout (seconds) for debug sessions. Sessions inactive for this long are automatically cleaned up. |
+| `ARKANA_DEBUG_COMMAND_TIMEOUT` | `300` | Timeout (seconds) per debug command (step, continue, read_memory, etc.). Prevents hung commands from blocking indefinitely. |
+| `ARKANA_MAX_DEBUG_SNAPSHOTS` | `10` | Maximum saved snapshots per debug session. Each snapshot captures full CPU + memory state. |
+
 ### Auto-Enrichment
 
 | Variable | Default | Description |

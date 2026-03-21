@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **230 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **250 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -298,6 +298,57 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `qiling_setup_check` | Check Qiling Framework setup status  - venv availability, rootfs directory structure, and essential DLLs for each architecture. Provides specific copy commands for missing DLLs. |
 
 > **Note:** Qiling runs in an isolated venv (`/app/qiling-venv`) with unicorn 1.x, keeping the main environment's unicorn 2.x intact for angr. Linux rootfs is pre-populated at Docker build time. Windows PE emulation requires real DLL files copied from a Windows installation  - see [QILING_ROOTFS.md](QILING_ROOTFS.md) for setup instructions. Registry hive stubs are auto-generated at runtime.
+
+## Interactive Emulation Debugger (20 tools)
+
+Interactive debugger built on Qiling, providing step-by-step emulation control with breakpoints, watchpoints, memory inspection, and snapshot-based state management. Unlike fire-and-forget emulation tools, debug sessions persist across MCP calls via a JSONL protocol over a persistent subprocess.
+
+### Session Lifecycle
+
+| Tool | Description |
+|---|---|
+| `debug_start` | Start an interactive debug session on the loaded binary. Spawns a persistent Qiling subprocess, pauses at entry point. Returns initial PC, registers, and architecture info. Max 3 concurrent sessions. |
+| `debug_stop` | Stop and destroy a debug session. Kills the subprocess and frees resources. |
+| `debug_status` | Check if a debug session is alive and return its current state (PC, status, instructions executed, architecture). |
+
+### Execution Control
+
+| Tool | Description |
+|---|---|
+| `debug_step` | Step N instructions (default 1). Returns updated PC, registers, and next 5 disassembled instructions. |
+| `debug_step_over` | Step over a CALL instruction (sets temporary breakpoint after the call). If the current instruction is not a CALL, behaves like single step. |
+| `debug_continue` | Continue execution until a breakpoint/watchpoint is hit, the program exits, or `max_instructions` (default 10M) is reached. |
+| `debug_run_until` | Run until a specific address is reached (temporary breakpoint). Accepts `max_instructions` safety limit. |
+
+### Breakpoints & Watchpoints
+
+| Tool | Description |
+|---|---|
+| `debug_set_breakpoint` | Set a breakpoint by address, API name, or with conditions (e.g., `{"register": "eax", "equals": "0x0"}`). Max 100 per session. |
+| `debug_remove_breakpoint` | Remove a breakpoint by ID. |
+| `debug_set_watchpoint` | Set a memory watchpoint (read, write, or both) on an address range. Max 50 per session, max 1MB region. |
+| `debug_remove_watchpoint` | Remove a watchpoint by ID. |
+| `debug_list_breakpoints` | List all breakpoints and watchpoints in the session. |
+
+### Inspection & Modification
+
+| Tool | Description |
+|---|---|
+| `debug_read_state` | Read full execution state: all registers, flags, PC, stack top, next 5 disassembled instructions, and memory map summary. |
+| `debug_read_memory` | Read N bytes at an address. Returns hex dump and optional capstone disassembly. Max 1MB per read. |
+| `debug_write_memory` | Write bytes to memory at a given address. |
+| `debug_write_register` | Set a register value. Validates register name against the session's architecture. |
+
+### Snapshots
+
+| Tool | Description |
+|---|---|
+| `debug_snapshot_save` | Save complete emulation state (CPU, memory, hooks) with an optional name and note. Max 10 per session. |
+| `debug_snapshot_restore` | Restore a previously saved snapshot, rewinding execution to that point. |
+| `debug_snapshot_list` | List all saved snapshots with metadata (PC, instruction count, timestamp). |
+| `debug_snapshot_diff` | Compare two snapshots  - shows register differences and changed memory regions. |
+
+> **Note:** Debug sessions use the same isolated Qiling venv (`/app/qiling-venv`) as the fire-and-forget emulation tools. Sessions time out after 30 minutes of inactivity (`ARKANA_DEBUG_SESSION_TTL`). Each debug command has a 5-minute timeout (`ARKANA_DEBUG_COMMAND_TIMEOUT`). Emulation fidelity limitations apply  - complex anti-emulation, threading, and some Windows APIs may not work correctly.
 
 ## Multi-Format Binary Analysis (9 tools)
 
@@ -639,6 +690,7 @@ The following limitations have been identified through comprehensive testing. Th
 | Qiling tools (`emulate_binary_with_qiling`, etc.) | Requires manual rootfs setup with real Windows DLLs. Use `qiling_setup_check()` to verify. See [QILING_ROOTFS.md](QILING_ROOTFS.md) for setup. |
 | `auto_unpack_pe` / `try_all_unpackers` | FSG-packed binaries may fail to unpack with Unipacker. Use Qiling-based unpacking (`qiling_dump_unpacked_binary`) or manual OEP recovery as fallback. |
 | Speakeasy / Qiling emulation | Complex packers with anti-emulation checks may cause emulation to stall or produce incomplete results. Timeouts and partial results are captured automatically. |
+| Debug sessions (`debug_*` tools) | Emulation fidelity limitations apply  - anti-emulation techniques, threading, and complex Windows APIs may produce incorrect results or cause the session to stall. Watchpoints add per-instruction overhead. Snapshots (`ql.save()`/`ql.restore()`) may not fully capture complex hook or callback state. Max 3 concurrent sessions, 30-minute idle timeout. |
 
 ### External Dependencies
 

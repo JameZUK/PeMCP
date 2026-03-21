@@ -176,6 +176,9 @@ class AnalyzerState:
         # Per-state throttle for async decompile cache saves (enrichment.py)
         self._last_decompile_save_time: float = 0.0
 
+        # Debug Sessions (managed by tools_debug._DebugSessionManager)
+        self._debug_manager = None  # Lazily created _DebugSessionManager
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Thread-safe read of a background task."""
         with self._task_lock:
@@ -919,6 +922,12 @@ def _session_reaper_loop() -> None:
                         cleanup_phase_cache(stale._state_uuid)
                     except (ImportError, AttributeError):
                         pass
+                    # Clean up debug sessions for reaped state
+                    try:
+                        if getattr(stale, '_debug_manager', None) is not None:
+                            stale._debug_manager.cleanup_all()
+                    except Exception:
+                        logger.warning("Session reaper: debug cleanup error", exc_info=True)
                 except Exception:
                     logger.warning("Session reaper: cleanup error for session", exc_info=True)
             if stale_to_cleanup:

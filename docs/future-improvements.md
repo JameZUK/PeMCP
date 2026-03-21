@@ -2,7 +2,7 @@
 
 Proposed enhancements and feature ideas for Arkana. Items are grouped by domain and prioritised within each section. Each proposal includes a value assessment to help determine whether the added complexity justifies the benefit over manual analysis.
 
-**Current state:** 230 MCP tools across 56 files, supporting PE/ELF/Mach-O with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy integrations.
+**Current state:** 250 MCP tools across 57 files, supporting PE/ELF/Mach-O with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy integrations.
 
 **Evaluation criteria for each proposal:**
 - **Value** — Does this enable analysis that's currently impossible, or just faster?
@@ -30,7 +30,7 @@ Proposed enhancements and feature ideas for Arkana. Items are grouped by domain 
 14. [Multi-Binary Campaign Analysis](#14-multi-binary-campaign-analysis)
 15. [Patching Primitives](#15-patching-primitives)
 16. [Expose Unused angr Analyses](#16-expose-unused-angr-analyses)
-17. [Qiling Snapshots & Interactive Debugging](#17-qiling-snapshots--interactive-debugging)
+17. [Emulation-Based Debugger](#17-emulation-based-debugger)
 18. [FLIRT Signature Matching](#18-flirt-signature-matching)
 19. [Mutable Malware Signature Knowledge Base](#19-mutable-malware-signature-knowledge-base)
 
@@ -832,50 +832,247 @@ Only implement if a higher-level tool (like taint analysis) needs them as buildi
 
 ---
 
-## 17. Qiling Snapshots & Interactive Debugging
+## 17. ~~Emulation-Based Debugger~~ ✅
 
-**Priority**: Low-Medium
-**Complexity**: Medium
-**New dependencies**: None (Qiling supports this natively)
-**New tools**: 2-3
+**Priority**: High
+**Complexity**: Medium-High
+**New dependencies**: None (uses existing Qiling/Unicorn in qiling-venv)
+**New tools**: 20 (implemented)
 
 ### Problem
 
-Qiling supports save/restore of emulation state (snapshots), but Arkana doesn't expose this. Analysts can't explore "what-if" branches during emulation without re-running from the start.
+Arkana's current emulation tools (`emulate_binary_with_qiling`, `qiling_trace_execution`, `qiling_hook_api_calls`) are fire-and-forget — they run to completion and return results. Analysts cannot interactively step through execution, inspect state at arbitrary points, set conditional breakpoints, watch memory regions, or explore alternative execution paths. This limits the ability to understand complex malware behaviours that only manifest through careful interactive analysis.
 
-### Proposal
+Real debuggers (GDB, x64dbg, WinDbg) require executing the binary on a real host, which creates significant safety risks when analysing malware: network exfiltration, filesystem damage, privilege escalation, and sandbox escape. Cross-architecture debugging adds further complexity (ARM malware on an x86 host requires QEMU or hardware).
 
-**Tool A: `qiling_save_snapshot`**
-- Save current emulation state (registers, memory, file descriptors) to a named checkpoint
-- Return snapshot ID and metadata (current PC, instruction count, API calls so far)
+### Approach: Emulation-first debugging
 
-**Tool B: `qiling_restore_snapshot`**
-- Restore a previously saved snapshot and continue emulation from that point
-- Enables branching exploration: save before a conditional, explore both paths
+Build an interactive debugger on top of Qiling/Unicorn emulation rather than real execution. This provides:
 
-**Tool C: `qiling_set_breakpoint`** (optional)
-- Set a breakpoint at an address; emulation pauses and returns state when hit
-- Interactive debugging without a full debugger
+- **Zero execution risk** — the binary never touches the real OS, network, or filesystem
+- **Multi-architecture support for free** — Unicorn handles x86, x86_64, ARM, ARM64, MIPS
+- **No network security concerns** — all API calls are hooked/emulated, not executed
+- **Docker-friendly** — no nested containers, privileged mode, or kernel modules required
+- **Natural fit** — extends the existing Qiling subprocess architecture
+
+The tradeoff is emulation fidelity: complex Windows APIs, threading, and anti-emulation tricks may not work. But for the vast majority of analysis, this is sufficient — and analysts already accept this tradeoff with the existing Qiling tools.
+
+### Architecture
+
+**Long-lived subprocess with command loop.** Extends the existing `qiling_runner.py` pattern:
+
+- Debug sessions spawn a persistent subprocess in the `qiling-venv` (unicorn v1 isolation preserved)
+- The subprocess accepts multiple JSON commands over stdin and responds on stdout
+- The subprocess stays alive between MCP tool calls, maintaining Qiling state
+- Session lifecycle: `debug_start` → (commands) → `debug_stop`
+
+This avoids the unicorn v1/v2 conflict (can't hold Qiling objects in the main process alongside angr) and requires no architectural changes to Arkana's core.
+
+**IPC protocol:**
+```json
+// → stdin
+{"action": "debug_start", "filepath": "...", "rootfs": "..."}
+// ← stdout
+{"status": "ok", "pc": "0x401000", "arch": "x8664", "session_id": "..."}
+
+// → stdin
+{"action": "debug_step", "count": 5}
+// ← stdout
+{"status": "ok", "pc": "0x401012", "instructions_executed": 5, "registers": {...}}
+
+// → stdin
+{"action": "debug_set_breakpoint", "address": "0x401100"}
+// ← stdout
+{"status": "ok", "breakpoint_id": 1}
+
+// → stdin
+{"action": "debug_continue"}
+// ← stdout
+{"status": "breakpoint_hit", "pc": "0x401100", "breakpoint_id": 1, "registers": {...}}
+```
+
+### Proposed tools (~20 new)
+
+**Session management:**
+
+| Tool | Description |
+|------|-------------|
+| `debug_start` | Spawn debug session, load binary, pause at entry point. Params: `filepath?`, `arch?`, `os_type?`, `break_on_entry?`, `timeout_minutes?` |
+| `debug_stop` | Tear down session and clean up subprocess. Param: `session_id?` |
+| `debug_status` | Session health: alive/paused/exited, current PC, instruction count, memory usage. Param: `session_id?` |
+
+**Execution control:**
+
+| Tool | Description |
+|------|-------------|
+| `debug_step` | Single-step N instructions. Params: `count?`, `session_id?` |
+| `debug_step_over` | Step over call instruction (temp breakpoint after call, continue). Param: `session_id?` |
+| `debug_continue` | Run until breakpoint, watchpoint, exit, or instruction limit. Params: `max_instructions?`, `session_id?` |
+| `debug_run_until` | Run until a specific address is reached. Params: `address`, `max_instructions?`, `session_id?` |
+
+**Breakpoints and watchpoints:**
+
+| Tool | Description |
+|------|-------------|
+| `debug_set_breakpoint` | Set address, API, or conditional breakpoint. Params: `address?`, `api_name?`, `conditions?`, `session_id?` |
+| `debug_set_watchpoint` | Watch memory region for reads/writes. Params: `address`, `size`, `type?` (read/write/both), `session_id?` |
+| `debug_remove_breakpoint` | Remove a breakpoint by ID. Params: `breakpoint_id`, `session_id?` |
+| `debug_remove_watchpoint` | Remove a watchpoint by ID. Params: `watchpoint_id`, `session_id?` |
+| `debug_list_breakpoints` | List all breakpoints and watchpoints with status. Param: `session_id?` |
+
+**Inspection and modification:**
+
+| Tool | Description |
+|------|-------------|
+| `debug_read_state` | Registers, flags, PC, next 5 disassembled instructions, stack top, memory map summary. Param: `session_id?` |
+| `debug_read_memory` | Read memory at address. Params: `address`, `length`, `format?` (hex/ascii/disasm), `session_id?` |
+| `debug_write_memory` | Patch memory (bypass anti-debug, modify data). Params: `address`, `hex_bytes`, `session_id?` |
+| `debug_write_register` | Modify a register value. Params: `register`, `value`, `session_id?` |
+
+**Snapshots:**
+
+| Tool | Description |
+|------|-------------|
+| `debug_snapshot_save` | Save full emulation state (CPU + memory). Params: `name?`, `note?`, `session_id?` |
+| `debug_snapshot_restore` | Restore to a saved snapshot. Params: `snapshot_id`, `session_id?` |
+| `debug_snapshot_list` | List snapshots with PC, instruction count, timestamp, note. Param: `session_id?` |
+| `debug_snapshot_diff` | Compare register and memory state between two snapshots. Params: `snapshot_id_a`, `snapshot_id_b`, `session_id?` |
+
+### Multiple debug sessions
+
+Up to `MAX_DEBUG_SESSIONS` (default 3, env: `ARKANA_MAX_DEBUG_SESSIONS`) concurrent sessions per loaded file. Each session gets a short ID (`dbg-1`, `dbg-2`). All debug tools accept an optional `session_id` — if omitted, the most recently active session is used (convenience for single-session workflows).
+
+**Resource budget per session:** ~50–200 MB memory (binary + rootfs DLLs + emulated memory), zero CPU when paused.
+
+**Use cases for multiple sessions:**
+- Debugging a dropper and its payload side by side
+- Same binary from different entry points (e.g., `DllMain` with different `fdwReason` values)
+- Comparing behaviour with different register/memory patches
+- Debugging extracted shellcode alongside the loader that unpacks it
+
+**Lifecycle management:**
+- Auto-reap idle sessions after `DEBUG_SESSION_TTL` (default 30 min, env: `ARKANA_DEBUG_SESSION_TTL`)
+- Session reaper (existing thread) extended to kill debug subprocesses
+- `debug_status` reports per-session memory usage for informed cleanup
+
+### Conditional breakpoints
+
+Three condition types, composable with AND logic:
+
+| Type | Example | Implementation |
+|------|---------|---------------|
+| Register | `{"type": "register", "register": "rax", "op": "==", "value": "0x0"}` | Checked in address hook callback |
+| Memory | `{"type": "memory", "address": "0x404000", "size": 4, "op": "==", "value": "0x01"}` | Checked in address hook callback |
+| API name | `{"type": "api", "name": "CreateFileW"}` | Uses `ql.os.set_api()` |
+| Instruction count | `{"type": "instruction_count", "count": 10000}` | Counter in code hook |
+
+Operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains` (for memory byte patterns).
+
+**Performance note:** Address-specific and API breakpoints are fast (only fire at target). Global conditions with no address require a per-instruction `ql.hook_code()` callback — warn the user and enforce `max_instructions`.
+
+### Watchpoints
+
+Uses Unicorn's memory access hooks (`ql.hook_mem_read`, `ql.hook_mem_write`). The subprocess maintains a list of watched address ranges and filters internally — only breaks when an access falls within a watched range.
+
+**Watchpoint hit response:**
+```json
+{
+  "status": "watchpoint_hit",
+  "watchpoint_id": 3,
+  "pc": "0x401234",
+  "access_type": "write",
+  "access_address": "0x404010",
+  "access_size": 4,
+  "value_written": "0xDEADBEEF",
+  "registers": {...}
+}
+```
+
+**Use cases:** Watch decryption buffers for plaintext, monitor IAT entries for dynamic API resolution, detect self-modifying code (watch `.text` for writes), track global flags that control behaviour branching.
+
+**Performance:** Active watchpoints add overhead to every memory access. `debug_status` includes an `instructions_per_second` metric so analysts can gauge the impact.
+
+### Snapshots
+
+Uses Qiling's native `ql.save()` / `ql.restore()`. Limit: `MAX_SNAPSHOTS_PER_SESSION` (default 10, env: `ARKANA_MAX_DEBUG_SNAPSHOTS`).
+
+**Snapshot diff** (`debug_snapshot_diff`) compares two snapshots and returns:
+- Changed registers with before/after values
+- Modified memory regions with address, size, and section name
+- Instruction count between the two snapshots
+
+**Use cases:** Path exploration (save before branch, try one path, restore, try the other), anti-debug bypass (save, hit check, restore, patch, continue), decryption capture (compare memory before/after decrypt routine), AI-driven systematic path exploration.
+
+### Safety analysis
+
+| Threat | Mitigation |
+|--------|-----------|
+| Binary execution | Qiling emulates CPU — host OS never executes the binary |
+| Network access | Network APIs are hooked, not executed; no real sockets |
+| Filesystem damage | File ops happen in rootfs sandbox with staged binary |
+| Resource exhaustion | `max_instructions` cap, subprocess timeout, memory limits |
+| Subprocess escape | Runner is unprivileged Python; no elevated capabilities |
+| Leaked sessions | Auto-timeout + session reaper cleanup |
+| Memory pressure | Snapshot limit, session limit, memory reporting in `debug_status` |
+
+### Integration with existing tools
+
+The subprocess boundary prevents direct object sharing, but data formats are interoperable:
+
+| Debug output | Feeds into |
+|---|---|
+| `debug_read_memory` hex bytes | `disassemble_raw_bytes(hex_bytes=...)` |
+| `debug_read_state` PC address | `decompile_function_with_angr(address=PC)` |
+| Watchpoint hit address | `get_function_xrefs(address=...)` |
+| `debug_read_state` stack pointer | `get_hex_dump(offset=SP)` on original file |
+
+The AI orchestrates these connections naturally. `debug_read_state` includes a disassembly preview (next 5 instructions via capstone in the subprocess) to minimise round-trips.
+
+### Multi-architecture register sets
+
+| Architecture | Registers | Common targets |
+|---|---|---|
+| x86 | EAX-EDI, EIP, ESP, EBP, EFLAGS | 32-bit Windows PE, Linux ELF |
+| x86_64 | RAX-R15, RIP, RSP, RBP, RFLAGS | 64-bit — most common |
+| ARM | R0-R12, SP, LR, PC, CPSR | IoT malware, Android native |
+| ARM64 | X0-X30, SP, PC, NZCV | Modern ARM |
+| MIPS | $v0-$v1, $a0-$a3, $t0-$t9, $s0-$s7, PC | Router/embedded malware |
+
+`debug_read_state` returns the appropriate register set based on detected architecture — callers don't need to know which architecture is being debugged.
 
 ### Value assessment
 
 | Dimension | Assessment |
 |-----------|-----------|
-| **Enables new analysis?** | Partially — branching exploration is new; breakpoints are a convenience |
-| **Uniqueness** | Moderate — no other MCP server offers emulation snapshots |
-| **Complexity cost** | Medium — Qiling snapshot API exists but needs state management |
-| **Frequency of use** | Low — emulation is already a niche workflow |
-| **Alternative** | Re-run emulation from start with different hooks/parameters |
+| **Enables new analysis?** | Yes — interactive debugging of malware without execution risk is currently impossible in any MCP server |
+| **Uniqueness** | Very high — no competing MCP tool offers emulation-based interactive debugging |
+| **Complexity cost** | Medium-High — extends existing Qiling subprocess pattern, but persistent session management and 20 new tools add surface area |
+| **Frequency of use** | Medium-High — debugging is a core RE workflow, not a niche feature |
+| **Alternative** | Fire-and-forget emulation (existing tools) covers simple cases; complex malware requires interactive stepping |
 
 ### Risks
 
-- Snapshot serialisation may fail for complex states (open files, network sockets)
-- Memory overhead of storing multiple snapshots
-- Interactive debugging model doesn't fit well with MCP's request-response pattern
+- Qiling's `ql.save()`/`ql.restore()` may fail for complex states (open files, hooked DLLs)
+- Memory overhead from snapshots (each stores full memory state)
+- Long-lived subprocesses increase resource management complexity
+- Emulation fidelity limits mean some malware won't work (anti-emulation, threading, complex APIs)
+- Watchpoint overhead could make execution very slow for memory-intensive binaries
+
+### Future extensions (v2)
+
+These are explicitly deferred from the initial implementation:
+
+| Extension | Description | Why defer |
+|-----------|-------------|-----------|
+| **Custom hook scripting** | Let users define Python hook callbacks via MCP | Complex security model for arbitrary code execution |
+| **Multi-binary debugging** | Two binaries communicating (client/server malware) with shared virtual network | Requires Qiling network layer bridging between instances |
+| **Dashboard debug panel** | Visual step-through UI with register/memory/disassembly views | Significant frontend work; MCP tools come first |
+| **GDB Remote Serial Protocol bridge** | Expose debug sessions to external debuggers (GDB, IDA, Ghidra) via RSP | Qiling has partial RSP support; needs hardening and MCP session coordination |
+| **Record/replay (time-travel debugging)** | Full instruction trace that can be replayed backward | Very high memory cost; requires custom trace format |
 
 ### Recommendation
 
-Low priority. The existing `emulate_binary_with_qiling` + hooks covers most use cases. Snapshots add complexity for a narrow workflow improvement.
+High priority. This fills a gap that no other MCP binary analysis server addresses: safe, interactive, multi-architecture debugging without executing malware on the host. The existing Qiling subprocess architecture provides a solid foundation, and the 20 new tools follow established patterns. Start with core tools (session, step, continue, breakpoints, inspect, snapshots), add watchpoints and conditional breakpoints as a fast follow.
 
 ---
 
@@ -1079,6 +1276,7 @@ A natural first consumer would be the `arkana-analyze` skill, which could call `
 | 7 | ~~.NET deobfuscation~~ ✅ | Medium-High | High | High |
 | 2 | ~~Symbolic execution extensions~~ ✅ | Medium | Very high | Medium |
 | 19 | Mutable malware signature KB | Low-Medium | Very high | Medium |
+| 17 | ~~Emulation-based debugger~~ ✅ | Medium-High | Very high | Medium-High |
 
 ### Worth discussing (moderate value, some complexity)
 
@@ -1099,6 +1297,5 @@ A natural first consumer would be the `arkana-analyze` skill, which could call `
 | 13 | Struct recovery | angr's type inference is weak; manual types work |
 | 15 | Patching primitives | Existing tools sufficient with minor extra effort |
 | 16 | Raw angr analyses | Low value without higher-level tools using them |
-| 17 | Qiling snapshots | Narrow use case, complex state management |
 | 18 | python-flirt | Marginal improvement over angr's built-in FLIRT |
 | 12 | Annotation transfer | Needs reliable matching; niche workflow |
