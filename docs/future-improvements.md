@@ -32,6 +32,7 @@ Proposed enhancements and feature ideas for Arkana. Items are grouped by domain 
 16. [Expose Unused angr Analyses](#16-expose-unused-angr-analyses)
 17. [Qiling Snapshots & Interactive Debugging](#17-qiling-snapshots--interactive-debugging)
 18. [FLIRT Signature Matching](#18-flirt-signature-matching)
+19. [Mutable Malware Signature Knowledge Base](#19-mutable-malware-signature-knowledge-base)
 
 ---
 
@@ -918,6 +919,154 @@ Low priority unless analysts frequently encounter stripped binaries where angr's
 
 ---
 
+## 19. Mutable Malware Signature Knowledge Base
+
+**Status**: Proposed
+**Priority**: High
+**Complexity**: Low-Medium
+**New dependencies**: None
+**New tools**: 2 (`add_malware_signature`, `update_malware_signature`)
+
+### Problem
+
+The malware signatures knowledge base (`arkana/data/malware_signatures.yaml`, 124 families) is currently **read-only** from the MCP client's perspective. When the AI discovers a new malware family during analysis — identifying its API hash algorithm, config encryption scheme, C2 protocol, and YARA indicators — this knowledge cannot be persisted back to the KB for future sessions. The next time the same family is encountered, the AI must re-derive everything from scratch rather than leveraging prior work via `identify_malware_family()`, `extract_config_for_family()`, or `scan_for_api_hashes(family_hint=...)`.
+
+This is particularly impactful for:
+- **Emerging families** not yet in the curated KB (e.g. new BRc4 variants, custom implants)
+- **Variant-specific config structures** that differ from the KB entry for a known family
+- **Site-specific threat intelligence** where an IR team repeatedly encounters the same custom tooling
+
+### Proposal
+
+A two-tier tool approach with a separate user knowledge base file:
+
+#### 19.1 User Knowledge Base (`~/.arkana/user_signatures.yaml`)
+
+Keep the curated `arkana/data/malware_signatures.yaml` read-only and version-controlled. AI-contributed entries go to `~/.arkana/user_signatures.yaml`, which is merged at load time. This provides:
+- Clean separation between curated and AI-generated entries
+- No risk of corrupting the shipped KB
+- Easy export/sharing of user-discovered signatures
+- Survives Arkana upgrades (lives in user config, not package data)
+
+Merge strategy: user entries override curated entries when the family name matches (case-insensitive), allowing the AI to extend or correct KB entries for known families.
+
+#### 19.2 `add_malware_signature` Tool
+
+Creates a new family entry with minimal required fields. The AI calls this once when it identifies a new family.
+
+```python
+add_malware_signature(
+    family="Brute Ratel C4",
+    description="Commercial adversary simulation framework...",
+    aliases=["BRc4", "BRc4 Badger"],
+    mitre_attack=["T1055.001", "T1620", "T1027", "T1071.001"],
+)
+```
+
+Returns the created skeleton entry with empty sections for the AI to fill incrementally.
+
+#### 19.3 `update_malware_signature` Tool
+
+Adds or updates individual sections of an existing family entry. The AI calls this as it discovers indicators during analysis, mirroring the natural investigation workflow.
+
+```python
+# After identifying the config encryption scheme:
+update_malware_signature(
+    family="Brute Ratel C4",
+    section="config",
+    data={
+        "encryption": "rc4",
+        "key_length": 8,
+        "structure": "pipe_delimited_27_fields",
+        "structure_description": "RC4-encrypted, pipe-delimited with 27 fields. "
+            "Key is first 8 bytes of last 16 bytes of decrypted payload.",
+        "location": {"section": ".data", "offset_range": [0x2E, 0x1C1]},
+        "parsed_fields": [
+            "sleep (seconds)", "jitter", "max_retry",
+            "c2_domains (comma-separated)", "port", "user_agent",
+            "auth_token_1", "auth_token_2", "uri_paths (comma-separated)",
+            "license_hash"
+        ],
+    }
+)
+
+# After tracing the API hash algorithm:
+update_malware_signature(
+    family="Brute Ratel C4",
+    section="api_hash",
+    data={
+        "algorithm": "custom",
+        "technique": "peb_walking_with_hash",
+        "known_hashes": {},
+    }
+)
+
+# After mapping network indicators:
+update_malware_signature(
+    family="Brute Ratel C4",
+    section="network",
+    data={
+        "protocols": ["https"],
+        "default_headers": [],
+        "uri_patterns": ["/api/azure", "/content.php"],
+        "user_agent_patterns": ["Chrome/90.0"],
+        "typical_ports": [443],
+    }
+)
+
+# After finding YARA-relevant strings:
+update_malware_signature(
+    family="Brute Ratel C4",
+    section="yara_indicators",
+    data={
+        "string_patterns": ["badger_x64_wait", "{-l,\" +r3/#~&;v_"],
+        "hex_patterns": [
+            {"name": "brc4_rc4_ksa_8byte", "hex": "83 E0 07"},
+            {"name": "brc4_pipe_split", "hex": "B9 7C 00 00 00"},
+        ],
+    }
+)
+```
+
+#### 19.4 Implementation Details
+
+**KB loading changes** (`tools_malware_identify.py`):
+- `_load_knowledge_base()` loads both files and merges user entries
+- `_kb_cache` is invalidated after any `add_` or `update_` call
+- Thread-safe writes via the existing `_kb_cache_lock`
+
+**Validation**:
+- `add_malware_signature` validates: family name uniqueness (across both KBs), non-empty description, aliases as list of strings
+- `update_malware_signature` validates: family exists, section name is one of the known sections (`config`, `api_hash`, `network`, `commands`, `compilation`, `constants`, `dll_loading`, `yara_indicators`, `references`, `mitre_attack`), data matches the expected schema for that section
+- Confidence weights default to `0.5` for AI-generated entries (vs curated entries which range 0.3–0.95)
+
+**YAML serialisation**:
+- Use `yaml.dump()` with `default_flow_style=False` for readable output
+- Atomic writes via `tempfile` + `os.replace()` (consistent with cache layer)
+
+**Integration with analysis workflow**:
+- `get_analysis_digest()` could suggest `add_malware_signature` when the AI has identified a family not in the KB
+- `suggest_next_action()` could recommend `update_malware_signature` when analysis has produced findings that would enrich an existing KB entry
+- The conclusion note workflow in the analysis skill could prompt the AI to persist findings to the KB
+
+### Value Assessment
+
+| Dimension | Assessment |
+|-----------|-----------|
+| **Enables new analysis?** | Yes — future sessions can auto-identify and extract configs for AI-discovered families |
+| **Uniqueness** | Very high — no competing tool offers AI-populated malware family knowledge bases |
+| **Complexity cost** | Low-Medium — 2 new tools, YAML merge logic, schema validation |
+| **Frequency of use** | Medium — every novel family analysis could contribute back to the KB |
+| **Alternative** | Manual YAML editing (error-prone, requires dev knowledge) |
+
+### Recommendation
+
+High priority. This closes the loop between analysis and knowledge management — the AI currently discovers detailed family indicators (config structure, encryption, network patterns, YARA strings) but has no way to persist them for reuse. The two-tier approach (create skeleton → fill sections incrementally) mirrors the natural analysis workflow and keeps individual tool calls simple. The user KB file (`~/.arkana/user_signatures.yaml`) ensures the curated KB stays clean while enabling organic knowledge growth.
+
+A natural first consumer would be the `arkana-analyze` skill, which could call `add_malware_signature` + `update_malware_signature` as part of its conclusion phase when it has high-confidence family identification and extracted config data.
+
+---
+
 ## Priority Summary
 
 ### Recommended for implementation (high value relative to complexity)
@@ -929,6 +1078,7 @@ Low priority unless analysts frequently encounter stripped binaries where angr's
 | 5 | ~~Frida script generation~~ ✅ | Low | High | Medium |
 | 7 | ~~.NET deobfuscation~~ ✅ | Medium-High | High | High |
 | 2 | ~~Symbolic execution extensions~~ ✅ | Medium | Very high | Medium |
+| 19 | Mutable malware signature KB | Low-Medium | Very high | Medium |
 
 ### Worth discussing (moderate value, some complexity)
 
