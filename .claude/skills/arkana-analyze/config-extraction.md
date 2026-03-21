@@ -348,6 +348,44 @@ comparison value `0x2321`, Go msgpack tags (`msgpack:"job_id"`, `msgpack:"acp"`)
 
 Ref: [av-gantimurov/adaptixc2-extractor](https://github.com/av-gantimurov/adaptixc2-extractor)
 
+### ValleyRAT / Silver Fox APT (Native)
+**Storage**: C2 config stored as UTF-16LE wide string in the PE `.rdata`/`.data`
+section. Both keys and values are **reversed strings**. Config key names use
+**pinyin abbreviations** of Chinese words. Multi-stage payload: outer PE unpacks
+to DLL → DLL decrypts config blob (Base64+XOR+subtract) → shellcode with custom
+ARX-CTR cipher → inner PE containing the C2 config.
+
+**Indicators**: `denglupeizhi` (pinyin for 登录配置), `tracerpt.exe` sideloading,
+`IpDates_info` registry key, Chinese-language strings, AMSI/ETW/WLDP bypass
+targets in config blob (`AmsiInitialize`, `EtwEventWrite`, `WldpQueryDynamicCodeTrust`).
+
+```
+1. extract_wide_strings(limit=200) → look for pipe-delimited config string
+   matching pattern "|value:key|value:key|..." (e.g., "|401.14.631.8:1p|3233:1o|")
+2. get_hex_dump(offset=<config string offset>) → verify config boundaries and
+   look for config key templates nearby (e.g., "p1:", "o1:", "t1:", "fz:", "bb:")
+3. search_for_specific_strings(patterns=["denglupeizhi", "IpDates", "tracerpt",
+   "Console"]) → confirm ValleyRAT indicators
+4. Parse config: split on "|", split each entry on ":" → (reversed_value, reversed_key)
+   → reverse both to get real key and value
+5. Key mapping (pinyin → meaning):
+   - p1/p2/p3 = C2 server IPs, o1/o2/o3 = ports, t1/t2/t3 = types (1=TCP)
+   - fz (分组) = campaign group, bb (版本) = version, bz (编制) = build date
+   - jp (截屏) = screenshot, kl (键盘) = keylogger, bh (保活) = heartbeat
+   - bd (本地) = debug mode
+6. Reverse IP values: "401.14.631.8" → "8.136.41.104"
+   Reverse port values: "3233" → "3323"
+7. Expected: 1-3 C2 server:port pairs, campaign group (默认 = "default"),
+   version string, build date, capability flags (screenshot, keylog, heartbeat)
+```
+
+**Important**: The inner PE is typically buried inside a custom ARX-CTR encrypted
+shellcode payload. `extract_config_automated()` will NOT find it. You must:
+(a) reverse the multi-stage decryption chain to extract the inner PE, then
+(b) load the inner PE with `open_file()` and search its wide strings.
+See `decompilation-guide.md` for critical notes on validating the cipher
+function's calling convention (angr uses SysV, shellcode uses Windows x64).
+
 ---
 
 ## Generic Approach (Unknown Family)

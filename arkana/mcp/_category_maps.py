@@ -171,7 +171,7 @@ import re as _re
 
 STRING_CATEGORY_PATTERNS = {
     "urls": _re.compile(r'(?:https?|ftp)://[^\s\'"<>]+', _re.IGNORECASE),
-    "ip_addresses": _re.compile(r'\b(?:\d{1,3}\.){3}\d{1,3}\b'),
+    "ip_addresses": _re.compile(r"(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)"),
     "domains": _re.compile(
         r'\b(?:[a-zA-Z0-9-]+\.)+(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion)\b',
         _re.IGNORECASE,
@@ -203,4 +203,4 @@ def is_benign_ip(ip_str: str) -> bool:
             or addr.is_link_local
         )
     except ValueError:
-        return False
+        return True  # Invalid IPs should be filtered out

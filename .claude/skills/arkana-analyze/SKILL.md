@@ -158,15 +158,32 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
   `ARKANA_BACKGROUND_TASK_TIMEOUT`). `check_task_status(task_id)` shows elapsed
   time and stall detection. On timeout, check `partial_result` for salvageable
   data (4 tools capture partial results).
-- **Evidence hierarchy — decompilation first**: When understanding what code
-  does, always prefer higher-quality evidence:
-  1. **Decompiled C pseudocode** (`decompile_function_with_angr`) — gold standard
-  2. **Annotated disassembly** (`get_annotated_disassembly`) — reliable fallback
+- **Evidence hierarchy — decompilation first, assembly to validate**: When
+  understanding what code does, always prefer higher-quality evidence:
+  1. **Decompiled C pseudocode** (`decompile_function_with_angr`) — primary source
+  2. **Annotated disassembly** (`get_annotated_disassembly`) — **cross-validate
+     decompiled code here**, especially for crypto functions, parameter order,
+     and when decompiled logic doesn't match expected behavior
   3. **Raw disassembly** (`disassemble_at_address`) — acceptable for short stubs
   4. **Hex dump** (`get_hex_dump`) — for DATA only, never for understanding code
 
   Do NOT read hex dumps to understand what code does. Hex dumps are for examining
   data regions (encrypted blobs, config structs, overlay content, PE headers).
+
+  **When decompiled code doesn't match expected behavior, the decompiler may be
+  wrong — not your understanding.** Check the assembly before rewriting your
+  implementation. This is especially critical for calling conventions (see above).
+
+  **Decompiler validation — MANDATORY for crypto and parameter-sensitive code**:
+  angr's decompiler uses **System V AMD64** calling convention by default. For
+  **Windows PE binaries and shellcode**, this means parameter names in pseudocode
+  (`a0`=rdi, `a1`=rsi, `ptr`=rdx, `a3`=rcx) do NOT match the actual Windows x64
+  convention (`rcx`=param1, `rdx`=param2, `r8`=param3, `r9`=param4). When
+  decompiled code doesn't produce expected results — especially for crypto/cipher
+  functions — **check the assembly at the call site** to see which registers
+  actually carry which arguments. See [decompilation-guide.md](decompilation-guide.md)
+  for a full reference on calling conventions, common pitfalls, and validation
+  workflows.
 
   **Decompiler fallback note**: If a decompilation response includes a `note` field
   mentioning "cffi pickle incompatibility", the decompiler encountered an angr
@@ -690,4 +707,5 @@ sideloading, campaign comparison, and shellcode extraction patterns.
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to Arkana tool calls
 - [search-patterns.md](search-patterns.md) — Regex patterns for decompilation/disassembly search, workflow recipes, context-lines guidance, and decision tree for when to search vs read full output
 - [extraction-guide.md](extraction-guide.md) — Refinery operations, batch mode, .NET/payload extraction, C2 attribution workflow, extraction chain documentation
+- [decompilation-guide.md](decompilation-guide.md) — Decompiler validation, calling convention pitfalls (SysV vs Windows x64), crypto function workflow, shellcode decompilation, and when to cross-check assembly
 - [multi-file-workflows.md](multi-file-workflows.md) — Dropper+payload, DLL sideloading, campaign comparison, shellcode extraction patterns

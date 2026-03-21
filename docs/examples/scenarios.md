@@ -117,6 +117,51 @@ Analyst: "Open this carved PE and analyse it"
 
 ---
 
+## Scenario 6: Reversing a Custom Cipher in a Chinese APT RAT (ValleyRAT)
+
+**The situation:** A threat intel analyst has a UPX-packed sample suspected to be ValleyRAT. The payload is hidden behind 5 layers of encryption including a custom block cipher. The C2 configuration is stored with reversed-string obfuscation.
+
+**Traditional workflow:** Unpack UPX in PE-bear, load DLL in IDA/Ghidra, trace the config decryption manually through 4 transforms, identify the custom cipher algorithm by reading assembly, reimplement in Python, decrypt the inner PE, load it in a new IDA session, find the C2 config string, manually reverse the obfuscation — a multi-day effort requiring expert-level reverse engineering.
+
+**With Arkana (multi-session):**
+
+*Session 1 — Unpack and identify the payload:*
+```
+Analyst: "Analyse this binary and extract any embedded payloads"
+```
+1. `open_file("valleyrat.exe")` — detects UPX packing
+2. `auto_unpack_pe()` — unpacks to PE64 DLL
+3. `open_file("unpacked.dll")` — analyses the DLL
+4. `get_triage_report()` — identifies suspicious imports, high-entropy sections
+5. `decompile_function_with_angr(config_func)` — reveals the 4-step decryption pipeline
+6. `refinery_codec(codec='b64')` + `refinery_xor(key='be')` — decodes the config blob
+
+*Session 2 — Reverse the shellcode loader:*
+```
+Analyst: "The config decrypts to shellcode. Analyse the shellcode and find the inner PE."
+```
+7. `open_file("shellcode.bin", mode="shellcode")` — loads shellcode for analysis
+8. `disassemble_raw_bytes()` — identifies PEB-walking reflective loader
+9. `decompile_function_with_angr(decrypt_func)` — reveals custom ARX-CTR cipher
+10. Custom Python decryption (non-standard cipher — one of the few cases requiring custom code)
+11. `search_hex_pattern(pattern="4D5A")` — locates the inner PE at offset 0x104C
+
+*Session 3 — Extract C2 from the inner PE:*
+```
+Analyst: "Load the extracted PE and find the C2 configuration"
+```
+12. `open_file("inner_pe.bin")` — full PE analysis with capa, YARA, FLOSS
+13. `get_triage_report()` — CRITICAL risk, process injection, anti-debug
+14. `extract_wide_strings()` — discovers reversed C2 config at offset 0x1DE40
+15. `get_hex_dump(offset=0x1DE00)` — confirms config structure with key templates
+16. `search_for_specific_strings(["tracerpt", "IpDate", "SOFTWARE"])` — finds persistence IOCs
+
+The AI decodes the reversed config: *"C2 server is 8.136.41[.]104:3323 (Alibaba Cloud). Campaign group is 默认 ('default' in Chinese). Build date 2025-12-04. Config keys use pinyin abbreviations confirming Chinese-language development. The shellcode patches AMSI, ETW, and WLDP before loading the implant."*
+
+**Full report:** [ValleyRAT Multi-Stage Loader](example-report-valleyrat.md)
+
+---
+
 ## Arkana vs Traditional Tools
 
 ### Comparison Matrix

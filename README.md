@@ -110,6 +110,7 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 | [LockBit 3.0 Ransomware](docs/examples/example-report-lockbit.md) | Packed ransomware | Entropy analysis, packing detection, stub extraction |
 | [AsyncRAT .NET RAT](docs/examples/example-report-asyncrat.md) | .NET RAT | C2 config extraction despite obfuscated metadata |
 | [StealC Info Stealer](docs/examples/example-report-stealc.md) | Credential stealer | 32 capa rules, browser/Steam targeting, crypto toolkit |
+| [ValleyRAT Multi-Stage Loader](docs/examples/example-report-valleyrat.md) | Chinese APT RAT | 5-stage unpacking, custom ARX cipher reversal, C2 config extraction |
 
 ---
 

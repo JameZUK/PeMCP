@@ -718,6 +718,24 @@ async def emulate_pe_with_windows_apis(
                 "real payload. Unpack first with auto_unpack_pe() or "
                 "try_all_unpackers(), then re-emulate the unpacked binary."
             )
+        elif "error" not in result:
+            result["diagnostic"] = {
+                "message": (
+                    "Emulation completed but captured 0 API calls. Common causes: "
+                    "(1) Binary uses PEB walking or manual API resolution — Speakeasy "
+                    "may not intercept manually-resolved function pointers. "
+                    "(2) Binary uses direct syscalls bypassing API hooks. "
+                    "(3) Entry point exits early (e.g. DLL with no DllMain work, "
+                    "or anti-analysis checks causing early termination). "
+                    "(4) Binary requires specific command-line arguments or environment."
+                ),
+                "suggested_tools": [
+                    "decompile_function_with_angr — examine entry point and main logic",
+                    "scan_for_api_hashes — detect API hashing (CRC32, DJB2, ROR13)",
+                    "emulate_binary_with_qiling — alternative emulator with deeper OS emulation",
+                    "find_anti_debug_comprehensive — check for anti-analysis that causes early exit",
+                ],
+            }
 
     return await _check_mcp_response_size(ctx, result, "emulate_pe_with_windows_apis", "the 'limit' parameter")
 
@@ -767,6 +785,27 @@ async def emulate_shellcode_with_speakeasy(
         except asyncio.CancelledError:
             pass
     await ctx.report_progress(100, 100)
+
+    # Diagnostic when emulation captured no API calls (common with PEB-walking shellcode)
+    if result.get("total_api_calls", -1) == 0 and "error" not in result:
+        result["diagnostic"] = {
+            "message": (
+                "Emulation completed but captured 0 API calls. Common causes: "
+                "(1) Shellcode uses PEB walking to resolve APIs — Speakeasy may not "
+                "intercept manually-resolved function pointers. "
+                "(2) Shellcode uses direct syscalls (int 0x2e / syscall) bypassing "
+                "the IAT and API hooks entirely. "
+                "(3) Shellcode exits early or enters an infinite loop before making calls. "
+                "(4) Architecture mismatch — try the other architecture (x86 vs x86_64)."
+            ),
+            "suggested_tools": [
+                "disassemble_raw_bytes — inspect actual instructions to understand control flow",
+                "scan_for_api_hashes — detect API hashing constants (CRC32, DJB2, ROR13)",
+                "emulate_shellcode_with_qiling — alternative emulator with deeper OS emulation",
+                "search_hex_pattern — search for known shellcode patterns (e.g. PEB access: 64 A1 30 00 00 00)",
+            ],
+        }
+
     return await _check_mcp_response_size(ctx, result, "emulate_shellcode_with_speakeasy", "the 'limit' parameter")
 
 
