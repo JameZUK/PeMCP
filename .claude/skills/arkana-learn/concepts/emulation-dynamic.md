@@ -79,6 +79,95 @@ Detailed trace of all API calls during emulation, providing a complete
 behavioural timeline.
 ```
 
+### Interactive Debugger (Persistent Qiling)
+
+The interactive debugger is a persistent Qiling subprocess that survives across
+multiple MCP calls. Unlike the fire-and-forget tools above (which run to
+completion and return all results at once), the debugger lets you start
+emulation, pause at breakpoints, inspect registers and memory, modify state,
+and resume — exactly like using a real debugger (GDB, x64dbg) but within the
+emulation environment.
+
+**How it differs from fire-and-forget Qiling**:
+
+| Aspect | Fire-and-forget | Interactive debugger |
+|---|---|---|
+| State persistence | Gone after tool returns | Persists across MCP calls |
+| Control granularity | Run to completion | Step, breakpoint, continue |
+| Input handling | Pre-configured args only | Queue input mid-execution |
+| Memory inspection | Only via qiling_memory_search after | Read any address at any point |
+| API monitoring | Full trace returned at end | Filter and query trace incrementally |
+| State comparison | Not possible | Snapshot save/restore/diff |
+
+**I/O stubs**: By default (`stub_io=True`), the debugger hooks Win32 console
+APIs (GetStdHandle, WriteConsoleA/W, ReadConsoleA, SetConsoleMode, etc.) so that
+printf, cout, cin, and similar calls work without crashing the emulator on
+unmapped memory. Output text is captured and retrievable. Input can be queued
+before the binary tries to read it.
+
+**API tracing**: All Windows API calls are logged automatically with their
+arguments and return values. You can query the trace with a filter (e.g.,
+`filter="Crypt"` to see only crypto-related calls) or set a whitelist to limit
+what gets recorded.
+
+**Memory search**: After stepping through code (e.g., past a decryption loop),
+search all mapped memory for strings (UTF-8 and UTF-16LE) or hex byte patterns
+(with `??` wildcards for unknown bytes).
+
+**Snapshots**: Save the full emulation state at any point, restore it later, or
+diff two snapshots to see exactly what changed (registers and memory) between
+two execution points.
+
+```
+Workflow: Stepping through a decryption function
+
+1. debug_start(file_path="/samples/malware.exe")
+   → Session created, paused at entry point 0x00401000
+
+2. debug_set_breakpoint(address="0x00401500")
+   → Breakpoint set at the decryption function
+
+3. debug_set_input(text="password123")
+   → Input queued for when the binary reads from console
+
+4. debug_continue()
+   → Hit breakpoint at 0x00401500
+   → API trace shows: GetStdHandle, ReadConsoleA (consumed "password123")
+
+5. debug_snapshot_save(name="before_decrypt")
+   → State saved
+
+6. debug_step_over()  (repeat several times or debug_run_until)
+   → Steps through the decryption logic
+
+7. debug_snapshot_save(name="after_decrypt")
+8. debug_snapshot_diff(name_a="before_decrypt", name_b="after_decrypt")
+   → Shows which memory regions changed (the output buffer)
+
+9. debug_read_memory(address="0x00500000", length=256)
+   → Read the decrypted data from the output buffer
+
+10. debug_search_memory(pattern="http", pattern_type="string")
+    → Find any decrypted URLs in memory
+
+11. debug_get_output()
+    → Read any text the binary printed to console
+
+12. debug_stop()
+    → Session ended
+```
+
+```
+Tool: debug_get_api_trace(filter="VirtualAlloc")
+
+Returns only API trace entries matching the filter. Example output:
+  entries:
+    - type: ENTER, api: VirtualAlloc, args: [0, 65536, 0x3000, 0x40]
+    - type: EXIT, api: VirtualAlloc, return_value: 0x00500000
+  total_entries: 2
+  filter_applied: "VirtualAlloc"
+```
+
 ### Speakeasy (Windows PE Emulation)
 
 Speakeasy is a Windows-focused emulator designed specifically for PE analysis.
@@ -164,6 +253,12 @@ when specific addresses are read, written, or executed.
 | Test a single function | angr (`emulate_function_execution`) | Function-level emulation |
 | Monitor specific memory writes | angr (`emulate_with_watchpoints`) | Watchpoint support |
 | Cross-platform (ELF) analysis | Qiling | Multi-platform support |
+| Step through code instruction by instruction | Debugger (`debug_start` + `debug_step`) | Persistent state, pause/resume |
+| Supply stdin input during emulation | Debugger (`debug_set_input`) | I/O stubs queue input for ReadConsole |
+| Compare state before/after a call | Debugger (`debug_snapshot_diff`) | Save and diff emulation snapshots |
+| Inspect memory at arbitrary points | Debugger (`debug_read_memory`) | Read any mapped address mid-execution |
+| Search for decrypted data mid-execution | Debugger (`debug_search_memory`) | Search while paused, before data is overwritten |
+| Fire-and-forget crashed, need control | Debugger (`debug_start` with breakpoints) | Step past crash point manually |
 
 ## Socratic Questions
 
@@ -179,6 +274,20 @@ when specific addresses are read, written, or executed.
 - "After emulation, the API trace shows VirtualAlloc followed by large memcpy.
   What might be happening?" (Leads to: unpacking or payload staging, search
   the allocated memory for PE headers or decrypted content)
+- "Fire-and-forget emulation crashed at instruction 5,000 with an unmapped read.
+  We need to see what happened just before the crash. How can we get more
+  control?" (Leads to: interactive debugger — set a breakpoint just before the
+  crash address, inspect registers and memory, understand the root cause)
+- "The binary reads a password from the console and uses it as a decryption key.
+  How can we supply that password during emulation?" (Leads to: interactive
+  debugger with debug_set_input to queue the password, I/O stubs handle the
+  ReadConsoleA call)
+- "We want to know exactly what changes in memory when the decryption function
+  runs. How can we capture that difference?" (Leads to: snapshot before the
+  function, step over it, snapshot after, then diff the two snapshots)
+- "The malware decrypts a URL in memory but overwrites it shortly after. How
+  can we catch it before it disappears?" (Leads to: set a breakpoint right
+  after decryption, search memory while paused, before execution continues)
 
 ## Common Mistakes
 
@@ -217,3 +326,26 @@ The most valuable data from emulation is often not in the API trace but in
 memory. After emulation completes (or even after early termination), use
 `qiling_memory_search` to look for decrypted strings, URLs, IP addresses,
 PE headers ("MZ"), or other indicators that only exist at runtime.
+
+### Using the interactive debugger when fire-and-forget would suffice
+
+The interactive debugger requires multiple MCP round-trips (start, set
+breakpoints, continue, inspect, ...). If you just need a full API trace or a
+memory search after execution, fire-and-forget tools (`emulate_binary_with_qiling`,
+`qiling_memory_search`) are faster and simpler. Use the debugger only when you
+need to pause, inspect, and resume — not as a default replacement for the
+simpler tools.
+
+### Forgetting to queue input before continuing
+
+If the binary reads from stdin/console, it will block (or fail) if no input is
+queued. Always call `debug_set_input()` before `debug_continue()` when you
+know the binary expects user input. The I/O stubs consume from the input queue
+in order — queue all expected inputs before running past those read points.
+
+### Not using snapshots for experimentation
+
+When you want to try different inputs or explore alternative code paths, use
+`debug_snapshot_save()` before the branch point. If the path is a dead end,
+`debug_snapshot_restore()` brings you back instantly without restarting the
+entire session. This is far more efficient than stopping and restarting.

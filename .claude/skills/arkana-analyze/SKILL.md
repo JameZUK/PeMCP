@@ -494,6 +494,65 @@ Progressive depth — use the minimum tier needed to answer your question.
 - `find_path_to_address(target)` — symbolic execution to find reaching inputs
 - `emulate_with_watchpoints()` — watchpoints on memory/registers
 
+### Tier 3b: Interactive Debugger (when you need step-through control)
+
+The interactive debugger provides a persistent Qiling subprocess that survives
+across MCP calls — you can start emulation, set breakpoints, step through code,
+inspect state, queue input, and search memory incrementally. Unlike Tier 3
+fire-and-forget tools that run to completion and return results, the debugger
+lets you pause, inspect, modify, and resume at will.
+
+**When to use the debugger instead of fire-and-forget emulation**:
+- You need to step through a decryption loop and inspect memory after each iteration
+- The binary reads user input (stdin/console) and you need to supply specific values
+- You want to compare state before and after a specific function call (snapshots)
+- Fire-and-forget emulation crashed or stalled and you need finer control
+- You want to set breakpoints at specific API calls and inspect arguments live
+- You need to watch memory regions for writes (e.g., detect when a buffer is filled)
+
+**Core workflow**:
+1. `debug_start(file_path)` — starts the debugger (I/O stubs enabled by default)
+2. `debug_set_breakpoint(address)` — set breakpoints at addresses of interest
+3. `debug_set_input(text)` — queue input the binary will read from stdin/console
+4. `debug_continue()` — run until breakpoint or completion
+5. `debug_read_state()` — inspect registers and current instruction
+6. `debug_read_memory(address, length)` — read memory at any address
+7. `debug_get_api_trace()` — review all Windows API calls made so far
+8. `debug_get_output()` — read text the binary wrote to stdout/console
+9. `debug_search_memory(pattern)` — find decrypted strings/data in memory
+10. `debug_stop()` — end the session
+
+**I/O stubs** (`stub_io=True`, default): Hooks Win32 console APIs (GetStdHandle,
+WriteConsoleA/W, ReadConsoleA, etc.) so printf/cout/cin calls work without
+crashing. Output is captured and retrievable via `debug_get_output()`. Input is
+consumed from a queue populated by `debug_set_input()`.
+
+**API tracing** (enabled by default): Logs all Windows API calls with arguments
+and return values. Use `debug_get_api_trace(filter="Crypt")` to retrieve only
+matching calls. Use `debug_set_trace_filter(whitelist=["VirtualAlloc", "memcpy"])`
+to limit what gets traced.
+
+**Snapshots** — save and compare state at different execution points:
+- `debug_snapshot_save(name)` — save full emulation state
+- `debug_snapshot_restore(name)` — revert to a saved state
+- `debug_snapshot_diff(name_a, name_b)` — compare register and memory differences
+
+**Memory search** — find data in mapped memory regions:
+- `debug_search_memory(pattern="http", pattern_type="string")` — string search
+  (UTF-8 + UTF-16LE)
+- `debug_search_memory(pattern="4D5A90", pattern_type="hex")` — hex pattern
+  with `??` wildcards for unknown bytes
+
+**Execution control**:
+- `debug_step()` — single instruction step (into calls)
+- `debug_step_over()` — step over calls
+- `debug_continue()` — run to next breakpoint or limit
+- `debug_run_until(address)` — run to a specific address
+- `debug_set_watchpoint(address, length, type)` — break on memory read/write/access
+
+**Limits**: Max 3 concurrent sessions, 1800s TTL, 10M instruction cap, 1MB max
+memory read, 100 breakpoints, 50 watchpoints, 10 snapshots.
+
 ### Tier 4: Frida Script Generation (for live dynamic analysis on a real system)
 - `generate_frida_trace_script(categories)` — auto-generates a Frida tracing script
   from the binary's imports. Filters by category (networking, crypto, process_injection,
@@ -527,6 +586,12 @@ without needing a real execution environment.
 | Identifying opaque predicates in obfuscated code | Tier 2 (detect_opaque_predicates) |
 | Tracing untrusted input to dangerous sinks | Tier 2 (find_dangerous_data_flows) |
 | Identifying C++ vtable dispatch | Tier 1 (identify_cpp_classes + scan_for_indirect_jumps) |
+| Stepping through decryption loop instruction-by-instruction | Tier 3b (debug_start + debug_step + debug_read_memory) |
+| Supplying specific stdin input during emulation | Tier 3b (debug_set_input + debug_continue) |
+| Comparing state before/after a function call | Tier 3b (debug_snapshot_save/restore/diff) |
+| Finding decrypted data after stepping past crypto | Tier 3b (debug_search_memory) |
+| Fire-and-forget emulation crashed, need finer control | Tier 3b (debug_start with breakpoints) |
+| Monitoring specific API calls with live argument inspection | Tier 3b (debug_get_api_trace with filter) |
 
 ## Phase 5: Extract
 
