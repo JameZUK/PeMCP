@@ -129,131 +129,9 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 
 ## How Analysis Works
 
-When you say *"Analyse this binary and tell me what it does"*, the AI doesn't just call one tool. It follows a structured, multi-phase methodology -- the same workflow a human malware analyst would use, but orchestrated automatically across Arkana's 259 tools.
+Arkana follows a structured, evidence-first methodology -- the same phased workflow a professional malware analyst uses, orchestrated automatically across 259 tools. Every claim cites specific tool output, indicators are treated as leads (not conclusions), and the AI cannot attempt decryption without first decompiling the function that performs it.
 
-```
-                            ┌─────────────────────┐
-                            │   "Analyse this      │
-                            │    binary for me"    │
-                            └──────────┬──────────┘
-                                       │
-                          ┌────────────▼────────────┐
-                          │  PHASE 0: ENVIRONMENT    │
-                          │  get_config()            │
-                          │  list_samples()          │
-                          └────────────┬────────────┘
-                                       │
-                          ┌────────────▼────────────┐
-                          │  PHASE 1: IDENTIFY       │
-                          │  open_file() ─── auto-   │
-                          │  enrichment starts in    │
-                          │  background (classify,   │
-                          │  triage, MITRE, IOCs,    │
-                          │  FLIRT, decompile sweep) │
-                          │                          │
-                          │  get_triage_report()     │
-                          │  classify_binary_purpose()│
-                          └────────────┬────────────┘
-                                       │
-                              ┌────────▼────────┐
-                              │  Packed binary?  │
-                              └───┬─────────┬───┘
-                              YES │         │ NO
-                     ┌────────────▼───┐     │
-                     │  PHASE 2:      │     │
-                     │  UNPACK        │     │
-                     │  auto_unpack   │     │
-                     │  → try_all     │     │
-                     │  → qiling_dump │     │
-                     │  → manual OEP  │     │
-                     │                │     │
-                     │  Re-open the   │     │
-                     │  unpacked file │     │
-                     └────────┬───────┘     │
-                              │             │
-                              └──────┬──────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │  PHASE 3: MAP        │
-                          │  get_focused_imports()│
-                          │  get_strings_summary()│
-                          │  get_function_map()   │
-                          │  get_capa_analysis()  │
-                          │  identify_malware_    │
-                          │    family()           │
-                          │  get_analysis_digest()│
-                          └──────────┬──────────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │  PHASE 4: DEEP DIVE  │
-                          │                      │
-                          │  Tier 1: Static      │
-                          │  decompile + rename  │
-                          │  + batch_decompile   │
-                          │         │            │
-                          │  Tier 2: Data Flow   │
-                          │  reaching_defs +     │
-                          │  propagate_constants │
-                          │         │            │
-                          │  Tier 3: Emulation   │
-                          │  speakeasy / qiling  │
-                          │  / interactive debug │
-                          └──────────┬──────────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │  PHASE 5: EXTRACT    │
-                          │  C2 configs, IOCs,   │
-                          │  decrypted payloads, │
-                          │  YARA rules          │
-                          └──────────┬──────────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │  PHASE 6: RESEARCH   │
-                          │  VirusTotal, family  │
-                          │  attribution, MITRE  │
-                          │  ATT&CK mapping      │
-                          └──────────┬──────────┘
-                                     │
-                          ┌──────────▼──────────┐
-                          │  PHASE 7: REPORT     │
-                          │  generate_report()   │
-                          │  Structured findings │
-                          │  with full evidence  │
-                          │  chain               │
-                          └──────────────────────┘
-```
-
-### Walkthrough: Triaging a Suspicious PE
-
-Here's what actually happens behind the scenes when the AI analyses a binary. Each step shows the real MCP tool calls the AI makes:
-
-**1. Environment & identification** -- The AI discovers available libraries and opens the file. `open_file()` returns format detection, hashes, and a file integrity assessment. Auto-enrichment kicks off in the background, immediately starting classification, risk scoring, MITRE mapping, IOC extraction, and a decompilation sweep -- by the time the AI asks its next question, many answers are already cached.
-
-**2. Triage** -- `get_triage_report(compact=True)` returns a ~2KB assessment: packing status, suspicious imports ranked by risk, capa capability matches mapped to ATT&CK, network IOCs, digital signature status, and a risk score. The AI reads this and decides what to investigate next.
-
-**3. Mapping the binary** -- Based on triage results, the AI calls `get_focused_imports()` to see security-relevant imports categorised by threat behaviour, `get_strings_summary()` for string intelligence, and `get_function_map()` to get functions ranked by interestingness -- this becomes the decompilation priority list.
-
-**4. Deep dive** -- The AI decompiles the highest-ranked functions with `decompile_function_with_angr()`, renames cryptic function names (`sub_401830` becomes `decrypt_c2_config`), and traces data flow with `get_reaching_definitions()` when static reading isn't enough. If the code decrypts something at runtime, the AI can emulate it with Speakeasy or step through it instruction-by-instruction with the interactive debugger.
-
-**5. Evidence gathering** -- Throughout the analysis, the AI records every finding with `add_note()` and `auto_note_function()`. Notes survive context window limits and server restarts, so investigations can span hours. `get_analysis_digest()` synthesises all findings at any point.
-
-**6. Reporting** -- `generate_report()` produces a structured markdown report with executive summary, risk assessment, detailed findings with function-level evidence, IOCs, MITRE ATT&CK mappings, and the complete analysis timeline.
-
-The AI adapts its depth based on the goal. A quick triage might stop after Phase 3. Deep reverse engineering goes through every tier. A CTF challenge might spend most of its time in the interactive debugger. The methodology is the same -- the depth varies.
-
-### Built-in Guardrails
-
-The analysis skill enforces strict methodology constraints that prevent the AI from cutting corners or producing unreliable results:
-
-- **Evidence-first, no speculation** -- Every claim must cite specific tool output. The AI cannot say *"this binary probably injects into processes"* -- it must decompile the function, show the `VirtualAllocEx` → `WriteProcessMemory` → `CreateRemoteThread` chain, and cite the addresses. If something is unknown, it says so.
-- **Indicators are leads, not conclusions** -- VirusTotal detections, capa matches, YARA hits, and risk scores are treated as pointers for investigation, not proof. A capa match for "process injection" means a byte pattern was found -- the AI still decompiles the relevant function to confirm the behaviour.
-- **No speculative decryption** -- The AI cannot attempt to decrypt, decompress, or decode embedded data without concrete evidence from decompiled code showing the algorithm, key source, and data location. Entropy analysis and "this looks encrypted" are not sufficient -- it must find the actual decryption function first.
-- **Unpack before analysing** -- When triage detects packing (high entropy, minimal imports, PEiD match), the AI must unpack before attempting decompilation or config extraction. Packed code defeats static analysis by design -- the AI follows the unpacking cascade (`auto_unpack_pe` → `try_all_unpackers` → `qiling_dump`) rather than guessing at encrypted content.
-- **Fair interpretation** -- Flagged APIs and behaviours are assessed in context. `IsDebuggerPresent` in a Rust binary's panic handler is a compiler artifact, not anti-analysis. `VirtualProtect` in any loader is a functional requirement, not evasion. The AI distinguishes between capability (what an API *can* do) and intent (what the developer *meant* it to do).
-- **Deep dive checkpoint** -- Before entering the time-intensive Phase 4 deep dive, the AI pauses to present its findings so far and asks the user whether to proceed. This prevents burning time decompiling functions the analyst doesn't care about.
-- **Mandatory note-taking** -- After every decompilation, the AI records a summary note. When it discovers any finding, it adds a note. Notes survive context window limits and server restarts, ensuring nothing is lost during long investigations.
-
-For seven detailed real-world walkthroughs (email attachment triage, packed .NET RAT, multi-stage dropper, Go ELF binary, IOC extraction, custom cipher reversal, and C2 implant unpacking), see [Scenarios & Comparisons](docs/examples/scenarios.md).
+**[Read the full methodology with annotated AsyncRAT walkthrough →](docs/methodology.md)**
 
 ---
 
@@ -313,6 +191,7 @@ For other MCP clients, local Python installation, and detailed configuration, se
 | Document | Description |
 |----------|-------------|
 | **[Installation Guide](docs/installation.md)** | Docker, local, and minimal installation; modes of operation; multi-format binary support |
+| **[Analysis Methodology](docs/methodology.md)** | Eight-phase analysis pipeline, tool-by-tool walkthrough, decision logic, built-in guardrails, annotated AsyncRAT example |
 | **[Claude Code Integration](docs/claude-code.md)** | Setup via CLI and JSON config; analysis and learning skills; typical workflows and example queries |
 | **[Configuration](docs/configuration.md)** | API keys, analysis cache, and command-line options |
 | **[Tools Reference](docs/tools-reference.md)** | Complete catalog of all 259 MCP tools organised by category |
