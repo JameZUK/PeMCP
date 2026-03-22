@@ -299,7 +299,7 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 
 > **Note:** Qiling runs in an isolated venv (`/app/qiling-venv`) with unicorn 1.x, keeping the main environment's unicorn 2.x intact for angr. Linux rootfs is pre-populated at Docker build time. Windows PE emulation requires real DLL files copied from a Windows installation  - see [QILING_ROOTFS.md](QILING_ROOTFS.md) for setup instructions. Registry hive stubs are auto-generated at runtime.
 
-## Interactive Emulation Debugger (20 tools)
+## Interactive Emulation Debugger (29 tools)
 
 Interactive debugger built on Qiling, providing step-by-step emulation control with breakpoints, watchpoints, memory inspection, and snapshot-based state management. Unlike fire-and-forget emulation tools, debug sessions persist across MCP calls via a JSONL protocol over a persistent subprocess.
 

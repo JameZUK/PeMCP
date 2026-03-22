@@ -85,7 +85,7 @@ Arkana applies defence-in-depth input validation across all layers:
 Arkana has two layers of testing, with automated CI via **GitHub Actions**:
 
 - **Unit tests** (`tests/`)  - 1117 fast tests covering core modules (utils, cache, state, hashing, parsers, MCP helpers), plus parametrised edge-case tests and concurrency tests for session isolation. No server or binary samples required. Run in ~2 seconds.
-- **Integration tests** (`mcp_test_client.py`)  - End-to-end tests for all 256 MCP tools against a running server, organised into 19 test categories with pytest markers.
+- **Integration tests** (`mcp_test_client.py`)  - End-to-end tests for all 259 MCP tools against a running server, organised into 19 test categories with pytest markers.
 - **CI/CD** (`.github/workflows/ci.yml`)  - Automated unit tests on Python 3.10/3.11/3.12, coverage enforcement (65% floor with branch coverage), and syntax checking on every push, PR, and manual dispatch. Dependabot monitors pip dependencies weekly.
 
 ```bash

@@ -775,7 +775,7 @@ sideloading, campaign comparison, and shellcode extraction patterns.
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 256-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [tooling-reference.md](tooling-reference.md) — Complete 259-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to Arkana tool calls

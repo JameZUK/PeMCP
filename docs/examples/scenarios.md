@@ -213,7 +213,7 @@ The AI maps the full execution chain: *"BRc4 badger with 5 C2 domains (2 via Tyk
 
 | Capability | Arkana | Ghidra | IDA Pro | pestudio | CyberChef | Binary Refinery CLI |
 |---|---|---|---|---|---|---|
-| **PE/ELF/Mach-O parsing** | 256 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
+| **PE/ELF/Mach-O parsing** | 259 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
 | **Decompilation** | Angr (auto, all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No | No | No |
 | **Symbolic execution** | Angr (automated) | Limited (Ghidra scripts) | No | No | No | No |
 | **Data transforms** | 200+ via Binary Refinery | Manual scripting | Manual scripting | No | 300+ (manual) | 200+ (CLI) |
@@ -224,7 +224,7 @@ The AI maps the full execution chain: *"BRc4 badger with 5 C2 domains (2 via Tyk
 | **Session persistence** | Notes + history + cache | Project files | IDB files | No | No | No |
 | **Learning curve** | Natural language | Months | Months | Low | Moderate | Moderate |
 | **Cost** | Free & open source | Free | $1,800+/year | Free | Free | Free |
-| **Tool count** | 256 tools | Plugins | Plugins | 50+ | 300+ | 200+ |
+| **Tool count** | 259 tools | Plugins | Plugins | 50+ | 300+ | 200+ |
 
 ### How Arkana Complements (Not Replaces) Existing Tools
 
