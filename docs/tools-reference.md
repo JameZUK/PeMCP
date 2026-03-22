@@ -307,7 +307,7 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 
 | Tool | Description |
 |---|---|
-| `debug_start` | Start an interactive debug session on the loaded binary. Spawns a persistent Qiling subprocess, pauses at entry point. `stub_crt` (default True) installs ~45 CRT initialization stubs (GetSystemTimeAsFileTime, GetCurrentProcessId, critical sections, TLS/FLS, etc.). `stub_io` (default True) installs Win32 console API stubs to prevent crashes from printf/cout/cin. API tracing is enabled by default. Returns initial PC, registers, architecture, and stub/trace status. Max 3 concurrent sessions. |
+| `debug_start` | Start an interactive debug session on the loaded binary. Spawns a persistent Qiling subprocess, pauses at entry point. `stub_crt` (default True) installs ~47 CRT initialization stubs (GetSystemTimeAsFileTime, GetCurrentProcessId, GetProcessHeap, critical sections, TLS/FLS, etc.). `stub_io` (default True) installs Win32 console API stubs to prevent crashes from printf/cout/cin. API tracing is enabled by default. Returns initial PC, registers, architecture, and stub/trace status. Max 3 concurrent sessions. |
 | `debug_stop` | Stop and destroy a debug session. Kills the subprocess and frees resources. |
 | `debug_status` | Check if a debug session is alive and return its current state (PC, status, instructions executed, architecture). |
 
@@ -374,7 +374,7 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 | Tool | Description |
 |---|---|
 | `debug_stub_api` | Create a custom API stub at runtime. When the binary calls the specified Windows API, the stub intercepts it, sets the return value, optionally writes data to output pointer parameters, and returns cleanly. Useful for stubbing APIs not covered by builtin CRT/I/O stubs. Max 200 user stubs. |
-| `debug_list_stubs` | List all installed API stubs: builtin I/O stubs (8 console APIs), builtin CRT stubs (~45 MSVC init APIs), and user-defined stubs. |
+| `debug_list_stubs` | List all installed API stubs: builtin I/O stubs (8 console APIs), builtin CRT stubs (~47 MSVC init APIs), and user-defined stubs. |
 | `debug_remove_stub` | Remove a user-defined API stub. Builtin I/O and CRT stubs cannot be removed — restart the session with `stub_io=False` or `stub_crt=False` to disable them. |
 
 > **Note:** Debug sessions use the same isolated Qiling venv (`/app/qiling-venv`) as the fire-and-forget emulation tools. Sessions time out after 30 minutes of inactivity (`ARKANA_DEBUG_SESSION_TTL`). Each debug command has a 5-minute timeout (`ARKANA_DEBUG_COMMAND_TIMEOUT`). Emulation fidelity limitations apply  - complex anti-emulation, threading, and some Windows APIs may not work correctly.

@@ -522,9 +522,9 @@ lets you pause, inspect, modify, and resume at will.
 9. `debug_search_memory(pattern)` — find decrypted strings/data in memory
 10. `debug_stop()` — end the session
 
-**CRT stubs** (`stub_crt=True`, default): Hooks ~45 Windows APIs needed for MSVC
-CRT initialization (GetSystemTimeAsFileTime, GetCurrentProcessId, critical
-sections, TLS/FLS, EncodePointer, etc.) to prevent crashes before user code runs.
+**CRT stubs** (`stub_crt=True`, default): Hooks ~47 Windows APIs needed for MSVC
+CRT initialization (GetSystemTimeAsFileTime, GetCurrentProcessId, GetProcessHeap,
+critical sections, TLS/FLS, EncodePointer, etc.) to prevent crashes before user code runs.
 
 **I/O stubs** (`stub_io=True`, default): Hooks Win32 console APIs (GetStdHandle,
 WriteConsoleA/W, ReadConsoleA, etc.) so printf/cout/cin calls work without

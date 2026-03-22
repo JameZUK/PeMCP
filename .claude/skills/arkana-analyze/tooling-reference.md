@@ -173,7 +173,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `emulate_pe_with_windows_apis` | PE emulation with Windows API sim (Speakeasy) | — |
 | `emulate_shellcode_with_speakeasy` | Shellcode with Speakeasy | `shellcode`, `arch` |
 | `emulate_with_watchpoints` | Emulation with memory/register breakpoints (timeout 300s, partial results on timeout: captured events) | `address`, `watchpoints` |
-| `debug_start` | Start interactive debug session — persistent Qiling subprocess, pauses at entry. `stub_crt` (default True) installs ~45 CRT stubs, `stub_io` (default True) installs console stubs | `rootfs_path`, `stub_crt`, `stub_io` |
+| `debug_start` | Start interactive debug session — persistent Qiling subprocess, pauses at entry. `stub_crt` (default True) installs ~47 CRT stubs, `stub_io` (default True) installs console stubs | `rootfs_path`, `stub_crt`, `stub_io` |
 | `debug_stop` | Stop and destroy a debug session | `session_id` |
 | `debug_status` | Check session liveness and current state | `session_id` |
 | `debug_step` | Step N instructions (default 1) | `count`, `session_id` |
@@ -200,7 +200,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `debug_set_trace_filter` | Configure API trace whitelist or enable/disable tracing | `apis` (comma-sep), `enabled`, `session_id` |
 | `debug_search_memory` | Search all mapped memory for string (UTF-8+UTF-16LE) or hex patterns with ?? wildcards | `pattern`, `pattern_type`, `max_matches`, `context_bytes`, `region_filter`, `session_id` |
 | `debug_stub_api` | Create custom API stub at runtime (set return value, write to output pointers) | `api_name`, `return_value`, `num_params`, `writes` (JSON), `session_id` |
-| `debug_list_stubs` | List all installed stubs: builtin I/O (8), builtin CRT (~45), user-defined | `session_id` |
+| `debug_list_stubs` | List all installed stubs: builtin I/O (8), builtin CRT (~47), user-defined | `session_id` |
 | `debug_remove_stub` | Remove a user-defined API stub (builtin stubs cannot be removed) | `api_name`, `session_id` |
 | `find_path_to_address` | Symbolic execution to find reaching inputs (timeout 600s, partial results on timeout: steps/active states) | `target_address` |
 | `find_path_with_custom_input` | Path finding with custom constraints (timeout 600s, partial results on timeout: steps/active states) | `target`, `constraints` |

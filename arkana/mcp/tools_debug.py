@@ -295,9 +295,9 @@ async def debug_start(
     Creates a persistent emulation environment using Qiling Framework.
     The binary is loaded and paused at entry point, ready for stepping.
 
-    CRT stubs (enabled by default) hook ~45 Windows APIs needed for MSVC CRT
-    initialization (GetSystemTimeAsFileTime, GetCurrentProcessId, critical
-    sections, TLS/FLS, etc.) to prevent crashes before user code runs.
+    CRT stubs (enabled by default) hook ~47 Windows APIs needed for MSVC CRT
+    initialization (GetSystemTimeAsFileTime, GetCurrentProcessId, GetProcessHeap,
+    critical sections, TLS/FLS, etc.) to prevent crashes before user code runs.
 
     I/O stubs (enabled by default) hook Windows console APIs (WriteConsoleA,
     ReadConsoleA, GetStdHandle, etc.) to prevent crashes from printf/cout/cin
@@ -1175,7 +1175,7 @@ async def debug_stub_api(
     sets the return value, optionally writes data to output pointer parameters,
     and returns cleanly. Useful for stubbing APIs that Qiling doesn't handle.
 
-    CRT stubs (~45 APIs) are installed by default. Use this for additional APIs
+    CRT stubs (~47 APIs) are installed by default. Use this for additional APIs
     that crash during emulation (e.g. custom DLL imports, rare Win32 APIs).
 
     Args:
