@@ -123,6 +123,7 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 | [StealC Info Stealer](docs/examples/example-report-stealc.md) | Credential stealer | 32 capa rules, browser/Steam targeting, crypto toolkit |
 | [ValleyRAT Multi-Stage Loader](docs/examples/example-report-valleyrat.md) | Chinese APT RAT | 5-stage unpacking, custom ARX cipher reversal, C2 config extraction |
 | [Brute Ratel C4 Badger](docs/examples/example-report-bruteratel.md) | Commercial C2 implant | PIC shellcode tracing, RC4 unpacking, C2 config extraction, 17 ATT&CK techniques |
+| [CrackMeZ3S CTF Challenge](docs/examples/example-report-crackme-z3s.md) | PELock 6-key crackme | Interactive debugger with IAT patching, code-cave shellcode injection, encrypted blob decryption, manual XOR cipher reversal, MD5 hash cracking |
 
 ---
 

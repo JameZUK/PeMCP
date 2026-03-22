@@ -562,6 +562,46 @@ to limit what gets traced.
 **Limits**: Max 3 concurrent sessions, 1800s TTL, 10M instruction cap, 1MB max
 memory read, 100 breakpoints, 50 watchpoints, 10 snapshots.
 
+**Known limitations and workarounds**:
+
+1. **Register writes do not redirect execution**: Unicorn's `emu_start()` uses
+   its own start address parameter and does not honour EIP/RIP changes made via
+   `debug_write_register`. Writing EIP to a new address and calling
+   `debug_continue` will NOT redirect execution to that address.
+   **Workaround — code patching**: Instead of changing EIP, use
+   `debug_write_memory` to patch a `JMP` instruction at the current execution
+   point to redirect to the desired address. Calculate the relative offset
+   (`target - (patch_addr + 5)`) and write `E9 xx xx xx xx` (x86 near jump).
+   To halt execution at a target, patch `EB FE` (jump-to-self infinite loop)
+   and use `max_instructions` to stop after the loop completes, then read
+   memory for results.
+
+2. **Unresolved imports crash emulation**: Qiling may fail to resolve imports
+   from certain DLLs (commonly MSVCRT CRT functions like `_initterm_e`,
+   `_initterm`, `__getmainargs`, `__set_app_type`), leaving IAT entries
+   pointing to invalid addresses in the 0x5xxx range.
+   **Workaround — IAT patching**: Write a `xor eax, eax; ret` stub
+   (`31 C0 C3`) to a code cave (e.g., zero-filled area at end of `.text`
+   section), then patch all unresolved IAT entries to point to the stub
+   address using `debug_write_memory`. Check the IAT region for entries with
+   suspiciously low addresses (< 0x10000) — these are likely unresolved.
+
+3. **Threading not supported**: `CreateThread`, `WaitForMultipleObjects`, and
+   other synchronisation APIs must be stubbed. Thread functions will not
+   execute. To analyse thread functions, redirect the main execution flow
+   into them via code patching (see workaround 1).
+
+4. **Breakpoints may not fire after code patches**: When combining code
+   patching with breakpoints, breakpoints set at the *original* target
+   address may not trigger. Use the infinite-loop-trap technique instead:
+   patch `EB FE` at the desired stop point, run with sufficient
+   `max_instructions`, and read memory after the emulator stops.
+
+5. **CRT stubs cover ~47 APIs but not all MSVCRT functions**: The builtin CRT
+   stubs handle common initialisation APIs. If emulation crashes during CRT
+   init, check `debug_get_api_trace` and the crash PC to identify the missing
+   API, then use `debug_stub_api` or IAT patching to add coverage.
+
 ### Tier 4: Frida Script Generation (for live dynamic analysis on a real system)
 - `generate_frida_trace_script(categories)` — auto-generates a Frida tracing script
   from the binary's imports. Filters by category (networking, crypto, process_injection,
@@ -601,6 +641,9 @@ without needing a real execution environment.
 | Finding decrypted data after stepping past crypto | Tier 3b (debug_search_memory) |
 | Fire-and-forget emulation crashed, need finer control | Tier 3b (debug_start with breakpoints) |
 | Monitoring specific API calls with live argument inspection | Tier 3b (debug_get_api_trace with filter) |
+| Binary with unresolved MSVCRT imports crashing at CRT init | Tier 3b (IAT patching + code-cave stubs) |
+| Extracting encrypted data from a function you can't call directly | Tier 3b (code patching: JMP to target + EB FE trap + memory read) |
+| Multi-threaded binary where threads don't execute under emulation | Tier 3b (stub CreateThread + code-patch main flow into thread funcs) |
 
 ## Phase 5: Extract
 
