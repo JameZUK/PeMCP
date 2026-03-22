@@ -48,8 +48,8 @@ Arkana eliminates this by putting **259 specialised analysis tools behind a sing
 ## Key Features
 
 - **Multi-format support** -- PE, ELF, Mach-O, .NET, Go, Rust, and raw shellcode with auto-detection and pre-parse integrity checks (truncation, corruption, null-padding detection). Unknown formats (ZIP, PDF, PCAP) fall back to raw mode with clear guidance instead of crashing. LIEF serves as a fallback parser when pefile cannot handle malformed PEs.
-- **Angr-powered analysis** -- 41 tools for decompilation, batch decompilation, CFG, symbolic execution, data-flow, slicing, and emulation
-- **Comprehensive static analysis** -- 24 PE structure tools, YARA/capa/PEiD/FLOSS signatures, crypto detection, hex pattern search, IOC export
+- **Angr-powered analysis** -- 46 tools for decompilation, batch decompilation, CFG, symbolic execution, data-flow, slicing, and emulation
+- **Comprehensive static analysis** -- 27 PE structure tools, YARA/capa/PEiD/FLOSS signatures, crypto detection, hex pattern search, IOC export
 - **Binary Refinery integration** -- 23 context-efficient tools wrapping 200+ composable data transforms (encoding, crypto, compression, forensics)
 - **Cross-platform emulation** -- Speakeasy (Windows APIs) and Qiling (Windows/Linux/macOS, x86/x64/ARM/MIPS)
 - **Interactive debugger** -- 29 tools for step-through emulation with breakpoints, watchpoints, memory inspection, snapshots, API call tracing, I/O capture, custom API stubs, and memory search -- up to 3 concurrent debug sessions
@@ -70,6 +70,7 @@ Arkana eliminates this by putting **259 specialised analysis tools behind a sing
 | **Function similarity** | BSim-style cross-binary | BSim (Java) | BinDiff/Lumina | No |
 | **Data transforms** | 200+ via Refinery | Manual scripting | Manual scripting | 300+ (manual) |
 | **Emulation** | Speakeasy + Qiling | Limited | No | No |
+| **Interactive debugging** | 29-tool step debugger | Manual | Manual | No |
 | **Learning curve** | Natural language | Months | Months | Moderate |
 | **Cost** | Free & open source | Free | $1,800+/yr | Free |
 
@@ -91,7 +92,7 @@ Arkana includes a real-time web dashboard that launches automatically on port 80
 - **Types** -- Custom struct/enum type editor for binary data parsing
 - **Diff** -- Binary diff via angr BinDiff with file browser and manual path input
 - **Timeline** -- Chronological log of every tool call and note, with expandable detail panels showing request parameters and result summaries
-- **Notes** -- Category-filtered view of all analysis notes (general, function, tool_result, IOC, hypothesis, manual) with clickable address links
+- **Notes** -- Category-filtered view of all analysis notes (general, function, tool_result, IOC, hypothesis, conclusion, manual) with clickable address links
 - **Global status bar** -- Active tool and background task progress visible from every page
 - **Real-time updates** -- SSE-driven live refresh as the AI runs tools
 
