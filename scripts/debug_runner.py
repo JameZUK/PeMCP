@@ -37,21 +37,9 @@ from qiling_runner import (
 from qiling import Qiling
 from qiling.const import QL_VERBOSE
 
-try:
-    from qiling.const import QL_INTERCEPT
-except ImportError:
-    class QL_INTERCEPT:
-        CALL = 0
-        EXIT = 1
-        ENTER = 2
-
-# --- Windows API decorator imports (for I/O stubs) ---
-try:
-    from qiling.os.windows.fncc import winsdkapi, STDCALL
-    from qiling.os.windows.api import DWORD, HANDLE, LPDWORD, LPVOID, BOOL
-    _WINSDKAPI_AVAILABLE = True
-except ImportError:
-    _WINSDKAPI_AVAILABLE = False
+# Note: QL_INTERCEPT and set_api() are intentionally NOT used.
+# We use hook_address() per IAT entry to avoid Qiling's forwarded-API
+# double-hook issue on x86 STDCALL.
 
 # --- Capstone imports (bundled with Qiling) ---
 try:
@@ -116,6 +104,12 @@ _tls_counter = 0                     # For TlsAlloc stub
 _stub_alloc_base = None              # Pre-mapped page for string-returning stubs
 _stub_alloc_offset = 0               # Current offset within alloc page
 _crt_stub_names = set()              # Names of installed CRT stubs
+
+# hook_address() refactor state
+_api_address_map = {}                # api_name → [sym_addr, ...] built once at init
+_stub_hooks = {}                     # api_name → [hook_handle, ...] for all stub types
+_trace_hooks = []                    # [hook_handle, ...] for trace hooks
+_io_stub_names = set()               # Track I/O stub names for trace dedup
 
 # Limits (matching constants.py)
 _MAX_CAPTURED_OUTPUT = 10_000
@@ -447,39 +441,62 @@ def _stub_set_retval(retval):
         _ql.arch.regs.eax = retval & 0xFFFFFFFF
 
 
-def _patch_simprocedure(api_name, num_params):
-    """Patch a simprocedure address with `ret N` to enable clean CALL-hook returns.
-
-    For x86 STDCALL: patches with `ret N` where N = num_params * 4.
-    For x64 fastcall: patches with `ret` (caller cleanup).
-
-    Returns True if the symbol was found and patched, False otherwise.
-    """
-    if _ql is None:
-        return False
-    if not hasattr(_ql, 'loader') or not hasattr(_ql.loader, 'import_symbols'):
-        return False
-
-    for _sym_addr, entry in _ql.loader.import_symbols.items():
+def _build_api_address_map():
+    """Build api_name → [import_symbol_addresses] map for hook_address targeting."""
+    global _api_address_map
+    _api_address_map = {}
+    if _ql is None or not hasattr(_ql, 'loader') or not hasattr(_ql.loader, 'import_symbols'):
+        return
+    for addr, entry in _ql.loader.import_symbols.items():
         name = entry.get('name')
         if not name:
             continue
-        sym_name = name.decode() if isinstance(name, bytes) else str(name)
-        if sym_name == api_name:
+        api_name = name.decode() if isinstance(name, bytes) else str(name)
+        _api_address_map.setdefault(api_name, []).append(addr)
+
+
+def _wrap_for_hook_address(hook_fn, api_name):
+    """Adapt a (ql, address, api_name) stub for hook_address's (ql) signature."""
+    def wrapper(ql):
+        hook_fn(ql, _get_pc(), api_name)
+    return wrapper
+
+
+def _hook_api_by_address(api_name, hook_fn, num_params=0, patch=True):
+    """Patch+hook an API at its import symbol addresses via hook_address().
+
+    Unlike set_api() which hooks ALL Qiling-internal addresses (including forwarded),
+    this only hooks IAT addresses from import_symbols — the ones we patch with ret N.
+
+    Args:
+        api_name: Windows API name
+        hook_fn: Callback with signature (ql) for hook_address
+        num_params: STDCALL param count for x86 ret N patching
+        patch: If True, write ret N before hooking (False for breakpoints)
+
+    Returns: (hook_handles: list, patched: bool)
+    """
+    hooks = []
+    patched = False
+    for sym_addr in _api_address_map.get(api_name, []):
+        if patch:
             try:
                 if _arch == "x8664":
-                    _ql.mem.write(_sym_addr, b'\xc3')
+                    _ql.mem.write(sym_addr, b'\xc3')
                 else:
                     n_bytes = num_params * 4
-                    if n_bytes == 0:
-                        _ql.mem.write(_sym_addr, b'\xc3')
-                    else:
-                        _ql.mem.write(_sym_addr,
-                                      b'\xc2' + struct.pack('<H', n_bytes))
-                return True
+                    _ql.mem.write(sym_addr,
+                                  b'\xc3' if n_bytes == 0
+                                  else b'\xc2' + struct.pack('<H', n_bytes))
+                patched = True
             except Exception:
-                return False
-    return False
+                continue
+        try:
+            h = _ql.hook_address(hook_fn, sym_addr)
+            hooks.append(h)
+        except Exception:
+            pass
+    return hooks, patched
 
 
 def _alloc_stub_data(data_bytes):
@@ -633,10 +650,12 @@ def _install_crt_stubs():
     for spec in _CRT_SIMPLE_STUBS:
         name = spec["name"]
         stub = _make_generic_stub(name, spec["return_value"])
+        wrapped = _wrap_for_hook_address(stub, name)
         try:
-            _ql.os.set_api(name, stub, QL_INTERCEPT.CALL)
-            _patch_simprocedure(name, spec["params"])
-            _crt_stub_names.add(name)
+            hooks, _ = _hook_api_by_address(name, wrapped, spec["params"])
+            if hooks:
+                _stub_hooks[name] = hooks
+                _crt_stub_names.add(name)
         except Exception:
             pass
 
@@ -644,10 +663,12 @@ def _install_crt_stubs():
     for spec in _CRT_WRITE_STUBS:
         name = spec["name"]
         stub = _make_generic_stub(name, spec["return_value"], spec["writes"])
+        wrapped = _wrap_for_hook_address(stub, name)
         try:
-            _ql.os.set_api(name, stub, QL_INTERCEPT.CALL)
-            _patch_simprocedure(name, spec["params"])
-            _crt_stub_names.add(name)
+            hooks, _ = _hook_api_by_address(name, wrapped, spec["params"])
+            if hooks:
+                _stub_hooks[name] = hooks
+                _crt_stub_names.add(name)
         except Exception:
             pass
 
@@ -734,10 +755,12 @@ def _install_crt_stubs():
     }
 
     for name, (nparams, stub_fn) in custom_stubs.items():
+        wrapped = _wrap_for_hook_address(stub_fn, name)
         try:
-            _ql.os.set_api(name, stub_fn, QL_INTERCEPT.CALL)
-            _patch_simprocedure(name, nparams)
-            _crt_stub_names.add(name)
+            hooks, _ = _hook_api_by_address(name, wrapped, nparams)
+            if hooks:
+                _stub_hooks[name] = hooks
+                _crt_stub_names.add(name)
         except Exception:
             pass
 
@@ -881,15 +904,17 @@ def _install_io_stubs():
         "FreeConsole": (0, _stub_FreeConsole),
     }
 
-    try:
-        # Register CALL hooks and patch simprocedures
-        for api_name, (_np, stub_fn) in stub_map.items():
-            _ql.os.set_api(api_name, stub_fn, QL_INTERCEPT.CALL)
-            _patch_simprocedure(api_name, _np)
+    for api_name, (_np, stub_fn) in stub_map.items():
+        wrapped = _wrap_for_hook_address(stub_fn, api_name)
+        try:
+            hooks, _ = _hook_api_by_address(api_name, wrapped, _np)
+            if hooks:
+                _stub_hooks[api_name] = hooks
+                _io_stub_names.add(api_name)
+        except Exception:
+            pass
 
-        _stub_io = True
-    except Exception:
-        _stub_io = False
+    _stub_io = len(_io_stub_names) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -929,69 +954,48 @@ def _add_trace_entry(api_name, address=None, params=None, retval=None):
     })
 
 
-def _install_api_trace():
-    """Install per-API ENTER hooks to trace all Windows API calls.
+def _make_trace_address_hook(api_name):
+    """Create a hook_address callback that traces an API call with raw params."""
+    def _trace(ql):
+        params = {}
+        for i in range(4):
+            try:
+                params[f"p{i}"] = _hex(_stub_read_param(i))
+            except Exception:
+                break
+        _add_trace_entry(api_name, _get_pc(), params)
+    return _trace
 
-    Qiling 1.4.6 does not support wildcard "*" matching in set_api().
-    The @winsdkapi decorator dispatches ENTER/EXIT by exact API name only.
-    We install ENTER hooks for every imported API found in loader.import_symbols.
+
+def _install_api_trace():
+    """Install per-API hook_address hooks to trace all Windows API calls.
+
+    Only hooks APIs that are NOT already stubbed (CRT, I/O, or user stubs),
+    since those stubs already record trace entries via _add_trace_entry().
     """
-    global _api_trace_enabled
+    global _api_trace_enabled, _trace_hooks
 
     if _ql is None:
         return
 
-    def _make_enter_hook(api_name):
-        """Create an ENTER hook closure for a specific API."""
-        def _trace_enter(ql, address, params):
-            _add_trace_entry(api_name, address, params)
-        return _trace_enter
+    _trace_hooks = []
 
-    def _make_exit_hook(api_name):
-        """Create an EXIT hook closure for a specific API."""
-        def _trace_exit(ql, address, params):
-            if not _api_trace_enabled:
-                return
-            if _api_trace_filter is not None and api_name not in _api_trace_filter:
-                return
-            # Read return value from register
-            retval = None
-            try:
-                if hasattr(ql.arch.regs, 'rax'):
-                    retval = ql.arch.regs.rax
-                elif hasattr(ql.arch.regs, 'eax'):
-                    retval = ql.arch.regs.eax
-            except Exception:
-                pass
-            # Patch retval onto the most recent entry for this API
-            for entry in reversed(_api_trace):
-                if entry["api"] == api_name and entry["retval"] is None:
-                    try:
-                        entry["retval"] = _hex(retval) if isinstance(retval, int) else None
-                    except Exception:
-                        entry["retval"] = "?"
-                    break
-        return _trace_exit
+    # Skip APIs already covered by stubs (they record their own trace entries)
+    stubbed = _crt_stub_names | _io_stub_names | set(_user_stubs.keys())
 
-    # Collect all imported API names from the PE loader
     hooked_count = 0
     try:
-        if hasattr(_ql, 'loader') and hasattr(_ql.loader, 'import_symbols'):
-            seen_names = set()
-            for _addr, entry in _ql.loader.import_symbols.items():
-                name = entry.get('name')
-                if not name:
-                    continue
-                api_name = name.decode() if isinstance(name, bytes) else str(name)
-                if api_name in seen_names:
-                    continue
-                seen_names.add(api_name)
+        for api_name, addrs in _api_address_map.items():
+            if api_name in stubbed:
+                continue
+            hook_fn = _make_trace_address_hook(api_name)
+            for addr in addrs:
                 try:
-                    _ql.os.set_api(api_name, _make_enter_hook(api_name), QL_INTERCEPT.ENTER)
-                    _ql.os.set_api(api_name, _make_exit_hook(api_name), QL_INTERCEPT.EXIT)
+                    h = _ql.hook_address(hook_fn, addr)
+                    _trace_hooks.append(h)
                     hooked_count += 1
                 except Exception:
-                    pass  # Skip APIs that can't be hooked
+                    pass
     except Exception:
         _api_trace_enabled = False
 
@@ -1145,6 +1149,7 @@ def cmd_init(cmd):
     global _api_trace, _api_trace_seq, _api_trace_filter, _api_trace_enabled
     global _stub_crt, _user_stubs, _fls_counter, _tls_counter
     global _stub_alloc_base, _stub_alloc_offset, _crt_stub_names
+    global _api_address_map, _stub_hooks, _trace_hooks, _io_stub_names
 
     filepath = cmd["filepath"]
     rootfs_path = cmd.get("rootfs_path")
@@ -1193,8 +1198,17 @@ def cmd_init(cmd):
     _stub_alloc_offset = 0
     _crt_stub_names = set()
 
+    # Reset hook_address refactor state
+    _api_address_map = {}
+    _stub_hooks = {}
+    _trace_hooks = []
+    _io_stub_names = set()
+
     # Initialize capstone disassembler
     _init_capstone(arch)
+
+    # Build API address map from import symbols (must be before stub installation)
+    _build_api_address_map()
 
     # Install global instruction counter
     _ql.hook_code(_instruction_counter_hook)
@@ -1489,11 +1503,12 @@ def cmd_set_breakpoint(cmd):
     elif api_name:
         bp_entry["api_name"] = api_name
         callback = _make_api_bp_callback(bp_id, api_name, conditions)
-        try:
-            _ql.os.set_api(api_name, callback, QL_INTERCEPT.CALL)
-            bp_entry["hook_handle"] = api_name  # For removal
-        except Exception as e:
-            return {"error": f"Failed to set API breakpoint for '{api_name}': {e}"}
+        def _bp_wrapper(ql, _cb=callback, _name=api_name):
+            _cb(ql, _get_pc(), {})
+        hooks, _ = _hook_api_by_address(api_name, _bp_wrapper, patch=False)
+        if not hooks:
+            return {"error": f"API '{api_name}' not found in imports"}
+        bp_entry["hook_handles"] = hooks
 
     _breakpoints[bp_id] = bp_entry
     return {
@@ -1516,16 +1531,20 @@ def cmd_remove_breakpoint(cmd):
         return {"error": f"Breakpoint {bp_id} not found"}
 
     bp = _breakpoints.pop(bp_id)
-    hook = bp.get("hook_handle")
-    if hook is not None:
-        try:
-            if bp.get("api_name"):
-                # API hooks can't be easily removed in Qiling — best effort
+    if bp.get("api_name"):
+        # API breakpoints have hook_address handles — clean removal
+        for h in bp.get("hook_handles", []):
+            try:
+                _ql.hook_del(h)
+            except Exception:
                 pass
-            else:
+    else:
+        hook = bp.get("hook_handle")
+        if hook is not None:
+            try:
                 _ql.hook_del(hook)
-        except Exception:
-            pass
+            except Exception:
+                pass
 
     return {"status": "ok", "breakpoint_id": bp_id, "total_breakpoints": len(_breakpoints)}
 
@@ -2306,12 +2325,9 @@ def cmd_stub_api(cmd):
 
     # Create and register the stub
     stub_fn = _make_generic_stub(api_name, return_value, writes if writes else None)
-    try:
-        _ql.os.set_api(api_name, stub_fn, QL_INTERCEPT.CALL)
-    except Exception as e:
-        return {"error": f"Failed to register API hook: {e}"}
-
-    patched = _patch_simprocedure(api_name, num_params)
+    wrapped = _wrap_for_hook_address(stub_fn, api_name)
+    hooks, patched = _hook_api_by_address(api_name, wrapped, num_params)
+    _stub_hooks[api_name] = hooks
 
     _user_stubs[api_name] = {
         "return_value": return_value,
@@ -2393,11 +2409,13 @@ def cmd_remove_stub(cmd):
     if api_name not in _user_stubs:
         return {"error": f"No user-defined stub for '{api_name}'"}
 
-    # Clear the hook
-    try:
-        _ql.os.set_api(api_name, None, QL_INTERCEPT.CALL)
-    except Exception:
-        pass  # Best effort
+    # Remove hook_address handles
+    for h in _stub_hooks.get(api_name, []):
+        try:
+            _ql.hook_del(h)
+        except Exception:
+            pass
+    _stub_hooks.pop(api_name, None)
 
     del _user_stubs[api_name]
     return {
