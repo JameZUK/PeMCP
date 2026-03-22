@@ -437,7 +437,6 @@ async def decompile_function_with_angr(
             state._decompile_on_demand_count -= 1
             raise
         try:
-            state._decompile_on_demand_count -= 1
             project, cfg = state.get_angr_snapshot()
             used_local_cfg = False
 
@@ -523,6 +522,7 @@ async def decompile_function_with_angr(
             except Exception as e:
                 return {"error": f"Decompilation failed: {e}"}
         finally:
+            state._decompile_on_demand_count -= 1
             state._decompile_lock.release()
 
     try:
@@ -2047,7 +2047,6 @@ async def batch_decompile(
                 state._decompile_on_demand_count -= 1
                 return {"error": "Decompilation lock busy — background analysis in progress. Retry shortly."}
             try:
-                state._decompile_on_demand_count -= 1
                 try:
                     func, addr_used = _resolve_function_address(t_addr)
                 except (KeyError, RuntimeError) as e:
@@ -2069,6 +2068,7 @@ async def batch_decompile(
                 except Exception as e:
                     return {"error": f"Decompilation failed for {hex(t_addr)}: {e}"}
             finally:
+                state._decompile_on_demand_count -= 1
                 state._decompile_lock.release()
 
         try:

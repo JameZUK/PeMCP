@@ -33,7 +33,7 @@ def _make_features(
     edge_count=6,
     cyclomatic=3,
     loop_count=1,
-    nesting_depth=1,
+    nesting_depth_approx=1,
     api_names=None,
     api_categories=None,
     vex_histogram=None,
@@ -51,7 +51,7 @@ def _make_features(
             "edge_count": edge_count,
             "cyclomatic_complexity": cyclomatic,
             "loop_count": loop_count,
-            "nesting_depth": nesting_depth,
+            "nesting_depth_approx": nesting_depth_approx,
         },
         "api_calls": {
             "names": api_names or [],

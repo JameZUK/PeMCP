@@ -156,6 +156,16 @@ class _DebugSession:
                 self.proc.kill()
             except Exception:
                 pass
+            # Reap the child process to prevent zombies
+            try:
+                if self.proc.pid is not None:
+                    import os
+                    os.waitpid(self.proc.pid, os.WNOHANG)
+            except (ChildProcessError, OSError):
+                pass
+        # Cancel stderr drain task if running
+        if self._stderr_task and not self._stderr_task.done():
+            self._stderr_task.cancel()
 
 
 # ---------------------------------------------------------------------------

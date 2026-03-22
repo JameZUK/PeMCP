@@ -41,6 +41,9 @@ else:
     VivWorkspace = None  # type: ignore
 
 
+# Maximum number of dynamic (stack/tight/decoded) strings to collect per type
+_MAX_DYNAMIC_STRINGS = 50_000
+
 # --- FLOSS Analysis Helper Functions ---
 def _setup_floss_logging(script_verbose_level: int, floss_internal_verbose_level: int):
     """
@@ -476,7 +479,6 @@ def _parse_floss_analysis(
                     verbosity=floss_verbose_level,
                     disable_progress=quiet_mode_for_floss_progress
                 )
-                _MAX_DYNAMIC_STRINGS = 50_000
                 stack_list = []
                 for s_obj in stack_strings_gen:
                     if len(stack_list) >= _MAX_DYNAMIC_STRINGS:
@@ -605,13 +607,18 @@ def _parse_floss_analysis(
                     contextual_item["source_type"] = source_type.replace("_strings", "")
                     all_found_strings.append(contextual_item)
 
+        _MAX_REGEX_MATCHES = 500
         matched_strings = []
         for string_item in all_found_strings:
             string_to_search = string_item["string"]
             if pattern.search(string_to_search):
                 matched_strings.append(string_item)
+                if len(matched_strings) >= _MAX_REGEX_MATCHES:
+                    break
 
         floss_results_dict["regex_matches"] = matched_strings
+        if len(matched_strings) >= _MAX_REGEX_MATCHES:
+            floss_results_dict["regex_matches_truncated"] = True
         if log_progress:
             logger.info("Found %d strings matching the regex pattern.", len(matched_strings))
 

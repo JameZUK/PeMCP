@@ -64,6 +64,7 @@ class MockProcess:
         self.stderr = MagicMock()
         self.returncode = None
         self._killed = False
+        self.pid = 99999
 
     def kill(self):
         self._killed = True

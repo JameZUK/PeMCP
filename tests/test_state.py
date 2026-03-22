@@ -17,6 +17,8 @@ from arkana.state import (
     SESSION_TTL_SECONDS,
     _default_state,
     _current_state_var,
+    _session_registry,
+    _registry_lock,
 )
 
 
@@ -258,6 +260,19 @@ class TestAngrState:
 # ---------------------------------------------------------------------------
 
 class TestSessionManagement:
+    def setup_method(self):
+        """Snapshot session registry before each test."""
+        with _registry_lock:
+            self._original_keys = set(_session_registry.keys())
+
+    def teardown_method(self):
+        """Remove sessions created during the test and reset contextvar."""
+        set_current_state(None)
+        with _registry_lock:
+            new_keys = set(_session_registry.keys()) - self._original_keys
+            for key in new_keys:
+                _session_registry.pop(key, None)
+
     def test_default_session_returns_default_state(self):
         result = get_or_create_session_state("default")
         assert result is _default_state
@@ -408,6 +423,9 @@ class TestArtifacts:
 
 
 class TestStateProxy:
+    def teardown_method(self):
+        set_current_state(None)
+
     def test_proxy_delegates_to_current_state(self):
         proxy = StateProxy()
         # By default, delegates to _default_state
@@ -415,8 +433,6 @@ class TestStateProxy:
         s.filepath = "/test/path"
         set_current_state(s)
         assert proxy.filepath == "/test/path"
-        # Clean up
-        set_current_state(None)
 
     def test_proxy_setattr(self):
         proxy = StateProxy()
@@ -424,10 +440,40 @@ class TestStateProxy:
         set_current_state(s)
         proxy.filepath = "/new/path"
         assert s.filepath == "/new/path"
-        # Clean up
-        set_current_state(None)
 
     def test_proxy_repr(self):
         proxy = StateProxy()
         r = repr(proxy)
         assert "StateProxy" in r
+
+    def test_proxy_fallback_to_default_state(self):
+        """When no state is set in contextvar, proxy falls back to _default_state."""
+        proxy = StateProxy()
+        set_current_state(None)
+        # Should not raise — falls back to _default_state
+        assert proxy.filepath is None or proxy.filepath == _default_state.filepath
+
+    def test_proxy_method_delegation(self):
+        """Proxy delegates method calls to the underlying state."""
+        proxy = StateProxy()
+        s = AnalyzerState()
+        set_current_state(s)
+        # Test add_note via proxy
+        proxy.add_note("test note", category="general")
+        notes = proxy.get_notes()
+        assert len(notes) == 1
+        assert notes[0]["content"] == "test note"
+
+    def test_proxy_different_states_per_contextvar(self):
+        """Different contextvar values give different states via proxy."""
+        proxy = StateProxy()
+        s1 = AnalyzerState()
+        s1.filepath = "/file1"
+        s2 = AnalyzerState()
+        s2.filepath = "/file2"
+
+        set_current_state(s1)
+        assert proxy.filepath == "/file1"
+
+        set_current_state(s2)
+        assert proxy.filepath == "/file2"

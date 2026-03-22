@@ -118,6 +118,8 @@ async def elf_analyze(
                 # Program headers (segments)
                 segments = []
                 for seg in elf.iter_segments():
+                    if len(segments) >= limit:
+                        break
                     segments.append({
                         "type": seg['p_type'],
                         "offset": hex(seg['p_offset']),
@@ -215,7 +217,7 @@ async def elf_dwarf_info(
                                 if len(functions) >= limit:
                                     break
 
-                    if len(comp_units) >= limit:
+                    if len(comp_units) >= limit or len(functions) >= limit:
                         break
 
                 result["compilation_units"] = comp_units

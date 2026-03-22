@@ -277,7 +277,6 @@ async def get_iocs_structured(
     if fmt == "json" and include_file_hashes and state._cached_iocs and not output_path:
         return state._cached_iocs
 
-    fmt = format.lower()
     if fmt not in ("json", "csv", "stix"):
         return {"error": f"Unsupported format '{format}'. Use 'json', 'csv', or 'stix'."}
 

@@ -693,6 +693,7 @@ def _try_rda_flow(project, func_obj, sources, sinks, timeout):
 
     result_holder = [None]
     error_holder = [None]
+    cancel_event = threading.Event()
 
     def _run_rda():
         try:
@@ -702,17 +703,20 @@ def _try_rda_flow(project, func_obj, sources, sinks, timeout):
             )
             # Check if any source definitions reach sink usage points
             # by examining the dependency graph
-            if hasattr(rd, 'dep_graph') and rd.dep_graph is not None:
+            if not cancel_event.is_set() and hasattr(rd, 'dep_graph') and rd.dep_graph is not None:
                 result_holder[0] = rd
         except Exception as exc:
-            error_holder[0] = exc
+            if not cancel_event.is_set():
+                error_holder[0] = exc
 
     t = threading.Thread(target=_run_rda, daemon=True)
     t.start()
     t.join(timeout=timeout)
 
     if t.is_alive():
-        logger.debug("RDA thread timed out after %ds for %s; thread will finish in background.",
+        # Signal the thread to discard its result and release references
+        cancel_event.set()
+        logger.debug("RDA thread timed out after %ds for %s; thread signalled to discard result.",
                       timeout, getattr(func_obj, 'name', '?'))
         return None  # timed out
 

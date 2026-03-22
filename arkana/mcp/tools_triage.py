@@ -1974,7 +1974,19 @@ async def get_triage_report(
         import copy
         triage_report = copy.deepcopy(state._cached_triage)
         triage_report["workflow_hints"] = _TRIAGE_WORKFLOW_HINTS
-        # Re-apply pagination parameters to the cached result
+        # Re-apply pagination parameters to all paginated fields in the cached result
+        _top_level_paginated = (
+            "suspicious_imports", "suspicious_capabilities", "section_anomalies",
+            "resource_anomalies", "yara_matches", "header_anomalies",
+            "high_value_strings", "suggested_next_tools",
+        )
+        for field_key in _top_level_paginated:
+            items = triage_report.get(field_key, [])
+            if isinstance(items, list):
+                page, pag_meta = _paginate_field(items, indicator_offset, indicator_limit)
+                triage_report[field_key] = page
+                triage_report[f"{field_key}_pagination"] = pag_meta
+        # Re-paginate network_iocs sub-fields
         net_iocs = triage_report.get("network_iocs", {})
         for field_key in ("ip_addresses", "urls", "domains", "registry_paths"):
             items = net_iocs.get(field_key, [])
@@ -1982,6 +1994,15 @@ async def get_triage_report(
                 page, pag_meta = _paginate_field(items, indicator_offset, indicator_limit)
                 net_iocs[field_key] = page
                 net_iocs[f"{field_key}_pagination"] = pag_meta
+        # Re-paginate nested dict fields (export_anomalies, delay_load_evasion)
+        for nested_key in ("export_anomalies", "delay_load_evasion"):
+            nested = triage_report.get(nested_key, {})
+            if isinstance(nested, dict):
+                for sub_key, sub_val in list(nested.items()):
+                    if isinstance(sub_val, list) and not sub_key.endswith("_pagination"):
+                        page, pag_meta = _paginate_field(sub_val, indicator_offset, indicator_limit)
+                        nested[sub_key] = page
+                        nested[f"{sub_key}_pagination"] = pag_meta
         return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "the 'indicator_limit' parameter")
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())

@@ -124,7 +124,7 @@ def extract_function_features(
         "edge_count": edge_count,
         "cyclomatic_complexity": cyclomatic,
         "loop_count": loop_count,
-        "nesting_depth": nesting_depth,
+        "nesting_depth_approx": nesting_depth,  # Approximated as capped loop count
     }
 
     # --- 2. API calls ---

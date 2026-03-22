@@ -529,9 +529,9 @@ async def open_file(
                 await ctx.info(f"Loading {format_label} binary...")
 
                 def _load_non_pe():
-                    state.pe_object = MockPE(_raw_file_data)
-                    state.filepath = abs_path
-                    state.pe_data = {
+                    # Build dict locally then assign atomically under _pe_lock
+                    # to avoid concurrent readers seeing partially-written state.
+                    pe_data = {
                         "filepath": abs_path,
                         "mode": mode,
                         "format": format_label,
@@ -550,6 +550,10 @@ async def open_file(
                             + ". Angr-based tools (decompilation, CFG, symbolic execution) work on all formats."
                         ),
                     }
+                    state.pe_object = MockPE(_raw_file_data)
+                    with state._pe_lock:
+                        state.filepath = abs_path
+                        state.pe_data = pe_data
 
                 await asyncio.to_thread(_load_non_pe)
                 await ctx.report_progress(50, 100)

@@ -3,7 +3,6 @@ import os
 import sys
 import signal
 import logging
-import datetime
 import threading
 import argparse
 
@@ -669,22 +668,18 @@ def _run_cli_analysis(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
             sys.exit(1)
         else:
             # PE CLI Mode
-            pe_obj = pefile.PE(abs_input_file, fast_load=False)
-            try:
-                _cli_analyze_and_print_pe(
-                    abs_input_file, cfg.abs_peid_db_path, cfg.abs_yara_rules_path,
-                    cfg.abs_capa_rules_dir, cfg.abs_capa_sigs_dir,
-                    args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
-                    cfg.floss_min_len, args.floss_verbose_level,
-                    cfg.floss_debug_level, cfg.floss_fmt,
-                    cfg.floss_disabled_types, cfg.floss_only_types,
-                    cfg.floss_functions, cfg.floss_quiet,
-                    args.extract_strings, args.min_str_len, args.search_string,
-                    args.strings_limit, args.hexdump_offset, args.hexdump_length,
-                    args.hexdump_lines, cfg.analyses_to_skip
-                )
-            finally:
-                pe_obj.close()
+            _cli_analyze_and_print_pe(
+                abs_input_file, cfg.abs_peid_db_path, cfg.abs_yara_rules_path,
+                cfg.abs_capa_rules_dir, cfg.abs_capa_sigs_dir,
+                args.verbose, args.skip_full_peid_scan, args.peid_scan_all_sigs_heuristically,
+                cfg.floss_min_len, args.floss_verbose_level,
+                cfg.floss_debug_level, cfg.floss_fmt,
+                cfg.floss_disabled_types, cfg.floss_only_types,
+                cfg.floss_functions, cfg.floss_quiet,
+                args.extract_strings, args.min_str_len, args.search_string,
+                args.strings_limit, args.hexdump_offset, args.hexdump_length,
+                args.hexdump_lines, cfg.analyses_to_skip
+            )
     except KeyboardInterrupt:
         print("\n[*] CLI Analysis interrupted by user. Exiting.")
         sys.exit(1)

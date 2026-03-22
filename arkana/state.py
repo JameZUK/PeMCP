@@ -540,22 +540,34 @@ class AnalyzerState:
                 result["name"] = name
                 # Deep copy mutable fields list to prevent callers mutating internal state
                 if "fields" in result:
-                    result["fields"] = list(result["fields"])
+                    result["fields"] = [dict(f) for f in result["fields"]]
                 return result
             if name in self.custom_types["enums"]:
                 result = dict(self.custom_types["enums"][name])
                 result["type"] = "enum"
                 result["name"] = name
+                # Deep copy mutable values dict to prevent callers mutating internal state
+                if "values" in result:
+                    result["values"] = dict(result["values"])
                 return result
         return None
 
     def get_all_custom_types(self) -> Dict[str, Any]:
-        """Thread-safe read of all custom types."""
+        """Thread-safe read of all custom types (deep copies mutable nested data)."""
         with self._types_lock:
-            return {
-                "structs": {k: dict(v) for k, v in self.custom_types["structs"].items()},
-                "enums": {k: dict(v) for k, v in self.custom_types["enums"].items()},
-            }
+            structs = {}
+            for k, v in self.custom_types["structs"].items():
+                s = dict(v)
+                if "fields" in s:
+                    s["fields"] = [dict(f) for f in s["fields"]]
+                structs[k] = s
+            enums = {}
+            for k, v in self.custom_types["enums"].items():
+                e = dict(v)
+                if "values" in e:
+                    e["values"] = dict(e["values"])
+                enums[k] = e
+            return {"structs": structs, "enums": enums}
 
     def delete_custom_type(self, name: str) -> bool:
         """Thread-safe removal. Returns True if found."""
@@ -569,12 +581,21 @@ class AnalyzerState:
         return False
 
     def get_all_types_snapshot(self) -> Dict[str, Any]:
-        """Thread-safe snapshot for cache persistence."""
+        """Thread-safe snapshot for cache persistence (deep copies mutable nested data)."""
         with self._types_lock:
-            return {
-                "structs": {k: dict(v) for k, v in self.custom_types["structs"].items()},
-                "enums": {k: dict(v) for k, v in self.custom_types["enums"].items()},
-            }
+            structs = {}
+            for k, v in self.custom_types["structs"].items():
+                s = dict(v)
+                if "fields" in s:
+                    s["fields"] = [dict(f) for f in s["fields"]]
+                structs[k] = s
+            enums = {}
+            for k, v in self.custom_types["enums"].items():
+                e = dict(v)
+                if "values" in e:
+                    e["values"] = dict(e["values"])
+                enums[k] = e
+            return {"structs": structs, "enums": enums}
 
     def clear_custom_types(self) -> int:
         """Thread-safe clear. Returns total count removed."""

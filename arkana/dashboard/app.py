@@ -219,7 +219,13 @@ _decompile_semaphore = asyncio.Semaphore(2)
 _report_semaphore = asyncio.Semaphore(2)
 
 # --- Content-Security-Policy value (single source of truth) ---
-_CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+_CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self';"
+
+
+def _api_error_response(endpoint: str, exc: Exception, status_code: int = 500) -> JSONResponse:
+    """Return a sanitized JSON error response — logs full details, returns generic message."""
+    logger.error("%s error: %s", endpoint, exc, exc_info=True)
+    return JSONResponse({"error": f"Internal server error in {endpoint}"}, status_code=status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -554,8 +560,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_overview_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_state error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_state", exc)
 
     async def api_debug(request: Request) -> Response:
         """Diagnostic endpoint — shows minimal state isolation info."""
@@ -591,8 +596,7 @@ def _create_routes(dashboard_token: str) -> list:
             )
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_functions error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_functions", exc)
 
     async def api_callgraph(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -601,8 +605,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_callgraph_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_callgraph error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_callgraph", exc)
 
     _MAX_POST_BODY_SIZE = 1024 * 1024  # 1 MB
 
@@ -646,8 +649,7 @@ def _create_routes(dashboard_token: str) -> list:
             result = await asyncio.to_thread(get_decompiled_code, address)
             return JSONResponse(result)
         except Exception as exc:
-            logger.error("api_decompile_get error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_decompile_get", exc)
 
     async def api_decompile_post(request: Request) -> Response:
         """Trigger a new decompilation for an address."""
@@ -717,8 +719,7 @@ def _create_routes(dashboard_token: str) -> list:
             )
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_strings error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_strings", exc)
 
     async def api_search(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -731,8 +732,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(global_search, q)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_search error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_search", exc)
 
     async def api_function_xrefs(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -788,8 +788,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_timeline_data, limit=limit)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_timeline error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_timeline", exc)
 
     async def api_events(request: Request) -> Response:
         """SSE endpoint — streams state changes every 2 seconds."""
@@ -993,8 +992,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_floss_summary)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_floss_summary error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_floss_summary", exc)
 
     # --- New API endpoints (Batch 1-3) ---
 
@@ -1015,8 +1013,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_hex_dump_data, offset, length)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_hex error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_hex", exc)
 
     async def api_mitre(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -1025,8 +1022,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_mitre_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_mitre error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_mitre", exc)
 
     async def api_capabilities(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -1035,8 +1031,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_capa_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_capabilities error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_capabilities", exc)
 
     async def api_function_cfg(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -1092,8 +1087,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_entropy_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_entropy error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_entropy", exc)
 
     async def api_resources(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -1102,8 +1096,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_resources_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_resources error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_resources", exc)
 
     async def api_triage_report(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -1112,8 +1105,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_triage_report_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_triage_report error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_triage_report", exc)
 
     async def api_packing(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -1122,8 +1114,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_packing_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_packing error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_packing", exc)
 
     async def api_similarity(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -1132,8 +1123,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_similarity_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_similarity error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_similarity", exc)
 
     async def api_types(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -1142,8 +1132,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_custom_types_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_types error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_types", exc)
 
     async def api_types_struct_post(request: Request) -> Response:
         """Create or update a struct type."""
@@ -1258,8 +1247,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_ioc_summary_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_ioc_summary error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_ioc_summary", exc)
 
     # --- Capabilities Summary ---
     async def api_capabilities_summary(request: Request) -> Response:
@@ -1269,8 +1257,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_capabilities_summary_data)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_capabilities_summary error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_capabilities_summary", exc)
 
     # --- Analysis Digest ---
     async def api_digest(request: Request) -> Response:
@@ -1389,8 +1376,7 @@ def _create_routes(dashboard_token: str) -> list:
             data = await asyncio.to_thread(get_list_files_data, search, sort_by)
             return JSONResponse(data)
         except Exception as exc:
-            logger.error("api_list_files error: %s", exc, exc_info=True)
-            return JSONResponse({"error": str(exc)}, status_code=500)
+            return _api_error_response("api_list_files", exc)
 
     return [
         Route("/login", endpoint=login_page, methods=["GET"]),

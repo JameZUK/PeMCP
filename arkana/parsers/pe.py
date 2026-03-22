@@ -225,10 +225,15 @@ def _parse_exports(pe: pefile.PE) -> Dict[str, Any]:
     return exports_info
 
 
+_MAX_RESOURCE_ENTRIES = 1000  # Cap resource directory traversal to prevent OOM on malformed PEs
+
+
 def _parse_resources_summary(pe: pefile.PE) -> List[Dict[str, Any]]:
     resources_summary_list = []
     if hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
         for res_type_entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
+            if len(resources_summary_list) >= _MAX_RESOURCE_ENTRIES:
+                break
             type_name_val = getattr(res_type_entry, 'id', None)
             type_name_str = pefile.RESOURCE_TYPE.get(type_name_val, str(type_name_val))
 
@@ -240,6 +245,8 @@ def _parse_resources_summary(pe: pefile.PE) -> List[Dict[str, Any]]:
 
             if hasattr(res_type_entry, 'directory'):
                 for res_id_entry in res_type_entry.directory.entries:
+                    if len(resources_summary_list) >= _MAX_RESOURCE_ENTRIES:
+                        break
                     id_val = getattr(res_id_entry, 'id', None)
                     id_name_str = str(id_val)
 

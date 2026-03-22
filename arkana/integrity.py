@@ -511,8 +511,6 @@ def _check_elf_integrity(
 
 # ── Mach-O integrity checks ───────────────────────────────────────────────
 
-_MACHO_MAGICS_LE = {0xFEEDFACE, 0xFEEDFACF}  # 32/64 little-endian on disk
-_MACHO_MAGICS_BE = {0xCEFAEDFE, 0xCFFAEDFE}  # 32/64 big-endian on disk
 _MACHO_FAT_MAGIC = {0xCAFEBABE, 0xBEBAFECA}
 
 

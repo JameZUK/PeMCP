@@ -124,9 +124,12 @@ class TestCacheEviction:
         # Force max to 1 KB for testing
         c.max_size_bytes = 1024
 
-        data1 = {"mode": "pe", "big_data": "x" * 200}
-        data2 = {"mode": "pe", "big_data": "y" * 200}
-        data3 = {"mode": "pe", "big_data": "z" * 200}
+        # Each entry needs unique chars to defeat gzip compression (~500+ bytes each)
+        import random
+        rng = random.Random(42)
+        data1 = {"mode": "pe", "big_data": "".join(rng.choices("abcdefghij", k=2000))}
+        data2 = {"mode": "pe", "big_data": "".join(rng.choices("klmnopqrst", k=2000))}
+        data3 = {"mode": "pe", "big_data": "".join(rng.choices("uvwxyz0123", k=2000))}
 
         c.put("1" * 64, data1, "/t1.exe")
         time.sleep(0.01)
@@ -134,10 +137,14 @@ class TestCacheEviction:
         time.sleep(0.01)
         c.put("3" * 64, data3, "/t3.exe")
 
-        # Oldest entry should have been evicted
+        # Oldest entry should have been evicted (cache size is 1KB, each entry ~200+ bytes)
         stats = c.get_stats()
+        # At least one entry should have been evicted to stay within limits
+        assert stats["entry_count"] < 3, f"Expected eviction but all 3 entries remain: {stats}"
         # Total size should be within limits
-        assert stats["total_size_mb"] * 1024 * 1024 <= c.max_size_bytes or stats["entry_count"] <= 3
+        assert stats["total_size_mb"] * 1024 * 1024 <= c.max_size_bytes
+        # The oldest entry specifically should be gone
+        assert c.get("1" * 64, "/t1.exe") is None, "Oldest entry should have been evicted"
 
 
 # ---------------------------------------------------------------------------
@@ -225,15 +232,20 @@ class TestCacheMetaHandling:
 
     def test_meta_save_error(self, cache, cache_dir, monkeypatch):
         """Cache survives when meta file cannot be written."""
-        import arkana.cache as cache_mod
-        orig_meta = cache_mod.META_FILE
         monkeypatch.setattr("arkana.cache.META_FILE",
                             cache_dir / "nonexistent_subdir" / "meta.json")
         # put should still succeed (data written, meta save fails gracefully)
         data = {"mode": "pe", "test": True}
+        sha = "ee" * 32
         # This exercises the OSError path in _save_meta
-        cache.put("ee" * 32, data, "/test.exe")
-        monkeypatch.setattr("arkana.cache.META_FILE", orig_meta)
+        result = cache.put(sha, data, "/test.exe")
+        assert result is True, "put() should succeed even when meta save fails"
+        # Verify the data was actually written and is retrievable
+        # Restore META_FILE only (undo() would also revert CACHE_DIR from cache_dir fixture)
+        monkeypatch.setattr("arkana.cache.META_FILE", cache_dir / "meta.json")
+        retrieved = cache.get(sha, "/test.exe")
+        assert retrieved is not None, "Data should be retrievable after meta save failure"
+        assert retrieved.get("test") is True
 
 
 # ---------------------------------------------------------------------------

@@ -1442,7 +1442,7 @@ def get_notes_data(category: Optional[str] = None) -> List[Dict[str, Any]]:
 def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
     """Return cached decompilation for a function, or indicate not cached."""
     try:
-        from arkana.mcp.tools_angr import _decompile_meta, _get_cached_lines
+        from arkana.mcp.tools_angr import _get_cached_lines, _get_cached_meta
         from arkana.mcp._rename_helpers import (
             apply_function_renames_to_lines,
             apply_variable_renames_to_lines,
@@ -1464,7 +1464,8 @@ def get_decompiled_code(address_hex: str) -> Dict[str, Any]:
     if cached_lines is None:
         return {"cached": False}
 
-    meta = _decompile_meta.get(cache_key, {})
+    from arkana.mcp.tools_angr import _get_cached_meta
+    meta = _get_cached_meta(cache_key)
     # Apply renames
     renamed_lines = apply_function_renames_to_lines(cached_lines)
     renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(addr_int))
@@ -1494,7 +1495,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     except (ValueError, TypeError):
         return {"cached": False, "error": "invalid address"}
 
-    from arkana.mcp.tools_angr import _decompile_meta, _decompile_meta_lock, _get_cached_lines, _set_decompile_meta
+    from arkana.mcp.tools_angr import _get_cached_lines, _get_cached_meta, _set_decompile_meta
     from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg
     from arkana.mcp._rename_helpers import (
         apply_function_renames_to_lines,
@@ -1507,7 +1508,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     cache_key = (st._state_uuid, addr_int)
     cached_lines = _get_cached_lines(cache_key)
     if cached_lines is not None:
-        meta = _decompile_meta.get(cache_key, {})
+        meta = _get_cached_meta(cache_key)
         renamed_lines = apply_function_renames_to_lines(cached_lines)
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(addr_int))
         display_name = get_display_name(hex(addr_int), meta.get("function_name", "unknown"))
@@ -1567,7 +1568,6 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
         st._decompile_on_demand_count -= 1
         return {"cached": False, "error": "Decompilation lock timeout — background enrichment may be running. Try again shortly."}
     try:
-        st._decompile_on_demand_count -= 1
         from arkana.mcp._angr_helpers import _safe_decompile, DECOMPILE_FALLBACK_NOTE
         dec, used_fallback = _safe_decompile(project, func, decompiler_cfg)
         if not dec.codegen:
@@ -1593,6 +1593,7 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     except Exception:
         return {"cached": False, "error": "Decompilation failed"}
     finally:
+        st._decompile_on_demand_count -= 1
         st._decompile_lock.release()
 
     renamed_lines = apply_function_renames_to_lines(all_lines)
@@ -2405,7 +2406,9 @@ def get_capa_data() -> Dict[str, Any]:
     if not isinstance(capa, dict):
         return {"rules": [], "attack_mapping": {}, "mbc_mapping": {}, "stats": {}, "available": False}
 
-    rules_raw = capa.get("rules", capa.get("capabilities", []))
+    capa_results = capa.get("results", {}) if isinstance(capa, dict) else {}
+    rules_raw = capa_results.get("rules", capa_results.get("capabilities",
+                capa.get("rules", capa.get("capabilities", []))))
     rules = []
     attack_mapping = {}
     mbc_mapping = {}
@@ -3793,7 +3796,9 @@ def get_capabilities_summary_data() -> Dict[str, Any]:
     if not isinstance(capa, dict):
         return {"available": False, "capabilities": [], "total": 0}
 
-    rules_raw = capa.get("rules", capa.get("capabilities", []))
+    capa_results = capa.get("results", {}) if isinstance(capa, dict) else {}
+    rules_raw = capa_results.get("rules", capa_results.get("capabilities",
+                capa.get("rules", capa.get("capabilities", []))))
     names: List[str] = []
 
     if isinstance(rules_raw, dict):

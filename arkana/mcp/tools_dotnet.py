@@ -375,6 +375,7 @@ async def dotnet_disassemble_method(
     await ctx.info(f"Disassembling .NET method at {method_rva}")
     _check_lib("dnfile", DNFILE_AVAILABLE, "dotnet_disassemble_method")
     _check_lib("dncil", DNCIL_AVAILABLE, "dotnet_disassemble_method")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     target = _get_filepath(file_path)
 
     rva = int(method_rva, 0)
