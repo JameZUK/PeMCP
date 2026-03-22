@@ -282,22 +282,21 @@ def _decode_single_byte_xor(data: bytes) -> Optional[Tuple[bytes, int]]:
         _printable[b] = 1
     _printable[9] = _printable[10] = _printable[13] = 1
 
-    # Use a mutable bytearray for fast in-place XOR instead of
-    # rebuilding a new bytes object per key.
-    buf = bytearray(data)
+    # Convert data to int for fast whole-buffer XOR via int arithmetic
+    data_int = int.from_bytes(data, 'big')
 
     for key in range(1, 256):
-        # XOR each byte in-place
-        for i in range(data_len):
-            buf[i] = data[i] ^ key
+        # XOR entire buffer at once using int arithmetic
+        xored_int = data_int ^ int.from_bytes(bytes([key]) * data_len, 'big')
+        xored = xored_int.to_bytes(data_len, 'big')
 
         # Count printable bytes via lookup table (avoids per-byte branching)
-        printable_chars = sum(_printable[b] for b in buf)
+        printable_chars = sum(_printable[b] for b in xored)
         printable_score = printable_chars / data_len
 
         if printable_score > max_printable_score:
             max_printable_score = printable_score
-            best_result = bytes(buf)
+            best_result = xored
             best_key = key
 
     # Only return a result if it's highly likely to be text

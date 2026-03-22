@@ -221,6 +221,7 @@ def _paginated_response(
     Returns:
         ``{"results": [...], "count": N, "_pagination": {...}, ...extra}``
     """
+    limit = max(1, limit)
     total = len(items) if isinstance(items, list) else 0
     offset = max(0, min(offset, total))
     page = items[offset:offset + limit] if isinstance(items, list) else []
@@ -246,7 +247,10 @@ def _paginate_field(items, offset=0, limit=50):
     Lightweight helper for adding pagination metadata to individual
     fields within a larger response dict — unlike ``_paginated_response``
     which builds the entire response wrapper.
+
+    ``limit`` is clamped to >= 1 to prevent empty pages with ``has_more=True``.
     """
+    limit = max(1, limit)
     if not isinstance(items, list):
         items = list(items) if items else []
     total = len(items)

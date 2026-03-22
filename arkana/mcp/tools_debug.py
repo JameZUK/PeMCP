@@ -11,6 +11,7 @@ Architecture:
 """
 import asyncio
 import json
+import re
 import os
 import time
 from typing import Any, Dict, List, Optional
@@ -321,6 +322,14 @@ async def debug_start(
     _check_qiling("debug_start")
     _check_pe_loaded("debug_start")
 
+    # Validate rootfs_path against the path sandbox
+    if rootfs_path:
+        import os as _os
+        resolved_rootfs = _os.path.realpath(rootfs_path)
+        if not _os.path.isdir(resolved_rootfs):
+            return {"error": f"rootfs_path does not exist or is not a directory: {rootfs_path}"}
+        state.check_path_allowed(resolved_rootfs)
+
     mgr = _get_debug_manager()
     await ctx.info("Starting debug session...")
 
@@ -581,6 +590,12 @@ async def debug_set_breakpoint(
 
     if address:
         address = _validate_address(address, "address")
+
+    if api_name:
+        if len(api_name) > 128:
+            return {"error": "api_name too long (max 128 chars)"}
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', api_name):
+            return {"error": "api_name must be alphanumeric/underscore"}
 
     parsed_conditions = []
     if conditions:

@@ -1959,6 +1959,11 @@ def cmd_stop(cmd):
     global _ql, _staged_path
     global _captured_output, _pending_input, _api_trace
     global _user_stubs, _crt_stub_names
+    global _breakpoints, _watchpoints, _snapshots
+    global _bp_counter, _wp_counter, _snap_counter
+    global _stop_reason, _hit_bp_id, _hit_wp_id, _wp_access_info
+    global _mem_read_hook, _mem_write_hook
+    global _api_address_map, _stub_hooks, _trace_hooks, _io_stub_names
     if _staged_path:
         _cleanup_staged_binary(_staged_path)
         _staged_path = None
@@ -1967,6 +1972,22 @@ def cmd_stop(cmd):
     _api_trace = []
     _user_stubs = {}
     _crt_stub_names = set()
+    _breakpoints = {}
+    _watchpoints = {}
+    _snapshots = {}
+    _bp_counter = 0
+    _wp_counter = 0
+    _snap_counter = 0
+    _stop_reason = ""
+    _hit_bp_id = None
+    _hit_wp_id = None
+    _wp_access_info = None
+    _mem_read_hook = None
+    _mem_write_hook = None
+    _api_address_map = {}
+    _stub_hooks = {}
+    _trace_hooks = []
+    _io_stub_names = set()
     _ql = None
     return {"status": "ok"}
 

@@ -54,7 +54,7 @@ def apply_variable_renames_to_lines(lines: List[str], func_address: str) -> List
     """
     state = get_current_state()
     var_renames = state.renames.get("variables", {})
-    addr = func_address.lower()
+    addr = normalize_address(func_address)
     if addr not in var_renames or not var_renames[addr]:
         return lines
 

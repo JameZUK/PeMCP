@@ -7,6 +7,7 @@ sweep, and auto-noting — all in a background daemon thread.
 Results are cached on ``AnalyzerState`` so that MCP tools can return them
 instantly without re-executing.
 """
+import datetime
 import logging
 import os
 import threading
@@ -20,8 +21,7 @@ _SWEEP_SAVE_INTERVAL = 60
 # Minimum interval between async (on-demand) saves (seconds).
 _ASYNC_SAVE_INTERVAL = 30
 
-# Module-level lock for throttled async saves (throttle moved to per-state field).
-_async_save_lock = threading.Lock()
+# Per-state lock is used for throttled async saves (state._async_save_lock).
 
 from arkana.constants import ENRICHMENT_MAX_DECOMPILE, ENRICHMENT_TIMEOUT
 from arkana.state import (
@@ -90,6 +90,7 @@ def start_enrichment(current_state: AnalyzerState) -> None:
         "status": TASK_RUNNING,
         "progress_percent": 0,
         "progress_message": "Starting auto-enrichment...",
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "created_at_epoch": time.time(),
         "last_progress_epoch": time.time(),
         "tool": "open_file (auto-enrichment)",
@@ -584,8 +585,8 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
     if now - state._last_decompile_save_time < _ASYNC_SAVE_INTERVAL:
         return
 
-    # Non-blocking acquire — skip if another save is already running
-    if not _async_save_lock.acquire(blocking=False):
+    # Non-blocking acquire — skip if another save is already running for this state
+    if not state._async_save_lock.acquire(blocking=False):
         return
     try:
         # Re-check throttle inside lock (another thread may have saved)
@@ -603,4 +604,4 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
         t = threading.Thread(target=_bg_save, daemon=True, name="arkana-async-save")
         t.start()
     finally:
-        _async_save_lock.release()
+        state._async_save_lock.release()

@@ -188,12 +188,16 @@ def _raise_on_error_dict(result):
     every tool failure surfaces as an exception that the MCP framework
     converts to an ``isError=True`` response.
     """
-    if isinstance(result, dict) and "error" in result and len(result) <= 3:
-        hint = result.get("hint", "")
-        msg = result["error"]
-        if hint:
-            msg = f"{msg} ({hint})"
-        raise RuntimeError(msg)
+    if isinstance(result, dict) and "error" in result:
+        # Only treat as error dict if it looks like one — not a legitimate
+        # result that happens to have an "error" key alongside many others.
+        other_keys = set(result) - {"error", "hint", "note"}
+        if not other_keys:
+            hint = result.get("hint", "")
+            msg = result["error"]
+            if hint:
+                msg = f"{msg} ({hint})"
+            raise RuntimeError(msg)
     return result
 
 
@@ -232,7 +236,13 @@ def _safe_decompile(project, func, cfg_model):
                 "Decompiler pickle error for %s — retrying with cfg=None: %s",
                 func.name, err_str,
             )
-            return project.analyses.Decompiler(func, cfg=None), True
+            try:
+                return project.analyses.Decompiler(func, cfg=None), True
+            except Exception as fallback_err:
+                raise RuntimeError(
+                    f"Decompiler failed (original: pickle error, "
+                    f"fallback: {fallback_err})"
+                ) from e
         raise
 
 

@@ -254,8 +254,6 @@ def tool_decorator(func):
             enriched = _enrich_error_message(msg)
             if enriched != str(exc):
                 raise type(exc)(enriched) from exc
-            if not str(exc):
-                raise type(exc)(msg) from exc
             raise
         except (AssertionError, AttributeError, TypeError, KeyError) as exc:
             # Catch common internal errors that surface with empty messages

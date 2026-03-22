@@ -957,7 +957,7 @@ def get_overview_data() -> Dict[str, Any]:
         _overview_cache[cache_key] = (time.time() + _OVERVIEW_TTL, st.filepath, copy.deepcopy(result))
         # Evict stale entries
         if len(_overview_cache) > _MAX_OVERVIEW_CACHE:
-            stale = [k for k, (exp, _) in _overview_cache.items() if time.time() > exp]
+            stale = [k for k, (exp, _fp, _data) in _overview_cache.items() if time.time() > exp]
             for k in stale:
                 _overview_cache.pop(k, None)
 

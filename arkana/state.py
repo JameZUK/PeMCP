@@ -173,8 +173,9 @@ class AnalyzerState:
         self.last_active: float = time.time()
         self._closing: bool = False  # True when session is being cleaned up
 
-        # Per-state throttle for async decompile cache saves (enrichment.py)
+        # Per-state throttle and lock for async decompile cache saves (enrichment.py)
         self._last_decompile_save_time: float = 0.0
+        self._async_save_lock: threading.Lock = threading.Lock()
 
         # Debug Sessions (managed by tools_debug._DebugSessionManager)
         self._debug_manager = None  # Lazily created _DebugSessionManager
@@ -730,11 +731,14 @@ class AnalyzerState:
             self.angr_loop_cache = None
             self.angr_loop_cache_config = None
             self.angr_hooks = {}
-        # Also clear background tasks (angr startup task) so a stalled
-        # "startup-angr" task doesn't persist across file reloads and
-        # block angr-dependent tools with "still in progress" errors.
+        # Clear angr-related background tasks so a stalled "startup-angr"
+        # task doesn't persist across file reloads and block angr-dependent
+        # tools with "still in progress" errors.  Non-angr tasks are kept.
+        _angr_task_ids = {"startup-angr", "angr-cfg", "angr-analysis"}
         with self._task_lock:
-            self.background_tasks.clear()
+            for tid in list(self.background_tasks):
+                if tid in _angr_task_ids:
+                    del self.background_tasks[tid]
 
     def close_pe(self):
         with self._pe_lock:

@@ -185,7 +185,7 @@ for _pat in _VULN_PATTERNS:
 
 # Input source APIs for attack surface analysis
 _INPUT_SOURCE_APIS = frozenset({
-    "recv", "recvfrom", "WSARecv", "WSARecvFrom",
+    "recv", "recvfrom", "recvmsg", "WSARecv", "WSARecvFrom",
     "read", "fread", "ReadFile", "ReadFileEx",
     "fgets", "gets", "scanf", "fscanf", "sscanf",
     "GetCommandLineA", "GetCommandLineW",
@@ -193,7 +193,6 @@ _INPUT_SOURCE_APIS = frozenset({
     "InternetReadFile", "HttpQueryInfoA",
     "RegQueryValueExA", "RegQueryValueExW",
     "GetClipboardData",
-    "recv", "recvmsg",
 })
 
 # Output/sink APIs for attack surface analysis
@@ -658,7 +657,8 @@ def _find_source_sink_candidates(cfg, target_addr=None):
                         name = callee.name if callee.name else ""
                         callee_names.add(name)
 
-        sources = [n for n in callee_names if n in _INPUT_SOURCE_APIS]
+        _input_lower = {api.lower() for api in _INPUT_SOURCE_APIS}
+        sources = [n for n in callee_names if n.lower() in _input_lower]
         sinks = [n for n in callee_names if n.lower() in _DANGEROUS_SINK_APIS]
 
         if sources and sinks:
@@ -748,19 +748,27 @@ def _structural_fallback(func_obj, sources, sinks):
             source_lower = {s.lower() for s in sources}
             sink_lower = {s.lower() for s in sinks}
 
+            # Access function knowledge base for callee resolution
+            kb_funcs = None
+            try:
+                kb_funcs = func_obj.function_manager.kb.functions
+            except AttributeError:
+                pass
+
             for idx, block in enumerate(topo_order):
-                block_addr = block.addr if hasattr(block, 'addr') else block
-                if block_addr in func_obj._function_manager._function_manager.functions if False else True:
-                    # Check successors for source/sink calls
-                    for succ_addr in (n.addr if hasattr(n, 'addr') else n
-                                      for n in func_obj.transition_graph.successors(block)
-                                      if hasattr(n, 'addr') and n.addr in func_obj._function_manager._kb.functions):
-                        callee = func_obj._function_manager._kb.functions.get(succ_addr)
-                        if callee and callee.name:
-                            if callee.name.lower() in source_lower:
-                                source_positions.append(idx)
-                            if callee.name.lower() in sink_lower:
-                                sink_positions.append(idx)
+                # Check successors for source/sink calls
+                try:
+                    successors = func_obj.transition_graph.successors(block)
+                except Exception:
+                    continue
+                for succ_node in successors:
+                    succ_addr = succ_node.addr if hasattr(succ_node, 'addr') else succ_node
+                    callee = kb_funcs.get(succ_addr) if kb_funcs else None
+                    if callee and callee.name:
+                        if callee.name.lower() in source_lower:
+                            source_positions.append(idx)
+                        if callee.name.lower() in sink_lower:
+                            sink_positions.append(idx)
 
             if source_positions and sink_positions:
                 source_before_sink = min(source_positions) < max(sink_positions)

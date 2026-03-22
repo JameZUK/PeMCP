@@ -237,6 +237,12 @@ def parse_vb6_header(
         #  +0x60: help file offset (4 bytes)
         #  +0x64: project name offset (4 bytes, relative from header)
 
+        # Initialise before try block so they are always defined even if
+        # a struct.error is raised before the assignments below.
+        ext_count = 0
+        ext_table_va = 0
+        obj_table_va = 0
+
         lang_id = struct.unpack_from("<I", data, vb_header_off + 0x24)[0]
         result["language_id"] = lang_id
 
