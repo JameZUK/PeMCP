@@ -124,7 +124,9 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
         ValueError: If the search exceeds the timeout.
     """
     global _regex_executor, _regex_consecutive_timeouts
-    future = _regex_executor.submit(compiled_re.search, text)
+    with _regex_executor_lock:
+        executor = _regex_executor
+    future = executor.submit(compiled_re.search, text)
     try:
         result = future.result(timeout=timeout)
         # M-9: Protect counter reset under lock for thread safety

@@ -528,7 +528,13 @@ async def decompile_function_with_angr(
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_decompile), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
-        raise RuntimeError(f"Decompilation timed out after {ANGR_ANALYSIS_TIMEOUT} seconds.")
+        # Note: the worker thread continues running and holds _decompile_lock
+        # until it finishes naturally.  Subsequent decompile requests will wait
+        # on the lock (up to 60s) until the abandoned thread completes.
+        raise RuntimeError(
+            f"Decompilation timed out after {ANGR_ANALYSIS_TIMEOUT} seconds. "
+            "The background thread is still running and will release the lock when done."
+        )
     _raise_on_error_dict(result)
 
     # Cache full result (raw, before renames) and return paginated
@@ -1491,6 +1497,7 @@ async def get_function_complexity_list(
     cached_funcs = state.result_cache.get("_complexity_list", _complexity_cache_key)
     if cached_funcs is None:
         cached_funcs = await asyncio.to_thread(_analyze)
+        _raise_on_error_dict(cached_funcs)
         state.result_cache.set("_complexity_list", _complexity_cache_key, cached_funcs)
 
     # Sort

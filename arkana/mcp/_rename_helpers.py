@@ -61,7 +61,9 @@ def apply_variable_renames_to_lines(lines: List[str], func_address: str) -> List
     # M-1: Build a single combined regex from all old names and use a
     # replacement function to look up the match.  This avoids sequential
     # substitution where rename A's output could be transformed by rename B.
-    rename_map = var_renames[addr]
+    rename_map = {k: v for k, v in var_renames[addr].items() if k}
+    if not rename_map:
+        return lines
     combined_pattern = re.compile(
         r'\b(?:' + '|'.join(re.escape(old_name) for old_name in rename_map) + r')\b'
     )

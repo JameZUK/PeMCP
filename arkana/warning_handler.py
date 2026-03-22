@@ -9,7 +9,7 @@ import sys
 import threading
 from typing import Optional, FrozenSet
 
-from arkana.state import get_current_state
+from arkana.state import _current_state_var
 
 # Context variables — set by tool_decorator and background task wrappers
 _current_tool_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
@@ -55,7 +55,7 @@ class LibraryWarningHandler(logging.Handler):
         try:
             if not self._should_capture(record):
                 return
-            state = get_current_state()
+            state = _current_state_var.get()
             if state is None:
                 return
             message = self.format(record)

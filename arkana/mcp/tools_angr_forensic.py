@@ -364,6 +364,7 @@ async def find_code_caves(
         limit: Max caves to return.
     """
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
+    min_size = max(1, min(min_size, 1_000_000))
     await ctx.info("Scanning for code caves")
     _check_angr_ready("find_code_caves")
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
@@ -652,7 +653,11 @@ async def save_patched_binary(
                 # by backend (PE vs ELF vs Mach-O).
                 file_offset = getattr(section, 'offset', None)
                 if file_offset is None:
-                    file_offset = getattr(section, 'addr', None)
+                    # ELF uses sh_offset for section file offset
+                    file_offset = getattr(section, 'sh_offset', None)
+                if file_offset is None:
+                    # Mach-O uses fileoff for segment file offset
+                    file_offset = getattr(section, 'fileoff', None)
                 if file_offset is None:
                     # Compute from VA and mapped base as last resort
                     try:
@@ -1893,6 +1898,7 @@ async def find_anti_debug_comprehensive(
         result = await asyncio.wait_for(asyncio.to_thread(_scan), timeout=ANGR_SHORT_TIMEOUT)
     except asyncio.TimeoutError:
         raise RuntimeError(f"find_anti_debug_comprehensive timed out after {ANGR_SHORT_TIMEOUT} seconds.")
+    _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "find_anti_debug_comprehensive")
 
 

@@ -576,8 +576,9 @@ async def open_file(
                 pe_obj = await asyncio.to_thread(_load_pe)
                 # M-M2: Free raw file data after PE object creation to halve peak memory
                 del _raw_file_data
-                state.filepath = abs_path
-                state.pe_object = pe_obj
+                with state._pe_lock:
+                    state.filepath = abs_path
+                    state.pe_object = pe_obj
 
                 await ctx.report_progress(15, 100)
                 await ctx.info("Analysing PE structures, signatures, and strings...")
@@ -725,9 +726,10 @@ async def open_file(
         # Clean up on failure — close any PE object that was created to
         # prevent resource leaks, then preserve an error record so clients
         # can distinguish "no file ever loaded" from "last open attempt failed".
-        state.filepath = None
-        state.pe_data = None
         state.close_pe()
+        with state._pe_lock:
+            state.filepath = None
+            state.pe_data = None
         logger.error("open_file failed for '%s': %s", abs_path, e, exc_info=True)
         raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e
     finally:

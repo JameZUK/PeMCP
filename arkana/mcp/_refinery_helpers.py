@@ -79,8 +79,9 @@ _MAX_FILE_READ_SIZE = 500 * 1024 * 1024  # 500 MB safety limit
 
 def _get_file_data() -> bytes:
     """Get the raw bytes of the currently loaded file."""
-    pe_obj = state.pe_object
-    fpath = state.filepath
+    with state._pe_lock:
+        pe_obj = state.pe_object
+        fpath = state.filepath
     if not pe_obj:
         raise RuntimeError("No file is loaded. Use open_file() first.")
     raw = getattr(pe_obj, "__data__", None)

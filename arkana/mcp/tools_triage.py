@@ -1994,8 +1994,8 @@ async def get_triage_report(
                 page, pag_meta = _paginate_field(items, indicator_offset, indicator_limit)
                 net_iocs[field_key] = page
                 net_iocs[f"{field_key}_pagination"] = pag_meta
-        # Re-paginate nested dict fields (export_anomalies, delay_load_evasion)
-        for nested_key in ("export_anomalies", "delay_load_evasion"):
+        # Re-paginate nested dict fields (export_anomalies, delay_load_risks)
+        for nested_key in ("export_anomalies", "delay_load_risks"):
             nested = triage_report.get(nested_key, {})
             if isinstance(nested, dict):
                 for sub_key, sub_val in list(nested.items()):

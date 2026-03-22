@@ -136,7 +136,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
     try:
         # ── Phase 1a: Classify binary purpose ────────────────────────
         if _cancelled(state, generation):
-            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
         _update(state, 0, "Classifying binary purpose...")
         try:
@@ -150,7 +150,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 1b: Triage report ──────────────────────────────────
         if _cancelled(state, generation):
-            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
         _update(state, 2, "Running triage report...")
         try:
@@ -169,7 +169,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 1c: Similarity hashes ──────────────────────────────
         if _cancelled(state, generation):
-            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
         _update(state, 25, "Computing similarity hashes...")
         try:
@@ -186,7 +186,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 2a: MITRE ATT&CK mapping ──────────────────────────
         if _cancelled(state, generation):
-            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
         _update(state, 28, "Mapping MITRE ATT&CK techniques...")
         try:
@@ -200,7 +200,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 2b: Structured IOCs ────────────────────────────────
         if _cancelled(state, generation):
-            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
         _update(state, 30, "Collecting structured IOCs...")
         try:
@@ -221,7 +221,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 3: Wait for angr CFG ───────────────────────────────
         if _cancelled(state, generation):
-            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
         _update(state, 32, "Waiting for angr CFG...")
         cfg_ready = _wait_for_cfg(state, generation=generation)
@@ -232,7 +232,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
         else:
             # ── Phase 3a: Library function identification ────────────
             if _cancelled(state, generation):
-                state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+                state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
                 return
             _update(state, 35, "Identifying library functions...")
             try:
@@ -245,7 +245,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
             # ── Phase 3b: Decompile sweep ────────────────────────────
             if _cancelled(state, generation):
-                state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+                state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
                 return
             _update(state, 40, "Starting decompile sweep...")
             try:
@@ -256,7 +256,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
             # ── Phase 3c: Auto-note functions ────────────────────────
             if _cancelled(state, generation):
-                state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+                state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
                 return
             _update(state, 90, "Auto-noting functions...")
             try:
@@ -268,7 +268,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
 
         # ── Phase 4: Cache save ──────────────────────────────────────
         if _cancelled(state, generation):
-            state.update_task(TASK_ID, status=TASK_COMPLETED, progress_message="Cancelled")
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
         _update(state, 98, "Saving to cache...")
         try:
@@ -510,7 +510,8 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
             return
 
         # Build a separate dict for serialization instead of mutating pe_data
-        serializable = dict(state.pe_data)
+        with state._pe_lock:
+            serializable = dict(state.pe_data)
 
         if state._cached_triage:
             serializable['_cached_triage'] = state._cached_triage
@@ -582,17 +583,22 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
         return
 
     now = time.time()
-    if now - state._last_decompile_save_time < _ASYNC_SAVE_INTERVAL:
-        return
-
-    # Update timestamp immediately to prevent multiple threads passing the
-    # throttle check simultaneously within the same interval.
-    state._last_decompile_save_time = now
-
-    # Non-blocking acquire — skip if another save is already running for this state
-    def _bg_save():
-        if not state._async_save_lock.acquire(blocking=False):
+    # Use the async_save_lock for an atomic check-and-update of the throttle
+    # timestamp to prevent TOCTOU races where multiple threads pass the
+    # interval check simultaneously.
+    if not state._async_save_lock.acquire(blocking=False):
+        return  # Another save is already running
+    try:
+        if now - state._last_decompile_save_time < _ASYNC_SAVE_INTERVAL:
+            state._async_save_lock.release()
             return
+        state._last_decompile_save_time = now
+    except BaseException:
+        state._async_save_lock.release()
+        raise
+
+    # Lock is held — run save in a daemon thread and release when done.
+    def _bg_save():
         try:
             _save_enrichment_cache(state)
             logger.debug("Async decompile cache save completed")

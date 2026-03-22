@@ -311,7 +311,7 @@ def _check_token(provided: str, dashboard_token: str) -> bool:
     """
     result = False
     for valid in _get_valid_tokens(dashboard_token):
-        result = hmac.compare_digest(provided, valid) or result
+        result = result | hmac.compare_digest(provided, valid)
     return result
 
 

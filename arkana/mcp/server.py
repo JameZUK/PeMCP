@@ -257,7 +257,12 @@ def tool_decorator(func):
             raise
         except (AssertionError, AttributeError, TypeError, KeyError) as exc:
             # Catch common internal errors that surface with empty messages
-            msg = str(exc)
+            # KeyError wraps its arg in quotes via str(), so use args[0] to
+            # avoid double-quoting when re-raising.
+            if isinstance(exc, KeyError) and exc.args:
+                msg = str(exc.args[0])
+            else:
+                msg = str(exc)
             if not msg:
                 msg = f"{tool_name} failed: {type(exc).__name__} (internal error — the binary may be incompatible with this analysis)"
                 raise RuntimeError(msg) from exc

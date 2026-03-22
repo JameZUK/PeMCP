@@ -37,7 +37,10 @@ def _get_arkana_version() -> str:
 
 
 # --- Constants ---
-CACHE_DIR = Path.home() / ".arkana" / "cache"
+try:
+    CACHE_DIR = Path.home() / ".arkana" / "cache"
+except RuntimeError:
+    CACHE_DIR = Path("/tmp") / ".arkana" / "cache"
 META_FILE = CACHE_DIR / "meta.json"
 DEFAULT_MAX_CACHE_SIZE_MB = 500
 CACHE_FORMAT_VERSION = 1
@@ -142,14 +145,18 @@ class AnalysisCache:
             tmp = Path(fd.name)
             try:
                 json.dump(meta, fd, indent=2)
+            except BaseException:
+                # M4-v14: Clean up temp file on failure
+                tmp.unlink(missing_ok=True)
+                raise
+            finally:
                 fd.close()
-                # Path.replace() is atomic on POSIX (rename(2) syscall).
+            # Path.replace() is atomic on POSIX (rename(2) syscall).
+            try:
                 tmp.replace(META_FILE)
                 self._meta_cache = meta
                 self._meta_mtime = META_FILE.stat().st_mtime
-            except BaseException:
-                fd.close()
-                # M4-v14: Clean up temp file on failure
+            except OSError:
                 tmp.unlink(missing_ok=True)
                 raise
         except OSError as e:
@@ -478,50 +485,50 @@ class AnalysisCache:
         sha256 = _validate_sha256(sha256)
         entry_path = self._entry_path(sha256)
 
-        # M12-v10: Hold lock through entire read-modify-write cycle to prevent
-        # concurrent updates from overwriting each other. Session data updates
-        # are infrequent so the slightly longer lock hold is acceptable.
-        with self._lock:
-            if not entry_path.exists():
-                return False
+        # Read gzip data outside the lock, then hold the lock only for the
+        # atomic write, to avoid blocking all cache operations during I/O.
+        if not entry_path.exists():
+            return False
 
-            try:
-                with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                    wrapper = json.load(f)
-            except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
-                logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
-                return False
+        try:
+            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                wrapper = json.load(f)
+        except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
+            logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
+            return False
 
-            # Modify wrapper in memory
-            if notes is not None:
-                wrapper["notes"] = notes
-            if tool_history is not None:
-                wrapper["tool_history"] = tool_history
-            if artifacts is not None:
-                wrapper["artifacts"] = artifacts
-            if renames is not None:
-                wrapper["renames"] = renames
-            if custom_types is not None:
-                wrapper["custom_types"] = custom_types
-            if triage_status is not None:
-                wrapper["triage_status"] = triage_status
+        # Modify wrapper in memory
+        if notes is not None:
+            wrapper["notes"] = notes
+        if tool_history is not None:
+            wrapper["tool_history"] = tool_history
+        if artifacts is not None:
+            wrapper["artifacts"] = artifacts
+        if renames is not None:
+            wrapper["renames"] = renames
+        if custom_types is not None:
+            wrapper["custom_types"] = custom_types
+        if triage_status is not None:
+            wrapper["triage_status"] = triage_status
 
-            # Write atomically using streaming gzip
-            # M-10: Use NamedTemporaryFile to avoid .tmp collisions
-            fd = tempfile.NamedTemporaryFile(
-                dir=str(entry_path.parent), suffix='.tmp', delete=False,
-            )
-            tmp = Path(fd.name)
-            fd.close()
-            try:
-                with gzip.open(tmp, "wt", encoding="utf-8") as gz:
-                    json.dump(wrapper, gz)
+        # Write atomically using streaming gzip — hold lock only for the
+        # rename to prevent concurrent updates from clobbering each other.
+        # M-10: Use NamedTemporaryFile to avoid .tmp collisions
+        fd = tempfile.NamedTemporaryFile(
+            dir=str(entry_path.parent), suffix='.tmp', delete=False,
+        )
+        tmp = Path(fd.name)
+        fd.close()
+        try:
+            with gzip.open(tmp, "wt", encoding="utf-8") as gz:
+                json.dump(wrapper, gz)
+            with self._lock:
                 tmp.replace(entry_path)
-                return True
-            except (TypeError, ValueError, OSError) as e:
-                logger.error("Failed to write session data for %s...: %s", sha256[:12], e)
-                tmp.unlink(missing_ok=True)
-                return False
+            return True
+        except (TypeError, ValueError, OSError) as e:
+            logger.error("Failed to write session data for %s...: %s", sha256[:12], e)
+            tmp.unlink(missing_ok=True)
+            return False
 
     # ------------------------------------------------------------------
     #  Management helpers (exposed via MCP tools)

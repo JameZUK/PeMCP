@@ -3162,7 +3162,7 @@ def get_diff_data(file_path_b: str, limit: int = 50) -> Dict[str, Any]:
     # Validate file_path_b — must be a real file, no path traversal
     file_path_b = os.path.realpath(file_path_b)
     if not os.path.isfile(file_path_b):
-        return {"error": "File not found: " + os.path.basename(file_path_b)}
+        return {"error": "File not found or not accessible"}
     # M-S7: Also validate via state.check_path_allowed() as defense-in-depth,
     # even when ARKANA_SAMPLES_DIR is not set.
     samples_dir = os.environ.get("ARKANA_SAMPLES_DIR", "")

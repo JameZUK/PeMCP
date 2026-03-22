@@ -111,7 +111,10 @@ YARA_COMMUNITY_ZIP_URL = "https://github.com/Yara-Rules/rules/archive/refs/heads
 YARA_COMMUNITY_SUBDIR = "community"
 
 # --- BSim Function Similarity ---
-BSIM_DB_DIR = Path.home() / ".arkana" / "bsim"
+try:
+    BSIM_DB_DIR = Path.home() / ".arkana" / "bsim"
+except RuntimeError:
+    BSIM_DB_DIR = Path("/tmp") / ".arkana" / "bsim"
 BSIM_DEFAULT_THRESHOLD = 0.5
 BSIM_BACKGROUND_TIMEOUT = 1800  # seconds — 30 min (env: ARKANA_BSIM_BACKGROUND_TIMEOUT). Note: CLAUDE.md historically said 600s; actual value is 1800s.
 
