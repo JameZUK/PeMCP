@@ -2,7 +2,7 @@
 
 **Prompt:** `/arkana-analyse find a difficult crackme that will need to extensively use arkana but will need to use the debugger to solve`
 
-**Sample:** CrackMeZ3S.exe by PELock (PE32 x86, 101,376 bytes)
+**Sample:** CrackMeZ3S.exe by PELock (PE32 x86, 101,376 bytes) — [source code & solution](https://github.com/PELock/CrackMeZ3S-CTF-CrackMe-Tutorial) | [author's write-up](https://www.pelock.com/articles/how-to-write-a-crackme-for-a-ctf-competition)
 
 **Flag:** `PELock v2.0`
 
