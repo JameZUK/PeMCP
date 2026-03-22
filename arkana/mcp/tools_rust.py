@@ -4,6 +4,7 @@ import os
 import re
 from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, RUSTBININFO_AVAILABLE, RUST_DEMANGLER_AVAILABLE
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._format_helpers import _check_lib, _get_filepath
 
@@ -190,6 +191,7 @@ async def rust_demangle_symbols(
         limit: Max symbols to return.
     """
     await ctx.info(f"Demangling {len(symbols)} Rust symbols")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_lib("rust_demangler", RUST_DEMANGLER_AVAILABLE, "rust_demangle_symbols", "rust-demangler")
 
     def _demangle():

@@ -550,7 +550,7 @@ def _triage_capa_capabilities(indicator_limit: int) -> Tuple[List[Dict[str, Any]
 
 _TRIAGE_IP_RE = re.compile(r"(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)")
 _TRIAGE_URL_RE = re.compile(r'(?:https?|ftp)://[^\s\'"<>]{1,2000}', re.IGNORECASE)
-_TRIAGE_DOMAIN_RE = re.compile(r'\b(?:[a-zA-Z0-9-]{1,63}\.){1,20}(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion)\b', re.IGNORECASE)
+_TRIAGE_DOMAIN_RE = re.compile(r'\b(?:[a-zA-Z0-9-]{1,63}\.){1,20}(?:com|net|org|io|ru|cn|tk|xyz|top|info|biz|cc|pw|su|onion|de|uk|fr|jp|br|au|ca|nl|kr|us|gov|edu|mil|co|me|in|es|it|pl|se|no|fi|cz|ch|at|be|pt|mx|ar|cl|za|tw|hk|sg|my|th|ph|vn|id|ke|ng|ly|gg|ir|kp|to|ws|nu|st|ac|cx)\b', re.IGNORECASE)
 _TRIAGE_REGISTRY_RE = re.compile(r'(?:HKLM|HKCU|HKCR|HKU|HKCC|Software)\\[^\s\'"]+', re.IGNORECASE)
 
 
@@ -1964,8 +1964,17 @@ async def get_triage_report(
 
     # Return cached result if enrichment already ran triage
     if state._cached_triage and not compact:
-        triage_report = state._cached_triage
+        import copy
+        triage_report = copy.deepcopy(state._cached_triage)
         triage_report["workflow_hints"] = _TRIAGE_WORKFLOW_HINTS
+        # Re-apply pagination parameters to the cached result
+        net_iocs = triage_report.get("network_iocs", {})
+        for field_key in ("ips", "urls", "domains", "registry_paths"):
+            items = net_iocs.get(field_key, [])
+            if isinstance(items, list):
+                page, pag_meta = _paginate_field(items, indicator_offset, indicator_limit)
+                net_iocs[field_key] = page
+                net_iocs[f"{field_key}_pagination"] = pag_meta
         return await _check_mcp_response_size(ctx, triage_report, "get_triage_report", "the 'indicator_limit' parameter")
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())

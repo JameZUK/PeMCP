@@ -1,6 +1,7 @@
 """MCP tools for viewing and managing the tool invocation history."""
 from typing import Dict, Any, Optional
 from arkana.config import state, Context
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 
 
@@ -25,12 +26,13 @@ async def get_tool_history(
     Args:
         ctx: The MCP Context object.
         tool_name: (Optional[str]) Filter history to a specific tool name.
-        limit: (int) Maximum number of history entries to return. Default: 50.
+        limit: (int) Maximum number of history entries to return. Default: 20.
 
     Returns:
         A dictionary with history entries, counts, and previous session count
         if available.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     entries = state.get_tool_history(tool_name=tool_name)
     total = len(entries)
     entries = entries[-limit:]  # most recent entries

@@ -219,6 +219,7 @@ async def get_function_variables(
     """
     await ctx.info(f"Recovering variables for {function_address}")
     _check_angr_ready("get_function_variables")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     target = _parse_addr(function_address)
 
     def _recover():
@@ -399,6 +400,7 @@ async def identify_library_functions(
     """
     await ctx.info("Running FLIRT signature matching")
     _check_angr_ready("identify_library_functions")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     def _flirt():
         _ensure_project_and_cfg()

@@ -516,7 +516,7 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
         "file_loaded": state.filepath is not None,
         "loaded_filepath": state.filepath,
         "samples_path": state.samples_path,
-        "state_id": id(state),
+        "state_id": getattr(state, '_state_uuid', 'unknown'),
         "pid": os.getpid(),
     }
 

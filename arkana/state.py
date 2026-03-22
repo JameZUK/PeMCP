@@ -21,6 +21,7 @@ logger = logging.getLogger("Arkana")
 
 # Stable session ID map — avoids id() reuse after GC.
 _session_id_map: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_session_id_map_lock = threading.Lock()
 
 # Maximum number of completed/failed background tasks to retain per session.
 MAX_COMPLETED_TASKS = 50
@@ -996,9 +997,10 @@ def get_session_key_from_context(ctx) -> str:
                     session._arkana_session_id = sid
                 except AttributeError:
                     # Frozen/slotted objects — use stable UUID via WeakKeyDictionary
-                    if session not in _session_id_map:
-                        _session_id_map[session] = f"id-{uuid.uuid4().hex[:16]}"
-                    sid = _session_id_map[session]
+                    with _session_id_map_lock:
+                        if session not in _session_id_map:
+                            _session_id_map[session] = f"id-{uuid.uuid4().hex[:16]}"
+                        sid = _session_id_map[session]
             return sid
     except Exception:
         # L: Elevated to WARNING — falling back to "default" in HTTP mode causes

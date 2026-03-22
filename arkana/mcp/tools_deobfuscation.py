@@ -6,6 +6,7 @@ import os
 import asyncio
 from typing import Dict, Any, Optional, List, Union
 from arkana.config import state, logger, Context, STRINGSIFTER_AVAILABLE
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._input_helpers import _parse_int_param
@@ -329,6 +330,7 @@ async def find_and_decode_encoded_strings(
     # --- Parameter Validation ---
     if not (isinstance(limit, int) and limit > 0):
         raise ValueError("Parameter 'limit' must be a positive integer.")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     if rank_with_sifter and not STRINGSIFTER_AVAILABLE:
         raise RuntimeError("Ranking is requested, but StringSifter is not available on the server.")
     if not (0.0 <= min_confidence <= 1.0):

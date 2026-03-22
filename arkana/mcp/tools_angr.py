@@ -402,7 +402,7 @@ async def decompile_function_with_angr(
             "lines": page,
             "count": len(page),
             "_pagination": {
-                "total": len(cached_lines),
+                "total": len(renamed_lines),
                 "offset": line_offset,
                 "limit": line_limit,
                 "has_more": has_more,
@@ -594,7 +594,7 @@ async def decompile_function_with_angr(
             "lines": page,
             "count": len(page),
             "_pagination": {
-                "total": len(all_lines),
+                "total": len(renamed_lines),
                 "offset": line_offset,
                 "limit": line_limit,
                 "has_more": has_more,
@@ -2015,7 +2015,8 @@ async def batch_decompile(
             if search:
                 sr = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
                 if sr["total_matches"] == 0:
-                    continue  # Skip functions with no matches
+                    succeeded += 1  # Decompiled OK, just no search matches
+                    continue
                 flat = []
                 for region in sr["matched_regions"]:
                     flat.extend(region["items"])
@@ -2100,7 +2101,8 @@ async def batch_decompile(
         if search:
             sr = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
             if sr["total_matches"] == 0:
-                continue  # Skip functions with no matches
+                succeeded += 1  # Decompiled OK, just no search matches
+                continue
             flat = []
             for region in sr["matched_regions"]:
                 flat.extend(region["items"])

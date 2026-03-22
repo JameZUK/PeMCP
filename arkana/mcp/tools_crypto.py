@@ -10,6 +10,7 @@ import struct
 from typing import Dict, Any, List, Optional, Union
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._input_helpers import _parse_int_param
 from arkana.mcp._progress_bridge import ProgressBridge
@@ -121,6 +122,7 @@ async def identify_crypto_algorithm(
     """
     await ctx.info("Scanning for cryptographic algorithms (deep analysis)")
     _check_pe_loaded("identify_crypto_algorithm")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     pe = state.pe_object
     if pe is None or not hasattr(pe, '__data__') or pe.__data__ is None:
@@ -291,6 +293,7 @@ async def auto_extract_crypto_keys(
     _check_pe_loaded("auto_extract_crypto_keys")
     # H6: Cap search_radius to prevent excessive memory/CPU usage
     search_radius = min(search_radius, 65536)
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     pe = state.pe_object
     if pe is None or not hasattr(pe, '__data__') or pe.__data__ is None:
@@ -490,6 +493,7 @@ async def brute_force_simple_crypto(
         raise ValueError("Data too large (max 1MB). Provide a smaller sample.")
     if len(data) < 4:
         raise ValueError("Data too small (min 4 bytes).")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     specific_key = None
     if key_hex:

@@ -805,6 +805,7 @@ async def dotnet_decompile(
 
     if output_dir:
         # Project mode — write .csproj + .cs files to directory
+        state.check_path_allowed(output_dir)
         await ctx.info("Decompiling .NET assembly to project")
         os.makedirs(output_dir, exist_ok=True)
         args = _build_ilspycmd_command(target, type_name=type_name, output_dir=output_dir)

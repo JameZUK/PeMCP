@@ -58,6 +58,7 @@ async def refinery_executable(
     """
     _require_refinery("refinery_executable")
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
+    count = max(1, min(count, MAX_TOOL_LIMIT))
 
     op = operation.lower()
 

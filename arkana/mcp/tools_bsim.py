@@ -13,7 +13,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from arkana.config import state, logger, Context, ANGR_AVAILABLE
-from arkana.constants import BSIM_DEFAULT_THRESHOLD, BSIM_BACKGROUND_TIMEOUT
+from arkana.constants import BSIM_DEFAULT_THRESHOLD, BSIM_BACKGROUND_TIMEOUT, MAX_TOOL_LIMIT
 from arkana.mcp.server import (
     tool_decorator,
     _check_angr_ready,
@@ -72,6 +72,7 @@ async def extract_function_features_tool(
         dict with 'functions' list of feature vectors and metadata.
     """
     _check_angr_ready("extract_function_features")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     def _extract(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
@@ -167,6 +168,7 @@ async def find_similar_functions(
         dict with ranked matches or task_id for background execution.
     """
     _check_angr_ready("find_similar_functions")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     abs_path_b = os.path.abspath(file_path_b)
     state.check_path_allowed(abs_path_b)
@@ -512,6 +514,7 @@ async def query_signature_db(
         dict with ranked matches from the signature database.
     """
     _check_angr_ready("query_signature_db")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     addr = _parse_addr(function_address)
 
     def _query():

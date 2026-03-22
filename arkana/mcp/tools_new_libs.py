@@ -20,6 +20,7 @@ from arkana.config import (
     DOTNETFILE_AVAILABLE,
     PPDEEP_AVAILABLE, TLSH_AVAILABLE, BINWALK_AVAILABLE, BINWALK_CLI_ONLY,
 )
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_angr_ready, _check_mcp_response_size
 from arkana.mcp._format_helpers import _check_lib, _get_filepath
 from arkana.mcp._progress_bridge import ProgressBridge
@@ -281,6 +282,7 @@ async def disassemble_raw_bytes(
     """
     await ctx.info(f"Disassembling raw bytes ({architecture})")
     _check_lib("capstone", CAPSTONE_AVAILABLE, "disassemble_raw_bytes")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     _MAX_RAW_HEX_LEN = 200_000  # 100KB decoded
     if len(hex_bytes) > _MAX_RAW_HEX_LEN:
@@ -679,6 +681,7 @@ async def emulate_pe_with_windows_apis(
     _check_pe_loaded("emulate_pe_with_windows_apis")
     if timeout_seconds < 1 or timeout_seconds > 600:
         raise ValueError(f"timeout_seconds must be 1-600, got {timeout_seconds}")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_pe_with_windows_apis", timeout_seconds)
@@ -765,6 +768,7 @@ async def emulate_shellcode_with_speakeasy(
     _MAX_SHELLCODE_HEX = 20_000_000  # 20MB hex = 10MB shellcode
     if shellcode_hex and len(shellcode_hex) > _MAX_SHELLCODE_HEX:
         raise ValueError(f"shellcode_hex too large ({len(shellcode_hex)} chars). Maximum is {_MAX_SHELLCODE_HEX}.")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     progress_task = asyncio.create_task(
         _subprocess_progress_reporter(ctx, "emulate_shellcode_with_speakeasy", timeout_seconds)
@@ -923,6 +927,7 @@ async def scan_for_embedded_files(
     _check_lib("binwalk", BINWALK_AVAILABLE, "scan_for_embedded_files")
     if not state.filepath or not os.path.isfile(state.filepath):
         raise RuntimeError("[scan_for_embedded_files] No file is loaded. Use open_file first.")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     def _scan_python_api():
         """Use the binwalk Python API (v2.x)."""

@@ -169,6 +169,7 @@ async def elf_dwarf_info(
         limit: Max entries per category.
     """
     await ctx.info("Extracting DWARF debug info")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
     _check_lib("pyelftools", PYELFTOOLS_AVAILABLE, "elf_dwarf_info", "pyelftools")
     target = _get_filepath(file_path)
 

@@ -411,6 +411,10 @@ async def open_file(
                     if session_meta:
                         with state._notes_lock:
                             state.notes = session_meta.get("notes", [])
+                            # Restore counter to max note ID + 1 to prevent collisions
+                            if state.notes:
+                                max_id = max(n.get("id", 0) for n in state.notes)
+                                state._notes_counter = max_id + 1
                         state.previous_session_history = session_meta.get("tool_history", [])[:MAX_TOOL_HISTORY]  # M3-v11: bound
                         with state._artifacts_lock:
                             state.artifacts = session_meta.get("artifacts", [])
@@ -734,6 +738,9 @@ async def close_file(ctx: Context) -> Dict[str, str]:
 
     closed_path = state.filepath
     closed_path_info = build_path_info(closed_path)
+
+    # Cancel any running enrichment before clearing state
+    state._enrichment_cancel.set()
 
     # Persist notes, tool history, and artifacts to cache before clearing state
     sha = (state.pe_data or {}).get("file_hashes", {}).get("sha256") if state.pe_data else None

@@ -13,6 +13,7 @@ import asyncio
 import json
 import re
 import os
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -94,6 +95,24 @@ class _DebugSession:
         self.crt_stubs = False
         self.api_trace_enabled = False
         self._cmd_lock = asyncio.Lock()
+        # Drain stderr in background to prevent pipe deadlock
+        self._stderr_task: Optional[asyncio.Task] = None
+        try:
+            loop = asyncio.get_running_loop()
+            self._stderr_task = loop.create_task(self._drain_stderr())
+        except RuntimeError:
+            pass  # No event loop (e.g. in tests)
+
+    async def _drain_stderr(self) -> None:
+        """Read and discard stderr to prevent pipe buffer deadlock."""
+        try:
+            while True:
+                line = await self.proc.stderr.readline()
+                if not line:
+                    break
+                logger.debug("debug_runner stderr: %s", line.decode(errors="replace").rstrip())
+        except Exception:
+            pass
 
     async def send_command(self, cmd: dict, timeout: int = DEBUG_COMMAND_TIMEOUT) -> dict:
         """Send JSONL command, read JSONL response."""
@@ -127,6 +146,8 @@ class _DebugSession:
                 await self.proc.wait()
             except Exception:
                 pass
+        if self._stderr_task and not self._stderr_task.done():
+            self._stderr_task.cancel()
 
     def kill_sync(self) -> None:
         """Synchronous kill for use in reaper thread."""
@@ -146,60 +167,65 @@ class _DebugSessionManager:
 
     def __init__(self):
         self._sessions: Dict[str, _DebugSession] = {}
-        self._lock = asyncio.Lock()
+        self._lock = threading.Lock()
         self._counter = 0
 
     async def create_session(self, filepath: str, rootfs_path: str = None,
                              stub_io: bool = True,
                              stub_crt: bool = True) -> _DebugSession:
         """Spawn a new debug subprocess and initialise Qiling."""
-        async with self._lock:
+        # Evict oldest session under lock (sync portion only)
+        old_to_kill = None
+        with self._lock:
             if len(self._sessions) >= MAX_DEBUG_SESSIONS:
-                # Evict oldest session
                 oldest_id = min(self._sessions, key=lambda k: self._sessions[k].last_active)
-                old = self._sessions.pop(oldest_id)
-                await old.kill()
+                old_to_kill = self._sessions.pop(oldest_id)
                 logger.debug("Debug session evicted: %s", oldest_id)
-
             self._counter += 1
             session_id = f"debug-{self._counter}"
 
-            proc = await asyncio.create_subprocess_exec(
-                str(_QILING_VENV_PYTHON), str(_DEBUG_RUNNER),
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+        # Kill evicted session outside lock (async)
+        if old_to_kill:
+            await old_to_kill.kill()
 
-            session = _DebugSession(session_id, proc, "", "", filepath)
+        proc = await asyncio.create_subprocess_exec(
+            str(_QILING_VENV_PYTHON), str(_DEBUG_RUNNER),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
 
-            # Send init command
-            init_cmd = {
-                "action": "init",
-                "filepath": filepath,
-                "rootfs_path": rootfs_path or str(_QILING_DEFAULT_ROOTFS),
-                "stub_io": stub_io,
-                "stub_crt": stub_crt,
-            }
-            result = await session.send_command(init_cmd, timeout=120)
+        session = _DebugSession(session_id, proc, "", "", filepath)
 
-            if "error" in result:
-                await session.kill()
-                raise RuntimeError(result["error"])
+        # Send init command
+        init_cmd = {
+            "action": "init",
+            "filepath": filepath,
+            "rootfs_path": rootfs_path or str(_QILING_DEFAULT_ROOTFS),
+            "stub_io": stub_io,
+            "stub_crt": stub_crt,
+        }
+        result = await session.send_command(init_cmd, timeout=120)
 
-            session.arch = result.get("architecture", "")
-            session.os_type = result.get("os_type", "")
-            session.pc = result.get("pc")
-            session.stub_io = result.get("stub_io", False)
-            session.crt_stubs = result.get("crt_stubs", False)
-            session.api_trace_enabled = result.get("api_trace_enabled", False)
-            session.status = "paused"
+        if "error" in result:
+            await session.kill()
+            raise RuntimeError(result["error"])
+
+        session.arch = result.get("architecture", "")
+        session.os_type = result.get("os_type", "")
+        session.pc = result.get("pc")
+        session.stub_io = result.get("stub_io", False)
+        session.crt_stubs = result.get("crt_stubs", False)
+        session.api_trace_enabled = result.get("api_trace_enabled", False)
+        session.status = "paused"
+
+        with self._lock:
             self._sessions[session_id] = session
-            return session
+        return session
 
     async def destroy_session(self, session_id: str) -> None:
         """Stop and remove a debug session."""
-        async with self._lock:
+        with self._lock:
             session = self._sessions.pop(session_id, None)
         if session is None:
             return
@@ -211,7 +237,7 @@ class _DebugSessionManager:
 
     async def get_session(self, session_id: Optional[str] = None) -> _DebugSession:
         """Get a session by ID, or the most recent one if ID is None."""
-        async with self._lock:
+        with self._lock:
             if not self._sessions:
                 raise RuntimeError(
                     "No active debug session. Use debug_start to create one."
@@ -230,38 +256,45 @@ class _DebugSessionManager:
 
     def cleanup_all(self) -> None:
         """Synchronously kill all debug subprocesses. Called by session reaper."""
-        for session in self._sessions.values():
-            session.kill_sync()
-        self._sessions.clear()
+        with self._lock:
+            for session in self._sessions.values():
+                session.kill_sync()
+            self._sessions.clear()
 
     @property
     def session_count(self) -> int:
-        return len(self._sessions)
+        with self._lock:
+            return len(self._sessions)
 
     def list_sessions(self) -> List[Dict[str, Any]]:
         """Return metadata for all active sessions."""
-        result = []
-        for sid, s in self._sessions.items():
-            result.append({
-                "session_id": sid,
-                "filepath": s.filepath,
-                "architecture": s.arch,
-                "os_type": s.os_type,
-                "pc": s.pc,
-                "status": s.status,
-                "instructions_executed": s.instructions_executed,
-                "created_at": s.created_at,
-                "last_active": s.last_active,
-                "is_alive": s.is_alive(),
-            })
-        return result
+        with self._lock:
+            result = []
+            for sid, s in self._sessions.items():
+                result.append({
+                    "session_id": sid,
+                    "filepath": s.filepath,
+                    "architecture": s.arch,
+                    "os_type": s.os_type,
+                    "pc": s.pc,
+                    "status": s.status,
+                    "instructions_executed": s.instructions_executed,
+                    "created_at": s.created_at,
+                    "last_active": s.last_active,
+                    "is_alive": s.is_alive(),
+                })
+            return result
+
+
+_debug_manager_lock = threading.Lock()
 
 
 def _get_debug_manager() -> _DebugSessionManager:
     """Get or create the debug session manager for the current state."""
-    if not hasattr(state, '_debug_manager') or state._debug_manager is None:
-        state._debug_manager = _DebugSessionManager()
-    return state._debug_manager
+    with _debug_manager_lock:
+        if not hasattr(state, '_debug_manager') or state._debug_manager is None:
+            state._debug_manager = _DebugSessionManager()
+        return state._debug_manager
 
 
 def _update_session_from_result(session: _DebugSession, result: dict) -> None:

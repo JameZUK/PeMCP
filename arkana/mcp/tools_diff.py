@@ -4,6 +4,7 @@ import asyncio
 from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context
+from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.utils import shannon_entropy
 
@@ -41,6 +42,7 @@ async def diff_payloads(
     # in diff logic, but bound to a reasonable value for future implementation)
     if context_bytes < 0 or context_bytes > 4096:
         raise ValueError(f"context_bytes must be 0-4096, got {context_bytes}")
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
 
     # Check hex string length BEFORE decoding to avoid allocating huge intermediates.
     # 2 hex chars = 1 byte, so _MAX_HEX_LEN hex chars = _MAX_HEX_LEN/2 decoded bytes.

@@ -6,6 +6,7 @@ triggered each warning, and a logging.Handler that filters by logger prefix.
 import contextvars
 import logging
 import sys
+import threading
 from typing import Optional, FrozenSet
 
 from arkana.state import get_current_state
@@ -76,14 +77,19 @@ class LibraryWarningHandler(logging.Handler):
                 pass
 
 
+_install_lock = threading.Lock()
+
+
 def install_warning_handler() -> None:
     """Attach the LibraryWarningHandler to the root logger.
 
     Idempotent — skips installation if a handler is already attached.
+    Thread-safe via _install_lock.
     """
-    root = logging.getLogger()
-    if any(isinstance(h, LibraryWarningHandler) for h in root.handlers):
-        return
-    handler = LibraryWarningHandler()
-    handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
-    root.addHandler(handler)
+    with _install_lock:
+        root = logging.getLogger()
+        if any(isinstance(h, LibraryWarningHandler) for h in root.handlers):
+            return
+        handler = LibraryWarningHandler()
+        handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+        root.addHandler(handler)

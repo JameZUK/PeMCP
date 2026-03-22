@@ -704,6 +704,7 @@ async def find_path_with_custom_input(
     symbolic_memory_ranges: Optional[List[str]] = None,
     concrete_memory: Optional[Dict[str, str]] = None,
     max_steps: int = 2000,
+    use_dfs: bool = True,
     run_in_background: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -788,7 +789,8 @@ async def find_path_with_custom_input(
             _update_progress(task_id_for_progress, 15, "Starting symbolic exploration...", bridge=_progress_bridge)
 
         simgr = proj.factory.simulation_manager(entry_state)
-        simgr.use_technique(angr.exploration_techniques.DFS())
+        if use_dfs:
+            simgr.use_technique(angr.exploration_techniques.DFS())
         simgr.use_technique(angr.exploration_techniques.LengthLimiter(max_length=max_steps))
         simgr.use_technique(angr.exploration_techniques.Explorer(find=target, avoid=avoid))
 
@@ -2195,8 +2197,6 @@ def _sync_detect_opaque(target_addr, limit):
     scanned_funcs = 0
     blocks_analyzed = 0
     solver_timeouts = 0
-    orphaned_threads = []
-
     funcs_to_scan = {}
     if target_addr is not None:
         if target_addr in cfg.functions:
@@ -2239,7 +2239,6 @@ def _sync_detect_opaque(target_addr, limit):
 
             if t.is_alive():
                 solver_timeouts += 1
-                orphaned_threads.append(t)
                 continue
 
             if result_holder[0] is not None:
@@ -2251,21 +2250,12 @@ def _sync_detect_opaque(target_addr, limit):
         if blocks_analyzed >= MAX_OPAQUE_PREDICATE_BLOCKS:
             break
 
-    # Best-effort cleanup: give orphaned solver threads a brief grace period
-    if orphaned_threads:
+    if solver_timeouts:
         logger.debug(
-            "Waiting for %d orphaned Z3 solver thread(s) to finish...",
-            len(orphaned_threads),
+            "%d Z3 solver thread(s) timed out during opaque predicate detection; "
+            "they will be reaped on process exit.",
+            solver_timeouts,
         )
-        for t in orphaned_threads:
-            t.join(timeout=1.0)
-        still_alive = sum(1 for t in orphaned_threads if t.is_alive())
-        if still_alive:
-            logger.warning(
-                "%d Z3 solver thread(s) still running after cleanup; "
-                "they will be reaped on process exit.",
-                still_alive,
-            )
 
     return {
         "findings": findings[:limit],

@@ -39,9 +39,9 @@ def _hex_to_bytes(hex_string: str) -> bytes:
             f"{_MAX_HEX_INPUT_LEN // 2:,} bytes."
         )
     cleaned = hex_string.replace(" ", "")
-    # Strip leading 0x/0X prefix only (not all occurrences)
-    if cleaned.startswith(("0x", "0X")):
-        cleaned = cleaned[2:]
+    # Strip all 0x/0X prefixes (handles "0x41 0x42 0x43" format)
+    import re as _re
+    cleaned = _re.sub(r'(?i)0x', '', cleaned)
     # Strip \x escape sequences throughout
     cleaned = cleaned.replace("\\x", "").replace("\\X", "")
     try:
