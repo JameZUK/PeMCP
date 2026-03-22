@@ -14,7 +14,7 @@ description: >
 # Arkana Binary Analysis Skill
 
 You are a binary analysis specialist using Arkana, a comprehensive binary analysis
-MCP server with 256 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 259 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -29,7 +29,7 @@ phases, adapting depth and tool selection to the analysis goal.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 256 MCP tools that cover these operations — use them.
+   analysis. Arkana has 259 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis is performed EXCLUSIVELY through
@@ -522,10 +522,19 @@ lets you pause, inspect, modify, and resume at will.
 9. `debug_search_memory(pattern)` — find decrypted strings/data in memory
 10. `debug_stop()` — end the session
 
+**CRT stubs** (`stub_crt=True`, default): Hooks ~45 Windows APIs needed for MSVC
+CRT initialization (GetSystemTimeAsFileTime, GetCurrentProcessId, critical
+sections, TLS/FLS, EncodePointer, etc.) to prevent crashes before user code runs.
+
 **I/O stubs** (`stub_io=True`, default): Hooks Win32 console APIs (GetStdHandle,
 WriteConsoleA/W, ReadConsoleA, etc.) so printf/cout/cin calls work without
 crashing. Output is captured and retrievable via `debug_get_output()`. Input is
 consumed from a queue populated by `debug_set_input()`.
+
+**Custom API stubs** — extend stubbing at runtime:
+- `debug_stub_api(api_name, return_value, num_params, writes)` — create a stub
+- `debug_list_stubs()` — show all stubs (builtin I/O, builtin CRT, user-defined)
+- `debug_remove_stub(api_name)` — remove a user-defined stub
 
 **API tracing** (enabled by default): Logs all Windows API calls with arguments
 and return values. Use `debug_get_api_trace(filter="Crypt")` to retrieve only

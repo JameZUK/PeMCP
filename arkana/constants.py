@@ -63,6 +63,7 @@ __all__ = [
     "MAX_DEBUG_SNAPSHOTS", "MAX_DEBUG_INSTRUCTIONS", "MAX_DEBUG_MEMORY_READ",
     "DEBUG_DISASM_PREVIEW", "MAX_DEBUG_WATCHPOINT_SIZE",
     "MAX_DEBUG_BREAKPOINTS", "MAX_DEBUG_WATCHPOINTS",
+    "MAX_DEBUG_USER_STUBS", "MAX_DEBUG_STUB_WRITE_SIZE", "MAX_DEBUG_STUB_WRITES",
     "DEPENDENCIES",
 ]
 
@@ -230,6 +231,9 @@ MAX_DEBUG_PENDING_INPUT = 1_000      # Max pending input entries for stubbed std
 MAX_DEBUG_API_TRACE = 10_000         # Max API trace entries per session
 MAX_DEBUG_SEARCH_MATCHES = 100       # Max memory search matches returned
 DEBUG_SEARCH_CONTEXT_BYTES = 32      # Context bytes around memory search matches
+MAX_DEBUG_USER_STUBS = 200           # Max user-defined API stubs per session
+MAX_DEBUG_STUB_WRITE_SIZE = 1024     # Max bytes per stub write operation
+MAX_DEBUG_STUB_WRITES = 8            # Max write operations per stub
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

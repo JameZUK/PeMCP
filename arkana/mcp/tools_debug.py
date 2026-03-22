@@ -25,7 +25,8 @@ from arkana.constants import (
     MAX_DEBUG_SNAPSHOTS, MAX_DEBUG_INSTRUCTIONS, MAX_DEBUG_MEMORY_READ,
     MAX_DEBUG_BREAKPOINTS, MAX_DEBUG_WATCHPOINTS, MAX_DEBUG_WATCHPOINT_SIZE,
     MAX_DEBUG_CAPTURED_OUTPUT, MAX_DEBUG_PENDING_INPUT, MAX_DEBUG_API_TRACE,
-    MAX_DEBUG_SEARCH_MATCHES,
+    MAX_DEBUG_SEARCH_MATCHES, MAX_DEBUG_USER_STUBS, MAX_DEBUG_STUB_WRITE_SIZE,
+    MAX_DEBUG_STUB_WRITES,
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
@@ -89,6 +90,7 @@ class _DebugSession:
         self.status = "paused"  # paused | running | exited | error
         self.instructions_executed = 0
         self.stub_io = False
+        self.crt_stubs = False
         self.api_trace_enabled = False
         self._cmd_lock = asyncio.Lock()
 
@@ -147,7 +149,8 @@ class _DebugSessionManager:
         self._counter = 0
 
     async def create_session(self, filepath: str, rootfs_path: str = None,
-                             stub_io: bool = True) -> _DebugSession:
+                             stub_io: bool = True,
+                             stub_crt: bool = True) -> _DebugSession:
         """Spawn a new debug subprocess and initialise Qiling."""
         async with self._lock:
             if len(self._sessions) >= MAX_DEBUG_SESSIONS:
@@ -175,6 +178,7 @@ class _DebugSessionManager:
                 "filepath": filepath,
                 "rootfs_path": rootfs_path or str(_QILING_DEFAULT_ROOTFS),
                 "stub_io": stub_io,
+                "stub_crt": stub_crt,
             }
             result = await session.send_command(init_cmd, timeout=120)
 
@@ -186,6 +190,7 @@ class _DebugSessionManager:
             session.os_type = result.get("os_type", "")
             session.pc = result.get("pc")
             session.stub_io = result.get("stub_io", False)
+            session.crt_stubs = result.get("crt_stubs", False)
             session.api_trace_enabled = result.get("api_trace_enabled", False)
             session.status = "paused"
             self._sessions[session_id] = session
@@ -282,12 +287,17 @@ async def debug_start(
     ctx: Context,
     rootfs_path: str = "",
     stub_io: bool = True,
+    stub_crt: bool = True,
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Start an interactive debug session for the loaded binary.
 
     Creates a persistent emulation environment using Qiling Framework.
     The binary is loaded and paused at entry point, ready for stepping.
+
+    CRT stubs (enabled by default) hook ~45 Windows APIs needed for MSVC CRT
+    initialization (GetSystemTimeAsFileTime, GetCurrentProcessId, critical
+    sections, TLS/FLS, etc.) to prevent crashes before user code runs.
 
     I/O stubs (enabled by default) hook Windows console APIs (WriteConsoleA,
     ReadConsoleA, GetStdHandle, etc.) to prevent crashes from printf/cout/cin
@@ -297,9 +307,12 @@ async def debug_start(
     API call tracing is enabled by default — all Windows API calls are logged
     with arguments and return values. Use debug_get_api_trace to view the trace.
 
+    Use debug_stub_api to add custom stubs for additional APIs at runtime.
+
     Args:
         rootfs_path: Custom rootfs path (optional, uses default if empty)
         stub_io: Install console I/O stubs to prevent crashes (default True)
+        stub_crt: Install CRT initialization stubs to prevent crashes (default True)
         session_id: Ignored (auto-generated). Use debug_status to see session IDs.
 
     Returns:
@@ -315,6 +328,7 @@ async def debug_start(
         filepath=state.filepath,
         rootfs_path=rootfs_path or None,
         stub_io=stub_io,
+        stub_crt=stub_crt,
     )
 
     await ctx.report_progress(100, 100)
@@ -327,11 +341,13 @@ async def debug_start(
         "pc": session.pc,
         "status": session.status,
         "stub_io": session.stub_io,
+        "crt_stubs": session.crt_stubs,
         "api_trace_enabled": session.api_trace_enabled,
         "note": "Debug session started. Binary loaded and paused at entry point. "
                 "Use debug_step, debug_continue, debug_set_breakpoint to control execution. "
                 "Use debug_get_output for captured console I/O, debug_get_api_trace for API calls, "
-                "debug_search_memory to search emulated memory.",
+                "debug_search_memory to search emulated memory. "
+                "Use debug_stub_api to add custom API stubs at runtime.",
     }
 
 
@@ -1138,3 +1154,123 @@ async def debug_search_memory(
     result = await session.send_command(cmd)
     await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "debug_search_memory", "'max_matches' parameter")
+
+
+# ---------------------------------------------------------------------------
+#  MCP Tools — API Stubs
+# ---------------------------------------------------------------------------
+
+@tool_decorator
+async def debug_stub_api(
+    ctx: Context,
+    api_name: str = "",
+    return_value: str = "0x0",
+    num_params: int = 0,
+    writes: str = "",
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Create a custom API stub at runtime.
+
+    When the binary calls the specified Windows API, the stub intercepts it:
+    sets the return value, optionally writes data to output pointer parameters,
+    and returns cleanly. Useful for stubbing APIs that Qiling doesn't handle.
+
+    CRT stubs (~45 APIs) are installed by default. Use this for additional APIs
+    that crash during emulation (e.g. custom DLL imports, rare Win32 APIs).
+
+    Args:
+        api_name: Windows API function name (e.g. "GetVersionExW", "CreateMutexA")
+        return_value: Return value as hex (e.g. "0x1") or "void" for no return (default "0x0")
+        num_params: Number of STDCALL parameters (0-20, for x86 stack cleanup)
+        writes: JSON array of pointer writes, e.g. '[{"param_index": 0, "data_hex": "0100", "size": 2}]'
+        session_id: Session to use (uses most recent if empty)
+
+    Returns:
+        Stub creation result with patching status.
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    if not api_name:
+        return {"error": "api_name is required"}
+    if len(api_name) > 128:
+        return {"error": "api_name too long (max 128 chars)"}
+
+    num_params = max(0, min(num_params, 20))
+
+    cmd: Dict[str, Any] = {
+        "action": "stub_api",
+        "api_name": api_name,
+        "return_value": return_value,
+        "num_params": num_params,
+    }
+
+    if writes:
+        try:
+            parsed_writes = json.loads(writes)
+            if not isinstance(parsed_writes, list):
+                return {"error": "'writes' must be a JSON array"}
+            if len(parsed_writes) > MAX_DEBUG_STUB_WRITES:
+                return {"error": f"Too many write operations (max {MAX_DEBUG_STUB_WRITES})"}
+            for i, w in enumerate(parsed_writes):
+                if not isinstance(w, dict):
+                    return {"error": f"writes[{i}] must be an object"}
+                dh = w.get("data_hex", "")
+                if dh and len(dh) // 2 > MAX_DEBUG_STUB_WRITE_SIZE:
+                    return {"error": f"writes[{i}].data_hex too large (max {MAX_DEBUG_STUB_WRITE_SIZE} bytes)"}
+            cmd["writes"] = parsed_writes
+        except json.JSONDecodeError as e:
+            return {"error": f"Invalid writes JSON: {e}"}
+
+    result = await session.send_command(cmd)
+    return result
+
+
+@tool_decorator
+async def debug_list_stubs(
+    ctx: Context,
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] List all installed API stubs in a debug session.
+
+    Shows three categories: builtin I/O stubs (console APIs), builtin CRT
+    stubs (MSVC initialization APIs), and user-defined stubs (created via
+    debug_stub_api).
+
+    Args:
+        session_id: Session to query (uses most recent if empty)
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    result = await session.send_command({"action": "list_stubs"})
+    return await _check_mcp_response_size(ctx, result, "debug_list_stubs")
+
+
+@tool_decorator
+async def debug_remove_stub(
+    ctx: Context,
+    api_name: str = "",
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Remove a user-defined API stub.
+
+    Only user-defined stubs (created via debug_stub_api) can be removed.
+    Builtin I/O and CRT stubs cannot be removed — restart the session
+    with stub_io=False or stub_crt=False to disable them.
+
+    Args:
+        api_name: Name of the API stub to remove
+        session_id: Session to use (uses most recent if empty)
+    """
+    mgr = _get_debug_manager()
+    session = await mgr.get_session(session_id or None)
+
+    if not api_name:
+        return {"error": "api_name is required"}
+
+    result = await session.send_command({
+        "action": "remove_stub",
+        "api_name": api_name,
+    })
+    return result

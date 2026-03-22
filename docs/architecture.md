@@ -58,7 +58,7 @@ arkana/
     ├── tools_angr_forensic.py    - Angr forensic & advanced analysis (10 tools)
     ├── tools_new_libs.py         - LIEF/Capstone/Keystone/Speakeasy (13 tools)
     ├── tools_qiling.py           - Qiling cross-platform emulation (8 tools)
-    ├── tools_debug.py            - Interactive emulation debugger (20 tools)
+    ├── tools_debug.py            - Interactive emulation debugger (29 tools)
     ├── tools_dotnet.py           - .NET analysis (dnfile/dncil, 2 tools)
     ├── tools_go.py               - Go binary analysis (pygore, 1 tool)
     ├── tools_rust.py             - Rust binary analysis (2 tools)

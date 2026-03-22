@@ -1205,3 +1205,264 @@ class TestMCPToolIntegrationNew:
         self._setup_session(clean_state, [])
         result = _run(debug_search_memory(mock_ctx, pattern="test", pattern_type="regex"))
         assert "error" in result
+
+
+# ===================================================================
+#  14. CRT Stubs & User API Stubs Tests
+# ===================================================================
+
+class TestCRTStubsAndUserStubs:
+
+    def _setup_session(self, clean_state, responses):
+        _DebugSession = _import_session_cls()
+        _DebugSessionManager = _import_manager_cls()
+        mgr = _DebugSessionManager()
+        proc = MockProcess(responses)
+        session = _DebugSession("debug-1", proc, "x86", "windows", "/tmp/test.exe")
+        mgr._sessions["debug-1"] = session
+        clean_state._debug_manager = mgr
+        return session
+
+    # --- stub_crt parameter flow ---
+
+    def test_debug_start_stub_crt_param(self, clean_state, mock_ctx):
+        """Verify stub_crt flows through to the init command."""
+        from arkana.mcp.tools_debug import debug_start, _get_debug_manager
+
+        init_resp = _make_init_response()
+        init_resp["crt_stubs"] = True
+        init_resp["crt_stub_count"] = 40
+        mock_proc = MockProcess([init_resp])
+
+        async def _test():
+            with patch("arkana.mcp.tools_debug._check_qiling_available", return_value=True), \
+                 patch("arkana.mcp.tools_debug.os.path.isdir", return_value=True), \
+                 patch("arkana.mcp.tools_debug.asyncio.create_subprocess_exec",
+                       new_callable=AsyncMock, return_value=mock_proc):
+                result = await debug_start(mock_ctx, stub_crt=True)
+                assert result["crt_stubs"] is True
+                # Verify the init command included stub_crt
+                written = mock_proc.stdin.written[0]
+                cmd = json.loads(written.decode())
+                assert cmd["stub_crt"] is True
+
+        _run(_test())
+
+    def test_debug_start_stub_crt_false(self, clean_state, mock_ctx):
+        """Verify stub_crt=False is passed through."""
+        from arkana.mcp.tools_debug import debug_start
+
+        init_resp = _make_init_response()
+        init_resp["crt_stubs"] = False
+        mock_proc = MockProcess([init_resp])
+
+        async def _test():
+            with patch("arkana.mcp.tools_debug._check_qiling_available", return_value=True), \
+                 patch("arkana.mcp.tools_debug.os.path.isdir", return_value=True), \
+                 patch("arkana.mcp.tools_debug.asyncio.create_subprocess_exec",
+                       new_callable=AsyncMock, return_value=mock_proc):
+                result = await debug_start(mock_ctx, stub_crt=False)
+                assert result["crt_stubs"] is False
+                written = mock_proc.stdin.written[0]
+                cmd = json.loads(written.decode())
+                assert cmd["stub_crt"] is False
+
+        _run(_test())
+
+    def test_debug_start_crt_stubs_in_response(self, clean_state, mock_ctx):
+        """Verify crt_stubs field appears in debug_start response."""
+        from arkana.mcp.tools_debug import debug_start
+
+        init_resp = _make_init_response()
+        init_resp["crt_stubs"] = True
+        init_resp["crt_stub_count"] = 42
+        mock_proc = MockProcess([init_resp])
+
+        async def _test():
+            with patch("arkana.mcp.tools_debug._check_qiling_available", return_value=True), \
+                 patch("arkana.mcp.tools_debug.os.path.isdir", return_value=True), \
+                 patch("arkana.mcp.tools_debug.asyncio.create_subprocess_exec",
+                       new_callable=AsyncMock, return_value=mock_proc):
+                result = await debug_start(mock_ctx)
+                assert "crt_stubs" in result
+
+        _run(_test())
+
+    # --- debug_stub_api ---
+
+    def test_stub_api_basic(self, clean_state, mock_ctx):
+        """Valid stub creation."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        resp = {"status": "ok", "api_name": "MyAPI", "return_value": "0x1",
+                "num_params": 2, "writes_count": 0, "patched": True,
+                "total_user_stubs": 1}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_stub_api(mock_ctx, api_name="MyAPI",
+                                      return_value="0x1", num_params=2))
+        assert result["status"] == "ok"
+        assert result["api_name"] == "MyAPI"
+
+    def test_stub_api_void_return(self, clean_state, mock_ctx):
+        """Void return value."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        resp = {"status": "ok", "api_name": "VoidAPI", "return_value": None,
+                "num_params": 0, "writes_count": 0, "patched": False,
+                "total_user_stubs": 1}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_stub_api(mock_ctx, api_name="VoidAPI",
+                                      return_value="void"))
+        assert result["status"] == "ok"
+
+    def test_stub_api_with_writes(self, clean_state, mock_ctx):
+        """Stub with write_params."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        resp = {"status": "ok", "api_name": "WriteAPI", "return_value": "0x1",
+                "num_params": 2, "writes_count": 1, "patched": True,
+                "total_user_stubs": 1}
+        self._setup_session(clean_state, [resp])
+        writes_json = '[{"param_index": 0, "data_hex": "0100", "size": 2}]'
+        result = _run(debug_stub_api(mock_ctx, api_name="WriteAPI",
+                                      return_value="0x1", num_params=2,
+                                      writes=writes_json))
+        assert result["status"] == "ok"
+        assert result["writes_count"] == 1
+
+    def test_stub_api_missing_name(self, clean_state, mock_ctx):
+        """Error on empty api_name."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        self._setup_session(clean_state, [])
+        result = _run(debug_stub_api(mock_ctx, api_name=""))
+        assert "error" in result
+
+    def test_stub_api_name_too_long(self, clean_state, mock_ctx):
+        """Error on api_name exceeding 128 chars."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        self._setup_session(clean_state, [])
+        result = _run(debug_stub_api(mock_ctx, api_name="A" * 200))
+        assert "error" in result
+
+    def test_stub_api_invalid_writes_json(self, clean_state, mock_ctx):
+        """Error on malformed writes JSON."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        self._setup_session(clean_state, [])
+        result = _run(debug_stub_api(mock_ctx, api_name="TestAPI",
+                                      writes="not valid json"))
+        assert "error" in result
+
+    def test_stub_api_writes_not_array(self, clean_state, mock_ctx):
+        """Error when writes is not an array."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        self._setup_session(clean_state, [])
+        result = _run(debug_stub_api(mock_ctx, api_name="TestAPI",
+                                      writes='{"not": "array"}'))
+        assert "error" in result
+
+    def test_stub_api_write_size_limit(self, clean_state, mock_ctx):
+        """Error when data exceeds MAX_DEBUG_STUB_WRITE_SIZE."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        self._setup_session(clean_state, [])
+        # 2048 hex chars = 1024 bytes, should be within limit
+        # 2050 hex chars = 1025 bytes, should exceed limit
+        big_hex = "AA" * 1025
+        writes_json = json.dumps([{"param_index": 0, "data_hex": big_hex, "size": 1025}])
+        result = _run(debug_stub_api(mock_ctx, api_name="TestAPI",
+                                      writes=writes_json))
+        assert "error" in result
+        assert "too large" in result["error"]
+
+    def test_stub_api_too_many_writes(self, clean_state, mock_ctx):
+        """Error when writes exceed MAX_DEBUG_STUB_WRITES."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        self._setup_session(clean_state, [])
+        writes = [{"param_index": i, "data_hex": "0100", "size": 2} for i in range(9)]
+        writes_json = json.dumps(writes)
+        result = _run(debug_stub_api(mock_ctx, api_name="TestAPI",
+                                      writes=writes_json))
+        assert "error" in result
+        assert "Too many" in result["error"]
+
+    # --- debug_list_stubs ---
+
+    def test_list_stubs(self, clean_state, mock_ctx):
+        """Returns categorized stub lists."""
+        from arkana.mcp.tools_debug import debug_list_stubs
+        resp = {"status": "ok",
+                "builtin_io": ["GetStdHandle", "WriteConsoleA"],
+                "builtin_io_count": 2,
+                "builtin_crt": ["GetCurrentProcessId", "GetTickCount"],
+                "builtin_crt_count": 2,
+                "user": [{"api_name": "MyStub", "return_value": "0x1",
+                           "num_params": 0, "writes_count": 0, "patched": True}],
+                "user_count": 1,
+                "total_stubs": 5}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_list_stubs(mock_ctx))
+        assert result["status"] == "ok"
+        assert result["total_stubs"] == 5
+        assert len(result["builtin_crt"]) == 2
+        assert len(result["user"]) == 1
+
+    # --- debug_remove_stub ---
+
+    def test_remove_stub_user(self, clean_state, mock_ctx):
+        """Successfully removes user-defined stub."""
+        from arkana.mcp.tools_debug import debug_remove_stub
+        resp = {"status": "ok", "api_name": "MyStub", "remaining_user_stubs": 0}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_remove_stub(mock_ctx, api_name="MyStub"))
+        assert result["status"] == "ok"
+        assert result["api_name"] == "MyStub"
+
+    def test_remove_stub_missing_name(self, clean_state, mock_ctx):
+        """Error on empty api_name."""
+        from arkana.mcp.tools_debug import debug_remove_stub
+        self._setup_session(clean_state, [])
+        result = _run(debug_remove_stub(mock_ctx, api_name=""))
+        assert "error" in result
+
+    def test_remove_stub_builtin_rejected(self, clean_state, mock_ctx):
+        """Cannot remove builtin stub — error from debug_runner."""
+        from arkana.mcp.tools_debug import debug_remove_stub
+        resp = {"error": "Cannot remove builtin I/O stub 'GetStdHandle'."}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_remove_stub(mock_ctx, api_name="GetStdHandle"))
+        assert "error" in result
+
+    def test_remove_stub_nonexistent(self, clean_state, mock_ctx):
+        """Error for unknown api_name."""
+        from arkana.mcp.tools_debug import debug_remove_stub
+        resp = {"error": "No user-defined stub for 'UnknownAPI'"}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_remove_stub(mock_ctx, api_name="UnknownAPI"))
+        assert "error" in result
+
+    # --- Session field tests ---
+
+    def test_session_crt_stubs_field(self):
+        """_DebugSession has crt_stubs field."""
+        _DebugSession = _import_session_cls()
+        proc = MockProcess([])
+        session = _DebugSession("test-1", proc, "x86", "windows", "/tmp/test.exe")
+        assert session.crt_stubs is False
+
+    def test_create_session_crt_stubs(self):
+        """create_session passes stub_crt and reads back crt_stubs."""
+        _DebugSessionManager = _import_manager_cls()
+
+        init_resp = _make_init_response()
+        init_resp["crt_stubs"] = True
+        init_resp["crt_stub_count"] = 40
+        mock_proc = MockProcess([init_resp])
+
+        async def _test():
+            mgr = _DebugSessionManager()
+            with patch("arkana.mcp.tools_debug.asyncio.create_subprocess_exec",
+                        new_callable=AsyncMock, return_value=mock_proc):
+                session = await mgr.create_session("/tmp/test.exe", stub_crt=True)
+                assert session.crt_stubs is True
+                # Verify init command
+                written = mock_proc.stdin.written[0]
+                cmd = json.loads(written.decode())
+                assert cmd["stub_crt"] is True
+
+        _run(_test())

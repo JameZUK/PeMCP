@@ -108,11 +108,23 @@ _api_trace_seq = 0                   # Sequence counter for trace entries
 _api_trace_filter = None             # None = trace all, set = whitelist
 _api_trace_enabled = True            # Master enable flag
 
+# --- CRT stubs state ---
+_stub_crt = False                    # Whether CRT stubs are installed
+_user_stubs = {}                     # api_name → {"return_value", "writes", "num_params", "patched"}
+_fls_counter = 0                     # For FlsAlloc stub
+_tls_counter = 0                     # For TlsAlloc stub
+_stub_alloc_base = None              # Pre-mapped page for string-returning stubs
+_stub_alloc_offset = 0               # Current offset within alloc page
+_crt_stub_names = set()              # Names of installed CRT stubs
+
 # Limits (matching constants.py)
 _MAX_CAPTURED_OUTPUT = 10_000
 _MAX_PENDING_INPUT = 1_000
 _MAX_API_TRACE = 10_000
 _MAX_SEARCH_MATCHES = 100
+_MAX_USER_STUBS = 200
+_MAX_STUB_WRITE_SIZE = 1024
+_MAX_STUB_WRITES = 8
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +447,302 @@ def _stub_set_retval(retval):
         _ql.arch.regs.eax = retval & 0xFFFFFFFF
 
 
+def _patch_simprocedure(api_name, num_params):
+    """Patch a simprocedure address with `ret N` to enable clean CALL-hook returns.
+
+    For x86 STDCALL: patches with `ret N` where N = num_params * 4.
+    For x64 fastcall: patches with `ret` (caller cleanup).
+
+    Returns True if the symbol was found and patched, False otherwise.
+    """
+    if _ql is None:
+        return False
+    if not hasattr(_ql, 'loader') or not hasattr(_ql.loader, 'import_symbols'):
+        return False
+
+    for _sym_addr, entry in _ql.loader.import_symbols.items():
+        name = entry.get('name')
+        if not name:
+            continue
+        sym_name = name.decode() if isinstance(name, bytes) else str(name)
+        if sym_name == api_name:
+            try:
+                if _arch == "x8664":
+                    _ql.mem.write(_sym_addr, b'\xc3')
+                else:
+                    n_bytes = num_params * 4
+                    if n_bytes == 0:
+                        _ql.mem.write(_sym_addr, b'\xc3')
+                    else:
+                        _ql.mem.write(_sym_addr,
+                                      b'\xc2' + struct.pack('<H', n_bytes))
+                return True
+            except Exception:
+                return False
+    return False
+
+
+def _alloc_stub_data(data_bytes):
+    """Allocate bytes in pre-mapped stub data page. Returns address or 0."""
+    global _stub_alloc_offset
+    if _stub_alloc_base is None or _ql is None:
+        return 0
+    size = len(data_bytes)
+    if _stub_alloc_offset + size > 4096:
+        return 0  # Page full
+    addr = _stub_alloc_base + _stub_alloc_offset
+    try:
+        _ql.mem.write(addr, data_bytes)
+    except Exception:
+        return 0
+    # Align to 8 bytes
+    _stub_alloc_offset += (size + 7) & ~7
+    return addr
+
+
+def _make_generic_stub(api_name, retval, writes=None):
+    """Factory: create a CALL-hook closure for a data-driven stub.
+
+    Args:
+        api_name: API function name (for trace logging)
+        retval: Return value (int) or None for void
+        writes: List of {"param_index": int, "data_hex": str, "size": int}
+    """
+    def _generic_stub(ql, address, _api_name):
+        params = {}
+        if writes:
+            for w in writes:
+                idx = w["param_index"]
+                ptr = _stub_read_param(idx)
+                params[f"param{idx}"] = _hex(ptr)
+                if ptr:
+                    try:
+                        data = bytes.fromhex(w["data_hex"])
+                        ql.mem.write(ptr, data)
+                    except Exception:
+                        pass
+        _add_trace_entry(api_name, address, params, retval)
+        if retval is not None:
+            _stub_set_retval(retval)
+    return _generic_stub
+
+
+# ---------------------------------------------------------------------------
+#  CRT Stub Registry — data-driven API stubs for MSVC CRT initialization
+# ---------------------------------------------------------------------------
+
+# Type 1: Simple return value stubs
+_CRT_SIMPLE_STUBS = [
+    {"name": "GetCurrentProcessId", "params": 0, "return_value": 0x1000},
+    {"name": "GetCurrentThreadId", "params": 0, "return_value": 0x1004},
+    {"name": "GetTickCount", "params": 0, "return_value": 300000},
+    {"name": "GetTickCount64", "params": 0, "return_value": 300000},
+    {"name": "IsDebuggerPresent", "params": 0, "return_value": 0},
+    {"name": "GetACP", "params": 0, "return_value": 1252},
+    {"name": "GetOEMCP", "params": 0, "return_value": 437},
+    {"name": "HeapSetInformation", "params": 4, "return_value": 1},
+    {"name": "SetUnhandledExceptionFilter", "params": 1, "return_value": 0},
+    {"name": "GetLastError", "params": 0, "return_value": 0},
+    {"name": "SetLastError", "params": 1, "return_value": None},
+    {"name": "FlsSetValue", "params": 2, "return_value": 1},
+    {"name": "FlsGetValue", "params": 1, "return_value": 0},
+    {"name": "FlsFree", "params": 1, "return_value": 1},
+    {"name": "TlsSetValue", "params": 2, "return_value": 1},
+    {"name": "TlsGetValue", "params": 1, "return_value": 0},
+    {"name": "TlsFree", "params": 1, "return_value": 1},
+    {"name": "FreeEnvironmentStringsW", "params": 1, "return_value": 1},
+    {"name": "DeleteCriticalSection", "params": 1, "return_value": None},
+    {"name": "EnterCriticalSection", "params": 1, "return_value": None},
+    {"name": "LeaveCriticalSection", "params": 1, "return_value": None},
+    {"name": "InitializeCriticalSectionAndSpinCount", "params": 2, "return_value": 1},
+    {"name": "InitializeCriticalSectionEx", "params": 3, "return_value": 1},
+    {"name": "UnhandledExceptionFilter", "params": 1, "return_value": 1},
+    {"name": "IsValidCodePage", "params": 1, "return_value": 1},
+    {"name": "GetStringTypeW", "params": 4, "return_value": 1},
+    {"name": "LCMapStringW", "params": 6, "return_value": 0},
+    {"name": "GetLocaleInfoW", "params": 4, "return_value": 0},
+    {"name": "GetUserDefaultLCID", "params": 0, "return_value": 0x0409},
+    {"name": "RtlUnwind", "params": 4, "return_value": None},
+]
+
+# Type 2: Pointer-write stubs (write data to output pointers + return)
+_CRT_WRITE_STUBS = [
+    {"name": "GetSystemTimeAsFileTime", "params": 1, "return_value": None,
+     "writes": [{"param_index": 0, "data_hex": "00000000d61a0100", "size": 8}]},
+    {"name": "QueryPerformanceCounter", "params": 1, "return_value": 1,
+     "writes": [{"param_index": 0, "data_hex": "0000000001000000", "size": 8}]},
+    {"name": "QueryPerformanceFrequency", "params": 1, "return_value": 1,
+     "writes": [{"param_index": 0, "data_hex": "00093d0000000000", "size": 8}]},
+    {"name": "InitializeSListHead", "params": 1, "return_value": None,
+     "writes": [{"param_index": 0, "data_hex": "0000000000000000" + "0000000000000000", "size": 16}]},
+    {"name": "GetCPInfo", "params": 2, "return_value": 1,
+     "writes": [{"param_index": 1, "data_hex": "01000000" + "3f00" + "00" * 14, "size": 20}]},
+    {"name": "GetStartupInfoW", "params": 1, "return_value": None,
+     "writes": [{"param_index": 0, "data_hex": "44000000" + "00" * 64, "size": 68}]},
+]
+
+
+def _install_crt_stubs():
+    """Install CRT initialization stubs to prevent crashes during MSVC CRT init.
+
+    Three categories of stubs:
+    1. Simple return-value stubs (data-driven via _CRT_SIMPLE_STUBS)
+    2. Pointer-write stubs (data-driven via _CRT_WRITE_STUBS)
+    3. Custom handler stubs (require special logic)
+    """
+    global _stub_crt, _crt_stub_names, _fls_counter, _tls_counter
+    global _stub_alloc_base, _stub_alloc_offset
+
+    if _ql is None:
+        return
+
+    _crt_stub_names = set()
+    _fls_counter = 0
+    _tls_counter = 0
+
+    # Map a 4KB page for string data (command line, environment)
+    _stub_alloc_base = None
+    _stub_alloc_offset = 0
+    try:
+        alloc_addr = 0x7FFE0000
+        _ql.mem.map(alloc_addr, 4096, info="[crt_stub_data]")
+        _stub_alloc_base = alloc_addr
+    except Exception:
+        # Try alternate address
+        try:
+            alloc_addr = 0x6FFE0000
+            _ql.mem.map(alloc_addr, 4096, info="[crt_stub_data]")
+            _stub_alloc_base = alloc_addr
+        except Exception:
+            pass  # No string data stubs
+
+    # Pre-allocate string data for command-line / environment stubs
+    _cmdline_a_addr = 0
+    _cmdline_w_addr = 0
+    _envstrings_addr = 0
+    if _stub_alloc_base is not None:
+        # GetCommandLineA: "binary.exe\0"
+        _cmdline_a_addr = _alloc_stub_data(b"binary.exe\x00")
+        # GetCommandLineW: L"binary.exe\0"
+        _cmdline_w_addr = _alloc_stub_data("binary.exe\x00".encode("utf-16-le"))
+        # GetEnvironmentStringsW: L"=\0\0" (minimal env block)
+        _envstrings_addr = _alloc_stub_data(b"\x00\x00\x00\x00")
+
+    # --- Install Type 1: simple return-value stubs ---
+    for spec in _CRT_SIMPLE_STUBS:
+        name = spec["name"]
+        stub = _make_generic_stub(name, spec["return_value"])
+        try:
+            _ql.os.set_api(name, stub, QL_INTERCEPT.CALL)
+            _patch_simprocedure(name, spec["params"])
+            _crt_stub_names.add(name)
+        except Exception:
+            pass
+
+    # --- Install Type 2: pointer-write stubs ---
+    for spec in _CRT_WRITE_STUBS:
+        name = spec["name"]
+        stub = _make_generic_stub(name, spec["return_value"], spec["writes"])
+        try:
+            _ql.os.set_api(name, stub, QL_INTERCEPT.CALL)
+            _patch_simprocedure(name, spec["params"])
+            _crt_stub_names.add(name)
+        except Exception:
+            pass
+
+    # --- Install Type 3: custom handler stubs ---
+
+    def _stub_IsProcessorFeaturePresent(ql, address, _api_name):
+        feature = _stub_read_param(0) & 0xFFFFFFFF
+        # PF_XMMI_INSTRUCTIONS_AVAILABLE (6), PF_XMMI64_INSTRUCTIONS_AVAILABLE (10),
+        # PF_SSE3_INSTRUCTIONS_AVAILABLE (13), PF_NX_ENABLED (12),
+        # PF_FASTFAIL_AVAILABLE (23), PF_COMPARE_EXCHANGE128 (14)
+        supported = {6, 10, 12, 13, 14, 23}
+        retval = 1 if feature in supported else 0
+        _add_trace_entry("IsProcessorFeaturePresent", address,
+                         {"ProcessorFeature": str(feature)}, retval)
+        _stub_set_retval(retval)
+
+    def _stub_GetModuleHandleW(ql, address, _api_name):
+        param0 = _stub_read_param(0)
+        if param0 == 0:
+            # NULL → return image base
+            retval = ql.loader.pe_image_address if hasattr(ql.loader, 'pe_image_address') else 0x400000
+        else:
+            retval = 0
+        _add_trace_entry("GetModuleHandleW", address,
+                         {"lpModuleName": _hex(param0)}, retval)
+        _stub_set_retval(retval)
+
+    def _stub_GetModuleHandleA(ql, address, _api_name):
+        param0 = _stub_read_param(0)
+        if param0 == 0:
+            retval = ql.loader.pe_image_address if hasattr(ql.loader, 'pe_image_address') else 0x400000
+        else:
+            retval = 0
+        _add_trace_entry("GetModuleHandleA", address,
+                         {"lpModuleName": _hex(param0)}, retval)
+        _stub_set_retval(retval)
+
+    def _stub_EncodePointer(ql, address, _api_name):
+        ptr = _stub_read_param(0)
+        _add_trace_entry("EncodePointer", address, {"Ptr": _hex(ptr)}, ptr)
+        _stub_set_retval(ptr)
+
+    def _stub_DecodePointer(ql, address, _api_name):
+        ptr = _stub_read_param(0)
+        _add_trace_entry("DecodePointer", address, {"Ptr": _hex(ptr)}, ptr)
+        _stub_set_retval(ptr)
+
+    def _stub_FlsAlloc(ql, address, _api_name):
+        global _fls_counter
+        _fls_counter += 1
+        _add_trace_entry("FlsAlloc", address,
+                         {"lpCallback": _hex(_stub_read_param(0))}, _fls_counter)
+        _stub_set_retval(_fls_counter)
+
+    def _stub_TlsAlloc(ql, address, _api_name):
+        global _tls_counter
+        _tls_counter += 1
+        _add_trace_entry("TlsAlloc", address, {}, _tls_counter)
+        _stub_set_retval(_tls_counter)
+
+    def _stub_GetCommandLineA(ql, address, _api_name):
+        _add_trace_entry("GetCommandLineA", address, {}, _cmdline_a_addr)
+        _stub_set_retval(_cmdline_a_addr)
+
+    def _stub_GetCommandLineW(ql, address, _api_name):
+        _add_trace_entry("GetCommandLineW", address, {}, _cmdline_w_addr)
+        _stub_set_retval(_cmdline_w_addr)
+
+    def _stub_GetEnvironmentStringsW(ql, address, _api_name):
+        _add_trace_entry("GetEnvironmentStringsW", address, {}, _envstrings_addr)
+        _stub_set_retval(_envstrings_addr)
+
+    custom_stubs = {
+        "IsProcessorFeaturePresent": (1, _stub_IsProcessorFeaturePresent),
+        "GetModuleHandleW": (1, _stub_GetModuleHandleW),
+        "GetModuleHandleA": (1, _stub_GetModuleHandleA),
+        "EncodePointer": (1, _stub_EncodePointer),
+        "DecodePointer": (1, _stub_DecodePointer),
+        "FlsAlloc": (1, _stub_FlsAlloc),
+        "TlsAlloc": (0, _stub_TlsAlloc),
+        "GetCommandLineA": (0, _stub_GetCommandLineA),
+        "GetCommandLineW": (0, _stub_GetCommandLineW),
+        "GetEnvironmentStringsW": (0, _stub_GetEnvironmentStringsW),
+    }
+
+    for name, (nparams, stub_fn) in custom_stubs.items():
+        try:
+            _ql.os.set_api(name, stub_fn, QL_INTERCEPT.CALL)
+            _patch_simprocedure(name, nparams)
+            _crt_stub_names.add(name)
+        except Exception:
+            pass
+
+    _stub_crt = len(_crt_stub_names) > 0
+
+
 def _install_io_stubs():
     """Install Win32 console API stubs to prevent crashes from console I/O.
 
@@ -573,35 +881,10 @@ def _install_io_stubs():
     }
 
     try:
-        # Register CALL hooks
+        # Register CALL hooks and patch simprocedures
         for api_name, (_np, stub_fn) in stub_map.items():
             _ql.os.set_api(api_name, stub_fn, QL_INTERCEPT.CALL)
-
-        # Patch simprocedure addresses with `ret N` so the instruction that
-        # executes after our CALL hook performs a clean STDCALL return.
-        # Without this, the real DLL code at the simprocedure address runs
-        # and crashes (Unicorn 1.x emu_stop doesn't prevent instruction exec).
-        patched = 0
-        if hasattr(_ql, 'loader') and hasattr(_ql.loader, 'import_symbols'):
-            for _sym_addr, entry in _ql.loader.import_symbols.items():
-                name = entry.get('name')
-                if not name:
-                    continue
-                sym_name = name.decode() if isinstance(name, bytes) else str(name)
-                if sym_name in stub_map:
-                    num_params = stub_map[sym_name][0]
-                    if _arch == "x8664":
-                        # x64 fastcall: caller cleanup, just `ret` (C3)
-                        _ql.mem.write(_sym_addr, b'\xc3')
-                    else:
-                        # x86 STDCALL: `ret N` where N = num_params * 4
-                        n_bytes = num_params * 4
-                        if n_bytes == 0:
-                            _ql.mem.write(_sym_addr, b'\xc3')
-                        else:
-                            _ql.mem.write(_sym_addr,
-                                          b'\xc2' + struct.pack('<H', n_bytes))
-                    patched += 1
+            _patch_simprocedure(api_name, _np)
 
         _stub_io = True
     except Exception:
@@ -859,6 +1142,8 @@ def cmd_init(cmd):
     global _mem_read_hook, _mem_write_hook
     global _stub_io, _captured_output, _pending_input, _io_seq_counter
     global _api_trace, _api_trace_seq, _api_trace_filter, _api_trace_enabled
+    global _stub_crt, _user_stubs, _fls_counter, _tls_counter
+    global _stub_alloc_base, _stub_alloc_offset, _crt_stub_names
 
     filepath = cmd["filepath"]
     rootfs_path = cmd.get("rootfs_path")
@@ -898,18 +1183,32 @@ def cmd_init(cmd):
     _api_trace_filter = None
     _api_trace_enabled = True
 
+    # Reset CRT stubs state
+    _stub_crt = False
+    _user_stubs = {}
+    _fls_counter = 0
+    _tls_counter = 0
+    _stub_alloc_base = None
+    _stub_alloc_offset = 0
+    _crt_stub_names = set()
+
     # Initialize capstone disassembler
     _init_capstone(arch)
 
     # Install global instruction counter
     _ql.hook_code(_instruction_counter_hook)
 
-    # Install I/O stubs (before API trace so specific hooks take priority)
+    # Install CRT stubs (before I/O stubs so I/O stubs can override)
+    stub_crt = cmd.get("stub_crt", True)
+    if stub_crt:
+        _install_crt_stubs()
+
+    # Install I/O stubs (overrides CRT stubs for console APIs)
     stub_io = cmd.get("stub_io", True)
     if stub_io:
         _install_io_stubs()
 
-    # Install API call tracing
+    # Install API call tracing (lowest priority)
     _install_api_trace()
 
     pc = _get_pc()
@@ -923,6 +1222,8 @@ def cmd_init(cmd):
         "next_instructions": _disassemble_at(pc, 5),
         "memory_map": _get_memory_map(),
         "stub_io": _stub_io,
+        "crt_stubs": _stub_crt,
+        "crt_stub_count": len(_crt_stub_names),
         "api_trace_enabled": _api_trace_enabled,
     }
     if _dll_warning:
@@ -1637,12 +1938,15 @@ def cmd_stop(cmd):
     """Clean up and signal exit."""
     global _ql, _staged_path
     global _captured_output, _pending_input, _api_trace
+    global _user_stubs, _crt_stub_names
     if _staged_path:
         _cleanup_staged_binary(_staged_path)
         _staged_path = None
     _captured_output = []
     _pending_input = []
     _api_trace = []
+    _user_stubs = {}
+    _crt_stub_names = set()
     _ql = None
     return {"status": "ok"}
 
@@ -1931,6 +2235,178 @@ def cmd_search_memory(cmd):
 
 
 # ---------------------------------------------------------------------------
+#  CRT stub command handlers
+# ---------------------------------------------------------------------------
+
+def cmd_stub_api(cmd):
+    """Create a user-defined API stub at runtime."""
+    global _user_stubs
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    api_name = cmd.get("api_name", "").strip()
+    if not api_name:
+        return {"error": "'api_name' is required"}
+    if len(api_name) > 128:
+        return {"error": "'api_name' too long (max 128 chars)"}
+    import re
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', api_name):
+        return {"error": f"Invalid api_name '{api_name}': must be alphanumeric + underscore"}
+
+    if len(_user_stubs) >= _MAX_USER_STUBS:
+        return {"error": f"User stub limit reached ({_MAX_USER_STUBS}). Remove stubs first."}
+
+    # Parse return value
+    return_value_str = cmd.get("return_value", "0x0")
+    if return_value_str in ("void", "null", "none", "None"):
+        return_value = None
+    else:
+        try:
+            if isinstance(return_value_str, int):
+                return_value = return_value_str
+            elif return_value_str.startswith(("0x", "0X")):
+                return_value = int(return_value_str, 16)
+            else:
+                return_value = int(return_value_str)
+        except (ValueError, AttributeError):
+            return {"error": f"Invalid return_value: '{return_value_str}'. Use hex (0x...), decimal, or 'void'"}
+
+    num_params = max(0, min(cmd.get("num_params", 0), 20))
+
+    # Parse writes
+    writes = []
+    writes_raw = cmd.get("writes")
+    if writes_raw:
+        if isinstance(writes_raw, str):
+            try:
+                writes_raw = json.loads(writes_raw)
+            except json.JSONDecodeError as e:
+                return {"error": f"Invalid writes JSON: {e}"}
+        if not isinstance(writes_raw, list):
+            return {"error": "'writes' must be a JSON array"}
+        if len(writes_raw) > _MAX_STUB_WRITES:
+            return {"error": f"Too many write operations (max {_MAX_STUB_WRITES})"}
+        for i, w in enumerate(writes_raw):
+            if not isinstance(w, dict):
+                return {"error": f"writes[{i}] must be an object"}
+            pi = w.get("param_index")
+            dh = w.get("data_hex", "")
+            if pi is None or not isinstance(pi, int) or pi < 0 or pi > 20:
+                return {"error": f"writes[{i}].param_index must be 0-20"}
+            if not dh or len(dh) % 2 != 0:
+                return {"error": f"writes[{i}].data_hex must be an even-length hex string"}
+            if len(dh) // 2 > _MAX_STUB_WRITE_SIZE:
+                return {"error": f"writes[{i}].data_hex too large (max {_MAX_STUB_WRITE_SIZE} bytes)"}
+            try:
+                bytes.fromhex(dh)
+            except ValueError:
+                return {"error": f"writes[{i}].data_hex is not valid hex"}
+            writes.append({"param_index": pi, "data_hex": dh, "size": len(dh) // 2})
+
+    # Create and register the stub
+    stub_fn = _make_generic_stub(api_name, return_value, writes if writes else None)
+    try:
+        _ql.os.set_api(api_name, stub_fn, QL_INTERCEPT.CALL)
+    except Exception as e:
+        return {"error": f"Failed to register API hook: {e}"}
+
+    patched = _patch_simprocedure(api_name, num_params)
+
+    _user_stubs[api_name] = {
+        "return_value": return_value,
+        "num_params": num_params,
+        "writes": writes,
+        "patched": patched,
+    }
+
+    return {
+        "status": "ok",
+        "api_name": api_name,
+        "return_value": _hex(return_value) if isinstance(return_value, int) else None,
+        "num_params": num_params,
+        "writes_count": len(writes),
+        "patched": patched,
+        "total_user_stubs": len(_user_stubs),
+    }
+
+
+def cmd_list_stubs(cmd):
+    """List all installed API stubs (builtin + user-defined)."""
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    # I/O stubs (always 8 APIs when enabled)
+    io_stubs = []
+    if _stub_io:
+        io_stubs = ["GetStdHandle", "WriteConsoleA", "WriteConsoleW",
+                     "ReadConsoleA", "SetConsoleMode", "GetConsoleMode",
+                     "AllocConsole", "FreeConsole"]
+
+    # CRT stubs
+    crt_stubs = sorted(_crt_stub_names) if _stub_crt else []
+
+    # User stubs
+    user_stubs = []
+    for name, info in _user_stubs.items():
+        user_stubs.append({
+            "api_name": name,
+            "return_value": _hex(info["return_value"]) if isinstance(info["return_value"], int) else None,
+            "num_params": info["num_params"],
+            "writes_count": len(info.get("writes", [])),
+            "patched": info["patched"],
+        })
+
+    return {
+        "status": "ok",
+        "builtin_io": io_stubs,
+        "builtin_io_count": len(io_stubs),
+        "builtin_crt": crt_stubs,
+        "builtin_crt_count": len(crt_stubs),
+        "user": user_stubs,
+        "user_count": len(user_stubs),
+        "total_stubs": len(io_stubs) + len(crt_stubs) + len(user_stubs),
+    }
+
+
+def cmd_remove_stub(cmd):
+    """Remove a user-defined API stub."""
+    global _user_stubs
+    if _ql is None:
+        return {"error": "No debug session active. Call 'init' first."}
+
+    api_name = cmd.get("api_name", "").strip()
+    if not api_name:
+        return {"error": "'api_name' is required"}
+
+    # Check if it's a builtin stub (can't remove)
+    io_names = {"GetStdHandle", "WriteConsoleA", "WriteConsoleW",
+                "ReadConsoleA", "SetConsoleMode", "GetConsoleMode",
+                "AllocConsole", "FreeConsole"}
+    if api_name in io_names:
+        return {"error": f"Cannot remove builtin I/O stub '{api_name}'. "
+                "Restart the session with stub_io=False to disable I/O stubs."}
+    if api_name in _crt_stub_names:
+        return {"error": f"Cannot remove builtin CRT stub '{api_name}'. "
+                "Restart the session with stub_crt=False to disable CRT stubs."}
+
+    if api_name not in _user_stubs:
+        return {"error": f"No user-defined stub for '{api_name}'"}
+
+    # Clear the hook
+    try:
+        _ql.os.set_api(api_name, None, QL_INTERCEPT.CALL)
+    except Exception:
+        pass  # Best effort
+
+    del _user_stubs[api_name]
+    return {
+        "status": "ok",
+        "api_name": api_name,
+        "remaining_user_stubs": len(_user_stubs),
+    }
+
+
+# ---------------------------------------------------------------------------
 #  Command dispatch table
 # ---------------------------------------------------------------------------
 
@@ -1959,6 +2435,9 @@ DISPATCH = {
     "clear_api_trace": cmd_clear_api_trace,
     "set_trace_filter": cmd_set_trace_filter,
     "search_memory": cmd_search_memory,
+    "stub_api": cmd_stub_api,
+    "list_stubs": cmd_list_stubs,
+    "remove_stub": cmd_remove_stub,
     "stop": cmd_stop,
 }
 
