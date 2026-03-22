@@ -17,9 +17,13 @@ Sandboxie, finds the persistence mechanism (Registry Run key), and recovers the 
 PDB path revealing a Vietnamese-speaking threat actor.
 [See the full report.](docs/examples/example-report-asyncrat.md)
 
+> *"Step through the unpacking stub and show me what it decrypts"*
+
+Arkana starts an interactive debug session, sets breakpoints on `VirtualAlloc` and `VirtualProtect`, steps through the decryption loop, snapshots state before and after, diffs the memory regions, and dumps the unpacked payload -- all driven by natural language.
+
 ![Arkana analysing AsyncRAT](docs/demos/demo-asyncrat.gif)
 
-Arkana is a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that gives **Claude Code** (or any MCP client) **259 analysis tools** -- decompilation, emulation, string decoding, YARA scanning, and more -- so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
+Arkana is a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that gives **Claude Code** (or any MCP client) **259 analysis tools** -- decompilation, symbolic execution, interactive step-through debugging, data-flow analysis, YARA/capa/FLOSS signatures, Binary Refinery data transforms, Qiling/Speakeasy emulation, .NET deobfuscation, function similarity matching, and a real-time web dashboard -- so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
 
 ---
 
@@ -33,15 +37,18 @@ Arkana eliminates this by putting **259 specialised analysis tools behind a sing
 
 - **Breadth** -- 259 tools spanning PE/ELF/Mach-O parsing, angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, .NET deobfuscation and C# decompilation, Frida script generation, vulnerability pattern detection, cross-binary function similarity search, and VirusTotal integration.
 - **AI reasoning over results** -- Unlike tools that just produce output, Arkana feeds results back to an AI that can reason about them. When it decompiles a function and sees `VirtualAlloc` followed by `memcpy` and an indirect call, it recognises the shellcode injection pattern, renames the function to `inject_shellcode`, and suggests investigating the source buffer.
+- **Zero-config auto-enrichment** -- Open a file and Arkana immediately begins background classification, risk scoring, MITRE ATT&CK mapping, IOC extraction, library identification, and a decompilation sweep. By the time you ask your first question, the answers are already cached.
+- **Interactive debugging** -- Step through binaries instruction-by-instruction with breakpoints, watchpoints, memory inspection, execution snapshots, API call tracing, I/O capture, and custom API stubs. Explore alternative execution paths by snapshotting state, modifying registers or memory, and comparing outcomes.
 - **Session continuity** -- Notes, function renames, custom type definitions, and tool history survive context window limits and server restarts, enabling investigations that span hours or days without losing context.
+- **Real-time web dashboard** -- A visual companion that updates live as the AI works: function triage with XREF analysis, interactive call graph, strings explorer, MITRE ATT&CK matrix, hex viewer, and analysis timeline. Analyst flags set on the dashboard feed directly back into the AI's tool suggestions.
 
 **Who benefits:**
 
-- **SOC analysts** -- automated triage in seconds, not hours
-- **Malware reversers** -- natural language drives decompilation, symbolic execution, and data transforms
-- **Incident responders** -- rapid IOC and C2 extraction under time pressure
-- **Learners** -- built-in interactive RE tutor with Socratic guidance and progress tracking
-- **Threat intel teams** -- automated config, hash, and network indicator extraction
+- **SOC analysts** -- automated triage with risk scoring, MITRE mapping, and IOC extraction in seconds; web dashboard for visual review
+- **Malware reversers** -- natural language drives decompilation, symbolic execution, interactive debugging, and data transforms across multi-stage payloads
+- **Incident responders** -- rapid C2 config extraction, network indicators, and structured reports under time pressure
+- **Learners** -- built-in interactive RE tutor with Socratic guidance, progress tracking, and hands-on exercises using real tools
+- **Threat intel teams** -- automated similarity hashing, family identification, YARA rule generation, and cross-binary function matching
 
 ---
 
@@ -71,6 +78,8 @@ Arkana eliminates this by putting **259 specialised analysis tools behind a sing
 | **Data transforms** | 200+ via Refinery | Manual scripting | Manual scripting | 300+ (manual) |
 | **Emulation** | Speakeasy + Qiling | Limited | No | No |
 | **Interactive debugging** | 29-tool step debugger | Manual | Manual | No |
+| **Auto-enrichment** | Background triage on open | No | No | No |
+| **Web dashboard** | Real-time, 14 pages | No | No | No |
 | **Learning curve** | Natural language | Months | Months | Moderate |
 | **Cost** | Free & open source | Free | $1,800+/yr | Free |
 
