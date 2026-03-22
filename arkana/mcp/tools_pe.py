@@ -411,10 +411,18 @@ async def open_file(
                     if session_meta:
                         with state._notes_lock:
                             state.notes = session_meta.get("notes", [])
-                            # Restore counter to max note ID + 1 to prevent collisions
+                            # Restore counter to max suffix + 1 to prevent ID collisions
+                            # Note IDs are formatted as "n_{timestamp}_{counter}"
                             if state.notes:
-                                max_id = max(n.get("id", 0) for n in state.notes)
-                                state._notes_counter = max_id + 1
+                                max_suffix = 0
+                                for n in state.notes:
+                                    nid = n.get("id", "")
+                                    if isinstance(nid, str) and "_" in nid:
+                                        try:
+                                            max_suffix = max(max_suffix, int(nid.rsplit("_", 1)[-1]))
+                                        except (ValueError, IndexError):
+                                            pass
+                                state._notes_counter = max_suffix + 1
                         state.previous_session_history = session_meta.get("tool_history", [])[:MAX_TOOL_HISTORY]  # M3-v11: bound
                         with state._artifacts_lock:
                             state.artifacts = session_meta.get("artifacts", [])
