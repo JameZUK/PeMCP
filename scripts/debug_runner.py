@@ -540,6 +540,7 @@ _CRT_SIMPLE_STUBS = [
     {"name": "IsDebuggerPresent", "params": 0, "return_value": 0},
     {"name": "GetACP", "params": 0, "return_value": 1252},
     {"name": "GetOEMCP", "params": 0, "return_value": 437},
+    {"name": "GetProcessHeap", "params": 0, "return_value": 0x10000},
     {"name": "HeapSetInformation", "params": 4, "return_value": 1},
     {"name": "SetUnhandledExceptionFilter", "params": 1, "return_value": 0},
     {"name": "GetLastError", "params": 0, "return_value": 0},
