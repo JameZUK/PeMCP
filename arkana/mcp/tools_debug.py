@@ -94,6 +94,7 @@ class _DebugSession:
         self.stub_io = False
         self.crt_stubs = False
         self.api_trace_enabled = False
+        self._desynchronised = False
         self._cmd_lock = asyncio.Lock()
         # Drain stderr in background to prevent pipe deadlock
         self._stderr_task: Optional[asyncio.Task] = None
@@ -117,6 +118,8 @@ class _DebugSession:
     async def send_command(self, cmd: dict, timeout: int = DEBUG_COMMAND_TIMEOUT) -> dict:
         """Send JSONL command, read JSONL response."""
         async with self._cmd_lock:
+            if self._desynchronised:
+                return {"error": "Debug session is desynchronised after a timeout — destroy and recreate it"}
             if self.proc.returncode is not None:
                 return {"error": "Debug session has exited unexpectedly"}
             line = json.dumps(cmd) + "\n"
@@ -127,7 +130,15 @@ class _DebugSession:
                     self.proc.stdout.readline(), timeout=timeout
                 )
             except asyncio.TimeoutError:
-                return {"error": f"Debug command timed out after {timeout}s"}
+                # Kill the subprocess — its stdout is now in an unknown state
+                # and any future read could return stale data from this command.
+                self._desynchronised = True
+                self.status = "error"
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+                return {"error": f"Debug command timed out after {timeout}s — session killed (protocol desync)"}
             if not resp_line:
                 return {"error": "Debug subprocess closed unexpectedly"}
             self.last_active = time.time()
@@ -207,15 +218,20 @@ class _DebugSessionManager:
 
         session = _DebugSession(session_id, proc, "", "", filepath)
 
-        # Send init command
-        init_cmd = {
-            "action": "init",
-            "filepath": filepath,
-            "rootfs_path": rootfs_path or str(_QILING_DEFAULT_ROOTFS),
-            "stub_io": stub_io,
-            "stub_crt": stub_crt,
-        }
-        result = await session.send_command(init_cmd, timeout=120)
+        # Send init command — kill subprocess on any unexpected exception
+        # to prevent orphaned child processes.
+        try:
+            init_cmd = {
+                "action": "init",
+                "filepath": filepath,
+                "rootfs_path": rootfs_path or str(_QILING_DEFAULT_ROOTFS),
+                "stub_io": stub_io,
+                "stub_crt": stub_crt,
+            }
+            result = await session.send_command(init_cmd, timeout=120)
+        except Exception:
+            await session.kill()
+            raise
 
         if "error" in result:
             await session.kill()
@@ -247,6 +263,17 @@ class _DebugSessionManager:
 
     async def get_session(self, session_id: Optional[str] = None) -> _DebugSession:
         """Get a session by ID, or the most recent one if ID is None."""
+        # Reap expired sessions first (TTL enforcement)
+        expired = []
+        now = time.time()
+        with self._lock:
+            for sid, sess in list(self._sessions.items()):
+                if now - sess.last_active > DEBUG_SESSION_TTL:
+                    expired.append(self._sessions.pop(sid))
+        for sess in expired:
+            sess.kill_sync()
+            logger.debug("Debug session expired (TTL): %s", sess.session_id)
+
         with self._lock:
             if not self._sessions:
                 raise RuntimeError(

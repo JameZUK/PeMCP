@@ -607,5 +607,10 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
         finally:
             state._async_save_lock.release()
 
-    t = threading.Thread(target=_bg_save, daemon=True, name="arkana-async-save")
-    t.start()
+    try:
+        t = threading.Thread(target=_bg_save, daemon=True, name="arkana-async-save")
+        t.start()
+    except Exception:
+        # Release the lock if thread creation/start fails to prevent deadlock
+        state._async_save_lock.release()
+        raise

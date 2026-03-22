@@ -140,6 +140,14 @@ def _get_data_from_hex_or_file_with_offset(
                     f"file size {len(raw)} (0x{len(raw):X}) bytes."
                 )
             return raw[offset:end]
+        # Cap unbounded tail slices to prevent copying hundreds of MB
+        remaining = len(raw) - offset
+        _MAX_TAIL_SLICE = 50 * 1024 * 1024  # 50 MB
+        if remaining > _MAX_TAIL_SLICE:
+            raise ValueError(
+                f"Slice from offset {file_offset} to end of file is {remaining:,} bytes "
+                f"(limit {_MAX_TAIL_SLICE:,}). Specify a 'length' parameter."
+            )
         return raw[offset:]
 
     return raw

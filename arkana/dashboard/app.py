@@ -1343,6 +1343,16 @@ def _create_routes(dashboard_token: str) -> list:
         # Resolve symlinks and validate path is within allowed directories
         try:
             resolved = os.path.realpath(file_path_b)
+            # When no allowed_paths configured, restrict absolute paths to samples directory
+            if st.allowed_paths is None:
+                samples_path_abs = getattr(st, "samples_path", None) or getattr(
+                    __import__('arkana.state', fromlist=['_default_state'])._default_state,
+                    "samples_path", None)
+                if samples_path_abs:
+                    if not resolved.startswith(os.path.realpath(str(samples_path_abs)) + os.sep):
+                        return JSONResponse({"error": "Absolute paths must be within the samples directory"}, status_code=403)
+                else:
+                    return JSONResponse({"error": "Absolute paths not allowed without --allowed-paths"}, status_code=403)
             st.check_path_allowed(resolved)
         except RuntimeError:
             return JSONResponse({"error": "path is outside allowed directories"}, status_code=403)

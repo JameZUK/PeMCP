@@ -145,10 +145,10 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
             timeout, pattern_preview, current_timeouts, _REGEX_MAX_WORKERS,
         )
         # Recreate pool after _REGEX_MAX_WORKERS consecutive timeouts (all workers likely stuck)
-        if current_timeouts >= _REGEX_MAX_WORKERS:
+        if current_timeouts >= 2:
             with _regex_executor_lock:
                 # Double-check under lock
-                if _regex_consecutive_timeouts >= _REGEX_MAX_WORKERS:
+                if _regex_consecutive_timeouts >= 2:
                     global _regex_pool_recreations
                     _regex_pool_recreations += 1
                     logger.warning(
@@ -165,6 +165,12 @@ def safe_regex_search(compiled_re: re.Pattern, text: str,
                     _regex_executor = concurrent.futures.ThreadPoolExecutor(max_workers=_REGEX_MAX_WORKERS)
                     old.shutdown(wait=False)
                     _regex_consecutive_timeouts = 0
+                    logger.warning(
+                        "Regex pool recreated (%d times). Note: %d worker threads may still be "
+                        "running from timed-out operations (inherent Python limitation).",
+                        _regex_pool_recreations,
+                        threading.active_count(),
+                    )
         raise ValueError(
             f"Regex execution timed out after {timeout}s. "
             "The pattern may cause catastrophic backtracking. "

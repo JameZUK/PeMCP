@@ -1013,19 +1013,6 @@ def _install_api_trace():
 #  Breakpoint callbacks
 # ---------------------------------------------------------------------------
 
-def _address_breakpoint_callback(ql):
-    """Called when an address breakpoint is hit."""
-    global _stop_reason, _hit_bp_id
-    pc = _get_pc()
-    for bp_id, bp in _breakpoints.items():
-        if bp.get("address") == pc:
-            if _evaluate_condition(bp.get("conditions")):
-                _stop_reason = "breakpoint_hit"
-                _hit_bp_id = bp_id
-                ql.emu_stop()
-                return
-
-
 def _make_address_bp_callback(bp_id, address, conditions):
     """Create a breakpoint callback for a specific address."""
     def callback(ql):
@@ -1480,6 +1467,9 @@ def cmd_set_breakpoint(cmd):
     if _ql is None:
         return {"error": "No debug session active. Call 'init' first."}
 
+    if len(_breakpoints) >= 100:
+        return {"error": "Breakpoint limit reached (100). Remove existing breakpoints first."}
+
     address = cmd.get("address")
     api_name = cmd.get("api_name")
     conditions = cmd.get("conditions", [])
@@ -1561,6 +1551,9 @@ def cmd_set_watchpoint(cmd):
 
     if _ql is None:
         return {"error": "No debug session active. Call 'init' first."}
+
+    if len(_watchpoints) >= 50:
+        return {"error": "Watchpoint limit reached (50). Remove existing watchpoints first."}
 
     address = _parse_address(cmd["address"])
     size = max(1, min(cmd.get("size", 4), 1_048_576))  # 1MB max
@@ -2497,6 +2490,7 @@ def main():
     # Redirect stdout → stderr for Qiling's internal prints.
     # We use real_stdout for our JSON protocol.
     real_stdout = sys.stdout
+    real_stderr = sys.stderr
     sys.stdout = sys.stderr
 
     for line in sys.stdin:
@@ -2521,9 +2515,11 @@ def main():
             else:
                 result = handler(cmd)
         except Exception as e:
+            # Log traceback to stderr (not sent to client) to avoid leaking
+            # internal paths and stack details through the JSONL protocol.
+            traceback.print_exc(file=real_stderr)
             result = {
                 "error": f"{type(e).__name__}: {e}",
-                "traceback": traceback.format_exc()[:2000],
             }
 
         try:

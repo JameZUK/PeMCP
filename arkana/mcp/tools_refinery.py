@@ -1055,6 +1055,9 @@ _MAX_BATCH_PIPELINE = 100
 
 _PIPELINE_MAX_INTERMEDIATE_SIZE = 100 * 1024 * 1024  # 100MB
 
+# Units that perform decompression — these need streaming bomb protection
+_PIPELINE_DECOMPRESS_UNITS = frozenset({"zl", "bz2", "lzma", "lz4", "decompress"})
+
 
 def _run_pipeline_single(data: bytes, steps: list) -> tuple:
     """Execute a pipeline on a single data blob. Returns (result_bytes, step_log)."""
@@ -1229,7 +1232,22 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
             mod_path, cls_name, kwargs = _PIPELINE_UNIT_MAP[unit_name]
             mod = importlib.import_module(mod_path)
             unit_cls = getattr(mod, cls_name)
-            current = current | unit_cls(**kwargs) | bytes
+            if unit_name in _PIPELINE_DECOMPRESS_UNITS:
+                # Streaming decompression with bomb protection
+                output_chunks = []
+                total = 0
+                for chunk in current | unit_cls(**kwargs):
+                    piece = bytes(chunk)
+                    total += len(piece)
+                    if total > _PIPELINE_MAX_INTERMEDIATE_SIZE:
+                        raise RuntimeError(
+                            f"Pipeline decompression exceeded {_PIPELINE_MAX_INTERMEDIATE_SIZE // (1024*1024)}MB limit "
+                            f"(possible decompression bomb). Aborting."
+                        )
+                    output_chunks.append(piece)
+                current = b"".join(output_chunks)
+            else:
+                current = current | unit_cls(**kwargs) | bytes
         else:
             raise ValueError(f"Unknown pipeline unit: '{unit_name}'")
 

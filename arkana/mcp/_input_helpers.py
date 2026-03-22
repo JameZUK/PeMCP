@@ -71,6 +71,8 @@ class _ToolResultCache:
         self._store: Dict[str, collections.OrderedDict] = {}
         with _ToolResultCache._global_lock:
             _ToolResultCache._all_instances.add(self)
+        # Register weak-ref finalizer to adjust global count on GC
+        weakref.finalize(self, _ToolResultCache._on_instance_gc, id(self))
 
     def _entry_count(self) -> int:
         """Return total entries across all tool buckets (caller must hold self._lock)."""
@@ -138,6 +140,12 @@ class _ToolResultCache:
             _ToolResultCache._global_entry_count = max(0, _ToolResultCache._global_entry_count - removed)
 
     @classmethod
+    def _on_instance_gc(cls, instance_id: int) -> None:
+        """Weakref finalizer — recount global entries when an instance is collected."""
+        with cls._global_lock:
+            cls._cleanup_expired()
+
+    @classmethod
     def _cleanup_expired(cls) -> None:
         """Remove expired entries across all instances (caller must hold _global_lock).
 
@@ -172,7 +180,10 @@ def _make_hashable(v, _depth=0):
         return bytes(v)
     if isinstance(v, dict):
         return tuple(sorted((k, _make_hashable(val, _depth + 1)) for k, val in v.items()))
-    if isinstance(v, (list, tuple, set)):
+    if isinstance(v, (set, frozenset)):
+        # Sort sets for deterministic cache keys
+        return tuple(sorted(_make_hashable(item, _depth + 1) for item in v))
+    if isinstance(v, (list, tuple)):
         return tuple(_make_hashable(item, _depth + 1) for item in v)
     return v
 

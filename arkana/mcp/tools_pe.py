@@ -267,6 +267,26 @@ async def open_file(
 
     # Close any previously loaded file — use atomic reset methods
     if state.pe_object or state.filepath:
+        # Persist session data from previous file before clearing state
+        _prev_sha = None
+        try:
+            if state.pe_data:
+                _prev_sha = (state.pe_data or {}).get("file_hashes", {}).get("sha256")
+        except Exception:
+            pass
+        if _prev_sha:
+            try:
+                analysis_cache.update_session_data(
+                    _prev_sha,
+                    notes=state.get_all_notes_snapshot(),
+                    tool_history=state.get_tool_history_snapshot(),
+                    artifacts=state.get_all_artifacts_snapshot(),
+                    renames=state.get_all_renames_snapshot(),
+                    custom_types=state.get_all_types_snapshot(),
+                    triage_status=state.get_all_triage_snapshot(),
+                )
+            except Exception as _save_err:
+                logger.warning("Failed to persist session data before file switch: %s", _save_err)
         # Cancel any running enrichment from the previous file
         state._enrichment_cancel.set()
         state.close_pe()
@@ -742,10 +762,30 @@ async def open_file(
         # Clean up on failure — close any PE object that was created to
         # prevent resource leaks, then preserve an error record so clients
         # can distinguish "no file ever loaded" from "last open attempt failed".
+        # Cancel enrichment and background tasks on failure
+        try:
+            state._enrichment_cancel.set()
+        except Exception:
+            pass
         state.close_pe()
+        try:
+            state.reset_angr()
+        except Exception:
+            pass
         with state._pe_lock:
             state.filepath = None
             state.pe_data = None
+        # Clear any cached enrichment data from partial init
+        state._cached_triage = None
+        state._cached_function_scores = None
+        state._cached_classification = None
+        state._cached_similarity_hashes = None
+        state._cached_mitre_mapping = None
+        state._cached_iocs = None
+        try:
+            state.result_cache.clear()
+        except Exception:
+            pass
         logger.error("open_file failed for '%s': %s", abs_path, e, exc_info=True)
         raise RuntimeError(f"[open_file] Failed to load '{abs_path}': {e}") from e
     finally:
@@ -815,6 +855,21 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     state.clear_triage()
     state.previous_session_history = []
 
+    # Clear cached enrichment data to prevent stale cross-file data
+    state._cached_triage = None
+    state._cached_function_scores = None
+    state._cached_classification = None
+    state._cached_similarity_hashes = None
+    state._cached_mitre_mapping = None
+    state._cached_iocs = None
+    state.result_cache.clear()
+    state.clear_warnings()
+    # Clear dashboard caches
+    try:
+        from arkana.dashboard.state_api import _cleanup_session_caches
+        _cleanup_session_caches(state._state_uuid)
+    except (ImportError, AttributeError):
+        pass
     # L2: Clean up session-specific phase cache entry
     try:
         from arkana.mcp.tools_session import _phase_caches

@@ -536,7 +536,7 @@ async def _check_mcp_response_size(
 
                 for k, v in modified_data.items():
                     try:
-                        v_len = len(repr(v))
+                        v_len = len(json.dumps(v, ensure_ascii=False))
                         if v_len > largest_len:
                             largest_len = v_len
                             largest_key = k
@@ -579,7 +579,7 @@ async def _check_mcp_response_size(
                     # Estimate new size by subtracting old field size and adding new.
                     # This avoids a full json.dumps on every iteration.
                     try:
-                        new_field_repr_len = len(repr(modified_data[largest_key]))
+                        new_field_repr_len = len(json.dumps(modified_data[largest_key], ensure_ascii=False))
                     except Exception:
                         new_field_repr_len = old_field_repr_len
                     current_chars -= (old_field_repr_len - new_field_repr_len)

@@ -122,12 +122,12 @@ class AnalysisCache:
         try:
             disk_mtime = META_FILE.stat().st_mtime
             if self._meta_cache is not None and disk_mtime == self._meta_mtime:
-                return self._meta_cache
+                return dict(self._meta_cache)
             with open(META_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._meta_cache = data
             self._meta_mtime = disk_mtime
-            return data
+            return dict(data)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Cache meta read error: %s", e)
             self._meta_cache = None
@@ -159,7 +159,7 @@ class AnalysisCache:
             except OSError:
                 tmp.unlink(missing_ok=True)
                 raise
-        except OSError as e:
+        except (OSError, TypeError, ValueError) as e:
             logger.error("Cache meta write error: %s", e)
 
     # ------------------------------------------------------------------
@@ -262,7 +262,7 @@ class AnalysisCache:
                     if now - last > 60:
                         meta[sha256]["last_accessed"] = now
                         self._save_meta(meta)
-            except OSError as exc:
+            except (OSError, TypeError, ValueError) as exc:
                 logger.debug("Failed to update LRU timestamp for %s: %s", sha256[:12], exc)
 
         # Patch session-specific field
