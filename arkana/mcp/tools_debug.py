@@ -1243,6 +1243,8 @@ async def debug_stub_api(
         return {"error": "api_name is required"}
     if len(api_name) > 128:
         return {"error": "api_name too long (max 128 chars)"}
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', api_name):
+        return {"error": "api_name must be alphanumeric/underscore"}
 
     num_params = max(0, min(num_params, 20))
 

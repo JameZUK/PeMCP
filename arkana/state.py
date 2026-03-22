@@ -538,6 +538,9 @@ class AnalyzerState:
                 result = dict(self.custom_types["structs"][name])
                 result["type"] = "struct"
                 result["name"] = name
+                # Deep copy mutable fields list to prevent callers mutating internal state
+                if "fields" in result:
+                    result["fields"] = list(result["fields"])
                 return result
             if name in self.custom_types["enums"]:
                 result = dict(self.custom_types["enums"][name])

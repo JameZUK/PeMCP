@@ -183,8 +183,8 @@ for _pat in _VULN_PATTERNS:
         except (re.error, ValueError):
             pass
 
-# Input source APIs for attack surface analysis
-_INPUT_SOURCE_APIS = frozenset({
+# Input source APIs for attack surface analysis (lowercased for O(1) lookup)
+_INPUT_SOURCE_APIS = frozenset(api.lower() for api in {
     "recv", "recvfrom", "recvmsg", "WSARecv", "WSARecvFrom",
     "read", "fread", "ReadFile", "ReadFileEx",
     "fgets", "gets", "scanf", "fscanf", "sscanf",
@@ -288,36 +288,41 @@ def _scan_function_for_vulns(
     # Also check imports directly (for functions we can't resolve callees for)
     if not ANGR_AVAILABLE or decompiled_text is None:
         pe_data = state.pe_data or {}
-        imports = pe_data.get("imports", {})
-        if isinstance(imports, dict):
-            for dll_imports in imports.values():
-                if isinstance(dll_imports, list):
-                    for imp in dll_imports:
+        imports = pe_data.get("imports", [])
+        # PE parser returns imports as a list of dicts: [{"dll": "...", "imports": [...]}, ...]
+        if isinstance(imports, list):
+            for dll_entry in imports:
+                if not isinstance(dll_entry, dict):
+                    continue
+                dll_imports = dll_entry.get("imports", [])
+                if not isinstance(dll_imports, list):
+                    continue
+                for imp in dll_imports:
+                    if len(findings) >= max_findings:
+                        break
+                    imp_name = (imp.get("name", "") if isinstance(imp, dict) else str(imp)).lower()
+                    matches = _DANGEROUS_API_LOOKUP.get(imp_name, [])
+                    for match_info in matches:
                         if len(findings) >= max_findings:
                             break
-                        imp_name = (imp.get("name", "") if isinstance(imp, dict) else str(imp)).lower()
-                        matches = _DANGEROUS_API_LOOKUP.get(imp_name, [])
-                        for match_info in matches:
-                            if len(findings) >= max_findings:
-                                break
-                            # Only add import-level findings if we don't have callee analysis
-                            # (to avoid duplicates)
-                            already_found = any(
-                                f["pattern_id"] == match_info["id"] and f["source"] == "callee_analysis"
-                                for f in findings
-                            )
-                            if not already_found:
-                                findings.append({
-                                    "pattern_id": match_info["id"],
-                                    "pattern_name": match_info["name"],
-                                    "severity": match_info["severity"],
-                                    "description": match_info["description"],
-                                    "function_address": "global",
-                                    "function_name": "imports",
-                                    "evidence": f"Imports {imp_name}",
-                                    "source": "import_table",
-                                })
-                                count += 1
+                        # Only add import-level findings if we don't have callee analysis
+                        # (to avoid duplicates)
+                        already_found = any(
+                            f["pattern_id"] == match_info["id"] and f["source"] == "callee_analysis"
+                            for f in findings
+                        )
+                        if not already_found:
+                            findings.append({
+                                "pattern_id": match_info["id"],
+                                "pattern_name": match_info["name"],
+                                "severity": match_info["severity"],
+                                "description": match_info["description"],
+                                "function_address": "global",
+                                "function_name": "imports",
+                                "evidence": f"Imports {imp_name}",
+                                "source": "import_table",
+                            })
+                            count += 1
 
     return count
 
@@ -536,7 +541,7 @@ def _sync_assess_attack_surface(addr_int: int) -> Dict[str, Any]:
 
     # Input sources
     for callee_name in callees:
-        if callee_name in (api.lower() for api in _INPUT_SOURCE_APIS):
+        if callee_name in _INPUT_SOURCE_APIS:
             result["input_sources"].append(callee_name)
 
     # Dangerous sinks

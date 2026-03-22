@@ -392,8 +392,9 @@ async def open_file(
                 cached_mode = cached.get("mode", "")
                 # Only use cache if the requested mode matches the cached mode
                 if mode == cached_mode or (mode == "pe" and cached_mode and cached_mode not in ("shellcode", "elf", "macho")):
-                    state.filepath = abs_path
-                    state.pe_data = cached
+                    with state._pe_lock:
+                        state.filepath = abs_path
+                        state.pe_data = cached
                     state.loaded_from_cache = True
                     # Still need a pe_object for tools that access it directly
                     if mode == "shellcode" or mode in ("elf", "macho"):
@@ -490,8 +491,9 @@ async def open_file(
                         "floss_analysis": {"status": "Pending..."},
                     }
                     state.pe_object = MockPE(_raw_file_data)
-                    state.filepath = abs_path
-                    state.pe_data = pe_data
+                    with state._pe_lock:
+                        state.filepath = abs_path
+                        state.pe_data = pe_data
 
                 await asyncio.to_thread(_load_shellcode)
                 await ctx.report_progress(30, 100)

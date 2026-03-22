@@ -260,7 +260,9 @@ def tool_decorator(func):
             msg = str(exc)
             if not msg:
                 msg = f"{tool_name} failed: {type(exc).__name__} (internal error — the binary may be incompatible with this analysis)"
-            raise RuntimeError(msg) from exc
+                raise RuntimeError(msg) from exc
+            # Preserve original exception type and message when message is non-empty
+            raise type(exc)(msg) from exc
         finally:
             _current_tool_var.reset(_tool_token)
             # Always cancel the heartbeat when the tool finishes

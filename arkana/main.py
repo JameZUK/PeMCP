@@ -698,17 +698,20 @@ def _run_cli_analysis(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
 # ---------------------------------------------------------------------------
 
 def main():
-    if not PEFILE_AVAILABLE:
-        print("[!] CRITICAL ERROR: The 'pefile' library is not found.", file=sys.stderr)
-        print("[!] This library is essential for the script to function.", file=sys.stderr)
-        print("[!] Install it with: pip install pefile", file=sys.stderr)
-        sys.exit(1)
-
     args = _parse_arguments()
     log_level = _configure_logging(args)
     cfg = _resolve_paths(args)
 
     if args.mcp_server:
+        if not PEFILE_AVAILABLE:
+            print("[!] WARNING: The 'pefile' library is not found.", file=sys.stderr)
+            print("[!] PE file analysis will be unavailable. ELF and Mach-O analysis will still work.", file=sys.stderr)
+            print("[!] Install it with: pip install pefile", file=sys.stderr)
         _start_mcp_server(args, cfg, log_level)
     else:
+        if not PEFILE_AVAILABLE:
+            print("[!] CRITICAL ERROR: The 'pefile' library is not found.", file=sys.stderr)
+            print("[!] CLI mode requires pefile for PE analysis.", file=sys.stderr)
+            print("[!] Install it with: pip install pefile", file=sys.stderr)
+            sys.exit(1)
         _run_cli_analysis(args, cfg)

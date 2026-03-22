@@ -784,7 +784,8 @@ async def find_path_to_address(
                 # Cap deferred stash to prevent unbounded state accumulation
                 deferred = getattr(simgr, 'deferred', None)
                 if deferred is not None and len(deferred) > 500:
-                    simgr.drop(stash='deferred', filter_func=lambda s: True)
+                    # Trim oldest states, keeping the 500 most recent
+                    simgr.stashes['deferred'] = deferred[-500:]
 
                 simgr.step()
                 steps += 1
@@ -793,7 +794,7 @@ async def find_path_to_address(
 
                 if task_id_for_progress and steps % 10 == 0:
                     active = len(simgr.active)
-                    deferred = len(simgr.stashed) + len(getattr(simgr, 'deferred', []))
+                    deferred = len(getattr(simgr, 'deferred', []))
                     percent = min(95, int((steps / max_steps) * 100))
                     msg = f"Solving... Active: {active}, Deferred: {deferred} (Step {steps})"
                     _update_progress(task_id_for_progress, percent, msg, bridge=_progress_bridge)
@@ -900,15 +901,17 @@ async def emulate_function_execution(
 
             while steps_taken < max_steps:
                 if not simgr.active: break
-                simgr.run(n=chunk_size)
-                steps_taken += chunk_size
+                remaining = max_steps - steps_taken
+                run_n = min(chunk_size, remaining)
+                simgr.run(n=run_n)
+                steps_taken += run_n
 
                 # M-2: Prune active states to prevent state explosion
                 if len(simgr.active) > 30:
                     simgr.split(from_stash='active', to_stash='deferred', limit=30)
                 deferred = getattr(simgr, 'deferred', None)
                 if deferred is not None and len(deferred) > 500:
-                    simgr.drop(stash='deferred')
+                    simgr.stashes['deferred'] = deferred[-500:]
 
                 _partial_emu['steps'] = steps_taken
                 try:

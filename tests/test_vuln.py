@@ -123,7 +123,7 @@ class TestInputSourceApis:
         from arkana.mcp.tools_vuln import _INPUT_SOURCE_APIS
         assert "recv" in _INPUT_SOURCE_APIS
         assert "fgets" in _INPUT_SOURCE_APIS
-        assert "ReadFile" in _INPUT_SOURCE_APIS
+        assert "readfile" in _INPUT_SOURCE_APIS  # lowercased for O(1) lookup
         assert "getenv" in _INPUT_SOURCE_APIS
 
 

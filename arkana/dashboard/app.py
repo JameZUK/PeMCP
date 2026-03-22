@@ -219,7 +219,7 @@ _decompile_semaphore = asyncio.Semaphore(2)
 _report_semaphore = asyncio.Semaphore(2)
 
 # --- Content-Security-Policy value (single source of truth) ---
-_CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self';"
+_CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
 
 
 # ---------------------------------------------------------------------------

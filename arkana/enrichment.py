@@ -585,6 +585,10 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
     if now - state._last_decompile_save_time < _ASYNC_SAVE_INTERVAL:
         return
 
+    # Update timestamp immediately to prevent multiple threads passing the
+    # throttle check simultaneously within the same interval.
+    state._last_decompile_save_time = now
+
     # Non-blocking acquire — skip if another save is already running for this state
     def _bg_save():
         if not state._async_save_lock.acquire(blocking=False):

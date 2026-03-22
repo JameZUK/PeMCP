@@ -58,9 +58,18 @@ def parse_signature_file(db_path: str, verbose: bool = False) -> List[Dict[str, 
                                     valid = False
                                     break
                             elif len(b_str) == 2 and (b_str[0] == '?' or b_str[1] == '?'):
+                                # Nibble-level wildcard: build a character class for the
+                                # 16 possible byte values matching the fixed nibble.
                                 byte_pat_list.append(None)
-                                regex_c = b_str.replace('?', '.')
-                                regex_b_list.append(regex_c.encode('ascii'))
+                                if b_str[0] == '?':
+                                    # High nibble wild: ?A -> 0x0A,0x1A,...,0xFA
+                                    lo = int(b_str[1], 16)
+                                    byte_vals = bytes([hi << 4 | lo for hi in range(16)])
+                                else:
+                                    # Low nibble wild: A? -> 0xA0,0xA1,...,0xAF
+                                    hi = int(b_str[0], 16)
+                                    byte_vals = bytes(range(hi << 4, (hi << 4) + 16))
+                                regex_b_list.append(b'[' + re.escape(byte_vals) + b']')
                             else:
                                 valid = False
                                 break

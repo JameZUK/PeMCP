@@ -1289,7 +1289,14 @@ def _triage_elf_security(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
                         if elf_sec["stripped"]:
                             elf_sec["note_stripped"] = "Symbol table stripped — harder to analyze"
                         elf_sec["has_gnu_relro"] = mm.find(b'GNU_RELRO') != -1
-                        elf_sec["has_nx"] = mm.find(b'GNU_STACK') != -1
+                        # GNU_STACK presence alone doesn't mean NX is enabled — it depends
+                        # on the segment's PF_X flag. Without pyelftools we can't read the
+                        # program header flags, so report as unknown rather than guessing.
+                        has_gnu_stack = mm.find(b'GNU_STACK') != -1
+                        elf_sec["has_nx"] = "unknown (heuristic)"
+                        if not has_gnu_stack:
+                            elf_sec["has_nx"] = False
+                            elf_sec["note_nx"] = "No GNU_STACK segment — stack may be executable"
                         elf_sec["note"] = "pyelftools not available — results are heuristic-based"
 
         except Exception as e:
@@ -1969,7 +1976,7 @@ async def get_triage_report(
         triage_report["workflow_hints"] = _TRIAGE_WORKFLOW_HINTS
         # Re-apply pagination parameters to the cached result
         net_iocs = triage_report.get("network_iocs", {})
-        for field_key in ("ips", "urls", "domains", "registry_paths"):
+        for field_key in ("ip_addresses", "urls", "domains", "registry_paths"):
             items = net_iocs.get(field_key, [])
             if isinstance(items, list):
                 page, pag_meta = _paginate_field(items, indicator_offset, indicator_limit)

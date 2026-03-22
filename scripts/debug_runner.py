@@ -290,12 +290,18 @@ def _build_execution_state(extra=None):
 def _parse_address(addr_str):
     """Parse an address string (hex or decimal) to int."""
     if isinstance(addr_str, int):
+        if addr_str < 0:
+            raise ValueError(f"Invalid address: negative value {addr_str}")
         return addr_str
     if isinstance(addr_str, str):
         addr_str = addr_str.strip()
         if addr_str.startswith("0x") or addr_str.startswith("0X"):
-            return int(addr_str, 16)
-        return int(addr_str)
+            val = int(addr_str, 16)
+        else:
+            val = int(addr_str)
+        if val < 0:
+            raise ValueError(f"Invalid address: negative value {addr_str}")
+        return val
     raise ValueError(f"Invalid address: {addr_str}")
 
 
