@@ -261,6 +261,7 @@ def _parse_floss_analysis(
     quiet_mode_for_floss_progress: bool, # For disabling FLOSS's own progress bars
     regex_search_pattern: Optional[str] = None,
     progress_callback: Optional[Callable[[int, str], None]] = None,
+    pe_object=None,
     ) -> Dict[str, Any]:
     """
     Performs string extraction using FLOSS, enriches with context, ranks with StringSifter,
@@ -377,8 +378,10 @@ def _parse_floss_analysis(
             # Build file-offset-to-VA conversion table from PE sections
             _offset_to_va_sections = []
             try:
-                from arkana.config import state as _fstate
-                pe_obj = _fstate.pe_object
+                pe_obj = pe_object
+                if pe_obj is None:
+                    from arkana.config import state as _fstate
+                    pe_obj = _fstate.pe_object
                 if pe_obj and hasattr(pe_obj, 'sections'):
                     for sec in pe_obj.sections:
                         raw_ptr = sec.PointerToRawData

@@ -485,50 +485,51 @@ class AnalysisCache:
         sha256 = _validate_sha256(sha256)
         entry_path = self._entry_path(sha256)
 
-        # Read gzip data outside the lock, then hold the lock only for the
-        # atomic write, to avoid blocking all cache operations during I/O.
-        if not entry_path.exists():
-            return False
+        # Hold lock through the full read-modify-write cycle to prevent
+        # concurrent updates from clobbering each other (e.g. add_note +
+        # rename_function racing).  Session data updates are infrequent
+        # so the slightly longer lock hold is acceptable.
+        with self._lock:
+            if not entry_path.exists():
+                return False
 
-        try:
-            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                wrapper = json.load(f)
-        except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
-            logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
-            return False
+            try:
+                with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                    wrapper = json.load(f)
+            except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
+                logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
+                return False
 
-        # Modify wrapper in memory
-        if notes is not None:
-            wrapper["notes"] = notes
-        if tool_history is not None:
-            wrapper["tool_history"] = tool_history
-        if artifacts is not None:
-            wrapper["artifacts"] = artifacts
-        if renames is not None:
-            wrapper["renames"] = renames
-        if custom_types is not None:
-            wrapper["custom_types"] = custom_types
-        if triage_status is not None:
-            wrapper["triage_status"] = triage_status
+            # Modify wrapper in memory
+            if notes is not None:
+                wrapper["notes"] = notes
+            if tool_history is not None:
+                wrapper["tool_history"] = tool_history
+            if artifacts is not None:
+                wrapper["artifacts"] = artifacts
+            if renames is not None:
+                wrapper["renames"] = renames
+            if custom_types is not None:
+                wrapper["custom_types"] = custom_types
+            if triage_status is not None:
+                wrapper["triage_status"] = triage_status
 
-        # Write atomically using streaming gzip — hold lock only for the
-        # rename to prevent concurrent updates from clobbering each other.
-        # M-10: Use NamedTemporaryFile to avoid .tmp collisions
-        fd = tempfile.NamedTemporaryFile(
-            dir=str(entry_path.parent), suffix='.tmp', delete=False,
-        )
-        tmp = Path(fd.name)
-        fd.close()
-        try:
-            with gzip.open(tmp, "wt", encoding="utf-8") as gz:
-                json.dump(wrapper, gz)
-            with self._lock:
+            # Write atomically using streaming gzip
+            # M-10: Use NamedTemporaryFile to avoid .tmp collisions
+            fd = tempfile.NamedTemporaryFile(
+                dir=str(entry_path.parent), suffix='.tmp', delete=False,
+            )
+            tmp = Path(fd.name)
+            fd.close()
+            try:
+                with gzip.open(tmp, "wt", encoding="utf-8") as gz:
+                    json.dump(wrapper, gz)
                 tmp.replace(entry_path)
-            return True
-        except (TypeError, ValueError, OSError) as e:
-            logger.error("Failed to write session data for %s...: %s", sha256[:12], e)
-            tmp.unlink(missing_ok=True)
-            return False
+                return True
+            except (TypeError, ValueError, OSError) as e:
+                logger.error("Failed to write session data for %s...: %s", sha256[:12], e)
+                tmp.unlink(missing_ok=True)
+                return False
 
     # ------------------------------------------------------------------
     #  Management helpers (exposed via MCP tools)

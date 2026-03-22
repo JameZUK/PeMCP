@@ -1096,6 +1096,7 @@ async def get_strings_for_function(
         A list of string dictionaries that are associated with the given function.
     """
     function_va = _parse_int_param(function_va, "function_va")
+    limit = max(1, min(limit, _MAX_LIMIT))
     await ctx.info(f"Request for strings referenced by function: {hex(function_va)}")
     _check_data_key_available("floss_analysis", "get_strings_for_function")
 
@@ -1161,6 +1162,7 @@ async def get_string_usage_context(
         empty list if the offset is not found or has no references.
     """
     string_offset = _parse_int_param(string_offset, "string_offset")
+    limit = max(1, min(limit, _MAX_LIMIT))
     await ctx.info(f"Request for usage context for string at offset: {hex(string_offset)}")
     _check_data_key_available("floss_analysis", "get_string_usage_context")
 
@@ -1197,6 +1199,7 @@ async def fuzzy_search_strings(
     Next steps: Use get_string_usage_context() for code references to matched
     strings, add_note() to record interesting fuzzy matches found.
     """
+    limit = max(1, min(limit, _MAX_LIMIT))
     await ctx.info(f"Fuzzy search request for '{query_string}'. Min Ratio: {min_similarity_ratio}, Limit: {limit}")
 
     # --- Parameter Validation ---
@@ -1206,8 +1209,6 @@ async def fuzzy_search_strings(
 
     if not query_string:
         raise ValueError("Parameter 'query_string' cannot be empty.")
-    if not (isinstance(limit, int) and limit > 0):
-        raise ValueError("Parameter 'limit' must be a positive integer.")
     if not (isinstance(min_similarity_ratio, int) and 0 <= min_similarity_ratio <= 100):
         raise ValueError("Parameter 'min_similarity_ratio' must be an integer between 0 and 100.")
 
@@ -1390,6 +1391,7 @@ async def search_yara_custom(
     from arkana.config import YARA_AVAILABLE
     await ctx.info("Running custom YARA rules")
     await ctx.report_progress(5, 100)
+    limit = max(1, min(limit, _MAX_LIMIT))
     _check_pe_loaded("search_yara_custom")
 
     if not YARA_AVAILABLE:

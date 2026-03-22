@@ -89,7 +89,7 @@ def _start_floss_background_task(current_state, floss_args: tuple):
         _start = _time.monotonic()
         try:
             _update(5, "Starting FLOSS deep analysis...")
-            result = _parse_floss_analysis(*floss_args, progress_callback=_update)
+            result = _parse_floss_analysis(*floss_args, progress_callback=_update, pe_object=current_state.pe_object)
 
             elapsed = _time.monotonic() - _start
             if elapsed > _FLOSS_THREAD_TIMEOUT:
@@ -318,6 +318,8 @@ async def open_file(
             pass
         state.result_cache.clear()
         state.clear_warnings()
+        # Clear enrichment cancel flag so new enrichment isn't immediately cancelled
+        state._enrichment_cancel.clear()
 
     _loaded_from_cache = False
 
@@ -427,6 +429,17 @@ async def open_file(
                         state.previous_session_history = session_meta.get("tool_history", [])[:MAX_TOOL_HISTORY]  # M3-v11: bound
                         with state._artifacts_lock:
                             state.artifacts = session_meta.get("artifacts", [])
+                            # Restore counter to max ID suffix + 1 to prevent ID collisions
+                            if state.artifacts:
+                                max_art_suffix = 0
+                                for a in state.artifacts:
+                                    aid = a.get("id", "")
+                                    if isinstance(aid, str) and "_" in aid:
+                                        try:
+                                            max_art_suffix = max(max_art_suffix, int(aid.rsplit("_", 1)[-1]))
+                                        except (ValueError, IndexError):
+                                            pass
+                                state._artifacts_counter = max_art_suffix + 1
                         with state._renames_lock:
                             state.renames = session_meta.get("renames", {"functions": {}, "variables": {}, "labels": {}})
                         with state._types_lock:
@@ -448,6 +461,8 @@ async def open_file(
                         val = cached.get(pe_key)
                         if val:
                             setattr(state, state_attr, val)
+                            # Remove from pe_data to avoid in-memory duplication
+                            cached.pop(pe_key, None)
 
                     # Restore decompiled functions (metadata + code lines)
                     cached_decompiled = cached.get('_decompiled_functions')
@@ -509,6 +524,7 @@ async def open_file(
                             abs_path, FLOSS_MIN_LENGTH_DEFAULT, 0,
                             Actual_DebugLevel_Floss.NONE, "auto",
                             [], [], [], True,
+                            pe_object=state.pe_object,
                         )
                         _perform_unified_string_sifting(updated)
                         state.pe_data = updated
@@ -770,6 +786,13 @@ async def close_file(ctx: Context) -> Dict[str, str]:
             custom_types=state.get_all_types_snapshot(),
             triage_status=state.get_all_triage_snapshot(),
         )
+
+    # Clean up debug sessions before clearing state
+    try:
+        if hasattr(state, '_debug_manager') and state._debug_manager is not None:
+            state._debug_manager.cleanup_all()
+    except Exception:
+        pass
 
     # C5: Clear decompile meta cache for this session only
     try:

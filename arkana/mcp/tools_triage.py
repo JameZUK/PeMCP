@@ -1607,12 +1607,16 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
 #  Auto-note helper — saves key triage findings for the analysis digest
 # ===================================================================
 
-def _auto_save_triage_notes(triage_report: Dict[str, Any]) -> None:
+def _auto_save_triage_notes(triage_report: Dict[str, Any],
+                            full_suspicious_imports: Optional[List] = None) -> None:
     """Auto-create 'tool_result' notes from triage findings.
 
     Called after each triage run so that ``get_analysis_digest()`` always
     has meaningful data.  Skips if triage notes already exist to avoid
     duplicates on re-triage.
+
+    ``full_suspicious_imports`` should be the pre-pagination list so that
+    CRITICAL imports beyond the page limit are still captured in notes.
     """
     from arkana.mcp.tools_notes import _persist_notes_to_cache
 
@@ -1635,7 +1639,8 @@ def _auto_save_triage_notes(triage_report: Dict[str, Any]) -> None:
     if isinstance(sig, dict):
         parts.append("signed" if sig.get("present") else "unsigned")
 
-    sus = triage_report.get("suspicious_imports", [])
+    # Use full pre-pagination list if available, otherwise fall back to report data
+    sus = full_suspicious_imports if full_suspicious_imports is not None else triage_report.get("suspicious_imports", [])
     critical_imports = []
     if isinstance(sus, list):
         critical_imports = [
@@ -1744,7 +1749,8 @@ def _run_triage_internal(
 
     _report(20, "Analyzing imports...")
     imports_result, delta = _triage_suspicious_imports(indicator_limit)
-    page, pag = _pf(imports_result["suspicious_imports"])
+    _full_suspicious_imports = imports_result["suspicious_imports"]  # pre-pagination for notes
+    page, pag = _pf(_full_suspicious_imports)
     triage_report["suspicious_imports"] = page
     triage_report["suspicious_imports_pagination"] = pag
     triage_report["suspicious_import_summary"] = imports_result["suspicious_import_summary"]
@@ -1897,7 +1903,7 @@ def _run_triage_internal(
     # Cache on state (pe_data persistence handled by _save_enrichment_cache)
     current_state._cached_triage = triage_report
 
-    _auto_save_triage_notes(triage_report)
+    _auto_save_triage_notes(triage_report, full_suspicious_imports=_full_suspicious_imports)
     return triage_report
 
 

@@ -307,7 +307,16 @@ def _parse_version_info(pe: pefile.PE) -> Dict[str, Any]:
 
     if hasattr(pe, 'FileInfo') and pe.FileInfo:
         fi_blocks = []
-        for fi_block in pe.FileInfo:
+        # pefile >= 2023 returns FileInfo as list-of-lists (one per resource
+        # language).  Flatten so we always iterate over individual info blocks.
+        raw_fi = pe.FileInfo
+        flat_fi_items = []
+        for item in raw_fi:
+            if isinstance(item, list):
+                flat_fi_items.extend(item)
+            else:
+                flat_fi_items.append(item)
+        for fi_block in flat_fi_items:
             block_detail: Dict[str, Any] = {}
 
             if hasattr(fi_block, 'entries'):

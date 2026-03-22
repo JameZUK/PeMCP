@@ -401,7 +401,8 @@ def _preload_file(args: argparse.Namespace, cfg: _ResolvedConfig) -> None:
                     cfg.floss_debug_level, cfg.floss_fmt,
                     cfg.floss_disabled_types, cfg.floss_only_types,
                     cfg.floss_functions, cfg.floss_quiet,
-                    args.regex_pattern
+                    args.regex_pattern,
+                    pe_object=state.pe_object,
                 )
                 _perform_unified_string_sifting(state.pe_data)
 

@@ -294,7 +294,7 @@ def _scan_function_for_vulns(
             for dll_entry in imports:
                 if not isinstance(dll_entry, dict):
                     continue
-                dll_imports = dll_entry.get("imports", [])
+                dll_imports = dll_entry.get("symbols", [])
                 if not isinstance(dll_imports, list):
                     continue
                 for imp in dll_imports:

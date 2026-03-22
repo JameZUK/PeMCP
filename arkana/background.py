@@ -195,12 +195,15 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
         print(f"\n[!] Task {task_id[:8]} failed: {str(e)[:200]}", file=sys.stderr)  # H1-v11: truncate stderr
 
 
-def _cfg_stall_monitor(project, task_id, interval=15):
+def _cfg_stall_monitor(project, task_id, interval=15, _session_state=None):
     """Sample KB function count periodically during CFGFast.
 
     Writes snapshots to task metadata so check_task_status can compute
     stall detection. Runs until the task leaves TASK_RUNNING state.
     """
+    # Propagate session state so StateProxy resolves correctly in this thread
+    if _session_state is not None:
+        set_current_state(_session_state)
     snapshots = []  # list of (timestamp, func_count)
     while True:
         task = state.get_task(task_id)
@@ -270,6 +273,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         monitor = threading.Thread(
             target=_cfg_stall_monitor,
             args=(project, task_id),
+            kwargs={"_session_state": _session_state},
             daemon=True,
         )
         monitor.start()

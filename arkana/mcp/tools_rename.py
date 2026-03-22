@@ -212,7 +212,11 @@ async def batch_rename(
     validated_entries = []
     for i, entry in enumerate(renames):
         rtype = entry.get("type")
-        addr = normalize_address(entry.get("address", ""))
+        raw_addr = entry.get("address", "").strip()
+        if not raw_addr:
+            validation_errors.append(f"[{i}] Missing address.")
+            continue
+        addr = normalize_address(raw_addr)
         _MAX_NAME_LEN = 200
         if rtype == "function":
             name = entry.get("new_name", "").strip()
@@ -236,6 +240,8 @@ async def batch_rename(
             cat = entry.get("category", "general")
             if not name:
                 validation_errors.append(f"[{i}] Missing name for label.")
+            elif len(name) > _MAX_NAME_LEN:
+                validation_errors.append(f"[{i}] Label name too long ({len(name)} chars). Maximum is {_MAX_NAME_LEN}.")
             elif cat not in valid_categories:
                 validation_errors.append(f"[{i}] Invalid category '{cat}'. Must be one of: {', '.join(valid_categories)}.")
             else:
