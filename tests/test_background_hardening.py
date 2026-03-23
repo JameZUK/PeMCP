@@ -539,8 +539,7 @@ class TestAngrWorkerFinallyCleanup(unittest.TestCase):
         import inspect
         from arkana.background import angr_background_worker
         source = inspect.getsource(angr_background_worker)
-        assert "_task_cancel_events.pop(task_id, None)" in source
-        assert "_background_threads.pop(task_id, None)" in source
+        assert "unregister_task_infra(task_id)" in source
         assert "finally:" in source
 
 

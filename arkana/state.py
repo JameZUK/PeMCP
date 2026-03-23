@@ -207,6 +207,49 @@ class AnalyzerState:
         with self._task_lock:
             return list(self.background_tasks.keys())
 
+    # ------------------------------------------------------------------
+    # Thread-safe accessors for _task_cancel_events / _background_threads
+    # ------------------------------------------------------------------
+    # These dicts accompany ``background_tasks`` but were historically
+    # accessed without ``_task_lock``.  The helpers below ensure all
+    # mutations go through a single lock, closing race windows with
+    # ``cancel_all_background_tasks``, the session reaper, and worker
+    # finally-blocks — especially important for future free-threaded
+    # Python builds (PEP 703).
+
+    def register_task_infra(
+        self,
+        task_id: str,
+        cancel_event: "threading.Event",
+        thread: "Optional[threading.Thread]" = None,
+    ) -> None:
+        """Register a cancel event (and optional thread) for *task_id*.
+
+        Must be called **before** ``set_task(task_id, ...)`` so that
+        ``cancel_all_background_tasks()`` can always find the event once
+        the task is visible as RUNNING.
+        """
+        with self._task_lock:
+            self._task_cancel_events[task_id] = cancel_event
+            if thread is not None:
+                self._background_threads[task_id] = thread
+
+    def set_task_thread(self, task_id: str, thread: "threading.Thread") -> None:
+        """Register (or update) the thread reference for *task_id*."""
+        with self._task_lock:
+            self._background_threads[task_id] = thread
+
+    def unregister_task_infra(self, task_id: str) -> None:
+        """Remove cancel event and thread ref for a completed/failed task."""
+        with self._task_lock:
+            self._task_cancel_events.pop(task_id, None)
+            self._background_threads.pop(task_id, None)
+
+    def get_cancel_event(self, task_id: str) -> "Optional[threading.Event]":
+        """Return the cancel event for *task_id*, or ``None``."""
+        with self._task_lock:
+            return self._task_cancel_events.get(task_id)
+
     def check_path_allowed(self, file_path: str) -> None:
         """Raise RuntimeError if the path is outside all allowed directories."""
         import os
@@ -234,8 +277,10 @@ class AnalyzerState:
     def increment_generation(self) -> int:
         """Increment analysis generation counter.
 
-        Safe because callers (reset_angr, cancel_all_background_tasks) are
-        serialized by the tool decorator's session activation.  Returns new value.
+        Called by ``reset_angr()`` during file switches.  Safe because callers
+        are serialized by the tool decorator's session activation (or, in the
+        session reaper, operate on evicted sessions with no concurrent writers).
+        Returns new value.
         """
         self._analysis_generation += 1
         return self._analysis_generation
@@ -252,8 +297,10 @@ class AnalyzerState:
                     task["error"] = "File was switched during analysis."
                     task["progress_message"] = "Discarded — file switched"
                     task["aborted"] = True
-        # Set cancel events outside _task_lock to avoid potential deadlocks
-        for _tid, cancel in list(self._task_cancel_events.items()):
+            # Snapshot cancel events under the same lock for a consistent read
+            cancel_snapshot = list(self._task_cancel_events.values())
+        # Set events outside _task_lock — workers' finally blocks acquire it
+        for cancel in cancel_snapshot:
             cancel.set()
 
     def _evict_old_tasks(self):
@@ -786,23 +833,24 @@ class AnalyzerState:
             self.angr_hooks = {}
         # Increment generation so stale background threads discard their results
         self.increment_generation()
-        # Set cancel events for angr-related tasks so threads can exit gracefully
         _angr_task_ids = {"startup-angr", "angr-cfg", "angr-analysis"}
-        for tid in _angr_task_ids:
-            cancel = self._task_cancel_events.get(tid)
-            if cancel is not None:
-                cancel.set()
-        # Clear angr-related background tasks so a stalled "startup-angr"
-        # task doesn't persist across file reloads and block angr-dependent
-        # tools with "still in progress" errors.  Non-angr tasks are kept.
+        # Collect cancel events, delete tasks, and clean up thread/event refs
+        # under a single lock acquisition for consistency.
         with self._task_lock:
+            cancel_events = [
+                self._task_cancel_events[tid]
+                for tid in _angr_task_ids
+                if tid in self._task_cancel_events
+            ]
             for tid in list(self.background_tasks):
                 if tid in _angr_task_ids:
                     del self.background_tasks[tid]
-        # Clean up thread refs
-        for tid in _angr_task_ids:
-            self._background_threads.pop(tid, None)
-            self._task_cancel_events.pop(tid, None)
+            for tid in _angr_task_ids:
+                self._background_threads.pop(tid, None)
+                self._task_cancel_events.pop(tid, None)
+        # Set cancel events outside the lock — worker finally blocks acquire it
+        for cancel in cancel_events:
+            cancel.set()
 
     def close_pe(self):
         with self._pe_lock:
@@ -968,17 +1016,23 @@ def _session_reaper_loop() -> None:
                     stale_to_cleanup.append(stale_session)
             for stale in stale_to_cleanup:
                 try:
-                    # Set cancel events for all background tasks in this session
-                    for cancel_evt in stale._task_cancel_events.values():
+                    # Snapshot cancel events and threads under lock
+                    with stale._task_lock:
+                        cancel_events = list(stale._task_cancel_events.values())
+                        threads_to_join = list(stale._background_threads.items())
+                    # Set cancel events outside lock (workers' finally blocks acquire it)
+                    for cancel_evt in cancel_events:
                         cancel_evt.set()
-                    # Join background threads with short timeout
-                    for tid, thr in list(stale._background_threads.items()):
+                    # Join threads outside lock to avoid deadlock with worker finally blocks
+                    for tid, thr in threads_to_join:
                         if thr.is_alive():
                             thr.join(timeout=5)
                             if thr.is_alive():
                                 logger.warning("Session reaper: thread for task %s still alive after join", tid)
-                    stale._background_threads.clear()
-                    stale._task_cancel_events.clear()
+                    # Clear dicts under lock
+                    with stale._task_lock:
+                        stale._background_threads.clear()
+                        stale._task_cancel_events.clear()
                     if stale.pe_object is not None:
                         stale.close_pe()
                     if stale.angr_project is not None and stale.angr_project is not _default_state.angr_project:

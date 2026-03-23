@@ -112,7 +112,7 @@ def _register_background_task(task_id: str, task_info: dict) -> threading.Event:
     """
     _session_state = get_current_state()
     cancel_event = threading.Event()
-    _session_state._task_cancel_events[task_id] = cancel_event
+    _session_state.register_task_infra(task_id, cancel_event)
     state.set_task(task_id, task_info)
     return cancel_event
 
@@ -173,7 +173,7 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
     # Use pre-registered cancel event or create one (backward compat)
     if cancel_event is None:
         cancel_event = threading.Event()
-        _session_state._task_cancel_events[task_id] = cancel_event
+        _session_state.register_task_infra(task_id, cancel_event)
 
     # Create a ProgressBridge if we have a live MCP context
     bridge = None
@@ -377,8 +377,7 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
 
     finally:
         # Clean up cancel event and thread ref
-        _session_state._task_cancel_events.pop(task_id, None)
-        _session_state._background_threads.pop(task_id, None)
+        _session_state.unregister_task_infra(task_id)
 
 
 def _cfg_stall_monitor(project, task_id, interval=15, _session_state=None):
@@ -521,12 +520,18 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
                         # Check if cancelled (abort or file switch)
                         if _cancel_event is not None and _cancel_event.is_set():
                             logger.info("CFG task %s cancelled during overtime", task_id)
+                            state.update_task(task_id, status=TASK_FAILED,
+                                              error="Cancelled during overtime.",
+                                              progress_message="Cancelled")
                             executor.shutdown(wait=False, cancel_futures=True)
                             return
 
                         # Check generation
                         if _session_state and _session_state._analysis_generation != my_gen:
                             logger.info("CFG task %s: file switched during overtime — discarding", task_id)
+                            state.update_task(task_id, status=TASK_FAILED,
+                                              error="File was switched during analysis.",
+                                              progress_message="Discarded — file switched")
                             executor.shutdown(wait=False, cancel_futures=True)
                             return
 
@@ -589,9 +594,15 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
             # Cancel and generation guard before writing results
             if _cancel_event is not None and _cancel_event.is_set():
                 logger.info("CFG task %s cancelled before result write", task_id)
+                state.update_task(task_id, status=TASK_FAILED,
+                                  error="Cancelled before result write.",
+                                  progress_message="Cancelled")
                 return
             if _session_state and _session_state._analysis_generation != my_gen:
                 logger.info("CFG task %s completed but file switched — discarding", task_id)
+                state.update_task(task_id, status=TASK_FAILED,
+                                  error="File was switched during analysis.",
+                                  progress_message="Discarded — file switched")
                 return
 
             state.set_angr_results(project, cfg, None, None)
@@ -643,8 +654,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
     finally:
         # Clean up cancel event and thread ref (mirrors _run_background_task_wrapper)
         if _session_state is not None:
-            _session_state._task_cancel_events.pop(task_id, None)
-            _session_state._background_threads.pop(task_id, None)
+            _session_state.unregister_task_infra(task_id)
 
 
 def _handle_cfg_hard_timeout(task_id, project, cfg_timeout, filepath, bridge):
@@ -685,6 +695,11 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
     # Capture the caller's session state to propagate to the background thread
     _session_state = get_current_state()
 
+    # Register cancel event BEFORE set_task so cancel_all_background_tasks()
+    # can always find it once the task is visible as RUNNING.
+    cancel_event = threading.Event()
+    _session_state.register_task_infra(task_id, cancel_event)
+
     state.set_task(task_id, {
         "status": TASK_RUNNING,
         "progress_percent": 0,
@@ -693,10 +708,6 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
         "created_at_epoch": time.time(),
         "tool": tool_label,
     })
-
-    # Register cancel event for abort support
-    cancel_event = threading.Event()
-    _session_state._task_cancel_events[task_id] = cancel_event
 
     global _monitor_started
     with _monitor_lock:
@@ -711,10 +722,9 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
         kwargs={"_session_state": _session_state, "_cancel_event": cancel_event},
         daemon=True,
     )
+    # Register thread BEFORE start so cleanup always finds it
+    _session_state.set_task_thread(task_id, angr_thread)
     angr_thread.start()
-
-    # Track thread reference for cleanup
-    _session_state._background_threads[task_id] = angr_thread
 
     logger.info("Background Angr analysis thread started (task_id=%s).", task_id)
     return task_id

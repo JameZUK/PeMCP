@@ -69,7 +69,7 @@ def _start_floss_background_task(current_state, floss_args: tuple):
     # Register cancel event and capture generation BEFORE setting the task
     # to RUNNING, so cancel_all_background_tasks() can always find it.
     cancel_event = threading.Event()
-    current_state._task_cancel_events[task_id] = cancel_event
+    current_state.register_task_infra(task_id, cancel_event)
     captured_gen = current_state._analysis_generation
 
     current_state.set_task(task_id, {
@@ -112,9 +112,15 @@ def _start_floss_background_task(current_state, floss_args: tuple):
             # Check cancellation and generation guard before writing results
             if cancel_event.is_set():
                 logger.info("FLOSS task %s cancelled before result write", task_id)
+                current_state.update_task(task_id, status=TASK_FAILED,
+                                          error="Cancelled before result write.",
+                                          progress_message="Cancelled")
                 return
             if current_state._analysis_generation != captured_gen:
                 logger.info("FLOSS task %s: file switched — discarding result", task_id)
+                current_state.update_task(task_id, status=TASK_FAILED,
+                                          error="File was switched during analysis.",
+                                          progress_message="Discarded — file switched")
                 return
 
             # Merge into pe_data in place — preserve static strings if deep failed
@@ -141,12 +147,11 @@ def _start_floss_background_task(current_state, floss_args: tuple):
             )
         finally:
             # Clean up infrastructure registration
-            current_state._task_cancel_events.pop(task_id, None)
-            current_state._background_threads.pop(task_id, None)
+            current_state.unregister_task_infra(task_id)
 
     t = threading.Thread(target=_worker, daemon=True, name="arkana-floss-deep")
     # Register thread reference BEFORE start so the worker's finally can clean it up
-    current_state._background_threads[task_id] = t
+    current_state.set_task_thread(task_id, t)
     t.start()
     logger.info("FLOSS deep analysis background thread started (task_id=%s).", task_id)
 

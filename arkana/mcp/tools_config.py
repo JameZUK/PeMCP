@@ -500,7 +500,7 @@ async def abort_background_task(ctx: Context, task_id: str) -> Dict[str, Any]:
     # Set cancel event so the worker thread can exit gracefully
     from arkana.state import get_current_state
     current_state = get_current_state()
-    cancel = current_state._task_cancel_events.get(task_id)
+    cancel = current_state.get_cancel_event(task_id)
     if cancel is not None:
         cancel.set()
 
