@@ -69,8 +69,10 @@ class _ToolResultCache:
         self._lock = threading.Lock()
         # tool_name -> OrderedDict[(params_key) -> {"items": list, "ts": float}]
         self._store: Dict[str, collections.OrderedDict] = {}
-        with _ToolResultCache._global_lock:
-            _ToolResultCache._all_instances.add(self)
+        # WeakSet is thread-safe (has internal lock).  Do NOT hold _global_lock
+        # here — WeakSet.add() can trigger GC which runs _on_instance_gc finalizer,
+        # and that also acquires _global_lock → deadlock on non-reentrant Lock.
+        _ToolResultCache._all_instances.add(self)
         # Register weak-ref finalizer to adjust global count on GC
         weakref.finalize(self, _ToolResultCache._on_instance_gc, id(self))
 
