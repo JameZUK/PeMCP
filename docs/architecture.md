@@ -69,7 +69,7 @@ arkana/
     ├── tools_deobfuscation.py    - Hex dump & deobfuscation tools (5 tools)
     ├── tools_triage.py           - Comprehensive triage report (1 tool)
     ├── tools_cache.py            - Analysis cache management (3 tools)
-    ├── tools_config.py           - Configuration & utility tools (4 tools)
+    ├── tools_config.py           - Configuration & utility tools (5 tools)
     ├── tools_classification.py   - Binary purpose classification (1 tool)
     ├── tools_samples.py          - Sample directory listing & discovery (1 tool)
     ├── tools_notes.py            - Persistent notes management (5 tools)

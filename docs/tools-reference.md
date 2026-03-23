@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **259 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **260 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -22,7 +22,7 @@ Arkana automatically detects and analyses binaries across all major platforms:
 
 ### Advanced Binary Analysis (Powered by Angr)
 
-43 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
+46 tools powered by the **Angr** binary analysis framework, working across PE, ELF, and Mach-O:
 
 - **Decompilation**  - Convert assembly into human-readable C-like pseudocode on the fly.
 - **Control Flow Graph (CFG)**  - Generate and traverse function blocks and edges.
@@ -85,7 +85,7 @@ Arkana is designed for **large binary corpus analysis** where AI clients need to
 - **Analysis Caching**  - Results are cached to disk in `~/.arkana/cache/`, keyed by SHA256 hash and compressed with gzip (~12x compression). Re-opening a previously analysed file loads instantly from cache.
 - **Persistent Configuration**  - API keys are stored securely in `~/.arkana/config.json` and recalled automatically across sessions.
 - **Progress Reporting**  - Over 50 long-running tools report fine-grained progress to the MCP client in real time (percentage, stage descriptions). Tools running in background threads use a thread-safe `ProgressBridge` to push updates back to the async MCP context.
-- **Progress-Adaptive Background Timeouts**  - Background tasks use a soft timeout → OVERTIME → stall-kill system. After the soft timeout (5 min for generic tasks, 15 min for CFG), the task enters `overtime` status (still running). During overtime, progress is checked every 60s — if progressing, the task keeps running; if stalled for 5 min with zero progress, it is killed. A 6-hour absolute ceiling prevents pathological cases. Passive `_background_alerts` are injected into every tool response when tasks are in overtime. Use `abort_background_task(task_id)` to explicitly stop any task. Four tools capture partial results on stall-kill. All timeout values are configurable via environment variables.
+- **Progress-Adaptive Background Timeouts**  - Background tasks use a soft timeout → OVERTIME → stall-kill system. After the soft timeout (5 min for generic tasks, 15 min for CFG), the task enters `overtime` status (still running). During overtime, progress is checked every 60s — if progressing, the task keeps running; if stalled for 5 min with zero progress, it is killed. A 6-hour absolute ceiling prevents pathological cases. Passive `_background_alerts` are injected into every tool response when tasks are in overtime. Use `abort_background_task(task_id)` to explicitly stop any task. Eight tools capture partial results on stall-kill. All timeout values are configurable via environment variables.
 
 ---
 
