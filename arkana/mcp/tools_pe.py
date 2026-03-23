@@ -204,6 +204,7 @@ async def open_file(
     use_cache: bool = True,
     auto_enrich: bool = True,
     force: bool = False,
+    force_switch: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: load] Opens and analyses a binary file, making it available for all other tools.
@@ -236,11 +237,31 @@ async def open_file(
         force: (bool) If True, force loading even if the format is unrecognized or integrity checks flag issues.
             When mode='auto' and format is unknown, force=True falls back to PE mode; otherwise falls back to
             raw/shellcode mode for basic analysis.
+        force_switch: (bool) If True, switch files even if background tasks are still running.
+            When False (default) and background tasks are active, an error is returned listing the
+            active tasks. Use abort_background_task() to stop them first, or set force_switch=True.
 
     Returns:
         A dictionary with status, filepath, detected format, file_integrity assessment,
         and (if available) session_context with restored notes and history.
     """
+    # Block file switch if background tasks are running/overtime (unless force_switch)
+    # Check this FIRST — before path validation — so the AI gets the most actionable error.
+    if state.pe_object or state.filepath:
+        from arkana.state import TASK_RUNNING as _TR, TASK_OVERTIME as _TO
+        active_tasks = []
+        for tid in state.get_all_task_ids():
+            t = state.get_task(tid)
+            if t and t.get("status") in (_TR, _TO):
+                active_tasks.append(f"{tid} ({t.get('status')})")
+        if active_tasks and not force_switch:
+            return {
+                "error": f"Cannot switch files: {len(active_tasks)} background task(s) still active: "
+                         f"{', '.join(active_tasks[:5])}.",
+                "active_tasks": active_tasks,
+                "hint": "Use abort_background_task() to stop them first, or pass force_switch=True to proceed anyway.",
+            }
+
     abs_path = str(Path(file_path).resolve())
 
     # Enforce path sandboxing (configured via --allowed-paths)
@@ -287,6 +308,8 @@ async def open_file(
                 )
             except Exception as _save_err:
                 logger.warning("Failed to persist session data before file switch: %s", _save_err)
+        # Cancel all background tasks (angr + non-angr) on file switch
+        state.cancel_all_background_tasks()
         # Cancel any running enrichment from the previous file
         state._enrichment_cancel.set()
         state.close_pe()
@@ -794,13 +817,16 @@ async def open_file(
 
 
 @tool_decorator
-async def close_file(ctx: Context) -> Dict[str, str]:
+async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]:
     """
     Closes the currently loaded file and clears all analysis data from memory.
     After calling this, a new file must be opened with open_file before using analysis tools.
 
     Args:
         ctx: The MCP Context object.
+        force_switch: (bool) If True, close even if background tasks are still running.
+            When False (default) and background tasks are active, an error is returned listing the
+            active tasks. Use abort_background_task() to stop them first, or set force_switch=True.
 
     Returns:
         A dictionary confirming the file was closed.
@@ -808,9 +834,26 @@ async def close_file(ctx: Context) -> Dict[str, str]:
     if state.filepath is None:
         return {"status": "no_file", "message": "No file was loaded."}
 
+    # Block close if background tasks are running/overtime (unless force_switch)
+    from arkana.state import TASK_RUNNING as _TR, TASK_OVERTIME as _TO
+    active_tasks = []
+    for tid in state.get_all_task_ids():
+        t = state.get_task(tid)
+        if t and t.get("status") in (_TR, _TO):
+            active_tasks.append(f"{tid} ({t.get('status')})")
+    if active_tasks and not force_switch:
+        return {
+            "error": f"Cannot close file: {len(active_tasks)} background task(s) still active: "
+                     f"{', '.join(active_tasks[:5])}.",
+            "active_tasks": active_tasks,
+            "hint": "Use abort_background_task() to stop them first, or pass force_switch=True to proceed anyway.",
+        }
+
     closed_path = state.filepath
     closed_path_info = build_path_info(closed_path)
 
+    # Cancel all background tasks (angr + non-angr) on file switch
+    state.cancel_all_background_tasks()
     # Cancel any running enrichment before clearing state
     state._enrichment_cancel.set()
 

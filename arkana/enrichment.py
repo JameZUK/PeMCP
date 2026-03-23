@@ -25,7 +25,7 @@ _ASYNC_SAVE_INTERVAL = 30
 
 from arkana.constants import ENRICHMENT_MAX_DECOMPILE, ENRICHMENT_TIMEOUT
 from arkana.state import (
-    AnalyzerState, TASK_RUNNING, TASK_COMPLETED, TASK_FAILED,
+    AnalyzerState, TASK_RUNNING, TASK_OVERTIME, TASK_COMPLETED, TASK_FAILED,
     set_current_state, get_current_state,
 )
 from arkana.utils import _safe_env_int
@@ -102,6 +102,11 @@ def start_enrichment(current_state: AnalyzerState) -> None:
         daemon=True,
         name="arkana-enrichment",
     )
+    # Register in standard background task infra BEFORE starting the thread
+    # so abort_background_task() and cancel_all_background_tasks() work.
+    # Reuse _enrichment_cancel as the cancel event so both mechanisms are unified.
+    current_state._background_threads[TASK_ID] = t
+    current_state._task_cancel_events[TASK_ID] = current_state._enrichment_cancel
     t.start()
     logger.info("Auto-enrichment background thread started (task_id=%s, gen=%d).", TASK_ID, generation)
 
@@ -306,7 +311,9 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
         # M11-v10: Removed unconditional counter reset — the counter is self-balancing
         # (each increment in tools_angr.py has a matching decrement). Resetting here
         # corrupts the counter if an on-demand decompile is in flight.
-        pass
+        # Clean up standard background task infra entries
+        state._background_threads.pop(TASK_ID, None)
+        state._task_cancel_events.pop(TASK_ID, None)
 
 
 def _wait_for_cfg(state: AnalyzerState, timeout: int = ENRICHMENT_TIMEOUT, generation: int = 0) -> bool:
@@ -331,6 +338,7 @@ def _wait_for_cfg(state: AnalyzerState, timeout: int = ENRICHMENT_TIMEOUT, gener
                 return proj is not None and cfg is not None
             if status == TASK_FAILED:
                 return False
+            # TASK_OVERTIME: CFG is still building — keep waiting
         else:
             # No angr task — CFG won't appear
             return False

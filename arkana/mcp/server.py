@@ -12,7 +12,7 @@ from arkana.config import (
     ANGR_AVAILABLE, MAX_MCP_RESPONSE_SIZE_BYTES, MAX_MCP_RESPONSE_SIZE_KB,
     MCP_SOFT_RESPONSE_LIMIT_CHARS,
 )
-from arkana.state import get_session_key_from_context, activate_session_state, get_current_state, TASK_RUNNING
+from arkana.state import get_session_key_from_context, activate_session_state, get_current_state, TASK_RUNNING, TASK_OVERTIME
 from arkana.utils import _safe_env_int
 from arkana.warning_handler import _current_tool_var
 
@@ -166,6 +166,47 @@ def _build_result_summary(result: Any) -> str:
     return "; ".join(parts)[:200]
 
 
+_ALERT_MIN_AGE_SECONDS = 5  # Don't alert for transient tasks
+
+
+def _collect_background_alerts(current_state) -> list:
+    """Collect alerts for running and overtime background tasks."""
+    alerts = []
+    try:
+        now = time.time()
+        for tid in current_state.get_all_task_ids():
+            task = current_state.get_task(tid)
+            if not task:
+                continue
+            status = task["status"]
+            if status == TASK_OVERTIME:
+                overtime_since = task.get("overtime_since_epoch", 0)
+                alerts.append({
+                    "task_id": tid,
+                    "status": "overtime",
+                    "overtime_seconds": round(now - overtime_since) if overtime_since else 0,
+                    "progress_percent": task.get("progress_percent", 0),
+                    "progress_message": task.get("progress_message", ""),
+                    "hint": f"Use check_task_status('{tid}') for details or abort_background_task('{tid}') to stop.",
+                })
+            elif status == TASK_RUNNING:
+                created = task.get("created_at_epoch", 0)
+                elapsed = now - created if created else 0
+                if elapsed < _ALERT_MIN_AGE_SECONDS:
+                    continue  # Skip transient tasks
+                alerts.append({
+                    "task_id": tid,
+                    "status": "running",
+                    "elapsed_seconds": round(elapsed),
+                    "progress_percent": task.get("progress_percent", 0),
+                    "progress_message": task.get("progress_message", ""),
+                    "hint": f"Use check_task_status('{tid}') for details.",
+                })
+    except Exception:
+        pass  # Never let alert collection break tool responses
+    return alerts
+
+
 def tool_decorator(func):
     """MCP tool decorator that activates per-session state before each call.
 
@@ -308,6 +349,12 @@ def tool_decorator(func):
             except Exception:
                 logger.debug("History recording failed for %s", tool_name, exc_info=True)
 
+        # Passive background alerts: inject overtime/recently-failed task alerts
+        if isinstance(result, dict):
+            alerts = _collect_background_alerts(current_state)
+            if alerts:
+                result["_background_alerts"] = alerts
+
         return result
     return _raw_tool_decorator(_with_session)
 
@@ -354,11 +401,13 @@ def _check_angr_ready(tool_name: str, *, require_cfg: bool = True) -> None:
     # Check if background angr startup is still running
     if require_cfg:
         startup_task = state.get_task("startup-angr")
-        if startup_task and startup_task["status"] == TASK_RUNNING:
+        if startup_task and startup_task["status"] in (TASK_RUNNING, TASK_OVERTIME):
+            status = startup_task["status"]
             progress = startup_task.get("progress_percent", 0)
             msg = startup_task.get("progress_message", "Initializing...")
+            status_label = "overtime (still running)" if status == TASK_OVERTIME else "in progress"
             raise RuntimeError(
-                f"[{tool_name}] Angr background analysis is still in progress ({progress}%: {msg}). "
+                f"[{tool_name}] Angr background analysis is {status_label} ({progress}%: {msg}). "
                 "Please wait and retry shortly. Use check_task_status('startup-angr') to monitor progress."
             )
 

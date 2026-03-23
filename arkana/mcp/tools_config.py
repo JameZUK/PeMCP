@@ -10,6 +10,7 @@ from arkana.config import (
     YARA_AVAILABLE, STRINGSIFTER_AVAILABLE, REQUESTS_AVAILABLE,
 )
 from arkana.user_config import get_config_value, set_config_value, get_masked_config
+from arkana.state import TASK_FAILED
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 
 
@@ -320,13 +321,12 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
     [Phase: utility] Checks the status and progress of a background analysis task.
 
     When to use: After launching a background task (e.g. get_reaching_definitions,
-    diff_binaries) to check if it has completed.
+    diff_binaries) to check if it has completed. Also shows overtime status with
+    progress trend and recommendation.
 
     Args:
         task_id: The ID returned by a tool running in background mode.
     """
-    # await ctx.info(f"Checking status for task: {task_id}") # Optional: Comment out to reduce noise
-
     task = state.get_task(task_id)
     if not task:
         return {"error": f"Task ID '{task_id}' not found.", "available_task_ids": state.get_all_task_ids()}
@@ -359,7 +359,7 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
         if func_count > 0:
             response["functions_discovered_so_far"] = func_count
 
-        if task["status"] == "running" and len(snapshots) >= 2:
+        if task["status"] in ("running", "overtime") and len(snapshots) >= 2:
             latest_time, latest_count = snapshots[-1]
             stall_start = latest_time
             for ts, count in reversed(snapshots):
@@ -374,6 +374,15 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
                 "seconds_since_last_change": round(seconds_stalled),
                 "functions_discovered": latest_count,
             }
+
+            # Compute discovery rate from last 5 snapshots
+            if len(snapshots) >= 2:
+                recent = snapshots[-min(5, len(snapshots)):]
+                time_span = recent[-1][0] - recent[0][0]
+                func_delta = recent[-1][1] - recent[0][1]
+                if time_span > 0:
+                    response["discovery_rate_per_min"] = round(func_delta / (time_span / 60), 1)
+
             if is_stalled:
                 response["stall_detection"]["verdict"] = (
                     f"CFG analysis appears STALLED — no new functions discovered "
@@ -390,8 +399,8 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
                     "Wait and retry shortly."
                 )
 
-    # --- Generic stall detection (for non-CFG running tasks) ---
-    if task["status"] == "running" and "stall_detection" not in response:
+    # --- Generic stall detection (for running/overtime tasks) ---
+    if task["status"] in ("running", "overtime") and "stall_detection" not in response:
         last_progress = task.get("last_progress_epoch")
         if last_progress is not None:
             since_update = time.time() - last_progress
@@ -406,9 +415,36 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
                 response["stall_detection"]["verdict"] = (
                     f"Task '{tool}' appears STALLED - no progress in {round(since_update)}s "
                     f"(last at {task.get('progress_percent', 0)}%). "
-                    "The task will time out automatically. You can wait or start a new analysis."
+                    "Use abort_background_task('" + task_id + "') to stop, or wait for auto stall-kill."
                 )
                 response["hint"] = response["stall_detection"]["verdict"]
+
+    # --- Overtime-specific fields ---
+    if task["status"] == "overtime":
+        overtime_since = task.get("overtime_since_epoch", 0)
+        if overtime_since:
+            response["overtime_seconds"] = round(time.time() - overtime_since)
+
+        # Determine progress trend
+        last_progress = task.get("last_progress_epoch", 0)
+        from arkana.constants import OVERTIME_STALL_KILL
+        stall_threshold = OVERTIME_STALL_KILL
+        since_progress = time.time() - last_progress if last_progress else 9999
+        is_progressing = since_progress < stall_threshold
+        response["progress_trend"] = "progressing" if is_progressing else "stalled"
+        response["stall_seconds"] = round(since_progress) if not is_progressing else 0
+
+        if is_progressing:
+            response["recommendation"] = (
+                "Task is in overtime but still making progress. Worth waiting. "
+                "Use abort_background_task('" + task_id + "') to stop if needed."
+            )
+        else:
+            response["recommendation"] = (
+                f"Task is in overtime and stalled ({round(since_progress)}s no progress). "
+                "Will be auto-killed soon. Use abort_background_task('" + task_id + "') to stop now."
+            )
+        response["hint"] = response["recommendation"]
 
     if task["status"] == "completed":
         result_data = task.get("result")
@@ -425,11 +461,69 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
                 response["partial_result"] = partial
                 response["hint"] = ("Task timed out but partial results are available. "
                                     "Review the partial_result field.")
+        if task.get("aborted"):
+            response["aborted"] = True
 
     elif task["status"] == "running":
         if "hint" not in response:
             response["hint"] = "Task is still processing. Poll again shortly with check_task_status."
 
+    return response
+
+
+@tool_decorator
+async def abort_background_task(ctx: Context, task_id: str) -> Dict[str, Any]:
+    """
+    [Phase: utility] Aborts a running or overtime background task.
+
+    The task thread cannot be force-killed (Python limitation), but its result
+    will be silently discarded when it eventually completes. The task is immediately
+    marked as failed/aborted.
+
+    When to use: When a background task (e.g. CFG build, symbolic execution) is
+    taking too long or is stuck and you want to proceed with other analysis.
+
+    Args:
+        task_id: The ID of the background task to abort.
+    """
+    task = state.get_task(task_id)
+    if not task:
+        return {"error": f"Task ID '{task_id}' not found.", "available_task_ids": state.get_all_task_ids()}
+
+    if task["status"] not in ("running", "overtime"):
+        return {
+            "error": f"Task '{task_id}' is not running (status: {task['status']}). Cannot abort.",
+            "task_id": task_id,
+            "status": task["status"],
+        }
+
+    # Set cancel event so the worker thread can exit gracefully
+    from arkana.state import get_current_state
+    current_state = get_current_state()
+    cancel = current_state._task_cancel_events.get(task_id)
+    if cancel is not None:
+        cancel.set()
+
+    # Collect partial info before marking failed
+    func_count = task.get("cfg_functions_discovered", 0)
+    partial = task.get("partial_result")
+
+    state.update_task(task_id, status=TASK_FAILED,
+                      error="Aborted by user.",
+                      aborted=True,
+                      progress_message="Aborted by user")
+
+    await ctx.info(f"Task '{task_id}' has been aborted.")
+
+    response = {
+        "task_id": task_id,
+        "status": "aborted",
+        "message": "Task marked as aborted. The worker thread will be discarded when it completes.",
+    }
+    if func_count > 0:
+        response["functions_discovered"] = func_count
+    if partial:
+        response["partial_result"] = partial
     return response
 
 

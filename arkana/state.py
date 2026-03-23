@@ -45,6 +45,7 @@ except (TypeError, ValueError):
 
 # Task status constants — use these instead of raw strings to prevent typo bugs.
 TASK_RUNNING = "running"
+TASK_OVERTIME = "overtime"  # Soft timeout exceeded, task still running
 TASK_COMPLETED = "completed"
 TASK_FAILED = "failed"
 
@@ -87,6 +88,9 @@ class AnalyzerState:
         self._task_lock = threading.Lock()
         self.background_tasks: Dict[str, Dict[str, Any]] = {}
         self.monitor_thread_started = False
+        self._task_cancel_events: Dict[str, threading.Event] = {}   # task_id -> cancel flag
+        self._background_threads: Dict[str, threading.Thread] = {}  # task_id -> thread ref
+        self._analysis_generation: int = 0  # Incremented on open_file/close_file
 
         # Notes (persisted per-binary via cache)
         self._notes_lock = threading.Lock()
@@ -227,6 +231,30 @@ class AnalyzerState:
         if self._closing:
             return
         self.last_active = time.time()
+
+    def increment_generation(self) -> int:
+        """Increment analysis generation counter.
+
+        Safe because callers (reset_angr, cancel_all_background_tasks) are
+        serialized by the tool decorator's session activation.  Returns new value.
+        """
+        self._analysis_generation += 1
+        return self._analysis_generation
+
+    def cancel_all_background_tasks(self):
+        """Cancel all running/overtime background tasks and mark them FAILED.
+
+        Called during force file switch to ensure no stale tasks persist.
+        """
+        with self._task_lock:
+            for _tid, task in list(self.background_tasks.items()):
+                if task.get("status") in (TASK_RUNNING, TASK_OVERTIME):
+                    task["status"] = TASK_FAILED
+                    task["error"] = "File was switched during analysis."
+                    task["progress_message"] = "Discarded — file switched"
+        # Set cancel events outside _task_lock to avoid potential deadlocks
+        for _tid, cancel in list(self._task_cancel_events.items()):
+            cancel.set()
 
     def _evict_old_tasks(self):
         """Remove oldest completed/failed tasks when the count exceeds the limit.
@@ -756,14 +784,25 @@ class AnalyzerState:
             self.angr_loop_cache = None
             self.angr_loop_cache_config = None
             self.angr_hooks = {}
+        # Increment generation so stale background threads discard their results
+        self.increment_generation()
+        # Set cancel events for angr-related tasks so threads can exit gracefully
+        _angr_task_ids = {"startup-angr", "angr-cfg", "angr-analysis"}
+        for tid in _angr_task_ids:
+            cancel = self._task_cancel_events.get(tid)
+            if cancel is not None:
+                cancel.set()
         # Clear angr-related background tasks so a stalled "startup-angr"
         # task doesn't persist across file reloads and block angr-dependent
         # tools with "still in progress" errors.  Non-angr tasks are kept.
-        _angr_task_ids = {"startup-angr", "angr-cfg", "angr-analysis"}
         with self._task_lock:
             for tid in list(self.background_tasks):
                 if tid in _angr_task_ids:
                     del self.background_tasks[tid]
+        # Clean up thread refs
+        for tid in _angr_task_ids:
+            self._background_threads.pop(tid, None)
+            self._task_cancel_events.pop(tid, None)
 
     def close_pe(self):
         with self._pe_lock:
@@ -929,6 +968,17 @@ def _session_reaper_loop() -> None:
                     stale_to_cleanup.append(stale_session)
             for stale in stale_to_cleanup:
                 try:
+                    # Set cancel events for all background tasks in this session
+                    for cancel_evt in stale._task_cancel_events.values():
+                        cancel_evt.set()
+                    # Join background threads with short timeout
+                    for tid, thr in list(stale._background_threads.items()):
+                        if thr.is_alive():
+                            thr.join(timeout=5)
+                            if thr.is_alive():
+                                logger.warning("Session reaper: thread for task %s still alive after join", tid)
+                    stale._background_threads.clear()
+                    stale._task_cancel_events.clear()
                     if stale.pe_object is not None:
                         stale.close_pe()
                     if stale.angr_project is not None and stale.angr_project is not _default_state.angr_project:

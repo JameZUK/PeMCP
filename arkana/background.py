@@ -9,11 +9,15 @@ import threading
 import logging
 
 from arkana.config import state, logger
-from arkana.constants import ANGR_CFG_TIMEOUT, BACKGROUND_TASK_TIMEOUT
+from arkana.constants import (
+    ANGR_CFG_TIMEOUT, BACKGROUND_TASK_TIMEOUT,
+    ANGR_CFG_SOFT_TIMEOUT, BACKGROUND_TASK_SOFT_TIMEOUT,
+    OVERTIME_CHECK_INTERVAL, OVERTIME_STALL_KILL, OVERTIME_MAX_RUNTIME,
+)
 from arkana.utils import _safe_env_int
 from arkana.state import (
     get_current_state, set_current_state, get_all_session_states,
-    TASK_RUNNING, TASK_COMPLETED, TASK_FAILED,
+    TASK_RUNNING, TASK_OVERTIME, TASK_COMPLETED, TASK_FAILED,
 )
 from arkana.warning_handler import _current_task_var
 
@@ -29,37 +33,40 @@ def _console_heartbeat_loop():
     """
     while True:
         time.sleep(30)
+        try:
+            current_time_str = datetime.datetime.now(datetime.timezone.utc).strftime('%H:%M:%S')
 
-        current_time_str = datetime.datetime.now(datetime.timezone.utc).strftime('%H:%M:%S')
+            # Collect running/overtime tasks from ALL sessions (not just the default state)
+            running_entries = []
+            for session_state in get_all_session_states():
+                for task_id in session_state.get_all_task_ids():
+                    task = session_state.get_task(task_id)
+                    if task and task["status"] in (TASK_RUNNING, TASK_OVERTIME):
+                        running_entries.append((task_id, task))
 
-        # Collect running tasks from ALL sessions (not just the default state)
-        running_entries = []
-        for session_state in get_all_session_states():
-            for task_id in session_state.get_all_task_ids():
-                task = session_state.get_task(task_id)
-                if task and task["status"] == TASK_RUNNING:
-                    running_entries.append((task_id, task))
+            if running_entries:
+                # Print a clean status block
+                print(f"\n--- [Status Heartbeat {current_time_str}] ---", file=sys.stderr)
+                for task_id, task in running_entries:
+                    # Calculate elapsed time
+                    try:
+                        start_time = datetime.datetime.fromisoformat(task["created_at"])
+                        elapsed = datetime.datetime.now(datetime.timezone.utc) - start_time
+                        elapsed_str = str(elapsed).split('.')[0]  # Remove microseconds
+                    except Exception:
+                        elapsed_str = "?"
 
-        if running_entries:
-            # Print a clean status block
-            print(f"\n--- [Status Heartbeat {current_time_str}] ---", file=sys.stderr)
-            for task_id, task in running_entries:
-                # Calculate elapsed time
-                try:
-                    start_time = datetime.datetime.fromisoformat(task["created_at"])
-                    elapsed = datetime.datetime.now(datetime.timezone.utc) - start_time
-                    elapsed_str = str(elapsed).split('.')[0]  # Remove microseconds
-                except Exception:
-                    elapsed_str = "?"
+                    percent = task.get("progress_percent", 0)
+                    msg = task.get("progress_message", "Processing...")
+                    suffix = " (OVERTIME)" if task["status"] == TASK_OVERTIME else ""
 
-                percent = task.get("progress_percent", 0)
-                msg = task.get("progress_message", "Processing...")
+                    print(f" * Task {task_id[:8]}... [{elapsed_str} elapsed] | {percent}%: {msg}{suffix}", file=sys.stderr)
+                print("------------------------------------------\n", file=sys.stderr)
 
-                print(f" * Task {task_id[:8]}... [{elapsed_str} elapsed] | {percent}%: {msg}", file=sys.stderr)
-            print("------------------------------------------\n", file=sys.stderr)
-
-            # Flush stderr to ensure it appears in logs/consoles immediately
-            sys.stderr.flush()
+                # Flush stderr to ensure it appears in logs/consoles immediately
+                sys.stderr.flush()
+        except Exception:
+            logger.debug("Heartbeat loop error", exc_info=True)
 
 
 def _update_progress(task_id: str, percent: int, message: str, bridge=None):
@@ -67,7 +74,13 @@ def _update_progress(task_id: str, percent: int, message: str, bridge=None):
 
     If a :class:`~arkana.mcp._progress_bridge.ProgressBridge` is provided,
     also push the progress notification to the MCP client in real-time.
+
+    Skips the update if the task is no longer active (e.g. after abort or
+    file switch) to prevent confusing progress on dead tasks.
     """
+    task = state.get_task(task_id)
+    if not task or task.get("status") not in (TASK_RUNNING, TASK_OVERTIME):
+        return  # Task is no longer active — skip update
     state.update_task(task_id, progress_percent=percent, progress_message=message,
                       last_progress_epoch=time.time())
     if bridge is not None:
@@ -86,8 +99,15 @@ def _log_task_exception(task_id: str):
     return _callback
 
 
+def _is_task_aborted(task_id: str) -> bool:
+    """Check if a task has been marked as aborted."""
+    task = state.get_task(task_id)
+    return task is not None and task.get("aborted", False)
+
+
 async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
-                                       timeout=None, on_timeout=None, **kwargs):
+                                       timeout=None, soft_timeout=None,
+                                       on_timeout=None, **kwargs):
     """Helper to run a blocking function in a thread and update the registry.
 
     Parameters
@@ -102,11 +122,14 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
         real-time MCP progress notifications in addition to the pollable
         task registry.
     timeout : int or None
-        Seconds before the task is cancelled.  Defaults to the
-        ``ARKANA_BACKGROUND_TASK_TIMEOUT`` env var / ``BACKGROUND_TASK_TIMEOUT``
-        constant (600 s).  Pass ``0`` to disable.
+        Hard timeout (legacy, used when soft_timeout is disabled).
+        Defaults to ``ARKANA_BACKGROUND_TASK_TIMEOUT``.  Pass ``0`` to disable.
+    soft_timeout : int or None
+        Seconds before the task transitions to OVERTIME (still running).
+        Defaults to ``ARKANA_BACKGROUND_TASK_SOFT_TIMEOUT``.  Set to ``0``
+        to fall back to the old single hard-timeout behavior.
     on_timeout : callable or None
-        Optional callback invoked on timeout to capture partial results.
+        Optional callback invoked on stall-kill to capture partial results.
         Should return a dict (or None).
     """
 
@@ -121,6 +144,11 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
 
     # Capture the caller's session state so we can propagate it into the worker thread
     _session_state = get_current_state()
+    captured_gen = _session_state._analysis_generation
+
+    # Register cancel event
+    cancel_event = threading.Event()
+    _session_state._task_cancel_events[task_id] = cancel_event
 
     # Create a ProgressBridge if we have a live MCP context
     bridge = None
@@ -154,23 +182,151 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
             ):
                 kwargs['_progress_bridge'] = bridge
 
-        task_timeout = timeout if timeout is not None else _safe_env_int(
+        # Resolve timeouts
+        hard_timeout = timeout if timeout is not None else _safe_env_int(
             "ARKANA_BACKGROUND_TASK_TIMEOUT", BACKGROUND_TASK_TIMEOUT)
+        soft_t = soft_timeout if soft_timeout is not None else (
+            timeout if timeout is not None else _safe_env_int(
+                "ARKANA_BACKGROUND_TASK_SOFT_TIMEOUT", BACKGROUND_TASK_SOFT_TIMEOUT))
+        check_interval = _safe_env_int("ARKANA_OVERTIME_CHECK_INTERVAL", OVERTIME_CHECK_INTERVAL)
+        stall_kill = _safe_env_int("ARKANA_OVERTIME_STALL_KILL", OVERTIME_STALL_KILL)
+        max_runtime = _safe_env_int("ARKANA_OVERTIME_MAX_RUNTIME", OVERTIME_MAX_RUNTIME)
 
+        task_start = time.time()
         coro = asyncio.to_thread(_thread_wrapper)
-        if task_timeout > 0:
-            result = await asyncio.wait_for(coro, timeout=task_timeout)
-        else:
-            result = await coro
+        task_future = asyncio.ensure_future(coro)
 
-        state.update_task(task_id, result=result, status=TASK_COMPLETED,
-                          progress_percent=100, progress_message="Analysis complete.")
+        # --- Backward compat: soft_timeout disabled → old single-timeout ---
+        if soft_t <= 0:
+            if hard_timeout > 0:
+                result = await asyncio.wait_for(asyncio.shield(task_future), timeout=hard_timeout)
+            else:
+                result = await task_future
+            # Generation guard
+            if _session_state._analysis_generation != captured_gen:
+                logger.info("Task %s completed but file was switched — discarding result", task_id)
+                state.update_task(task_id, status=TASK_FAILED,
+                                  error="File was switched during analysis.",
+                                  progress_message="Discarded — file switched")
+                return
+            state.update_task(task_id, result=result, status=TASK_COMPLETED,
+                              progress_percent=100, progress_message="Analysis complete.")
+            if bridge is not None:
+                bridge.report_progress(100, 100, force=True)
+                bridge.info("Background task complete.", force=True)
+            print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
+            return
+
+        # --- Phase 1: Wait for soft timeout ---
+        done, _ = await asyncio.wait({task_future}, timeout=soft_t)
+        if done:
+            # Check cancel before extracting result
+            if cancel_event.is_set():
+                logger.info("Task %s cancelled before result extraction", task_id)
+                return
+            result = task_future.result()
+            if _session_state._analysis_generation != captured_gen:
+                logger.info("Task %s completed but file was switched — discarding result", task_id)
+                state.update_task(task_id, status=TASK_FAILED,
+                                  error="File was switched during analysis.",
+                                  progress_message="Discarded — file switched")
+                return
+            state.update_task(task_id, result=result, status=TASK_COMPLETED,
+                              progress_percent=100, progress_message="Analysis complete.")
+            if bridge is not None:
+                bridge.report_progress(100, 100, force=True)
+                bridge.info("Background task complete.", force=True)
+            print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
+            return
+
+        # --- Phase 2: Overtime loop ---
+        state.update_task(task_id, status=TASK_OVERTIME,
+                          overtime_since_epoch=time.time(),
+                          progress_message=f"Overtime — soft timeout ({soft_t}s) exceeded, still running...")
+        logger.info("Task %s entered overtime after %ds soft timeout", task_id, soft_t)
         if bridge is not None:
-            bridge.report_progress(100, 100, force=True)
-            bridge.info("Background task complete.", force=True)
-        print(f"\n[*] Task {task_id[:8]} finished successfully.", file=sys.stderr)
+            bridge.info(f"Task entered overtime (soft timeout {soft_t}s exceeded, still running).", force=True)
+
+        while True:
+            done, _ = await asyncio.wait({task_future}, timeout=check_interval)
+            if done:
+                # Task completed during overtime
+                if cancel_event.is_set():
+                    logger.info("Task %s completed after cancel — discarding", task_id)
+                    return
+                if _session_state._analysis_generation != captured_gen:
+                    logger.info("Task %s completed but file was switched — discarding result", task_id)
+                    return
+                result = task_future.result()
+                state.update_task(task_id, result=result, status=TASK_COMPLETED,
+                                  progress_percent=100,
+                                  progress_message="Analysis complete (recovered from overtime).")
+                if bridge is not None:
+                    bridge.report_progress(100, 100, force=True)
+                    bridge.info("Background task complete (recovered from overtime).", force=True)
+                print(f"\n[*] Task {task_id[:8]} finished (overtime recovery).", file=sys.stderr)
+                return
+
+            # Check if cancelled (abort, file switch, or reaper)
+            if cancel_event.is_set():
+                logger.info("Task %s cancelled during overtime — thread still running but result will be discarded", task_id)
+                return
+
+            # Check generation
+            if _session_state._analysis_generation != captured_gen:
+                logger.info("Task %s: file switched during overtime — discarding", task_id)
+                state.update_task(task_id, status=TASK_FAILED,
+                                  error="File was switched during analysis.",
+                                  progress_message="Discarded — file switched")
+                return
+
+            # Check absolute ceiling
+            total_elapsed = time.time() - task_start
+            if max_runtime > 0 and total_elapsed >= max_runtime:
+                partial = None
+                if on_timeout is not None:
+                    try:
+                        partial = on_timeout()
+                    except Exception:
+                        logger.debug("on_timeout callback failed for task %s", task_id, exc_info=True)
+                state.update_task(task_id, status=TASK_FAILED,
+                                  error=f"Absolute max runtime ({int(max_runtime)}s) exceeded.",
+                                  timed_out=True, partial_result=partial,
+                                  progress_message=f"Killed — max runtime {int(max_runtime)}s exceeded")
+                print(f"\n[!] Task {task_id[:8]} killed — max runtime exceeded.", file=sys.stderr)
+                return
+
+            # Check progress (stall detection)
+            task = state.get_task(task_id)
+            last_progress = task.get("last_progress_epoch", task_start) if task else task_start
+            stalled_for = time.time() - last_progress
+            if stalled_for >= stall_kill:
+                partial = None
+                if on_timeout is not None:
+                    try:
+                        partial = on_timeout()
+                    except Exception:
+                        logger.debug("on_timeout callback failed for task %s", task_id, exc_info=True)
+                error_msg = (
+                    f"Task stalled for {int(stalled_for)}s with no progress. "
+                    f"Total runtime: {int(total_elapsed)}s."
+                )
+                if partial:
+                    error_msg += " Partial results are available."
+                state.update_task(task_id, status=TASK_FAILED, error=error_msg,
+                                  timed_out=True, partial_result=partial,
+                                  progress_message=f"Stall-killed after {int(stalled_for)}s no progress")
+                if bridge is not None:
+                    bridge.info(f"Task stall-killed after {int(stalled_for)}s no progress.", force=True)
+                print(f"\n[!] Task {task_id[:8]} stall-killed after {int(stalled_for)}s no progress.", file=sys.stderr)
+                return
+
+            # Still progressing — update overtime status
+            state.update_task(task_id,
+                              progress_message=f"Overtime ({int(total_elapsed)}s elapsed, progressing...)")
 
     except asyncio.TimeoutError:
+        # Only reached in backward-compat mode (soft_t <= 0)
         partial = None
         if on_timeout is not None:
             try:
@@ -178,28 +334,33 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
             except Exception:
                 logger.debug("on_timeout callback failed for task %s", task_id, exc_info=True)
 
-        error_msg = f"Task timed out after {task_timeout}s."
+        error_msg = f"Task timed out after {hard_timeout}s."
         if partial:
             error_msg += " Partial results are available."
 
         state.update_task(task_id, status=TASK_FAILED, error=error_msg,
                           timed_out=True, partial_result=partial,
-                          progress_message=f"Timed out after {task_timeout}s")
+                          progress_message=f"Timed out after {hard_timeout}s")
         if bridge is not None:
-            bridge.info(f"Task timed out after {task_timeout}s.", force=True)
-        print(f"\n[!] Task {task_id[:8]} timed out after {task_timeout}s.", file=sys.stderr)
+            bridge.info(f"Task timed out after {hard_timeout}s.", force=True)
+        print(f"\n[!] Task {task_id[:8]} timed out after {hard_timeout}s.", file=sys.stderr)
 
     except Exception as e:
         logger.error("Background task %s failed: %s: %s", task_id, type(e).__name__, e, exc_info=True)
         state.update_task(task_id, error=str(e)[:200], status=TASK_FAILED)  # M4-v10: truncate exception
         print(f"\n[!] Task {task_id[:8]} failed: {str(e)[:200]}", file=sys.stderr)  # H1-v11: truncate stderr
 
+    finally:
+        # Clean up cancel event and thread ref
+        _session_state._task_cancel_events.pop(task_id, None)
+        _session_state._background_threads.pop(task_id, None)
+
 
 def _cfg_stall_monitor(project, task_id, interval=15, _session_state=None):
     """Sample KB function count periodically during CFGFast.
 
     Writes snapshots to task metadata so check_task_status can compute
-    stall detection. Runs until the task leaves TASK_RUNNING state.
+    stall detection. Runs until the task leaves RUNNING/OVERTIME state.
     """
     # Propagate session state so StateProxy resolves correctly in this thread
     if _session_state is not None:
@@ -207,7 +368,7 @@ def _cfg_stall_monitor(project, task_id, interval=15, _session_state=None):
     snapshots = []  # list of (timestamp, func_count)
     while True:
         task = state.get_task(task_id)
-        if not task or task["status"] != TASK_RUNNING:
+        if not task or task["status"] not in (TASK_RUNNING, TASK_OVERTIME):
             break
         try:
             count = len(project.kb.functions)
@@ -232,8 +393,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
     Unified background worker for Angr analysis.  Supports PE, ELF, Mach-O,
     and shellcode (via ``mode='shellcode'``).
 
-    This is the single implementation used by both CLI startup pre-loading
-    and the ``open_file`` MCP tool.
+    Uses progress-adaptive timeout: soft timeout → OVERTIME → stall-kill.
 
     Parameters
     ----------
@@ -249,8 +409,16 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
     import angr  # imported here since this only runs when ANGR_AVAILABLE is True
 
-    cfg_timeout = _safe_env_int("ARKANA_ANGR_CFG_TIMEOUT", ANGR_CFG_TIMEOUT)
+    # Resolve timeouts
+    cfg_hard = _safe_env_int("ARKANA_ANGR_CFG_TIMEOUT", ANGR_CFG_TIMEOUT)
+    cfg_soft = _safe_env_int("ARKANA_ANGR_CFG_SOFT_TIMEOUT", ANGR_CFG_SOFT_TIMEOUT)
+    check_interval = _safe_env_int("ARKANA_OVERTIME_CHECK_INTERVAL", OVERTIME_CHECK_INTERVAL)
+    stall_kill = _safe_env_int("ARKANA_OVERTIME_STALL_KILL", OVERTIME_STALL_KILL)
+    max_runtime = _safe_env_int("ARKANA_OVERTIME_MAX_RUNTIME", OVERTIME_MAX_RUNTIME)
+
     bridge = _progress_bridge  # shorter alias
+    my_gen = _session_state._analysis_generation if _session_state else 0
+    task_start_time = time.time()
 
     try:
         _update_progress(task_id, 1, "Loading Angr Project...", bridge=bridge)
@@ -269,7 +437,7 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         state.set_angr_results(project, None, None, None)
         _update_progress(task_id, 20, "Building Control Flow Graph...", bridge=bridge)
 
-        # 2. Build CFG (the heaviest step) — with timeout and stall monitor
+        # 2. Build CFG (the heaviest step) — with progress-adaptive timeout
         monitor = threading.Thread(
             target=_cfg_stall_monitor,
             args=(project, task_id),
@@ -279,38 +447,121 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         monitor.start()
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        cfg = None
         try:
             future = executor.submit(
                 project.analyses.CFGFast,
                 normalize=True,
                 resolve_indirect_jumps=True,
             )
-            try:
-                cfg = future.result(timeout=cfg_timeout)
-            except concurrent.futures.TimeoutError:
+
+            # --- Backward compat: soft timeout disabled → old single-timeout ---
+            if cfg_soft <= 0:
                 try:
-                    funcs_found = len(project.kb.functions)
-                except Exception:
-                    funcs_found = 0
-                error_msg = (
-                    f"CFG build timed out after {cfg_timeout}s "
-                    f"(discovered {funcs_found} functions before stalling). "
-                    "Binary is likely packed/obfuscated. Try: auto_unpack_pe() → "
-                    "try_all_unpackers() → qiling_dump_unpacked_binary(). "
-                    "You can still decompile discovered functions — "
-                    "decompile_function_with_angr() will build a local CFG."
-                )
-                logger.warning("Background Angr CFG timed out after %ds for %s", cfg_timeout, filepath)
-                state.update_task(
-                    task_id,
-                    status=TASK_FAILED,
-                    error=error_msg,
-                    progress_message=f"CFG timed out ({funcs_found} functions discovered)",
-                )
-                if bridge is not None:
-                    bridge.info(f"CFG timed out after {cfg_timeout}s. {funcs_found} partial functions available.", force=True)
-                print(f"\n[!] Background Angr CFG timed out after {cfg_timeout}s ({funcs_found} functions found).", file=sys.stderr)
-                return  # monitor thread exits on next iteration (status != RUNNING)
+                    cfg = future.result(timeout=cfg_hard)
+                except concurrent.futures.TimeoutError:
+                    _handle_cfg_hard_timeout(task_id, project, cfg_hard, filepath, bridge)
+                    return
+            else:
+                # --- Phase 1: Wait for soft timeout ---
+                try:
+                    cfg = future.result(timeout=cfg_soft)
+                except concurrent.futures.TimeoutError:
+                    # Enter overtime
+                    try:
+                        funcs = len(project.kb.functions)
+                    except Exception:
+                        funcs = 0
+                    state.update_task(task_id, status=TASK_OVERTIME,
+                                      overtime_since_epoch=time.time(),
+                                      progress_message=f"CFG overtime ({funcs} funcs, still building...)")
+                    logger.info("CFG build entered overtime after %ds (%d funcs)", cfg_soft, funcs)
+                    if bridge is not None:
+                        bridge.info(f"CFG entered overtime ({funcs} funcs, still building).", force=True)
+
+                    # --- Phase 2: Progress-adaptive overtime loop ---
+                    last_known_funcs = funcs
+                    stall_start = None
+                    while True:
+                        try:
+                            cfg = future.result(timeout=check_interval)
+                            break  # Completed during overtime
+                        except concurrent.futures.TimeoutError:
+                            pass
+
+                        # Check if aborted
+                        task = state.get_task(task_id)
+                        if not task or task.get("aborted"):
+                            logger.info("CFG task %s aborted during overtime", task_id)
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            return
+
+                        # Check generation
+                        if _session_state and _session_state._analysis_generation != my_gen:
+                            logger.info("CFG task %s: file switched during overtime — discarding", task_id)
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            return
+
+                        try:
+                            current_funcs = len(project.kb.functions)
+                        except Exception:
+                            current_funcs = last_known_funcs
+
+                        if current_funcs > last_known_funcs:
+                            # Progress! Reset stall timer
+                            last_known_funcs = current_funcs
+                            stall_start = None
+                            state.update_task(task_id,
+                                              progress_message=f"CFG overtime ({current_funcs} funcs, progressing...)",
+                                              cfg_functions_discovered=current_funcs,
+                                              last_progress_epoch=time.time())
+                        else:
+                            # No progress
+                            if stall_start is None:
+                                stall_start = time.time()
+                            stalled_for = time.time() - stall_start
+                            if stalled_for >= stall_kill:
+                                error_msg = (
+                                    f"CFG stalled for {int(stalled_for)}s ({current_funcs} funcs). "
+                                    "Binary is likely packed/obfuscated. Try: auto_unpack_pe() → "
+                                    "try_all_unpackers() → qiling_dump_unpacked_binary(). "
+                                    "You can still decompile discovered functions — "
+                                    "decompile_function_with_angr() will build a local CFG."
+                                )
+                                logger.warning("CFG stall-killed for %s (%d funcs)", filepath, current_funcs)
+                                state.update_task(task_id, status=TASK_FAILED, error=error_msg,
+                                                  progress_message=f"CFG stall-killed ({current_funcs} funcs)")
+                                if bridge is not None:
+                                    bridge.info(f"CFG stall-killed ({current_funcs} funcs).", force=True)
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                return
+
+                        # Check absolute ceiling
+                        total_elapsed = time.time() - task_start_time
+                        if max_runtime > 0 and total_elapsed >= max_runtime:
+                            try:
+                                f_count = len(project.kb.functions)
+                            except Exception:
+                                f_count = 0
+                            error_msg = (
+                                f"Absolute max runtime ({int(max_runtime)}s) exceeded "
+                                f"({f_count} funcs discovered). "
+                                "decompile_function_with_angr() will build a local CFG."
+                            )
+                            state.update_task(task_id, status=TASK_FAILED, error=error_msg,
+                                              progress_message=f"Max runtime exceeded ({f_count} funcs)")
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            return
+
+            if cfg is None:
+                # Should not reach here, but safety net
+                _handle_cfg_hard_timeout(task_id, project, cfg_hard, filepath, bridge)
+                return
+
+            # Generation guard before writing results
+            if _session_state and _session_state._analysis_generation != my_gen:
+                logger.info("CFG task %s completed but file switched — discarding", task_id)
+                return
 
             state.set_angr_results(project, cfg, None, None)
         finally:
@@ -360,6 +611,32 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
         _update_progress(task_id, 0, f"Failed: {str(e)[:200]}", bridge=bridge)  # H1-v11: truncate
 
 
+def _handle_cfg_hard_timeout(task_id, project, cfg_timeout, filepath, bridge):
+    """Handle old-style hard CFG timeout (when soft timeout is disabled)."""
+    try:
+        funcs_found = len(project.kb.functions)
+    except Exception:
+        funcs_found = 0
+    error_msg = (
+        f"CFG build timed out after {cfg_timeout}s "
+        f"(discovered {funcs_found} functions before stalling). "
+        "Binary is likely packed/obfuscated. Try: auto_unpack_pe() → "
+        "try_all_unpackers() → qiling_dump_unpacked_binary(). "
+        "You can still decompile discovered functions — "
+        "decompile_function_with_angr() will build a local CFG."
+    )
+    logger.warning("Background Angr CFG timed out after %ds for %s", cfg_timeout, filepath)
+    state.update_task(
+        task_id,
+        status=TASK_FAILED,
+        error=error_msg,
+        progress_message=f"CFG timed out ({funcs_found} functions discovered)",
+    )
+    if bridge is not None:
+        bridge.info(f"CFG timed out after {cfg_timeout}s. {funcs_found} partial functions available.", force=True)
+    print(f"\n[!] Background Angr CFG timed out after {cfg_timeout}s ({funcs_found} functions found).", file=sys.stderr)
+
+
 def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "amd64",
                           task_id: str = "startup-angr", tool_label: str = "startup"):
     """
@@ -381,6 +658,10 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
         "tool": tool_label,
     })
 
+    # Register cancel event for abort support
+    cancel_event = threading.Event()
+    _session_state._task_cancel_events[task_id] = cancel_event
+
     global _monitor_started
     with _monitor_lock:
         if not _monitor_started:
@@ -395,5 +676,9 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
         daemon=True,
     )
     angr_thread.start()
+
+    # Track thread reference for cleanup
+    _session_state._background_threads[task_id] = angr_thread
+
     logger.info("Background Angr analysis thread started (task_id=%s).", task_id)
     return task_id
