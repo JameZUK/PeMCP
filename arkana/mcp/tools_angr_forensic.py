@@ -20,7 +20,7 @@ from arkana.constants import (
     MAX_CFF_SCAN_FUNCTIONS, MAX_OPAQUE_SCAN_FUNCTIONS,
 )
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
-from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
+from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception, _register_background_task
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
 from arkana.mcp._input_helpers import _paginate_field
@@ -208,7 +208,7 @@ async def diff_binaries(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing BinDiff...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -216,7 +216,7 @@ async def diff_binaries(
             "tool": "diff_binaries",
         })
         task = asyncio.create_task(_run_background_task_wrapper(
-            task_id, _diff, ctx=ctx, timeout=600))
+            task_id, _diff, ctx=ctx, cancel_event=_cancel, timeout=600))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "BinDiff queued."}
 
@@ -870,7 +870,7 @@ async def find_path_with_custom_input(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing custom solver...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -878,7 +878,7 @@ async def find_path_with_custom_input(
             "tool": "find_path_with_custom_input",
         })
         task = asyncio.create_task(_run_background_task_wrapper(
-            task_id, _solve, ctx=ctx,
+            task_id, _solve, ctx=ctx, cancel_event=_cancel,
             timeout=600, on_timeout=_on_timeout_custom))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Custom symbolic execution queued."}
@@ -1089,7 +1089,7 @@ async def emulate_with_watchpoints(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing watchpoint emulation...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1097,7 +1097,7 @@ async def emulate_with_watchpoints(
             "tool": "emulate_with_watchpoints",
         })
         task = asyncio.create_task(_run_background_task_wrapper(
-            task_id, _emulate, ctx=ctx,
+            task_id, _emulate, ctx=ctx, cancel_event=_cancel,
             timeout=300, on_timeout=_on_timeout_wp))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Watchpoint emulation queued."}
@@ -1283,7 +1283,7 @@ async def identify_cpp_classes(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing class identification...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -1291,7 +1291,7 @@ async def identify_cpp_classes(
             "tool": "identify_cpp_classes",
         })
         task = asyncio.create_task(_run_background_task_wrapper(
-            task_id, _identify, ctx=ctx, timeout=300))
+            task_id, _identify, ctx=ctx, cancel_event=_cancel, timeout=300))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Class identification queued."}
 

@@ -49,6 +49,9 @@ def _start_floss_background_task(current_state, floss_args: tuple):
     so the dashboard and MCP tools automatically pick up the enriched data.
     Uses ``_update_progress`` to set ``last_progress_epoch`` so that generic
     stall detection in ``check_task_status()`` works correctly.
+
+    Integrated with background task infrastructure: registers a cancel event
+    and thread reference, checks generation guard before writing results.
     """
     import threading
     import time as _time
@@ -62,6 +65,12 @@ def _start_floss_background_task(current_state, floss_args: tuple):
         current_state = get_current_state()
 
     task_id = "floss-deep-analysis"
+
+    # Register cancel event and capture generation BEFORE setting the task
+    # to RUNNING, so cancel_all_background_tasks() can always find it.
+    cancel_event = threading.Event()
+    current_state._task_cancel_events[task_id] = cancel_event
+    captured_gen = current_state._analysis_generation
 
     current_state.set_task(task_id, {
         "status": TASK_RUNNING,
@@ -88,12 +97,25 @@ def _start_floss_background_task(current_state, floss_args: tuple):
         set_current_state(current_state)
         _start = _time.monotonic()
         try:
+            # Check cancellation before starting heavy work
+            if cancel_event.is_set():
+                logger.info("FLOSS task %s cancelled before start", task_id)
+                return
+
             _update(5, "Starting FLOSS deep analysis...")
             result = _parse_floss_analysis(*floss_args, progress_callback=_update, pe_object=current_state.pe_object)
 
             elapsed = _time.monotonic() - _start
             if elapsed > _FLOSS_THREAD_TIMEOUT:
                 logger.warning("FLOSS deep analysis exceeded %ds timeout (%ds elapsed)", _FLOSS_THREAD_TIMEOUT, int(elapsed))
+
+            # Check cancellation and generation guard before writing results
+            if cancel_event.is_set():
+                logger.info("FLOSS task %s cancelled before result write", task_id)
+                return
+            if current_state._analysis_generation != captured_gen:
+                logger.info("FLOSS task %s: file switched — discarding result", task_id)
+                return
 
             # Merge into pe_data in place — preserve static strings if deep failed
             if current_state.pe_data:
@@ -117,9 +139,15 @@ def _start_floss_background_task(current_state, floss_args: tuple):
                 progress_message=f"Failed: {str(e)[:200]}",  # M4-v10: truncate exception
                 last_progress_epoch=_time.time(),
             )
+        finally:
+            # Clean up infrastructure registration
+            current_state._task_cancel_events.pop(task_id, None)
+            current_state._background_threads.pop(task_id, None)
 
     t = threading.Thread(target=_worker, daemon=True, name="arkana-floss-deep")
     t.start()
+    # Register thread reference for cleanup
+    current_state._background_threads[task_id] = t
     logger.info("FLOSS deep analysis background thread started (task_id=%s).", task_id)
 
 
@@ -785,7 +813,11 @@ async def open_file(
         # Clean up on failure — close any PE object that was created to
         # prevent resource leaks, then preserve an error record so clients
         # can distinguish "no file ever loaded" from "last open attempt failed".
-        # Cancel enrichment and background tasks on failure
+        # Cancel ALL background tasks (enrichment, FLOSS, angr, etc.) on failure
+        try:
+            state.cancel_all_background_tasks()
+        except Exception:
+            pass
         try:
             state._enrichment_cancel.set()
         except Exception:

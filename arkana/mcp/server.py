@@ -203,7 +203,7 @@ def _collect_background_alerts(current_state) -> list:
                     "hint": f"Use check_task_status('{tid}') for details.",
                 })
     except Exception:
-        pass  # Never let alert collection break tool responses
+        logger.debug("Alert collection error", exc_info=True)
     return alerts
 
 

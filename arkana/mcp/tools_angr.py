@@ -16,7 +16,7 @@ from arkana.constants import (
 )
 from arkana.state import TASK_RUNNING, TASK_FAILED
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
-from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
+from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception, _register_background_task
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict, _safe_decompile, DECOMPILE_FALLBACK_NOTE
 from arkana.mcp._rename_helpers import apply_function_renames_to_lines, apply_variable_renames_to_lines, get_display_name
@@ -834,7 +834,7 @@ async def find_path_to_address(
     # --- Background Handling ---
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing solver...",
@@ -844,7 +844,7 @@ async def find_path_to_address(
         })
         task = asyncio.create_task(_run_background_task_wrapper(
             task_id, _solve_path, ctx=ctx,
-            timeout=600, on_timeout=_on_timeout_path))
+            cancel_event=_cancel, timeout=600, on_timeout=_on_timeout_path))
         task.add_done_callback(_log_task_exception(task_id))
         return {
             "status": "queued",
@@ -980,7 +980,7 @@ async def emulate_function_execution(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing emulation...",
@@ -990,7 +990,7 @@ async def emulate_function_execution(
         })
         task = asyncio.create_task(_run_background_task_wrapper(
             task_id, _core_emulation, ctx=ctx,
-            timeout=300, on_timeout=_on_timeout_emu))
+            cancel_event=_cancel, timeout=300, on_timeout=_on_timeout_emu))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Emulation queued."}
 
@@ -1123,7 +1123,7 @@ async def analyze_binary_loops(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Starting loop analysis...",
@@ -1132,7 +1132,7 @@ async def analyze_binary_loops(
             "tool": "analyze_binary_loops"
         })
         task = asyncio.create_task(_run_background_task_wrapper(
-            task_id, _core_logic, ctx=ctx, timeout=300))
+            task_id, _core_logic, ctx=ctx, cancel_event=_cancel, timeout=300))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Loop analysis queued."}
 
@@ -2324,7 +2324,7 @@ async def solve_constraints_for_path(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing constraint solver...",
@@ -2334,7 +2334,7 @@ async def solve_constraints_for_path(
         })
         task = asyncio.create_task(_run_background_task_wrapper(
             task_id, _solve, ctx=ctx,
-            timeout=timeout_seconds, on_timeout=_on_timeout))
+            cancel_event=_cancel, timeout=timeout_seconds, on_timeout=_on_timeout))
         task.add_done_callback(_log_task_exception(task_id))
         return {
             "status": "queued",
@@ -2523,7 +2523,7 @@ async def explore_symbolic_states(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": f"Initializing explorer ({strategy})...",
@@ -2533,7 +2533,7 @@ async def explore_symbolic_states(
         })
         task = asyncio.create_task(_run_background_task_wrapper(
             task_id, _explore, ctx=ctx,
-            timeout=timeout_seconds, on_timeout=_on_timeout))
+            cancel_event=_cancel, timeout=timeout_seconds, on_timeout=_on_timeout))
         task.add_done_callback(_log_task_exception(task_id))
         return {
             "status": "queued",

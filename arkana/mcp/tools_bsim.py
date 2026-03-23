@@ -36,7 +36,7 @@ from arkana.mcp._bsim_features import (
     store_functions_batch,
     update_binary_function_count,
 )
-from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
+from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception, _register_background_task
 from arkana.utils import _safe_env_int
 
 if ANGR_AVAILABLE:
@@ -281,7 +281,7 @@ async def find_similar_functions(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing function similarity comparison...",
@@ -291,7 +291,7 @@ async def find_similar_functions(
         })
         task = asyncio.create_task(
             _run_background_task_wrapper(task_id, _compare, ctx=ctx,
-                                         timeout=bsim_timeout, on_timeout=_on_timeout_compare)
+                                         cancel_event=_cancel, timeout=bsim_timeout, on_timeout=_on_timeout_compare)
         )
         task.add_done_callback(_log_task_exception(task_id))
         return {
@@ -461,7 +461,7 @@ async def build_function_signature_db(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running",
             "progress_percent": 0,
             "progress_message": "Initializing signature DB build...",
@@ -471,7 +471,7 @@ async def build_function_signature_db(
         })
         task = asyncio.create_task(
             _run_background_task_wrapper(task_id, _build, ctx=ctx,
-                                         timeout=bsim_timeout, on_timeout=_on_timeout_build)
+                                         cancel_event=_cancel, timeout=bsim_timeout, on_timeout=_on_timeout_build)
         )
         task.add_done_callback(_log_task_exception(task_id))
         return {

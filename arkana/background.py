@@ -99,6 +99,24 @@ def _log_task_exception(task_id: str):
     return _callback
 
 
+def _register_background_task(task_id: str, task_info: dict) -> threading.Event:
+    """Register a background task and its cancel event atomically.
+
+    Creates a cancel event, registers it in ``_task_cancel_events``, then
+    calls ``state.set_task()``.  Returns the cancel event so callers can
+    pass it to ``_run_background_task_wrapper(cancel_event=...)``.
+
+    This closes the race window where ``cancel_all_background_tasks()``
+    could fire between ``set_task(RUNNING)`` and cancel event registration
+    inside the wrapper.
+    """
+    _session_state = get_current_state()
+    cancel_event = threading.Event()
+    _session_state._task_cancel_events[task_id] = cancel_event
+    state.set_task(task_id, task_info)
+    return cancel_event
+
+
 def _is_task_aborted(task_id: str) -> bool:
     """Check if a task has been marked as aborted."""
     task = state.get_task(task_id)
@@ -107,7 +125,8 @@ def _is_task_aborted(task_id: str) -> bool:
 
 async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
                                        timeout=None, soft_timeout=None,
-                                       on_timeout=None, **kwargs):
+                                       on_timeout=None, cancel_event=None,
+                                       **kwargs):
     """Helper to run a blocking function in a thread and update the registry.
 
     Parameters
@@ -131,6 +150,11 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
     on_timeout : callable or None
         Optional callback invoked on stall-kill to capture partial results.
         Should return a dict (or None).
+    cancel_event : threading.Event, optional
+        Pre-registered cancel event.  When provided, the wrapper uses it
+        instead of creating a new one.  Callers should register the event
+        in ``_task_cancel_events`` *before* setting the task to RUNNING
+        to close the race window with ``cancel_all_background_tasks()``.
     """
 
     # Lazy-start the heartbeat monitor on the first background request
@@ -146,9 +170,10 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
     _session_state = get_current_state()
     captured_gen = _session_state._analysis_generation
 
-    # Register cancel event
-    cancel_event = threading.Event()
-    _session_state._task_cancel_events[task_id] = cancel_event
+    # Use pre-registered cancel event or create one (backward compat)
+    if cancel_event is None:
+        cancel_event = threading.Event()
+        _session_state._task_cancel_events[task_id] = cancel_event
 
     # Create a ProgressBridge if we have a live MCP context
     bridge = None
@@ -388,7 +413,7 @@ def _cfg_stall_monitor(project, task_id, interval=15, _session_state=None):
 
 
 def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch_hint: str = "amd64",
-                           _session_state=None, _progress_bridge=None):
+                           _session_state=None, _progress_bridge=None, _cancel_event=None):
     """
     Unified background worker for Angr analysis.  Supports PE, ELF, Mach-O,
     and shellcode (via ``mode='shellcode'``).
@@ -400,6 +425,10 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
     _progress_bridge : ProgressBridge, optional
         If provided, progress updates are also pushed to the MCP client
         in real-time via the bridge (in addition to the pollable task registry).
+    _cancel_event : threading.Event, optional
+        Cooperative cancellation event.  Checked during the overtime loop
+        and before writing results.  Set by ``abort_background_task()`` or
+        ``cancel_all_background_tasks()``.
     """
     # Propagate the caller's session state so the StateProxy resolves to the
     # correct AnalyzerState inside this thread.
@@ -489,10 +518,9 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
                         except concurrent.futures.TimeoutError:
                             pass
 
-                        # Check if aborted
-                        task = state.get_task(task_id)
-                        if not task or task.get("aborted"):
-                            logger.info("CFG task %s aborted during overtime", task_id)
+                        # Check if cancelled (abort or file switch)
+                        if _cancel_event is not None and _cancel_event.is_set():
+                            logger.info("CFG task %s cancelled during overtime", task_id)
                             executor.shutdown(wait=False, cancel_futures=True)
                             return
 
@@ -558,7 +586,10 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
                 _handle_cfg_hard_timeout(task_id, project, cfg_hard, filepath, bridge)
                 return
 
-            # Generation guard before writing results
+            # Cancel and generation guard before writing results
+            if _cancel_event is not None and _cancel_event.is_set():
+                logger.info("CFG task %s cancelled before result write", task_id)
+                return
             if _session_state and _session_state._analysis_generation != my_gen:
                 logger.info("CFG task %s completed but file switched — discarding", task_id)
                 return
@@ -603,12 +634,17 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
     except (OSError, RuntimeError, ValueError) as e:
         logger.error("Background Angr analysis failed: %s: %s", type(e).__name__, e, exc_info=True)
-        state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200])  # H1-v11: truncate
-        _update_progress(task_id, 0, f"Failed: {str(e)[:200]}", bridge=bridge)  # H1-v11: truncate
+        state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200],
+                          progress_message=f"Failed: {str(e)[:200]}")  # H1-v11: truncate
     except Exception as e:
         logger.error("Background Angr analysis failed unexpectedly: %s: %s", type(e).__name__, e, exc_info=True)
-        state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200])  # H1-v11: truncate
-        _update_progress(task_id, 0, f"Failed: {str(e)[:200]}", bridge=bridge)  # H1-v11: truncate
+        state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200],
+                          progress_message=f"Failed: {str(e)[:200]}")  # H1-v11: truncate
+    finally:
+        # Clean up cancel event and thread ref (mirrors _run_background_task_wrapper)
+        if _session_state is not None:
+            _session_state._task_cancel_events.pop(task_id, None)
+            _session_state._background_threads.pop(task_id, None)
 
 
 def _handle_cfg_hard_timeout(task_id, project, cfg_timeout, filepath, bridge):
@@ -672,7 +708,7 @@ def start_angr_background(filepath: str, mode: str = "auto", arch_hint: str = "a
     angr_thread = threading.Thread(
         target=angr_background_worker,
         args=(filepath, task_id, mode, arch_hint),
-        kwargs={"_session_state": _session_state},
+        kwargs={"_session_state": _session_state, "_cancel_event": cancel_event},
         daemon=True,
     )
     angr_thread.start()

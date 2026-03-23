@@ -10,7 +10,7 @@ from arkana.config import (
     YARA_AVAILABLE, STRINGSIFTER_AVAILABLE, REQUESTS_AVAILABLE,
 )
 from arkana.user_config import get_config_value, set_config_value, get_masked_config
-from arkana.state import TASK_FAILED
+from arkana.state import TASK_FAILED, TASK_RUNNING, TASK_OVERTIME
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 
 
@@ -490,7 +490,7 @@ async def abort_background_task(ctx: Context, task_id: str) -> Dict[str, Any]:
     if not task:
         return {"error": f"Task ID '{task_id}' not found.", "available_task_ids": state.get_all_task_ids()}
 
-    if task["status"] not in ("running", "overtime"):
+    if task["status"] not in (TASK_RUNNING, TASK_OVERTIME):
         return {
             "error": f"Task '{task_id}' is not running (status: {task['status']}). Cannot abort.",
             "task_id": task_id,

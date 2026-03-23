@@ -87,7 +87,6 @@ class AnalyzerState:
         # Background Tasks
         self._task_lock = threading.Lock()
         self.background_tasks: Dict[str, Dict[str, Any]] = {}
-        self.monitor_thread_started = False
         self._task_cancel_events: Dict[str, threading.Event] = {}   # task_id -> cancel flag
         self._background_threads: Dict[str, threading.Thread] = {}  # task_id -> thread ref
         self._analysis_generation: int = 0  # Incremented on open_file/close_file
@@ -252,6 +251,7 @@ class AnalyzerState:
                     task["status"] = TASK_FAILED
                     task["error"] = "File was switched during analysis."
                     task["progress_message"] = "Discarded — file switched"
+                    task["aborted"] = True
         # Set cancel events outside _task_lock to avoid potential deadlocks
         for _tid, cancel in list(self._task_cancel_events.items()):
             cancel.set()

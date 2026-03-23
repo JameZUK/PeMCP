@@ -9,7 +9,7 @@ from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, ANGR_AVAILABLE
 from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
-from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception
+from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception, _register_background_task
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
 
@@ -209,7 +209,7 @@ async def get_reaching_definitions(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing RDA...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -217,7 +217,7 @@ async def get_reaching_definitions(
             "tool": "get_reaching_definitions",
         })
         task = asyncio.create_task(_run_background_task_wrapper(
-            task_id, _rda, ctx=ctx, timeout=300))
+            task_id, _rda, ctx=ctx, cancel_event=_cancel, timeout=300))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Reaching definitions analysis queued."}
 
@@ -395,7 +395,7 @@ async def get_data_dependencies(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing data dependency analysis...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -403,7 +403,7 @@ async def get_data_dependencies(
             "tool": "get_data_dependencies",
         })
         task = asyncio.create_task(_run_background_task_wrapper(
-            task_id, _ddg, ctx=ctx, timeout=300))
+            task_id, _ddg, ctx=ctx, cancel_event=_cancel, timeout=300))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Data dependency analysis queued."}
 
@@ -740,7 +740,7 @@ async def get_value_set_analysis(
 
     if run_in_background:
         task_id = str(uuid.uuid4())
-        state.set_task(task_id, {
+        _cancel = _register_background_task(task_id, {
             "status": "running", "progress_percent": 0,
             "progress_message": "Initializing VFG...",
             "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -748,7 +748,7 @@ async def get_value_set_analysis(
             "tool": "get_value_set_analysis",
         })
         task = asyncio.create_task(_run_background_task_wrapper(
-            task_id, _vsa, ctx=ctx, timeout=600))
+            task_id, _vsa, ctx=ctx, cancel_event=_cancel, timeout=600))
         task.add_done_callback(_log_task_exception(task_id))
         return {"status": "queued", "task_id": task_id, "message": "Value-set analysis queued."}
 
