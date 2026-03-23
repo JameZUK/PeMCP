@@ -87,6 +87,28 @@ not guess at the payload's nature.
 | `/app/home/.arkana` | rw | Persistent cache, notes, session data |
 | `/app/qiling-rootfs` | rw | Qiling emulation rootfs |
 
+## LIEF as pefile Fallback
+
+If PE analysis via pefile fails (timeout, crash, or corrupt headers flagged by
+`file_integrity`), use `parse_binary_with_lief()` as a fallback parser. LIEF can
+extract sections, imports, exports, headers, and Authenticode signatures from PE
+files that pefile cannot handle — including malformed, partially corrupt, or
+unusually structured binaries. It also supports ELF and Mach-O natively. Use when:
+- `open_file` times out or raises an error on a PE file
+- `file_integrity.status` is `"corrupt"` or `"partial"` and pefile-based tools return errors
+- You need cross-format structural comparison (LIEF normalises PE/ELF/Mach-O)
+
+## Phase 2 — Anti-Pattern Warning
+
+**ACTUALLY CALL THE UNPACKING TOOLS**: Do not just think about which unpacking
+tool to use — call it. The most common failure mode is recognizing the binary
+is packed, identifying the right tool in your reasoning, but then trying
+something else instead (hex dumps, refinery operations, manual stub analysis).
+The method cascade below exists for a reason: call `auto_unpack_pe()` first,
+then `try_all_unpackers()`, then `qiling_dump_unpacked_binary()`. Only attempt
+manual stub analysis (Method 5) after all three automated methods have been
+tried and have returned explicit failure results.
+
 ## Phase 2 — Full Method Cascade
 
 1. **`auto_unpack_pe()`** — handles UPX, ASPack, PECompact, Themida, and more.
