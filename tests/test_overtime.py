@@ -140,6 +140,10 @@ class TestProgressAdaptiveWrapper(unittest.TestCase):
         try:
             return loop.run_until_complete(coro)
         finally:
+            # Shut down default executor to prevent lingering non-daemon
+            # threads — Python < 3.12 doesn't do this in loop.close().
+            if loop._default_executor is not None:
+                loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
 
     def test_completes_before_soft_timeout(self):
@@ -325,6 +329,8 @@ class TestAbortBackgroundTask(unittest.TestCase):
         try:
             return loop.run_until_complete(coro)
         finally:
+            if loop._default_executor is not None:
+                loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
 
     def test_abort_running_task(self):
@@ -1093,6 +1099,8 @@ class TestWrapperGenMismatchMarksFailed(unittest.TestCase):
         try:
             return loop.run_until_complete(coro)
         finally:
+            if loop._default_executor is not None:
+                loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
 
     def test_gen_mismatch_backward_compat_marks_failed(self):
@@ -1199,6 +1207,8 @@ class TestSoftTimeoutFallbackToTimeout(unittest.TestCase):
         try:
             return loop.run_until_complete(coro)
         finally:
+            if loop._default_executor is not None:
+                loop.run_until_complete(loop.shutdown_default_executor())
             loop.close()
 
     def test_timeout_used_as_soft_when_no_soft_specified(self):
