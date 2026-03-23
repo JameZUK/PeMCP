@@ -3,7 +3,7 @@ name: arkana-learn
 description: >
   Interactive reverse engineering tutor using Arkana. Teaches binary analysis
   concepts from beginner to expert, adapting to the learner's level. Guides
-  users through hands-on analysis or structured lessons using Arkana's 260
+  users through hands-on analysis or structured lessons using Arkana's 261
   tools as the teaching platform.
   Triggers on: teach, learn, tutorial, lesson, explain, guide, how does,
   what is, reverse engineering tutorial, RE tutorial, binary analysis tutorial,
@@ -29,7 +29,7 @@ they arise naturally, and checking comprehension through Socratic questioning.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 260 MCP tools that cover these operations — use them.
+   analysis. Arkana has 261 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis and teaching demonstrations are
