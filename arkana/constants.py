@@ -10,6 +10,8 @@ __all__ = [
     "MCP_SOFT_RESPONSE_LIMIT_CHARS",
     "ANGR_ANALYSIS_TIMEOUT", "ANGR_SHORT_TIMEOUT", "ANGR_CFG_TIMEOUT",
     "BACKGROUND_TASK_TIMEOUT",
+    "ANGR_CFG_SOFT_TIMEOUT", "BACKGROUND_TASK_SOFT_TIMEOUT",
+    "OVERTIME_CHECK_INTERVAL", "OVERTIME_STALL_KILL", "OVERTIME_MAX_RUNTIME",
     "CAPA_ANALYSIS_TIMEOUT", "FLOSS_ANALYSIS_TIMEOUT",
     "HTTP_DOWNLOAD_TIMEOUT", "HTTP_API_TIMEOUT", "HTTP_QUICK_TIMEOUT",
     "VT_API_URL_FILE_REPORT",
@@ -66,6 +68,7 @@ __all__ = [
     "MAX_DEBUG_USER_STUBS", "MAX_DEBUG_STUB_WRITE_SIZE", "MAX_DEBUG_STUB_WRITES",
     "MAX_DEBUG_CAPTURED_OUTPUT", "MAX_DEBUG_PENDING_INPUT",
     "MAX_DEBUG_API_TRACE", "MAX_DEBUG_SEARCH_MATCHES", "DEBUG_SEARCH_CONTEXT_BYTES",
+    "DASHBOARD_THREAD_POOL_SIZE",
     "DEPENDENCIES",
 ]
 
@@ -86,6 +89,16 @@ ANGR_ANALYSIS_TIMEOUT = 300    # angr symbolic execution / analysis operations
 ANGR_SHORT_TIMEOUT = 120       # shorter angr operations (e.g. anti-debug scan)
 ANGR_CFG_TIMEOUT = 1800        # background CFGFast timeout (env: ARKANA_ANGR_CFG_TIMEOUT)
 BACKGROUND_TASK_TIMEOUT = 1800 # background task timeout (env: ARKANA_BACKGROUND_TASK_TIMEOUT)
+
+# --- Progress-Adaptive Overtime ---
+# Soft timeouts: transition to TASK_OVERTIME (notification, no kill)
+ANGR_CFG_SOFT_TIMEOUT = 900          # 15 min — env: ARKANA_ANGR_CFG_SOFT_TIMEOUT
+BACKGROUND_TASK_SOFT_TIMEOUT = 300   # 5 min — env: ARKANA_BACKGROUND_TASK_SOFT_TIMEOUT
+# Overtime loop settings
+OVERTIME_CHECK_INTERVAL = 60         # Check progress every 60s during overtime
+OVERTIME_STALL_KILL = 300            # Kill after 300s (5 min) of zero progress
+OVERTIME_MAX_RUNTIME = 21600         # 6 hour absolute ceiling — env: ARKANA_OVERTIME_MAX_RUNTIME
+
 CAPA_ANALYSIS_TIMEOUT = 300    # capa analysis during open_file (env: ARKANA_CAPA_ANALYSIS_TIMEOUT)
 FLOSS_ANALYSIS_TIMEOUT = 300   # FLOSS analysis during open_file (env: ARKANA_FLOSS_ANALYSIS_TIMEOUT)
 HTTP_DOWNLOAD_TIMEOUT = 60     # downloading resources (YARA rules, capa rules)
@@ -239,6 +252,9 @@ DEBUG_SEARCH_CONTEXT_BYTES = 32      # Context bytes around memory search matche
 MAX_DEBUG_USER_STUBS = 200           # Max user-defined API stubs per session
 MAX_DEBUG_STUB_WRITE_SIZE = 1024     # Max bytes per stub write operation
 MAX_DEBUG_STUB_WRITES = 8            # Max write operations per stub
+
+# --- Dashboard Thread Pool ---
+DASHBOARD_THREAD_POOL_SIZE = 4  # Dedicated pool for dashboard (env: ARKANA_DASHBOARD_THREADS)
 
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [

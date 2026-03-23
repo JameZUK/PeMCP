@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 259 MCP tools organized by use case.
+Complete catalog of all 260 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -34,8 +34,8 @@ Source files: `arkana/mcp/tools_*.py`
 
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
-| `open_file` | Loading any binary for analysis. Returns `file_integrity` assessment. Unknown formats auto-fallback to raw mode. | `file_path`, `mode`, `force` (override format fallback) |
-| `close_file` | Done with current file, loading another | — |
+| `open_file` | Loading any binary for analysis. Returns `file_integrity` assessment. Unknown formats auto-fallback to raw mode. Blocks when background tasks active — use `force_switch=True` to override. | `file_path`, `mode`, `force` (override format fallback), `force_switch` (override active task block) |
+| `close_file` | Done with current file, loading another. Blocks when background tasks active — use `force_switch=True` to override. | `force_switch` (override active task block) |
 | `check_file_integrity` | Pre-parse validation of a binary — detects truncation, null-padding, header corruption. Can run before or after `open_file`. Does not modify state. | `file_path` (optional — defaults to loaded file) |
 | `reanalyze_loaded_pe_file` | Need fresh analysis after patching | — |
 | `list_samples` | Browsing available samples in /samples | — |
@@ -283,6 +283,22 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 |------|----------|----------------|
 | `refinery_pipeline` | Chain multiple refinery operations (encoding, compression, crypto, slicing, bitwise, padding); supports batch mode (`data_hex_list` up to 100 items) and file offset input | `data_hex` or `file_offset`+`length`, `steps`, `output_path`, `data_hex_list` (batch) |
 | `refinery_list_units` | List all available refinery units | `category` (optional) |
+
+**Pipeline step categories** (use `refinery_list_units(category)` to discover all operations):
+
+| Category | Example Operations | Use Case |
+|----------|-------------------|----------|
+| encoding | `b64`, `hex`, `url`, `utf8` | Decode/encode Base64, hex, URL-encoded data |
+| compression | `zl`, `lzma`, `bzip2`, `lz4` | Decompress compressed payloads |
+| crypto | `xor`, `rc4`, `aes`, `des`, `chacha` | Decrypt with known keys |
+| slicing | `snip`, `chop`, `pick` | Extract byte ranges or split data |
+| bitwise | `ror`, `rol`, `shl`, `shr`, `add`, `sub`, `and`, `or`, `not` | Bitwise transforms |
+| padding | `pad`, `terminate` | Add/remove padding |
+| utility | `nop` | No-op passthrough (for debugging) |
+
+> **Always discover before use**: Call `refinery_list_units(category)` to confirm
+> exact operation names and parameters before constructing pipelines. Operation names
+> must match exactly — guessing leads to errors.
 
 ## Payload & Config Extraction
 

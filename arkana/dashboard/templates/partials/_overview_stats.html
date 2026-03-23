@@ -12,13 +12,13 @@
 </div>
 {% endif %}
 {% if data.background_tasks %}
-{% set running_tasks = data.background_tasks|selectattr('status', 'equalto', 'running')|list %}
-{% if running_tasks %}
-{% for task in running_tasks %}
-<div class="panel active-tool-banner border-warning">
-    <span class="warning">&#9654; {{ task.tool }}</span>
+{% set active_tasks = data.background_tasks|selectattr('status', 'in', ['running', 'overtime'])|list %}
+{% if active_tasks %}
+{% for task in active_tasks %}
+<div class="panel active-tool-banner {% if task.status == 'overtime' %}border-overtime{% else %}border-warning{% endif %}">
+    <span class="{% if task.status == 'overtime' %}overtime-text{% else %}warning{% endif %}">&#9654; {{ task.tool }}{% if task.status == 'overtime' %} (OVERTIME){% endif %}</span>
     <div class="progress-bar progress-bar-flex">
-        <div class="progress-fill progress-fill-warning" data-width="{{ task.progress_percent }}"></div>
+        <div class="progress-fill {% if task.status == 'overtime' %}progress-fill-overtime{% else %}progress-fill-warning{% endif %}" data-width="{{ task.progress_percent }}"></div>
     </div>
     <span class="dim ml-8">{{ task.progress_percent }}%</span>
     {% if task.progress_message %}

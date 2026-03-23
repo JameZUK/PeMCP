@@ -31,6 +31,66 @@ to read), and `output_path` (save decoded output to disk as a session artifact):
 with embedded payloads — it's a single step instead of two, avoids hex-encoding
 large blobs, and produces cleaner tool history.
 
+## Incremental Pipeline Construction
+
+When using `refinery_pipeline` with more than 2 steps, build and verify
+stage-by-stage rather than constructing the full pipeline at once.
+
+**Methodology:**
+1. Start with the first 1-2 steps and inspect the output
+2. Verify the intermediate result matches expectations (correct encoding, expected
+   byte patterns, plausible size)
+3. Add the next step and inspect again
+4. Repeat until the full pipeline is complete
+
+**When to use this pattern:**
+- More than 2 pipeline steps
+- Unfamiliar data format or unknown encoding layers
+- Complex transforms (e.g., b64 decode → XOR → decompress → carve)
+- Any time a pipeline produces unexpected output
+
+**Example — multi-stage config extraction:**
+```
+# Step 1: Verify the base64 layer
+refinery_pipeline(file_offset="0x3B80", length=512, steps=[{"op": "b64"}])
+# → Inspect: should be raw bytes, not still ASCII
+
+# Step 2: Add XOR decryption
+refinery_pipeline(file_offset="0x3B80", length=512,
+    steps=[{"op": "b64"}, {"op": "xor", "key": "5A"}])
+# → Inspect: should show structure (MZ header, JSON, URL patterns)
+
+# Step 3: Add decompression if needed
+refinery_pipeline(file_offset="0x3B80", length=512,
+    steps=[{"op": "b64"}, {"op": "xor", "key": "5A"}, {"op": "zl"}],
+    output_path="/output/config.bin")
+```
+
+## Pipeline Debugging
+
+When a pipeline produces wrong or empty output:
+
+1. **Bisect**: Run progressively fewer steps to isolate the failure. If a 4-step
+   pipeline fails, try steps 1-3, then 1-2, then step 1 alone.
+
+2. **Preview input**: Before transforming, inspect the raw bytes with
+   `get_hex_dump(offset, length=64)` or `refinery_pretty_print(data, format="hex")`.
+   Wrong input (wrong offset, wrong length, already-decoded data) is the #1 cause
+   of pipeline failures.
+
+3. **Discover operations**: Call `refinery_list_units(category)` to confirm the exact
+   operation name and verify it exists. Operation names must match exactly — `"zlib"`
+   is not the same as `"zl"`, and `"base64"` is not the same as `"b64"`.
+
+4. **Common pitfalls:**
+   - Wrong hex encoding in `data_hex` (odd length, non-hex chars) — prefer
+     `file_offset`+`length` instead
+   - Operation name mismatch — always verify with `refinery_list_units`
+   - Wrong step order — decoding layers must be unwrapped in the reverse order
+     they were applied (outermost first)
+   - Data already decoded — the blob you're targeting may have already been
+     processed by a previous tool call
+
 ## Artifact Management
 
 **Always use `output_path`** when extracting payloads, decrypted configs, or carved

@@ -1,5 +1,8 @@
 """Starlette ASGI app for the Arkana dashboard."""
+import atexit
 import asyncio
+import contextvars
+import functools
 import hmac
 import json
 import logging
@@ -8,6 +11,7 @@ import re
 import secrets
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
@@ -61,7 +65,28 @@ from arkana.dashboard.state_api import (
     get_capabilities_summary_data,
 )
 
+from arkana.constants import DASHBOARD_THREAD_POOL_SIZE
+from arkana.utils import _safe_env_int
+
 logger = logging.getLogger("Arkana.dashboard")
+
+# --- Dedicated dashboard thread pool ---
+# Prevents dashboard requests from being starved when MCP tools or background
+# tasks saturate the default executor (which has only min(32, cpu+4) threads).
+_dashboard_executor = ThreadPoolExecutor(
+    max_workers=_safe_env_int("ARKANA_DASHBOARD_THREADS", DASHBOARD_THREAD_POOL_SIZE),
+    thread_name_prefix="arkana-dash",
+)
+atexit.register(_dashboard_executor.shutdown, wait=False)
+
+
+async def _dash_to_thread(func, /, *args, **kwargs):
+    """Like asyncio.to_thread() but uses the dashboard's dedicated thread pool."""
+    loop = asyncio.get_running_loop()
+    ctx = contextvars.copy_context()
+    func_call = functools.partial(ctx.run, func, *args, **kwargs)
+    return await loop.run_in_executor(_dashboard_executor, func_call)
+
 
 # --- Paths ---
 _DASHBOARD_DIR = Path(__file__).parent
@@ -538,7 +563,7 @@ def _create_routes(dashboard_token: str) -> list:
             ctx = {"nav_active": nav}
             if data_fn:
                 try:
-                    ctx["data"] = await asyncio.to_thread(data_fn)
+                    ctx["data"] = await _dash_to_thread(data_fn)
                 except Exception:
                     logger.debug("Page data function failed for %s", template, exc_info=True)
                     ctx["data"] = {} if template != "functions.html" else []
@@ -557,7 +582,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_overview_data)
+            data = await _dash_to_thread(get_overview_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_state", exc)
@@ -590,7 +615,7 @@ def _create_routes(dashboard_token: str) -> list:
         search = request.query_params.get("search", "")[:500]
         sort_asc = request.query_params.get("asc", "1") == "1"
         try:
-            data = await asyncio.to_thread(
+            data = await _dash_to_thread(
                 get_functions_data, sort_by=sort_by, filter_triage=filter_triage,
                 search=search, sort_asc=sort_asc,
             )
@@ -602,7 +627,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_callgraph_data)
+            data = await _dash_to_thread(get_callgraph_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_callgraph", exc)
@@ -646,7 +671,7 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            result = await asyncio.to_thread(get_decompiled_code, address)
+            result = await _dash_to_thread(get_decompiled_code, address)
             return JSONResponse(result)
         except Exception as exc:
             return _api_error_response("api_decompile_get", exc)
@@ -668,7 +693,7 @@ def _create_routes(dashboard_token: str) -> list:
         async with _decompile_semaphore:
             try:
                 result = await asyncio.wait_for(
-                    asyncio.to_thread(trigger_decompile, address),
+                    _dash_to_thread(trigger_decompile, address),
                     timeout=300,
                 )
             except asyncio.TimeoutError:
@@ -712,7 +737,7 @@ def _create_routes(dashboard_token: str) -> list:
         except (ValueError, TypeError):
             lim = 100
         try:
-            data = await asyncio.to_thread(
+            data = await _dash_to_thread(
                 get_strings_data, search=search, string_type=string_type,
                 category=cat, min_score=min_score, sort_by=sort,
                 sort_asc=asc, offset=off, limit=lim,
@@ -729,7 +754,7 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "query too short (min 2 chars)"}, status_code=400)
         q = q[:500]
         try:
-            data = await asyncio.to_thread(global_search, q)
+            data = await _dash_to_thread(global_search, q)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_search", exc)
@@ -742,7 +767,7 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            data = await asyncio.to_thread(get_function_xrefs_data, address)
+            data = await _dash_to_thread(get_function_xrefs_data, address)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_function_xrefs error for %s", address, exc_info=True)
@@ -756,7 +781,7 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            data = await asyncio.to_thread(get_function_analysis_data, address)
+            data = await _dash_to_thread(get_function_analysis_data, address)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_function_analysis error for %s", address, exc_info=True)
@@ -770,7 +795,7 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            data = await asyncio.to_thread(get_function_strings_data, address)
+            data = await _dash_to_thread(get_function_strings_data, address)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_function_strings error for %s", address, exc_info=True)
@@ -785,7 +810,7 @@ def _create_routes(dashboard_token: str) -> list:
         except (ValueError, TypeError):
             limit = 100
         try:
-            data = await asyncio.to_thread(get_timeline_data, limit=limit)
+            data = await _dash_to_thread(get_timeline_data, limit=limit)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_timeline", exc)
@@ -826,7 +851,7 @@ def _create_routes(dashboard_token: str) -> list:
                 # Seed with current state so the first tick isn't a false "file-changed"
                 try:
                     # M-E4: Use to_thread to avoid blocking the event loop
-                    seed = await asyncio.to_thread(get_overview_data)
+                    seed = await _dash_to_thread(get_overview_data)
                 except Exception:
                     seed = {}
                 last_tool_count = seed.get("tool_calls", 0)
@@ -856,7 +881,7 @@ def _create_routes(dashboard_token: str) -> list:
                         logger.debug("SSE: connection token invalidated, closing")
                         return
                     try:
-                        overview = await asyncio.to_thread(get_overview_data)
+                        overview = await _dash_to_thread(get_overview_data)
                         current_tools = overview["tool_calls"]
                         current_notes = overview["notes_count"]
                         current_active = overview.get("active_tool")
@@ -936,7 +961,7 @@ def _create_routes(dashboard_token: str) -> list:
         category = request.query_params.get("category", "").strip() or None
         if category and category not in _VALID_NOTE_CATEGORIES:
             category = None
-        data = await asyncio.to_thread(get_notes_data, category=category)
+        data = await _dash_to_thread(get_notes_data, category=category)
         ctx = {"nav_active": "notes", "data": data, "active_category": category or "all"}
         resp = HTMLResponse(_render("notes.html", ctx))
         return _make_auth_response(request, dashboard_token, resp)
@@ -945,7 +970,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return HTMLResponse("", status_code=401)
         try:
-            data = await asyncio.to_thread(get_overview_data)
+            data = await _dash_to_thread(get_overview_data)
             html = _render("partials/_overview_stats.html", {"data": data})
             return HTMLResponse(html)
         except Exception:
@@ -956,7 +981,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return HTMLResponse("", status_code=401)
         try:
-            data = await asyncio.to_thread(get_overview_data)
+            data = await _dash_to_thread(get_overview_data)
             html = _render("partials/_task_list.html", {"data": data})
             return HTMLResponse(html)
         except Exception:
@@ -967,7 +992,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return HTMLResponse("", status_code=401)
         try:
-            entries = await asyncio.to_thread(get_timeline_data, limit=20)
+            entries = await _dash_to_thread(get_timeline_data, limit=20)
             html = _render("partials/_timeline_entry.html", {"entries": entries})
             return HTMLResponse(html)
         except Exception:
@@ -978,7 +1003,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return HTMLResponse("", status_code=401)
         try:
-            data = await asyncio.to_thread(get_overview_data)
+            data = await _dash_to_thread(get_overview_data)
             html = _render("partials/_global_status.html", {"data": data})
             return HTMLResponse(html)
         except Exception:
@@ -989,7 +1014,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_floss_summary)
+            data = await _dash_to_thread(get_floss_summary)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_floss_summary", exc)
@@ -1010,7 +1035,7 @@ def _create_routes(dashboard_token: str) -> list:
         except (ValueError, TypeError):
             length = 256
         try:
-            data = await asyncio.to_thread(get_hex_dump_data, offset, length)
+            data = await _dash_to_thread(get_hex_dump_data, offset, length)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_hex", exc)
@@ -1019,7 +1044,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_mitre_data)
+            data = await _dash_to_thread(get_mitre_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_mitre", exc)
@@ -1028,7 +1053,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_capa_data)
+            data = await _dash_to_thread(get_capa_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_capabilities", exc)
@@ -1041,7 +1066,7 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            data = await asyncio.to_thread(get_function_cfg_data, address)
+            data = await _dash_to_thread(get_function_cfg_data, address)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_function_cfg error for %s", address, exc_info=True)
@@ -1060,7 +1085,7 @@ def _create_routes(dashboard_token: str) -> list:
         except (ValueError, TypeError):
             count = 200
         try:
-            data = await asyncio.to_thread(get_disassembly_data, address, count)
+            data = await _dash_to_thread(get_disassembly_data, address, count)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_disassembly error for %s", address, exc_info=True)
@@ -1074,7 +1099,7 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            data = await asyncio.to_thread(get_function_variables_data, address)
+            data = await _dash_to_thread(get_function_variables_data, address)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_function_variables error for %s", address, exc_info=True)
@@ -1084,7 +1109,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_entropy_data)
+            data = await _dash_to_thread(get_entropy_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_entropy", exc)
@@ -1093,7 +1118,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_resources_data)
+            data = await _dash_to_thread(get_resources_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_resources", exc)
@@ -1102,7 +1127,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_triage_report_data)
+            data = await _dash_to_thread(get_triage_report_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_triage_report", exc)
@@ -1111,7 +1136,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_packing_data)
+            data = await _dash_to_thread(get_packing_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_packing", exc)
@@ -1120,7 +1145,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_similarity_data)
+            data = await _dash_to_thread(get_similarity_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_similarity", exc)
@@ -1129,7 +1154,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_custom_types_data)
+            data = await _dash_to_thread(get_custom_types_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_types", exc)
@@ -1210,7 +1235,7 @@ def _create_routes(dashboard_token: str) -> list:
         if err:
             return err
         try:
-            data = await asyncio.to_thread(get_function_similarity_data, address)
+            data = await _dash_to_thread(get_function_similarity_data, address)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_function_similarity error for %s", address, exc_info=True)
@@ -1222,7 +1247,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
         try:
-            report = await asyncio.to_thread(get_export_report_data)
+            report = await _dash_to_thread(get_export_report_data)
             report_json = json.dumps(report, indent=2, default=str)
             filename = "arkana_report.json"
             file_info = report.get("file_info", {})
@@ -1244,7 +1269,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_ioc_summary_data)
+            data = await _dash_to_thread(get_ioc_summary_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_ioc_summary", exc)
@@ -1254,7 +1279,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_capabilities_summary_data)
+            data = await _dash_to_thread(get_capabilities_summary_data)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_capabilities_summary", exc)
@@ -1264,7 +1289,7 @@ def _create_routes(dashboard_token: str) -> list:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
-            data = await asyncio.to_thread(get_digest_data)
+            data = await _dash_to_thread(get_digest_data)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_digest error", exc_info=True)
@@ -1279,7 +1304,7 @@ def _create_routes(dashboard_token: str) -> list:
         async with _report_semaphore:
             try:
                 data = await asyncio.wait_for(
-                    asyncio.to_thread(generate_report_text), timeout=60
+                    _dash_to_thread(generate_report_text), timeout=60
                 )
                 return JSONResponse(data)
             except asyncio.TimeoutError:
@@ -1303,7 +1328,7 @@ def _create_routes(dashboard_token: str) -> list:
         except (ValueError, TypeError):
             limit = 100
         try:
-            data = await asyncio.to_thread(search_decompiled_code, q, max_results=limit)
+            data = await _dash_to_thread(search_decompiled_code, q, max_results=limit)
             return JSONResponse(data)
         except Exception:
             logger.debug("api_search_code error", exc_info=True)
@@ -1364,7 +1389,7 @@ def _create_routes(dashboard_token: str) -> list:
 
         async with _diff_semaphore:
             try:
-                data = await asyncio.to_thread(_run_diff)
+                data = await _dash_to_thread(_run_diff)
                 if data.get("error") == "file not found or not accessible":
                     return JSONResponse(data, status_code=400)
                 return JSONResponse(data)
@@ -1383,7 +1408,7 @@ def _create_routes(dashboard_token: str) -> list:
         if sort_by not in ("name", "size", "format"):
             sort_by = "name"
         try:
-            data = await asyncio.to_thread(get_list_files_data, search, sort_by)
+            data = await _dash_to_thread(get_list_files_data, search, sort_by)
             return JSONResponse(data)
         except Exception as exc:
             return _api_error_response("api_list_files", exc)

@@ -14,9 +14,9 @@
     </div>
     {% endif %}
     {% for task in data.background_tasks %}
-    {% if task.status == 'running' %}
+    {% if task.status in ['running', 'overtime'] %}
     <div class="gs-item gs-bg-task">
-        <span class="badge badge-running">BG</span>
+        <span class="badge {% if task.status == 'overtime' %}badge-overtime{% else %}badge-running{% endif %}">{% if task.status == 'overtime' %}OT{% else %}BG{% endif %}</span>
         <span class="gs-tool-name">{{ task.tool }}</span>
         <div class="gs-progress-wrap">
             <div class="progress-bar progress-bar-inline">

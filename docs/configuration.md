@@ -102,14 +102,20 @@ Beyond the cache and API key settings above, Arkana supports several environment
 
 | Variable | Default | Description |
 |---|---|---|
-| `ARKANA_BACKGROUND_TASK_TIMEOUT` | `1800` | Default timeout (seconds) for background analysis tasks (symbolic execution, emulation, binary diffing, etc.). Applies to all 12 background tools. |
+| `ARKANA_BACKGROUND_TASK_TIMEOUT` | `1800` | Hard timeout (seconds) for background tasks. Used as fallback when soft timeout is disabled (set to 0). |
 | `ARKANA_BSIM_BACKGROUND_TIMEOUT` | `1800` | Separate timeout (seconds) for BSim function similarity background tasks (`find_similar_functions`, `build_function_signature_db`). |
+| `ARKANA_ANGR_CFG_SOFT_TIMEOUT` | `900` | Soft timeout (15 min) for CFG build. After this, the task enters OVERTIME status but keeps running. Set to `0` to disable progress-adaptive timeout and use hard timeout instead. |
+| `ARKANA_BACKGROUND_TASK_SOFT_TIMEOUT` | `300` | Soft timeout (5 min) for generic background tasks. Set to `0` to fall back to hard timeout. |
+| `ARKANA_OVERTIME_CHECK_INTERVAL` | `60` | How often (seconds) to check progress during overtime. |
+| `ARKANA_OVERTIME_STALL_KILL` | `300` | Kill the task after this many seconds (5 min) of zero progress during overtime. |
+| `ARKANA_OVERTIME_MAX_RUNTIME` | `21600` | Absolute ceiling (6 hours) — tasks are killed regardless of progress after this. |
 
 ### Concurrency
 
 | Variable | Default | Description |
 |---|---|---|
 | `ARKANA_MAX_CONCURRENT_ANALYSES` | `3` | Maximum concurrent heavy analysis operations (semaphore). Prevents CPU/memory exhaustion when multiple tools run simultaneously. |
+| `ARKANA_DASHBOARD_THREADS` | `4` | Number of threads in the dashboard's dedicated thread pool. Prevents dashboard requests from being starved when MCP tools or background tasks saturate the default executor. |
 
 ### Session Management
 

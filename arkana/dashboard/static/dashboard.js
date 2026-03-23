@@ -212,7 +212,7 @@ function showToast(message, type) {
         var tasks = data.background_tasks || [];
         var running = 0;
         for (var i = 0; i < tasks.length; i++) {
-            if (tasks[i].status === 'running') running++;
+            if (tasks[i].status === 'running' || tasks[i].status === 'overtime') running++;
         }
         if (running < lastTaskRunning && lastTaskRunning > 0) {
             showToast('Background task finished', 'info');

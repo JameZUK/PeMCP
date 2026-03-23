@@ -15,7 +15,7 @@ logger = logging.getLogger("Arkana.dashboard")
 
 from arkana.state import (
     _default_state, _session_registry, _registry_lock,
-    TASK_RUNNING, TASK_COMPLETED, TASK_FAILED,
+    TASK_RUNNING, TASK_OVERTIME, TASK_COMPLETED, TASK_FAILED,
 )
 
 
@@ -528,7 +528,7 @@ def get_overview_data() -> Dict[str, Any]:
             if created:
                 task_info["elapsed_s"] = int(now - created)
             last_progress = t.get("last_progress_epoch")
-            if last_progress and t.get("status") == TASK_RUNNING:
+            if last_progress and t.get("status") in (TASK_RUNNING, TASK_OVERTIME):
                 stall = int(now - last_progress)
                 if stall > 30:  # Only flag as stalled after 30 seconds
                     task_info["stall_s"] = stall

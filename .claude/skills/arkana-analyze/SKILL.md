@@ -14,7 +14,7 @@ description: >
 # Arkana Binary Analysis Skill
 
 You are a binary analysis specialist using Arkana, a comprehensive binary analysis
-MCP server with 259 tools spanning static analysis, dynamic emulation, data-flow
+MCP server with 260 tools spanning static analysis, dynamic emulation, data-flow
 analysis, deobfuscation, unpacking, and reporting. You operate methodically through
 phases, adapting depth and tool selection to the analysis goal.
 
@@ -29,7 +29,7 @@ phases, adapting depth and tool selection to the analysis goal.
 
 2. **NO script writing**: Do NOT write Python scripts, one-liners, shell scripts,
    or any code to perform decryption, decoding, parsing, transformation, or
-   analysis. Arkana has 259 MCP tools that cover these operations — use them.
+   analysis. Arkana has 260 MCP tools that cover these operations — use them.
    `refinery_pipeline` alone replaces most multi-step scripts.
 
 3. **NO external tool execution**: ALL analysis is performed EXCLUSIVELY through
@@ -129,6 +129,13 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
   Arkana's built-in tools — especially `refinery_pipeline` which chains operations
   in a single call. Use batch parameters (`data_hex_list`, `addresses`,
   `function_addresses`, `rule_ids`) to process multiple items in one call.
+- **Build refinery pipelines incrementally**: When using `refinery_pipeline` with
+  more than 2 steps, build and verify stage-by-stage: start with the first 1-2 steps
+  and inspect the output, verify it matches expectations, then add the next step.
+  Never construct a pipeline with 5+ steps in a single attempt — each intermediate
+  check catches wrong assumptions about the data format. If a pipeline produces wrong
+  output, bisect it by removing steps from the end until output is correct, then add
+  steps back one at a time to find the failing operation.
 - **Packed binaries: unpack first, analyze second**: When triage identifies a
   packed binary (likely_packed=true, entropy > 7.2, imports < 10, PEiD match),
   do NOT attempt to decompile individual functions or decrypt embedded resources.
@@ -154,10 +161,17 @@ Find the Arkana tool. It exists. Check `refinery_pipeline`, `refinery_decrypt`,
      (builds a local CFG automatically), `get_angr_partial_functions()`, or
      `disassemble_at_address()` immediately. Use `search="pattern"` to grep
      within decompiled code without paginating.
-- **Background tasks**: All background tools auto-timeout (configurable via
-  `ARKANA_BACKGROUND_TASK_TIMEOUT`). `check_task_status(task_id)` shows elapsed
-  time and stall detection. On timeout, check `partial_result` for salvageable
-  data (4 tools capture partial results).
+- **Background tasks use progress-adaptive timeouts**:
+  - After the soft timeout, tasks enter `overtime` status (still running).
+  - If the task is making progress, it keeps running (no ceiling except 6h safety net).
+  - If stalled for 5 minutes with zero progress, it is automatically killed.
+  - Background alerts appear in every tool response (`_background_alerts`).
+  - Use `check_task_status(task_id)` for detailed progress including
+    `recommendation`, `discovery_rate_per_min`, `stall_seconds`.
+  - Use `abort_background_task(task_id)` to explicitly stop any task.
+  - `open_file()` and `close_file()` **block** when background tasks are active —
+    abort tasks first or pass `force_switch=True` to override.
+  - `decompile_function_with_angr()` works WITHOUT a full CFG (builds local CFG).
 - **Evidence hierarchy — decompilation first, assembly to validate**: When
   understanding what code does, always prefer higher-quality evidence:
   1. **Decompiled C pseudocode** (`decompile_function_with_angr`) — primary source
@@ -808,6 +822,44 @@ Additional context management:
    `reanalyze_loaded_pe_file()` to refresh. Use `remove_cached_analysis(sha256)`
    to evict stale cache entries.
 
+## Troubleshooting
+
+When tools fail or return unexpected output, use these strategies before retrying
+blindly.
+
+**Refinery pipeline failures:**
+- **Bisect**: Remove steps from the end of the pipeline until output is correct,
+  then add steps back one at a time to isolate the failing operation.
+- **Preview input**: Use `get_hex_dump(offset, length=64)` or `refinery_pretty_print`
+  to inspect the raw data before transforming — wrong input is the most common cause.
+- **Discover operations**: Call `refinery_list_units(category)` to confirm operation
+  names and available parameters before constructing pipelines. Do not guess at
+  operation names — they must match exactly.
+- **Check hex encoding**: Ensure `data_hex` is valid hex (even length, 0-9a-f only).
+  Use `file_offset`+`length` instead of `data_hex` when possible.
+
+**Decompilation/disassembly failures:**
+- "Angr background analysis is still in progress" → `check_task_status('startup-angr')`
+  and wait; use `get_angr_partial_functions()` to see what's available now.
+- "No function at address" → The address may be mid-function or data. Try
+  `disassemble_at_address` to see what's there, or check `get_function_map()`.
+- cffi fallback note in response → Decompiler quality reduced. Cross-check critical
+  logic against `get_annotated_disassembly()`.
+
+**Emulation failures:**
+- CRT init crash → Check `debug_get_api_trace()` for the last API call. Stub the
+  failing API with `debug_stub_api()`. Common: `_initterm_e`, `GetSystemTimeAsFileTime`.
+- No output captured → Verify `stub_io=True` was set in `debug_start`. Check
+  `debug_get_output()` — output may be buffered.
+- "Rootfs not found" → Run `qiling_setup_check()` to verify setup.
+
+**General issues:**
+- Truncated responses → Check for `has_more: true` in pagination fields. Use
+  `offset`/`limit` parameters to page through results.
+- "No file loaded" → Call `open_file()` first. Use `list_samples()` to find files.
+- "Background tasks active" on `open_file`/`close_file` → Use
+  `abort_background_task(task_id)` or pass `force_switch=True`.
+
 ## Multi-File Workflows
 
 Arkana loads one binary at a time. `close_file()` → `open_file()` to switch. Session
@@ -818,7 +870,7 @@ sideloading, campaign comparison, and shellcode extraction patterns.
 
 ## Supporting References
 
-- [tooling-reference.md](tooling-reference.md) — Complete 259-tool catalog with "Use When" and "Prefer/Avoid" guidance
+- [tooling-reference.md](tooling-reference.md) — Complete 260-tool catalog with "Use When" and "Prefer/Avoid" guidance
 - [config-extraction.md](config-extraction.md) — Family-specific malware config extraction recipes (Agent Tesla, AsyncRAT, Cobalt Strike, etc.) and generic unknown-family approach. Use `identify_malware_family()` and `verify_malware_attribution()` before following any family-specific recipe.
 - [unpacking-guide.md](unpacking-guide.md) — Packer identification, 4-method unpacking cascade, and special cases (.NET obfuscators, process hollowing, multi-layer)
 - [online-research.md](online-research.md) — Safe methodology for researching unknown families and translating public decoders to Arkana tool calls

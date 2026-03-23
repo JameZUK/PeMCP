@@ -119,7 +119,7 @@ arkana/
 - **Docker-First Design**  - No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Single-File Analysis Context**  - The server holds one file in memory via `AnalyzerState`. All tools operate on this shared context. Use `open_file` and `close_file` to switch between files. Calling `open_file` on a new file without `close_file` is safe — all module-level caches (`_decompile_meta`, `_phase_caches`, dashboard caches, `result_cache`, analysis warnings) are cleared automatically to prevent cross-file data contamination.
 - **Thread-Safe State**  - Centralised `AnalyzerState` class with locking for concurrent access.
-- **Background Tasks**  - Long-running operations (symbolic execution, Angr CFG) run asynchronously with heartbeat monitoring.
+- **Background Tasks**  - Long-running operations (symbolic execution, Angr CFG) run asynchronously with progress-adaptive timeouts (soft timeout → OVERTIME → stall-kill/ceiling). Background alerts are passively injected into tool responses. `abort_background_task()` provides explicit cancellation.
 - **Disk-Based Caching**  - Analysis results are cached in `~/.arkana/cache/` as gzip-compressed JSON, keyed by SHA256. Re-opening a previously analysed file loads from cache in under 10 ms. LRU eviction keeps cache size bounded.
 - **Lazy Loading**  - Heavy analysis (Angr CFG) runs in the background. The server is usable immediately.
 - **Pagination**  - Tools that return lists support `limit` and `offset` parameters with LRU result caching, preventing response truncation and giving AI clients control over data volume per call (default limit 20 for most tools).
@@ -231,6 +231,11 @@ Paginated results are cached in an **LRU cache** (5 slots per tool) so that pagi
 | `MAX_ANALYSIS_WARNINGS` | 500 | Maximum unique library warnings captured per session (deduplicated) |
 | `_MAX_DECOMPILE_META` | 2,000 | Maximum cached decompilation results (LRU eviction via OrderedDict, session-scoped keys) |
 | `MAX_TOOL_LIMIT` | 100,000 | Hard upper bound for `limit` parameters across all ~60 tool functions |
+| `ANGR_CFG_SOFT_TIMEOUT` | 900 | Soft timeout (15 min) for CFG build before entering OVERTIME. Set to 0 to disable. |
+| `BACKGROUND_TASK_SOFT_TIMEOUT` | 300 | Soft timeout (5 min) for generic background tasks before entering OVERTIME. |
+| `OVERTIME_CHECK_INTERVAL` | 60 | Progress check frequency during OVERTIME (seconds) |
+| `OVERTIME_STALL_KILL` | 300 | Kill task after this many seconds of zero progress during OVERTIME |
+| `OVERTIME_MAX_RUNTIME` | 21,600 | Absolute ceiling (6 hours) — safety net for pathological slow-progress cases |
 | `MAX_DEBUG_SESSIONS` | 3 | Maximum concurrent interactive debug sessions (overridable via `ARKANA_MAX_DEBUG_SESSIONS`). Oldest evicted when limit reached. |
 | `DEBUG_SESSION_TTL` | 1,800 | Debug session idle timeout in seconds (overridable via `ARKANA_DEBUG_SESSION_TTL`) |
 | `DEBUG_COMMAND_TIMEOUT` | 300 | Per-command timeout for debug operations (overridable via `ARKANA_DEBUG_COMMAND_TIMEOUT`) |

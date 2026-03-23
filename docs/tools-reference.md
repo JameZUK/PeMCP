@@ -85,7 +85,7 @@ Arkana is designed for **large binary corpus analysis** where AI clients need to
 - **Analysis Caching**  - Results are cached to disk in `~/.arkana/cache/`, keyed by SHA256 hash and compressed with gzip (~12x compression). Re-opening a previously analysed file loads instantly from cache.
 - **Persistent Configuration**  - API keys are stored securely in `~/.arkana/config.json` and recalled automatically across sessions.
 - **Progress Reporting**  - Over 50 long-running tools report fine-grained progress to the MCP client in real time (percentage, stage descriptions). Tools running in background threads use a thread-safe `ProgressBridge` to push updates back to the async MCP context.
-- **Background Task Timeout & Stall Detection**  - All 10 angr background tools have automatic timeouts (300-600s depending on the tool, configurable via `ARKANA_BACKGROUND_TASK_TIMEOUT`). `check_task_status()` reports elapsed time, detects stalls (no progress in 60s), and surfaces partial results when available. Four symbolic execution and emulation tools capture partial results on timeout (steps completed, active states, captured events).
+- **Progress-Adaptive Background Timeouts**  - Background tasks use a soft timeout → OVERTIME → stall-kill system. After the soft timeout (5 min for generic tasks, 15 min for CFG), the task enters `overtime` status (still running). During overtime, progress is checked every 60s — if progressing, the task keeps running; if stalled for 5 min with zero progress, it is killed. A 6-hour absolute ceiling prevents pathological cases. Passive `_background_alerts` are injected into every tool response when tasks are in overtime. Use `abort_background_task(task_id)` to explicitly stop any task. Four tools capture partial results on stall-kill. All timeout values are configurable via environment variables.
 
 ---
 
@@ -93,9 +93,9 @@ Arkana is designed for **large binary corpus analysis** where AI clients need to
 
 | Tool | Description |
 |---|---|
-| `open_file` | Load and analyse a binary (PE/ELF/Mach-O/shellcode). Auto-detects format with smart fallback (unknown formats → raw mode). Returns `file_integrity` assessment and `quick_indicators` for PE files. Use `force=True` to override format fallback. |
+| `open_file` | Load and analyse a binary (PE/ELF/Mach-O/shellcode). Auto-detects format with smart fallback (unknown formats → raw mode). Returns `file_integrity` assessment and `quick_indicators` for PE files. Use `force=True` to override format fallback. **Blocks when background tasks are active** — returns an error listing active tasks. Use `abort_background_task()` to stop them first, or pass `force_switch=True` to proceed anyway. |
 | `check_file_integrity` | Pre-parse integrity check on a binary file. Detects truncation, null-padding, impossible sizes, and header corruption for PE/ELF/Mach-O. Can run before or after `open_file`. Does not modify state. |
-| `close_file` | Close the loaded file and clear analysis data from memory. |
+| `close_file` | Close the loaded file and clear analysis data from memory. **Blocks when background tasks are active** — returns an error listing active tasks. Use `abort_background_task()` to stop them first, or pass `force_switch=True` to proceed anyway. |
 | `reanalyze_loaded_pe_file` | Re-run PE analysis with different options (skip/enable specific analyses). |
 | `detect_binary_format` | Auto-detect binary format and suggest appropriate analysis tools. |
 | `list_samples` | List files in the configured samples directory. Supports flat (top-level only) and recursive listing, glob pattern filtering (e.g. `*.exe`), and returns file metadata including size and magic-byte format hints (PE/ELF/Mach-O/ZIP/etc.). Paginated with `limit` and `offset`. Configured via `--samples-path` or `ARKANA_SAMPLES`. |
@@ -107,7 +107,8 @@ Arkana is designed for **large binary corpus analysis** where AI clients need to
 | `set_api_key` | Store an API key persistently in `~/.arkana/config.json`. |
 | `get_config` | View current configuration, available libraries, and loaded file status. |
 | `get_current_datetime` | Retrieve current UTC and local date/time. |
-| `check_task_status` | Monitor progress of background tasks. Returns `elapsed_seconds`/`elapsed_human` for all tasks, generic `stall_detection` (triggers after 60s without progress), and `timed_out`/`partial_result` fields for tasks that exceeded their timeout. Works for all 10 angr background tools plus the startup CFG build. |
+| `check_task_status` | Monitor progress of background tasks. Returns `elapsed_seconds`/`elapsed_human` for all tasks, generic `stall_detection` (triggers after 60s without progress), `timed_out`/`partial_result` for stall-killed tasks. For overtime tasks: `overtime_seconds`, `progress_trend` (progressing/stalled), `stall_seconds`, `recommendation`, and `discovery_rate_per_min` (CFG tasks). |
+| `abort_background_task` | Abort a running or overtime background task. Marks it as failed/aborted; the worker thread result is discarded. Returns partial data if available (e.g. functions discovered during CFG build). |
 | `get_extended_capabilities` | List all available tools and library versions. |
 | `get_cache_stats` | View analysis cache statistics (entries, size, utilisation). |
 | `clear_analysis_cache` | Clear the entire disk-based analysis cache. |
