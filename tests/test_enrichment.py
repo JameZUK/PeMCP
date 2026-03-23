@@ -113,6 +113,14 @@ class TestEnrichmentCoordinator:
             "com_descriptor": {},
         }
 
+    def teardown_method(self):
+        # Cancel any enrichment threads launched by start_enrichment()
+        self.state._enrichment_cancel.set()
+        for t in list(self.state._background_threads.values()):
+            t.join(timeout=5)
+        self.state._background_threads.clear()
+        self.state._task_cancel_events.clear()
+
     def test_cancelled_helper(self):
         from arkana.enrichment import _cancelled
         assert not _cancelled(self.state)
