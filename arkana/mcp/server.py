@@ -38,6 +38,8 @@ _SKIP_HISTORY_TOOLS = frozenset({
     "get_learning_suggestions", "reset_learner_profile",
     # Warning tools — diagnostic, not analysis steps
     "get_analysis_warnings", "clear_analysis_warnings",
+    # Resource monitoring — diagnostic
+    "get_resource_usage",
 })
 
 # --- Heartbeat configuration ---
@@ -204,6 +206,16 @@ def _collect_background_alerts(current_state) -> list:
                 })
     except Exception:
         logger.debug("Alert collection error", exc_info=True)
+
+    # Resource pressure alert (memory / CPU)
+    try:
+        from arkana.resource_monitor import get_resource_alert
+        resource_alert = get_resource_alert()
+        if resource_alert:
+            alerts.append(resource_alert)
+    except Exception:
+        logger.debug("Resource alert collection error", exc_info=True)
+
     return alerts
 
 

@@ -923,6 +923,13 @@ def get_overview_data() -> Dict[str, Any]:
         active_tool_progress = st.active_tool_progress
         active_tool_total = st.active_tool_total
 
+    # Resource usage (process-level memory/CPU)
+    try:
+        from arkana.resource_monitor import get_resource_snapshot
+        resource_usage = get_resource_snapshot()
+    except Exception:
+        resource_usage = None
+
     result = {
         "file_loaded": filepath is not None,
         "filename": filename,
@@ -949,6 +956,7 @@ def get_overview_data() -> Dict[str, Any]:
         "active_tool": active_tool,
         "active_tool_progress": active_tool_progress,
         "active_tool_total": active_tool_total,
+        "resource_usage": resource_usage,
     }
 
     # M-E5: Cache the result — deep copy only on write (callers get deep copy on read).
@@ -2398,6 +2406,40 @@ def get_mitre_data() -> Dict[str, Any]:
 #  CAPA capabilities data (Batch 1c)
 # ---------------------------------------------------------------------------
 
+def _extract_capa_address(raw) -> str:
+    """Extract a hex address string from various capa address formats.
+
+    Capa v9 (pydantic) serializes match dicts with complex Address keys as
+    lists of ``[address_obj, match_result]`` pairs.  Address objects can be:
+    - ``{"type": "absolute", "value": 4198400}``
+    - ``{"type": "call", "value": {"caller": ..., "position": ...}}``
+    - A plain int (e.g. ``4198400``)
+    - A string (e.g. ``"0x401000"`` or ``"(4198400, file)"``)
+    - A list pair ``[address_obj, match_result]``
+    """
+    # List pair: first element is the address, second is the match result
+    if isinstance(raw, list) and len(raw) >= 1:
+        raw = raw[0]
+
+    # Dict address object (capa v9 frozen model)
+    if isinstance(raw, dict):
+        val = raw.get("value", raw)
+        # Nested address (e.g. "call" type with caller sub-object)
+        if isinstance(val, dict):
+            val = val.get("value", val.get("caller", {}).get("value", val))
+        # Tuple-as-list (e.g. [4198400, 0])
+        if isinstance(val, (list, tuple)) and val:
+            val = val[0]
+        if isinstance(val, int):
+            return hex(val)
+        return str(val)
+
+    if isinstance(raw, int):
+        return hex(raw)
+
+    return str(raw)
+
+
 def get_capa_data() -> Dict[str, Any]:
     """Return capa rule matches grouped by ATT&CK tactic or MBC objective."""
     st = _get_state()
@@ -2427,10 +2469,10 @@ def get_capa_data() -> Dict[str, Any]:
             elif not isinstance(raw_addrs, list):
                 raw_addrs = []
             for a in raw_addrs[:20]:
-                addr_str = str(a)
+                addr_str = _extract_capa_address(a)
                 entry = {"address": addr_str}
                 try:
-                    va_int = int(addr_str, 16) if isinstance(addr_str, str) else int(addr_str)
+                    va_int = int(addr_str, 16) if addr_str.startswith("0x") else int(addr_str)
                     hit = _find_containing_function(func_lookup, va_int)
                     if hit:
                         entry["func_addr"] = hit[0]

@@ -528,6 +528,52 @@ async def abort_background_task(ctx: Context, task_id: str) -> Dict[str, Any]:
 
 
 @tool_decorator
+async def get_resource_usage(ctx: Context) -> Dict[str, Any]:
+    """
+    [Phase: utility] Returns current process resource usage: RSS memory,
+    CPU percentage, thread count, and recent trend data.
+
+    When to use: When you notice resource pressure alerts in tool responses,
+    or to check server health before launching expensive operations like
+    symbolic execution or CFG recovery.
+
+    This tool does not require a file to be loaded.
+    """
+    from arkana.resource_monitor import (
+        get_resource_snapshot, get_resource_history,
+        _MEMORY_HIGH, _MEMORY_CRITICAL, _CPU_HIGH,
+        PSUTIL_AVAILABLE,
+    )
+    if not PSUTIL_AVAILABLE:
+        return {
+            "error": "psutil is not installed. Install with: pip install psutil",
+            "hint": "Resource monitoring requires the psutil library.",
+        }
+
+    snapshot = get_resource_snapshot()
+    if not snapshot:
+        return {"error": "Resource monitor has not collected data yet. Try again shortly."}
+
+    history = get_resource_history()
+    trend: Dict[str, Any] = {}
+    if len(history) >= 2:
+        oldest = history[0]
+        trend["rss_change_mb"] = round(snapshot["rss_mb"] - oldest["rss_mb"], 1)
+        trend["period_seconds"] = round(snapshot["timestamp"] - oldest["timestamp"])
+        trend["samples"] = len(history)
+
+    return {
+        "current": snapshot,
+        "trend": trend,
+        "thresholds": {
+            "memory_high_mb": _MEMORY_HIGH,
+            "memory_critical_mb": _MEMORY_CRITICAL,
+            "cpu_high_percent": _CPU_HIGH,
+        },
+    }
+
+
+@tool_decorator
 async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, str]:
     """
     [Phase: utility] Stores an API key in the user's persistent configuration

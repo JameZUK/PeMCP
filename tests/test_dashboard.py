@@ -1378,3 +1378,150 @@ class TestGenerateReportText:
         data = generate_report_text()
         assert "VirtualAlloc" in data["report"]
         assert "CRITICAL" in data["report"]
+
+
+# ---------------------------------------------------------------------------
+#  Capa address extraction
+# ---------------------------------------------------------------------------
+
+class TestExtractCapaAddress:
+    """Test _extract_capa_address handles all capa address formats."""
+
+    def test_plain_int(self):
+        from arkana.dashboard.state_api import _extract_capa_address
+        assert _extract_capa_address(4198400) == hex(4198400)
+
+    def test_plain_string(self):
+        from arkana.dashboard.state_api import _extract_capa_address
+        assert _extract_capa_address("0x401000") == "0x401000"
+
+    def test_absolute_address_dict(self):
+        from arkana.dashboard.state_api import _extract_capa_address
+        result = _extract_capa_address({"type": "absolute", "value": 4198400})
+        assert result == hex(4198400)
+
+    def test_call_address_dict(self):
+        from arkana.dashboard.state_api import _extract_capa_address
+        result = _extract_capa_address({
+            "type": "call",
+            "value": {"caller": {"type": "absolute", "value": 4198400}, "position": 0},
+        })
+        assert result == hex(4198400)
+
+    def test_list_pair_with_dict_address(self):
+        """Capa v9 serializes match dicts as [address_obj, match_result] pairs."""
+        from arkana.dashboard.state_api import _extract_capa_address
+        pair = [{"type": "absolute", "value": 4198400}, {"success": True, "node": {}}]
+        result = _extract_capa_address(pair)
+        assert result == hex(4198400)
+
+    def test_list_pair_with_int(self):
+        from arkana.dashboard.state_api import _extract_capa_address
+        pair = [4198400, {"success": True}]
+        result = _extract_capa_address(pair)
+        assert result == hex(4198400)
+
+    def test_tuple_value_in_dict(self):
+        from arkana.dashboard.state_api import _extract_capa_address
+        result = _extract_capa_address({"type": "absolute", "value": [4198400, 0]})
+        assert result == hex(4198400)
+
+    def test_string_fallback(self):
+        from arkana.dashboard.state_api import _extract_capa_address
+        result = _extract_capa_address("(4198400, file)")
+        assert result == "(4198400, file)"
+
+    def test_empty_list(self):
+        from arkana.dashboard.state_api import _extract_capa_address
+        result = _extract_capa_address([])
+        assert result == "[]"
+
+
+class TestCapaDataAddressFormats:
+    """Test get_capa_data handles capa v9 address formats."""
+
+    def setup_method(self):
+        with _registry_lock:
+            self._saved_registry = dict(_session_registry)
+            _session_registry.clear()
+        from arkana.dashboard.state_api import _overview_cache
+        _overview_cache.clear()
+
+    def teardown_method(self):
+        with _registry_lock:
+            _session_registry.clear()
+            _session_registry.update(self._saved_registry)
+        from arkana.dashboard.state_api import _overview_cache
+        _overview_cache.clear()
+
+    def test_v9_list_pair_matches(self):
+        """Capa v9 matches serialized as list of [addr_obj, match] pairs."""
+        from arkana.dashboard.state_api import get_capa_data
+
+        old_fp = _default_state.filepath
+        old_pd = _default_state.pe_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {
+            "mode": "pe",
+            "capa_analysis": {
+                "status": "Analysis complete (adapted workflow)",
+                "results": {
+                    "rules": {
+                        "test rule": {
+                            "meta": {"namespace": "test/ns", "scope": "function"},
+                            "matches": [
+                                [{"type": "absolute", "value": 4198400}, {"success": True}],
+                                [{"type": "absolute", "value": 4198656}, {"success": True}],
+                            ],
+                        }
+                    }
+                },
+            },
+        }
+        try:
+            data = get_capa_data()
+            assert len(data["rules"]) == 1
+            rule = data["rules"][0]
+            assert rule["name"] == "test rule"
+            assert len(rule["addresses"]) == 2
+            # Addresses should be hex strings, not JSON dumps
+            for addr in rule["addresses"]:
+                assert not addr["address"].startswith("["), f"Address looks like JSON: {addr['address']}"
+                assert not addr["address"].startswith("{"), f"Address looks like JSON: {addr['address']}"
+        finally:
+            _default_state.filepath = old_fp
+            _default_state.pe_data = old_pd
+
+    def test_dict_matches_with_string_keys(self):
+        """Traditional capa format: matches as dict with string keys."""
+        from arkana.dashboard.state_api import get_capa_data
+
+        old_fp = _default_state.filepath
+        old_pd = _default_state.pe_data
+        _default_state.filepath = "/tmp/test.exe"
+        _default_state.pe_data = {
+            "mode": "pe",
+            "capa_analysis": {
+                "status": "Analysis complete (adapted workflow)",
+                "results": {
+                    "rules": {
+                        "test rule": {
+                            "meta": {"namespace": "test/ns"},
+                            "matches": {
+                                "0x401000": {"success": True},
+                                "0x402000": {"success": True},
+                            },
+                        }
+                    }
+                },
+            },
+        }
+        try:
+            data = get_capa_data()
+            assert len(data["rules"]) == 1
+            addrs = [a["address"] for a in data["rules"][0]["addresses"]]
+            assert "0x401000" in addrs
+            assert "0x402000" in addrs
+        finally:
+            _default_state.filepath = old_fp
+            _default_state.pe_data = old_pd

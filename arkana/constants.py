@@ -69,6 +69,10 @@ __all__ = [
     "MAX_DEBUG_CAPTURED_OUTPUT", "MAX_DEBUG_PENDING_INPUT",
     "MAX_DEBUG_API_TRACE", "MAX_DEBUG_SEARCH_MATCHES", "DEBUG_SEARCH_CONTEXT_BYTES",
     "DASHBOARD_THREAD_POOL_SIZE",
+    # Resource monitor
+    "RESOURCE_MONITOR_INTERVAL", "RESOURCE_MEMORY_HIGH_MB",
+    "RESOURCE_MEMORY_CRITICAL_MB", "RESOURCE_CPU_HIGH_PERCENT",
+    "RESOURCE_HISTORY_SIZE",
     "DEPENDENCIES",
 ]
 
@@ -256,6 +260,13 @@ MAX_DEBUG_STUB_WRITES = 8            # Max write operations per stub
 # --- Dashboard Thread Pool ---
 DASHBOARD_THREAD_POOL_SIZE = 4  # Dedicated pool for dashboard (env: ARKANA_DASHBOARD_THREADS)
 
+# --- Resource Monitor ---
+RESOURCE_MONITOR_INTERVAL = 10          # Seconds between polls (env: ARKANA_RESOURCE_MONITOR_INTERVAL)
+RESOURCE_MEMORY_HIGH_MB = 4096          # RSS MB warning threshold (env: ARKANA_RESOURCE_MEMORY_HIGH_MB)
+RESOURCE_MEMORY_CRITICAL_MB = 8192      # RSS MB critical threshold (env: ARKANA_RESOURCE_MEMORY_CRITICAL_MB)
+RESOURCE_CPU_HIGH_PERCENT = 90          # CPU% warning threshold (env: ARKANA_RESOURCE_CPU_HIGH_PERCENT)
+RESOURCE_HISTORY_SIZE = 60              # Number of snapshots to retain for trend analysis
+
 # --- Dependencies manifest (for diagnostics / status reporting) ---
 DEPENDENCIES = [
     ("cryptography", "cryptography", "Cryptography (for digital signatures)", False),
@@ -270,4 +281,5 @@ DEPENDENCIES = [
     ("mcp.server", "mcp[cli]", "MCP SDK (for MCP server mode)", True),
     ("angr", "angr", "Angr (for binary decompilation & solving)", False),
     ("refinery", "binary-refinery", "Binary Refinery (for data transforms, crypto, deobfuscation)", False),
+    ("psutil", "psutil", "psutil (for process resource monitoring)", False),
 ]
