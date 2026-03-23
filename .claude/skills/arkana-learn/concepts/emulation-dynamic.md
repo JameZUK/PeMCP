@@ -227,6 +227,23 @@ Result:
 ```
 
 ```
+Tool: explore_symbolic_states(find_addresses, avoid_addresses, strategy, max_active, max_steps)
+
+BFS/DFS exploration towards target addresses while avoiding others.
+WARNING: Keep max_active ≤ 10 and max_steps ≤ 10000 for complex binaries.
+Higher values can OOM-kill the container — angr clones full state objects
+at every branch, and hash/crypto/CRT code causes exponential growth.
+```
+
+```
+Tool: solve_constraints_for_path(target_address, start_address, avoid_addresses, max_steps)
+
+Solve for concrete stdin/argv values that reach a target. Use start_address
+to skip CRT init (a common source of state explosion). Same OOM caveats
+as explore_symbolic_states.
+```
+
+```
 Tool: emulate_function_execution(function_address, args)
 
 Emulates a single function with concrete arguments. Useful for testing what
@@ -250,8 +267,11 @@ when specific addresses are read, written, or executed.
 | Find decrypted data in memory | Qiling (`qiling_memory_search`) | Best memory inspection |
 | Unpack to OEP and dump | Qiling (`qiling_dump_unpacked_binary`) | Full memory dump support |
 | Find input that reaches target | angr (`find_path_to_address`) | Symbolic execution required |
+| Explore multiple paths to target | angr (`explore_symbolic_states`) | BFS/DFS with `max_active` ≤ 10 to avoid OOM |
+| Solve for concrete input values | angr (`solve_constraints_for_path`) | Use `start_address` to skip CRT init |
 | Test a single function | angr (`emulate_function_execution`) | Function-level emulation |
 | Monitor specific memory writes | angr (`emulate_with_watchpoints`) | Watchpoint support |
+| Extract key from hash-heavy code | Debugger or Qiling (NOT angr symbolic) | Symbolic execution cannot invert hashes efficiently |
 | Cross-platform (ELF) analysis | Qiling | Multi-platform support |
 | Step through code instruction by instruction | Debugger (`debug_start` + `debug_step`) | Persistent state, pause/resume |
 | Supply stdin input during emulation | Debugger (`debug_set_input`) | I/O stubs queue input for ReadConsole |
@@ -319,6 +339,38 @@ complex binaries (too many branches to explore). Use it for targeted questions
 ("find input reaching address X") rather than full program exploration. For
 general behavioural analysis, concrete emulation with Qiling or Speakeasy is
 faster and more practical.
+
+### Symbolic execution memory limits (OOM prevention)
+
+angr clones full state objects at every branch point. Each state carries the
+entire simulated memory and accumulated constraint set. On complex binaries
+this causes exponential memory growth that can **OOM-kill the container**.
+
+**What causes OOM in practice:**
+- **CRT-heavy code**: MinGW/MSVC startup routines have hundreds of branches.
+  Starting from the entry point means exploring CRT init before reaching your
+  actual target, wasting states on irrelevant paths.
+- **Hash functions and crypto**: Hash mixing (MurmurHash, SHA, custom hashes)
+  creates deeply nested XOR/shift/multiply constraints that Z3 cannot simplify.
+  Each iteration doubles the constraint complexity.
+- **High `max_active`**: With 50 active states on a 32-bit PE doing complex
+  hashing, the state space explodes. 35+ active states can consume 4+ GB.
+
+**Safe parameter ranges:**
+- `max_active`: ≤ 10 for complex binaries (default 50 is dangerous)
+- `max_steps`: ≤ 10000 (not 50000+)
+- `timeout_seconds`: 120–300 (not 600)
+
+**Better approaches for hash-heavy targets:**
+- Use `start_address` to skip CRT init and start closer to the comparison
+- Use `avoid_addresses` aggressively to prune irrelevant paths
+- If the target is a comparison (memcmp, strcmp) after a deterministic key
+  generation, start AFTER the generation so the expected value is concrete
+  and the comparison becomes a trivial constraint
+- For hash inversions (finding input that hashes to X), symbolic execution
+  is the wrong tool — use concrete emulation or brute-force instead
+- Prefer the interactive debugger for stepping through hash functions and
+  extracting intermediate values
 
 ### Forgetting to search memory after emulation
 

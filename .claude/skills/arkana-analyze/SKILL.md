@@ -506,7 +506,21 @@ Progressive depth — use the minimum tier needed to answer your question.
 - `qiling_hook_api_calls()` — hook specific APIs during emulation
 - `qiling_memory_search()` — search emulation memory for decrypted data
 - `find_path_to_address(target)` — symbolic execution to find reaching inputs
+- `explore_symbolic_states(find, avoid)` — BFS/DFS symbolic exploration
+- `solve_constraints_for_path(target, start_address)` — solve for concrete
+  input reaching a target; use `start_address` to skip CRT init
 - `emulate_with_watchpoints()` — watchpoints on memory/registers
+
+**Symbolic execution OOM warning**: angr clones full state objects at every
+branch. On complex binaries (hash functions, CRT-heavy MinGW/MSVC code, crypto
+loops), state counts explode and can OOM-kill the Docker container. Mitigations:
+- Keep `max_active` ≤ 10 (default 50 is dangerous for complex targets)
+- Keep `max_steps` ≤ 10000 (not 50000+)
+- Use `start_address` to skip CRT initialization when possible
+- Prefer concrete emulation (Qiling/Speakeasy/debugger) for hash-heavy code —
+  symbolic execution cannot efficiently invert hash functions
+- If targeting a comparison (memcmp, strcmp), start AFTER the value generation
+  so the expected value is concrete and the constraint is trivial
 
 ### Tier 3b: Interactive Debugger (when you need step-through control)
 

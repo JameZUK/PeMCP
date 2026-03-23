@@ -204,6 +204,8 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `debug_remove_stub` | Remove a user-defined API stub (builtin stubs cannot be removed) | `api_name`, `session_id` |
 | `find_path_to_address` | Symbolic execution to find reaching inputs (timeout 600s, partial results on timeout: steps/active states) | `target_address` |
 | `find_path_with_custom_input` | Path finding with custom constraints (timeout 600s, partial results on timeout: steps/active states) | `target`, `constraints` |
+| `explore_symbolic_states` | BFS/DFS symbolic exploration towards target addresses, avoiding others. **OOM risk**: keep `max_active` ≤ 10 and `max_steps` ≤ 10000 for complex binaries — angr clones entire state objects per branch, and hash-heavy or CRT-heavy code causes exponential memory growth that can OOM-kill the container | `find_addresses`, `avoid_addresses`, `strategy`, `max_steps`, `max_active`, `timeout_seconds` |
+| `solve_constraints_for_path` | Solve for concrete stdin/argv/register values that reach a target. Supports `start_address` to skip CRT init. Same OOM caveats as `explore_symbolic_states` — use `max_steps` ≤ 10000 | `target_address`, `start_address`, `avoid_addresses`, `max_steps`, `timeout_seconds` |
 
 ## Cryptography
 

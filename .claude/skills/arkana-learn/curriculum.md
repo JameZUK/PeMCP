@@ -396,6 +396,9 @@ dynamic analysis, and anti-analysis techniques.
 - `qiling_trace_execution()` — detailed API tracing
 - `emulate_with_watchpoints()` — memory/register watchpoints
 - `find_path_to_address(target)` — symbolic execution path finding
+- `explore_symbolic_states(find, avoid)` — BFS/DFS symbolic exploration
+  (**OOM risk**: keep `max_active` ≤ 10 and `max_steps` ≤ 10000 for complex binaries)
+- `solve_constraints_for_path(target, start_address)` — solve for concrete input
 - `emulate_function_execution(address, args)` — single function emulation
 
 **Suggested exercises**:
@@ -403,6 +406,8 @@ dynamic analysis, and anti-analysis techniques.
 2. Hook VirtualAlloc and WriteProcessMemory — what data is written?
 3. After emulation, search memory for URLs or IP addresses
 4. Use symbolic execution to find an input that reaches a specific code path
+5. Observe what happens when you use `max_active=50` vs `max_active=10` on a
+   binary with complex hashing — monitor container memory usage
 
 ---
 
