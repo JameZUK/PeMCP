@@ -145,9 +145,9 @@ def _start_floss_background_task(current_state, floss_args: tuple):
             current_state._background_threads.pop(task_id, None)
 
     t = threading.Thread(target=_worker, daemon=True, name="arkana-floss-deep")
-    t.start()
-    # Register thread reference for cleanup
+    # Register thread reference BEFORE start so the worker's finally can clean it up
     current_state._background_threads[task_id] = t
+    t.start()
     logger.info("FLOSS deep analysis background thread started (task_id=%s).", task_id)
 
 
