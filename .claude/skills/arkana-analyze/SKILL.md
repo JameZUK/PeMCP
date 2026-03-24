@@ -114,7 +114,7 @@ Also: `get_top_sifted_strings`, `get_floss_analysis_info`, `identify_malware_fam
 `emulate_function_execution`, `emulate_binary_with_qiling`, `emulate_shellcode_with_qiling`, `emulate_pe_with_windows_apis`, `emulate_shellcode_with_speakeasy`, `qiling_trace_execution`, `qiling_hook_api_calls`, `qiling_memory_search`, `find_path_to_address`, `explore_symbolic_states`, `solve_constraints_for_path`, `emulate_with_watchpoints`. OOM: `max_active` <= 10, `max_steps` <= 10000.
 
 ### Tier 3b: Debugger
-`debug_start` -> `debug_set_breakpoint` -> `debug_continue` -> `debug_read_state` -> `debug_read_memory` -> `debug_search_memory` -> `debug_stop`. Read [debugger-guide.md](debugger-guide.md).
+`debug_start` -> `debug_set_breakpoint` -> `debug_continue` -> `debug_read_state` -> `debug_read_memory` -> `debug_search_memory` -> `debug_stop`. Execution commands timeout-pause (not kill) — session stays alive for inspection and can be resumed with `debug_continue`. Read [debugger-guide.md](debugger-guide.md).
 
 ### Tier 4: Frida
 `generate_frida_trace_script`, `generate_frida_bypass_script`, `generate_frida_hook_script`.

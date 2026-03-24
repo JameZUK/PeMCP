@@ -178,8 +178,8 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `debug_status` | Check session liveness and current state | `session_id` |
 | `debug_step` | Step N instructions (default 1) | `count`, `session_id` |
 | `debug_step_over` | Step over CALL (temp BP after call) | `session_id` |
-| `debug_continue` | Continue until BP/WP hit or max instructions | `max_instructions`, `session_id` |
-| `debug_run_until` | Run until specific address reached | `address`, `max_instructions`, `session_id` |
+| `debug_continue` | Continue until BP/WP hit, max instructions, or timeout. **Timeout pauses (not kills)** — session stays alive for memory inspection and can be resumed with another `debug_continue` | `max_instructions`, `session_id` |
+| `debug_run_until` | Run until specific address reached. Same timeout-pause behavior as `debug_continue` | `address`, `max_instructions`, `session_id` |
 | `debug_set_breakpoint` | Set address/API/conditional breakpoint | `address`, `api_name`, `conditions`, `session_id` |
 | `debug_remove_breakpoint` | Remove breakpoint by ID | `breakpoint_id`, `session_id` |
 | `debug_set_watchpoint` | Set memory read/write watchpoint | `address`, `size`, `watch_type`, `session_id` |

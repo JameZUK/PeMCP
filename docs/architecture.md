@@ -238,7 +238,8 @@ Paginated results are cached in an **LRU cache** (5 slots per tool) so that pagi
 | `OVERTIME_MAX_RUNTIME` | 21,600 | Absolute ceiling (6 hours) — safety net for pathological slow-progress cases |
 | `MAX_DEBUG_SESSIONS` | 3 | Maximum concurrent interactive debug sessions (overridable via `ARKANA_MAX_DEBUG_SESSIONS`). Oldest evicted when limit reached. |
 | `DEBUG_SESSION_TTL` | 1,800 | Debug session idle timeout in seconds (overridable via `ARKANA_DEBUG_SESSION_TTL`) |
-| `DEBUG_COMMAND_TIMEOUT` | 300 | Per-command timeout for debug operations (overridable via `ARKANA_DEBUG_COMMAND_TIMEOUT`) |
+| `DEBUG_COMMAND_TIMEOUT` | 300 | Per-command timeout for debug execution commands (overridable via `ARKANA_DEBUG_COMMAND_TIMEOUT`). On timeout, the session is paused (not killed) — memory and state are preserved for inspection and execution can be resumed |
+| `DEBUG_RUNNER_TIMEOUT_BUFFER` | 15 | Extra seconds added to the client-side safety-net timeout beyond the runner-side deadline |
 | `MAX_DEBUG_SNAPSHOTS` | 10 | Maximum saved snapshots per debug session (overridable via `ARKANA_MAX_DEBUG_SNAPSHOTS`) |
 | `MAX_DEBUG_INSTRUCTIONS` | 10,000,000 | Maximum instructions per continue/run_until operation |
 | `MAX_DEBUG_BREAKPOINTS` | 100 | Maximum breakpoints per debug session |
