@@ -118,14 +118,45 @@ def _mem_read(emu, address, size):
     raise RuntimeError("Cannot access emulator memory — unsupported Speakeasy version")
 
 
-def _get_address_map(emu):
-    """Get memory map from the Speakeasy emulator."""
+def _get_memory_regions(emu):
+    """Get memory regions from the Speakeasy emulator.
+
+    Speakeasy's memory manager API varies by version:
+    - Some versions: emu.get_address_map() returns all regions
+    - Others: emu.get_address_map(addr) returns info for one address
+    - Fallback: emu.mem.get_mem_maps() or iterate emu.mem._map_info
+    """
+    # Try parameterless call first
     if hasattr(emu, 'get_address_map'):
-        return emu.get_address_map()
-    # Fallback: try the memory manager
-    mem_mgr = getattr(emu, 'mem', None) or getattr(emu, 'memory', None)
-    if mem_mgr and hasattr(mem_mgr, 'get_address_map'):
-        return mem_mgr.get_address_map()
+        try:
+            result = emu.get_address_map()
+            if isinstance(result, (list, tuple)) and len(result) > 0:
+                return result
+        except TypeError:
+            pass  # Needs an argument — skip
+
+    # Try the memory manager's internal map list
+    mem_mgr = getattr(emu, 'mem', None)
+    if mem_mgr is not None:
+        # get_mem_maps() is available in some versions
+        if hasattr(mem_mgr, 'get_mem_maps'):
+            try:
+                return mem_mgr.get_mem_maps()
+            except Exception:
+                pass
+        # _map_info is the internal list of MemMap objects
+        map_info = getattr(mem_mgr, '_map_info', None) or getattr(mem_mgr, 'map_info', None)
+        if map_info and isinstance(map_info, (list, tuple)):
+            regions = []
+            for m in map_info:
+                entry = {}
+                entry["base"] = getattr(m, 'base', getattr(m, 'addr', 0))
+                entry["size"] = getattr(m, 'size', 0)
+                entry["tag"] = getattr(m, 'tag', getattr(m, 'name', ""))
+                entry["perms"] = getattr(m, 'perms', "")
+                regions.append(entry)
+            return regions
+
     return None
 
 
@@ -154,7 +185,12 @@ def cmd_emulate_pe(cmd):
 
     emulation_exception = None
     try:
-        se.run_module(module, timeout=timeout_seconds)
+        # Speakeasy's run_module signature varies by version —
+        # some accept timeout= kwarg, others only positional.
+        try:
+            se.run_module(module, timeout=timeout_seconds)
+        except TypeError:
+            se.run_module(module)
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
@@ -298,7 +334,7 @@ def cmd_memory_map(cmd):
     if emu is None:
         return {"error": "Memory inspection not available — cannot access Speakeasy emulator internals."}
 
-    addr_map = _get_address_map(emu)
+    addr_map = _get_memory_regions(emu)
     if addr_map is None:
         return {"error": "Memory map not available in this Speakeasy version."}
 
@@ -353,7 +389,7 @@ def cmd_search_memory(cmd):
     if not needles:
         return {"error": "No search patterns provided. Use 'search_patterns' (strings) or 'search_hex'."}
 
-    addr_map = _get_address_map(emu)
+    addr_map = _get_memory_regions(emu)
     if addr_map is None:
         return {"error": "Memory map not available — cannot enumerate regions for search."}
 
