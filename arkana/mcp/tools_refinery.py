@@ -129,6 +129,12 @@ _COMPRESS_MAP = {
     "gz": "refinery.units.compression.zl:zl",
 }
 
+# Stream ciphers where encryption == decryption (no 'reverse' flag needed)
+_STREAM_CIPHERS = frozenset({
+    "rc4", "rc4mod", "chacha", "salsa", "blabla", "rabbit",
+    "seal", "hc128", "hc256", "isaac", "sosemanuk",
+})
+
 
 # ===================================================================
 #  1. ENCODING / DECODING (merged encode + decode)
@@ -1297,7 +1303,6 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
                         kwargs["little_endian"] = v.lower() in ("true", "1", "yes")
                     elif k == "aad":
                         kwargs["aad"] = _safe_fromhex(v, "cipher aad")
-            _STREAM_CIPHERS = {"rc4", "rc4mod", "chacha", "salsa", "blabla", "rabbit", "seal", "hc128", "hc256", "isaac", "sosemanuk"}
             if encrypt_mode and cipher_name not in _STREAM_CIPHERS:
                 kwargs["reverse"] = True
             current = current | unit_cls(**kwargs) | bytes

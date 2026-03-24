@@ -404,9 +404,17 @@ class AnalysisCache:
                             merge_tmp.unlink(missing_ok=True)
                             raise
                     except Exception as e:
-                        logger.warning("Failed to merge session data during cache put: %s", e)
+                        # Merge failed — keep the on-disk version (which has session data)
+                        # rather than clobbering it with our unmerged analysis-only data.
+                        logger.warning(
+                            "Failed to merge session data during cache put: %s. "
+                            "Keeping existing on-disk entry to preserve session data.", e
+                        )
+                        tmp.unlink(missing_ok=True)
+                        tmp = None  # signal to skip replace
 
-                tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
+                if tmp is not None:
+                    tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
 
                 file_size = entry_path.stat().st_size
                 meta = self._load_meta()

@@ -67,15 +67,21 @@ def _get_cached_meta(cache_key):
         return {}
 
 
-def _set_decompile_meta(cache_key, value):
-    """Thread-safe store with LRU eviction when exceeding max size."""
+def _set_decompile_meta(cache_key, value, skip_line_cap=False):
+    """Thread-safe store with LRU eviction when exceeding max size.
+
+    When *skip_line_cap* is True, stores the full line array without
+    truncation. Use this after a re-decompile triggered by a capped
+    cache hit to avoid an infinite re-decompilation loop.
+    """
     with _decompile_meta_lock:
-        lines = value.get("lines")
-        if lines and len(lines) > _MAX_DECOMPILE_META_LINES:
-            value = dict(value)  # shallow copy
-            value["_total_lines"] = len(lines)
-            value["lines"] = lines[:_MAX_DECOMPILE_META_LINES]
-            value["_lines_capped"] = True
+        if not skip_line_cap:
+            lines = value.get("lines")
+            if lines and len(lines) > _MAX_DECOMPILE_META_LINES:
+                value = dict(value)  # shallow copy
+                value["_total_lines"] = len(lines)
+                value["lines"] = lines[:_MAX_DECOMPILE_META_LINES]
+                value["_lines_capped"] = True
         if cache_key in _decompile_meta:
             _decompile_meta.move_to_end(cache_key)  # M-14: LRU touch on update
         _decompile_meta[cache_key] = value
@@ -357,6 +363,7 @@ async def decompile_function_with_angr(
     # Check cache first — serves subsequent pages without re-decompiling
     cache_key = _make_decompile_key(target_addr)
     cached_entry = _get_cached_entry(cache_key)
+    _recache_full = False
 
     if cached_entry is not None:
         cached_lines = cached_entry.get("lines", [])
@@ -366,7 +373,7 @@ async def decompile_function_with_angr(
         # If lines were capped and user requests beyond cached range, fall through
         # to re-decompile so they get full output.
         if lines_capped and line_offset >= _MAX_DECOMPILE_META_LINES and not search:
-            pass  # fall through to fresh decompilation below
+            _recache_full = True  # fall through; store full result without cap
         else:
             # Apply user renames to output
             renamed_lines = apply_function_renames_to_lines(cached_lines)
@@ -565,7 +572,7 @@ async def decompile_function_with_angr(
     }
     if result.get("note"):
         meta["note"] = result["note"]
-    _set_decompile_meta(cache_key, meta)
+    _set_decompile_meta(cache_key, meta, skip_line_cap=_recache_full)
     # Reclaim KB decompiler artifacts now that text is cached
     project_snapshot, _ = state.get_angr_snapshot()
     if project_snapshot is not None:
