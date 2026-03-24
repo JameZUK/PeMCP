@@ -550,8 +550,6 @@ async def refinery_decompress(
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result, max_len=2000),
     }
-    if original_output_size > _MAX_DECOMPRESS_OUTPUT:
-        response["_output_truncated"] = f"Output truncated from {original_output_size} to {_MAX_DECOMPRESS_OUTPUT} bytes"
     if output_path:
         artifact_meta = await asyncio.to_thread(
             _write_output_and_register_artifact,
@@ -581,7 +579,7 @@ async def refinery_extract_iocs(
         ctx: MCP Context.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
         indicator_type: (str) Type of indicator or 'all'. Default 'all'.
-        limit: (int) Max results. Default 200.
+        limit: (int) Max results. Default 20.
 
     Returns:
         Dictionary with extracted indicators grouped by type.

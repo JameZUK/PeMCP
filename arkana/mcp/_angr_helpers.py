@@ -100,8 +100,24 @@ def _ensure_project_and_cfg():
         if cfg is None:
             # Refresh project reference after potential hooks rebuild
             project, _ = state.get_angr_snapshot()
+            # Snapshot hook count before CFG build to detect concurrent additions
+            with state._angr_lock:
+                hooks_before = len(state.angr_hooks)
             # Build CFG outside the lock to avoid blocking other tools
             new_cfg = project.analyses.CFGFast(normalize=True)
+            # Check if hooks were added during the (potentially long) CFG build.
+            # If so, the CFG may not reflect the hooked functions correctly.
+            # We don't rebuild (too expensive) but log the inconsistency.
+            with state._angr_lock:
+                hooks_after = len(state.angr_hooks)
+            if hooks_after > hooks_before:
+                logger.warning(
+                    "Hooks added during CFG build (%d -> %d). "
+                    "The CFG may not reflect hooked functions. "
+                    "Consider calling hook_function() before triggering CFG construction, "
+                    "or invalidate the CFG to force a rebuild.",
+                    hooks_before, hooks_after,
+                )
             with _init_lock:
                 # Only store if no other thread beat us to it
                 _, existing_cfg = state.get_angr_snapshot()

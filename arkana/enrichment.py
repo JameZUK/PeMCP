@@ -515,22 +515,31 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
         if state.pe_data is None:
             return
 
-        # Build a separate dict for serialization instead of mutating pe_data
+        # Build a separate dict for serialization instead of mutating pe_data.
+        # Snapshot all cached fields under _pe_lock to avoid TOCTOU races —
+        # CPython's GIL makes individual reads atomic, but we need a consistent
+        # set of fields that all correspond to the same pe_data generation.
         with state._pe_lock:
             serializable = dict(state.pe_data)
+            cached_triage = state._cached_triage
+            cached_classification = state._cached_classification
+            cached_similarity_hashes = state._cached_similarity_hashes
+            cached_mitre_mapping = state._cached_mitre_mapping
+            cached_iocs = state._cached_iocs
+            cached_function_scores = state._cached_function_scores
 
-        if state._cached_triage:
-            serializable['_cached_triage'] = state._cached_triage
-        if state._cached_classification:
-            serializable['_cached_classification'] = state._cached_classification
-        if state._cached_similarity_hashes:
-            serializable['_cached_similarity_hashes'] = state._cached_similarity_hashes
-        if state._cached_mitre_mapping:
-            serializable['_cached_mitre_mapping'] = state._cached_mitre_mapping
-        if state._cached_iocs:
-            serializable['_cached_iocs'] = state._cached_iocs
-        if state._cached_function_scores:
-            serializable['_cached_function_scores'] = state._cached_function_scores
+        if cached_triage:
+            serializable['_cached_triage'] = cached_triage
+        if cached_classification:
+            serializable['_cached_classification'] = cached_classification
+        if cached_similarity_hashes:
+            serializable['_cached_similarity_hashes'] = cached_similarity_hashes
+        if cached_mitre_mapping:
+            serializable['_cached_mitre_mapping'] = cached_mitre_mapping
+        if cached_iocs:
+            serializable['_cached_iocs'] = cached_iocs
+        if cached_function_scores:
+            serializable['_cached_function_scores'] = cached_function_scores
 
         # Save decompiled functions (metadata + code lines) for cache restore
         # Only save entries belonging to the current session (key[0] == session UUID)

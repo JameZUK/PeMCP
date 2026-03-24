@@ -21,14 +21,6 @@ def _run(coro):
 #  Mock helpers
 # ---------------------------------------------------------------------------
 
-class MockContext:
-    """Minimal mock for MCP Context."""
-    async def warning(self, msg): pass
-    async def error(self, msg): pass
-    async def info(self, msg): pass
-    async def report_progress(self, current, total): pass
-
-
 class MockStdin:
     """Mock subprocess stdin that records written data."""
     def __init__(self):
@@ -113,11 +105,6 @@ def clean_state():
     set_current_state(s)
     yield s
     set_current_state(None)
-
-
-@pytest.fixture
-def mock_ctx():
-    return MockContext()
 
 
 # ---------------------------------------------------------------------------

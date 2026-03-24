@@ -15,22 +15,31 @@ from typing import Dict, Any, Optional, List
 from arkana.config import pefile, logger
 
 
-def _safe_env_int(key: str, default: int) -> int:
+def _safe_env_int(key: str, default: int, min_val: int | None = None, max_val: int | None = None) -> int:
     """Read an environment variable as int with fallback to *default*.
 
     Returns *default* when the variable is missing or its value cannot be
     converted to ``int`` (e.g. empty string, float notation, non-numeric
     text).  A warning is logged for invalid values so operators can notice
     misconfigurations.
+
+    When *min_val* or *max_val* are provided, the parsed value is clamped
+    to the given range.
     """
     val = os.environ.get(key)
     if val is None:
-        return default
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        logger.warning("Invalid value for %s=%r, using default %d", key, val, default)
-        return default
+        result = default
+    else:
+        try:
+            result = int(val)
+        except (ValueError, TypeError):
+            logger.warning("Invalid value for %s=%r, using default %d", key, val, default)
+            result = default
+    if min_val is not None and result < min_val:
+        result = min_val
+    if max_val is not None and result > max_val:
+        result = max_val
+    return result
 
 # Module-level shared executor for regex timeout protection.
 # Using a small pool avoids per-call thread creation/teardown overhead.
@@ -73,6 +82,11 @@ _MAX_REGEX_PATTERN_LENGTH = 1000
 _NESTED_QUANTIFIER_RE = re.compile(
     r'\((?:\?[:=!])?[^)]*[+*}\?][^)]*\)\s*[+*{]'
 )
+# Detects alternation inside quantified groups, e.g. (a|ab)+, (foo|foobar)*
+# These can cause catastrophic backtracking when the alternatives overlap.
+_ALTERNATION_QUANTIFIER_RE = re.compile(
+    r'\([^)]*\|[^)]*\)[*+?]|\([^)]*\|[^)]*\)\{'
+)
 
 
 def validate_regex_pattern(pattern: str) -> None:
@@ -90,6 +104,12 @@ def validate_regex_pattern(pattern: str) -> None:
     if _NESTED_QUANTIFIER_RE.search(pattern):
         raise ValueError(
             f"Regex pattern contains nested quantifiers which can cause "
+            f"catastrophic backtracking (ReDoS). Please simplify the pattern: "
+            f"'{pattern[:80]}{'...' if len(pattern) > 80 else ''}'"
+        )
+    if _ALTERNATION_QUANTIFIER_RE.search(pattern):
+        raise ValueError(
+            f"Regex pattern contains alternation inside a quantified group which can cause "
             f"catastrophic backtracking (ReDoS). Please simplify the pattern: "
             f"'{pattern[:80]}{'...' if len(pattern) > 80 else ''}'"
         )

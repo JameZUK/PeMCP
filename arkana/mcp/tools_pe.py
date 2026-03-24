@@ -603,7 +603,8 @@ async def open_file(
                             pe_object=state.pe_object,
                         )
                         _perform_unified_string_sifting(updated)
-                        state.pe_data = updated
+                        with state._pe_lock:
+                            state.pe_data = updated
 
                     await asyncio.to_thread(_run_floss)
 
@@ -707,10 +708,12 @@ async def open_file(
                 else:
                     _PE_ANALYSIS_TIMEOUT = _base_timeout
                 try:
-                    state.pe_data = await asyncio.wait_for(
+                    _pe_result = await asyncio.wait_for(
                         asyncio.to_thread(_run_analysis),
                         timeout=_PE_ANALYSIS_TIMEOUT,
                     )
+                    with state._pe_lock:
+                        state.pe_data = _pe_result
                 except asyncio.TimeoutError:
                     raise RuntimeError(
                         f"[open_file] PE analysis timed out after {_PE_ANALYSIS_TIMEOUT}s. "
@@ -924,8 +927,9 @@ async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]
     # Use atomic reset methods (safe for shared references from default state)
     state.close_pe()
     state.reset_angr()
-    state.pe_data = None
-    state.filepath = None
+    with state._pe_lock:
+        state.pe_data = None
+        state.filepath = None
     state.loaded_from_cache = False
     state.clear_notes()
     state.clear_tool_history()
@@ -1245,7 +1249,8 @@ async def reanalyze_loaded_pe_file(
             state.pe_object.close()
 
         state.pe_object = new_pe_obj_from_thread
-        state.pe_data = new_parsed_data_from_thread
+        with state._pe_lock:
+            state.pe_data = new_parsed_data_from_thread
 
         # M-E3: Rank strings with StringSifter via to_thread to avoid blocking event loop
         await asyncio.to_thread(_perform_unified_string_sifting, state.pe_data)

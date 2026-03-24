@@ -744,13 +744,16 @@ async def find_path_to_address(
     def _solve_path(task_id_for_progress=None, _progress_bridge=None):
 
         _ensure_project_and_cfg()
+        project = state.angr_project
+        if project is None:
+            return {"error": "angr project became unavailable (file switch?)."}
 
         stability_options = {
             angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
             angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS
         }
-        entry_st = state.angr_project.factory.entry_state(add_options=stability_options)
-        simgr = state.angr_project.factory.simulation_manager(entry_st)
+        entry_st = project.factory.entry_state(add_options=stability_options)
+        simgr = project.factory.simulation_manager(entry_st)
 
         techniques_applied = []
         if enable_veritesting:
@@ -890,6 +893,9 @@ async def emulate_function_execution(
     def _core_emulation(task_id_for_progress=None, _progress_bridge=None):
 
         _ensure_project_and_cfg()
+        project = state.angr_project
+        if project is None:
+            return {"error": "angr project became unavailable (file switch?)."}
 
         try:
             add_options = {angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY, angr.options.ZERO_FILL_UNCONSTRAINED_REGISTERS}
@@ -899,8 +905,8 @@ async def emulate_function_execution(
                 add_options.update({angr.options.FAST_MEMORY, angr.options.FAST_REGISTERS})
                 remove_options.update({angr.options.UNICORN_TRACK_BBL_ADDRS, angr.options.UNICORN_TRACK_STACK_POINTERS})
 
-            call_st = state.angr_project.factory.call_state(target, *args, add_options=add_options, remove_options=remove_options)
-            simgr = state.angr_project.factory.simulation_manager(call_st)
+            call_st = project.factory.call_state(target, *args, add_options=add_options, remove_options=remove_options)
+            simgr = project.factory.simulation_manager(call_st)
 
             chunk_size = 50
             steps_taken = 0
@@ -934,8 +940,8 @@ async def emulate_function_execution(
                 final = simgr.deadended[0]
                 try:
                     # Use the architecture-appropriate return register
-                    ret_reg = state.angr_project.arch.register_names.get(
-                        state.angr_project.arch.ret_offset, "eax"
+                    ret_reg = project.arch.register_names.get(
+                        project.arch.ret_offset, "eax"
                     )
                     ret_val = hex(final.solver.eval(getattr(final.regs, ret_reg)))
                 except Exception:
@@ -1452,8 +1458,10 @@ async def get_function_complexity_list(
     def _analyze():
 
         _ensure_project_and_cfg()
-        # H6: Use snapshot to prevent race condition with concurrent CFG invalidation
-        _, cfg_snap = state.get_angr_snapshot()
+        # Take local snapshot to prevent race with concurrent file switch
+        project_snap, cfg_snap = state.get_angr_snapshot()
+        if project_snap is None:
+            return {"error": "angr project became unavailable (file switch?)."}
         if cfg_snap is None:
             return {"error": "CFG not available."}
 
@@ -1487,7 +1495,7 @@ async def get_function_complexity_list(
                 "address": hex(func.addr),
                 "blocks": block_count,
                 "edges": edge_count,
-                "is_entry_point": (func.addr == state.angr_project.entry),
+                "is_entry_point": (func.addr == project_snap.entry),
             })
 
         return funcs_data
@@ -1502,8 +1510,12 @@ async def get_function_complexity_list(
 
     # Sort
     sort_key = "blocks"
-    if not compact and sort_by == "edges":
-        sort_key = "edges"
+    sort_fallback_note = None
+    if sort_by == "edges":
+        if compact:
+            sort_fallback_note = "sort_by='edges' is not available in compact mode; sorted by blocks"
+        else:
+            sort_key = "edges"
     sorted_funcs = sorted(cached_funcs, key=lambda x: x.get(sort_key, 0), reverse=True)
 
     # Apply compact/limit as presentation
@@ -1517,6 +1529,8 @@ async def get_function_complexity_list(
         "sort_metric": sort_key,
         "top_functions": top,
     }
+    if sort_fallback_note:
+        result["note"] = sort_fallback_note
     _raise_on_error_dict(result)
     return await _check_mcp_response_size(ctx, result, "get_function_complexity_list", "the 'limit' parameter")
 
@@ -1541,7 +1555,9 @@ async def extract_function_constants(
 
         _ensure_project_and_cfg()
         # H6: Use snapshot to prevent race condition with concurrent CFG invalidation
-        _, cfg_snap = state.get_angr_snapshot()
+        project_snap, cfg_snap = state.get_angr_snapshot()
+        if project_snap is None:
+            return {"error": "angr project became unavailable (file switch?)."}
         if cfg_snap is None:
             return {"error": "CFG not available."}
 
@@ -1569,7 +1585,7 @@ async def extract_function_constants(
                             # Heuristic: Check if this immediate points to a string in memory
                             try:
                                 # Read up to 64 bytes from this address
-                                mem_data = state.angr_project.loader.memory.load(val, 64)
+                                mem_data = project_snap.loader.memory.load(val, 64)
                                 # Simple check for ASCII printable
                                 str_candidate = ""
                                 for b in mem_data:
@@ -1774,8 +1790,11 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
     def _patch():
 
         _ensure_project_and_cfg()
+        project = state.angr_project
+        if project is None:
+            return {"error": "angr project became unavailable (file switch?)."}
         try:
-            state.angr_project.loader.memory.store(addr, patch_data)
+            project.loader.memory.store(addr, patch_data)
             # H1: Invalidate CFG under lock to prevent race conditions with
             # concurrent tools reading the CFG.
             with state._angr_lock:
@@ -1789,8 +1808,8 @@ async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) 
                 bad_addr = hex(int(str(e)))
             except (ValueError, TypeError):
                 bad_addr = str(e)
-            valid_min = hex(state.angr_project.loader.min_addr)
-            valid_max = hex(state.angr_project.loader.max_addr)
+            valid_min = hex(project.loader.min_addr)
+            valid_max = hex(project.loader.max_addr)
             return {
                 "error": f"Address {bad_addr} is not mapped in the binary's memory.",
                 "valid_range": f"{valid_min} - {valid_max}",
@@ -2215,6 +2234,9 @@ async def solve_constraints_for_path(
 
     def _solve(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
+        project = state.angr_project
+        if project is None:
+            return {"error": "angr project became unavailable (file switch?)."}
 
         stability_options = {
             angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
@@ -2222,15 +2244,15 @@ async def solve_constraints_for_path(
         }
 
         if start:
-            entry_st = state.angr_project.factory.blank_state(
+            entry_st = project.factory.blank_state(
                 addr=start, add_options=stability_options
             )
         else:
-            entry_st = state.angr_project.factory.entry_state(
+            entry_st = project.factory.entry_state(
                 add_options=stability_options
             )
 
-        simgr = state.angr_project.factory.simulation_manager(entry_st)
+        simgr = project.factory.simulation_manager(entry_st)
 
         # Apply techniques — BFS by default (DFS triggers cffi pickle errors)
         simgr.use_technique(angr.exploration_techniques.LengthLimiter(max_length=5000))
@@ -2409,6 +2431,9 @@ async def explore_symbolic_states(
 
     def _explore(task_id_for_progress=None, _progress_bridge=None):
         _ensure_project_and_cfg()
+        project = state.angr_project
+        if project is None:
+            return {"error": "angr project became unavailable (file switch?)."}
 
         stability_options = {
             angr.options.ZERO_FILL_UNCONSTRAINED_MEMORY,
@@ -2416,15 +2441,15 @@ async def explore_symbolic_states(
         }
 
         if start:
-            entry_st = state.angr_project.factory.blank_state(
+            entry_st = project.factory.blank_state(
                 addr=start, add_options=stability_options
             )
         else:
-            entry_st = state.angr_project.factory.entry_state(
+            entry_st = project.factory.entry_state(
                 add_options=stability_options
             )
 
-        simgr = state.angr_project.factory.simulation_manager(entry_st)
+        simgr = project.factory.simulation_manager(entry_st)
 
         # Apply strategy
         if strategy == "dfs":

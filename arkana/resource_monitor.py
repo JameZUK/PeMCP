@@ -160,7 +160,7 @@ def stop_monitor() -> None:
     _monitor_stop.set()
     if _monitor_thread is not None:
         _monitor_thread.join(timeout=5)
-        _monitor_thread = None
     with _monitor_lock:
+        _monitor_thread = None
         _latest_snapshot = None
         _snapshot_history.clear()

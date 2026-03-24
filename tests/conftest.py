@@ -19,6 +19,9 @@ class MockContext:
     async def info(self, msg):
         self.infos.append(msg)
 
+    async def report_progress(self, current, total):
+        pass
+
 
 @pytest.fixture
 def mock_ctx():

@@ -195,7 +195,12 @@ def _markdown_to_html(text: str) -> str:
 
 
 def _md_inline(text: str) -> str:
-    """Apply inline markdown formatting (bold, code)."""
+    """Apply inline markdown formatting (bold, code).
+
+    SECURITY: _md_inline() MUST only be called AFTER escape() — it injects raw HTML
+    tags (<code>, <strong>) and returns unescaped strings that are wrapped in Markup().
+    Moving this before escape() would allow XSS via user-controlled note content.
+    """
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     return text
@@ -1548,7 +1553,7 @@ def start_dashboard_thread(host: str = "127.0.0.1", port: int = 8082) -> threadi
     t = threading.Thread(target=_run, daemon=True, name="arkana-dashboard")
     t.start()
     logger.info(
-        "Dashboard: http://%s:%d/dashboard/ (token: %s...)",
-        host, port, dashboard_token[:4],
+        "Dashboard: http://%s:%d/dashboard/?token=<see %s>",
+        host, port, _TOKEN_FILE,
     )
     return t

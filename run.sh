@@ -74,11 +74,15 @@ build_image() {
 }
 
 # --- Common run arguments ---
-common_args() {
+# Populates the global COMMON_ARGS array.  Using an array (instead of
+# echoing a string and capturing via $(...)) preserves arguments that
+# contain spaces — e.g. paths like "/home/user/My Samples".
+COMMON_ARGS=()
+build_common_args() {
     # Ensure cache directory exists on host
     mkdir -p "$CACHE_DIR" 2>/dev/null || true
 
-    local args=(
+    COMMON_ARGS=(
         --rm
         -e "HOME=/app/home"
         -e "USER=${USER:-arkana}"
@@ -87,13 +91,13 @@ common_args() {
     # Podman rootless needs --userns=keep-id to map host UID into the container
     # so bind-mounted directories are writable. Docker doesn't need this.
     if [[ "$RUNTIME" == "podman" ]]; then
-        args+=(--userns=keep-id)
+        COMMON_ARGS+=(--userns=keep-id)
     else
-        args+=(--user "$(id -u):$(id -g)")
-        args+=(--group-add 1500)
+        COMMON_ARGS+=(--user "$(id -u):$(id -g)")
+        COMMON_ARGS+=(--group-add 1500)
     fi
 
-    args+=(
+    COMMON_ARGS+=(
         -e "ARKANA_HOST_SAMPLES=$SAMPLES_DIR"
         -v "$SAMPLES_DIR:$CONTAINER_SAMPLES:ro${SELINUX_SUFFIX}"
         -v "$CACHE_DIR:/app/home/.arkana:rw${SELINUX_SUFFIX}"
@@ -103,9 +107,9 @@ common_args() {
     if [[ -n "${OUTPUT_DIR:-}" ]]; then
         mkdir -p "$OUTPUT_DIR" 2>/dev/null || true
         if [[ -d "$OUTPUT_DIR" ]]; then
-            args+=(-v "$OUTPUT_DIR:/output:rw${SELINUX_SUFFIX}")
-            args+=(-e "ARKANA_HOST_EXPORT=$OUTPUT_DIR")
-            args+=(-e "ARKANA_EXPORT_DIR=/output")
+            COMMON_ARGS+=(-v "$OUTPUT_DIR:/output:rw${SELINUX_SUFFIX}")
+            COMMON_ARGS+=(-e "ARKANA_HOST_EXPORT=$OUTPUT_DIR")
+            COMMON_ARGS+=(-e "ARKANA_EXPORT_DIR=/output")
         fi
     fi
 
@@ -113,18 +117,18 @@ common_args() {
     # Users place Windows DLLs, Linux libs, etc. here for Qiling emulation.
     # See docs/QILING_ROOTFS.md for setup instructions.
     if [[ -d "$ROOTFS_DIR" ]]; then
-        args+=(-v "$ROOTFS_DIR:/app/qiling-rootfs:rw${SELINUX_SUFFIX}")
+        COMMON_ARGS+=(-v "$ROOTFS_DIR:/app/qiling-rootfs:rw${SELINUX_SUFFIX}")
     fi
 
     # Pass VT_API_KEY if set
     if [[ -n "${VT_API_KEY:-}" ]]; then
-        args+=(-e "VT_API_KEY=$VT_API_KEY")
+        COMMON_ARGS+=(-e "VT_API_KEY=$VT_API_KEY")
     fi
 
     # Load .env file if present
     local env_file="$(dirname "$0")/.env"
     if [[ -f "$env_file" ]]; then
-        args+=(--env-file "$env_file")
+        COMMON_ARGS+=(--env-file "$env_file")
     fi
 
     # Build ARKANA_PATH_MAP: semicolon-separated internal=external path pairs
@@ -133,23 +137,21 @@ common_args() {
     if [[ -n "${OUTPUT_DIR:-}" && -d "$OUTPUT_DIR" ]]; then
         path_map="$path_map;/output=$OUTPUT_DIR"
     fi
-    args+=(-e "ARKANA_PATH_MAP=$path_map")
-
-    echo "${args[@]}"
+    COMMON_ARGS+=(-e "ARKANA_PATH_MAP=$path_map")
 }
 
 # --- Commands ---
 cmd_http() {
     ensure_image
+    build_common_args
     echo "[*] Starting Arkana HTTP server on port $CONTAINER_PORT..."
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)"
     echo "[*] Config/cache (.arkana): $CACHE_DIR"
     echo "[*] MCP endpoint: http://127.0.0.1:$CONTAINER_PORT/mcp"
     echo "[*] Press Ctrl+C to stop."
     echo ""
-    # shellcheck disable=SC2046
     $RUNTIME run -it \
-        $(common_args) \
+        "${COMMON_ARGS[@]}" \
         -e ARKANA_DASHBOARD_HOST=0.0.0.0 \
         -p "$CONTAINER_PORT:8082" \
         "$IMAGE_NAME" \
@@ -161,13 +163,13 @@ cmd_http() {
 
 cmd_stdio() {
     ensure_image
+    build_common_args
     echo "[*] Starting Arkana in stdio MCP mode..." >&2
     echo "[*] Samples mounted at: $CONTAINER_SAMPLES (from $SAMPLES_DIR)" >&2
     echo "[*] Config/cache (.arkana): $CACHE_DIR" >&2
     echo "[*] Dashboard will be available at: http://127.0.0.1:$CONTAINER_PORT/dashboard/" >&2
-    # shellcheck disable=SC2046
     $RUNTIME run -i \
-        $(common_args) \
+        "${COMMON_ARGS[@]}" \
         -e ARKANA_DASHBOARD_HOST=0.0.0.0 \
         -p "$CONTAINER_PORT:8082" \
         "$IMAGE_NAME" \
@@ -194,9 +196,9 @@ cmd_analyze() {
     base="$(basename "$abs_file")"
 
     echo "[*] Analyzing: $abs_file"
-    # shellcheck disable=SC2046
+    build_common_args
     $RUNTIME run -it \
-        $(common_args) \
+        "${COMMON_ARGS[@]}" \
         -v "$dir:/app/input:ro${SELINUX_SUFFIX}" \
         -e "ARKANA_PATH_MAP=$CONTAINER_SAMPLES=$SAMPLES_DIR;/app/input=$dir" \
         "$IMAGE_NAME" \
@@ -206,10 +208,10 @@ cmd_analyze() {
 
 cmd_shell() {
     ensure_image
+    build_common_args
     echo "[*] Opening shell in Arkana container..."
-    # shellcheck disable=SC2046
     $RUNTIME run -it \
-        $(common_args) \
+        "${COMMON_ARGS[@]}" \
         --entrypoint /bin/bash \
         "$IMAGE_NAME"
 }

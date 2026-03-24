@@ -78,6 +78,7 @@ class AnalysisCache:
         # M-E1: In-memory metadata cache to avoid re-reading meta.json on every operation
         self._meta_cache: Optional[Dict[str, Any]] = None
         self._meta_mtime: float = 0.0
+        self._meta_size: int = 0
         self._ensure_cache_dir()
 
     # ------------------------------------------------------------------
@@ -118,20 +119,31 @@ class AnalysisCache:
         if not META_FILE.exists():
             self._meta_cache = {}
             self._meta_mtime = 0.0
+            self._meta_size: int = 0
             return {}
         try:
-            disk_mtime = META_FILE.stat().st_mtime
-            if self._meta_cache is not None and disk_mtime == self._meta_mtime:
+            st = META_FILE.stat()
+            disk_mtime = st.st_mtime
+            disk_size = st.st_size
+            # Check both mtime and size to detect writes that land within
+            # the same filesystem timestamp granularity (e.g. 1s on ext3,
+            # HFS+).  Two distinct writes that produce the same mtime will
+            # almost always differ in size.
+            if (self._meta_cache is not None
+                    and disk_mtime == self._meta_mtime
+                    and disk_size == self._meta_size):
                 return dict(self._meta_cache)
             with open(META_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             self._meta_cache = data
             self._meta_mtime = disk_mtime
+            self._meta_size = disk_size
             return dict(data)
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("Cache meta read error: %s", e)
             self._meta_cache = None
             self._meta_mtime = 0.0
+            self._meta_size = 0
             return {}
 
     def _save_meta(self, meta: Dict[str, Any]) -> None:
@@ -155,7 +167,9 @@ class AnalysisCache:
             try:
                 tmp.replace(META_FILE)
                 self._meta_cache = meta
-                self._meta_mtime = META_FILE.stat().st_mtime
+                st = META_FILE.stat()
+                self._meta_mtime = st.st_mtime
+                self._meta_size = st.st_size
             except OSError:
                 tmp.unlink(missing_ok=True)
                 raise
@@ -551,6 +565,7 @@ class AnalysisCache:
                 pass
             self._meta_cache = None
             self._meta_mtime = 0.0
+            self._meta_size = 0
 
             if CACHE_DIR.exists():
                 for subdir in CACHE_DIR.iterdir():

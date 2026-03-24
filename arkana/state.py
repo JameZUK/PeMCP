@@ -1078,6 +1078,7 @@ def _start_session_reaper():
 
     NOTE: Must be called under _registry_lock to prevent duplicate reaper threads.
     """
+    assert _registry_lock.locked(), "_start_session_reaper must be called under _registry_lock"
     global _reaper_thread, _reaper_started
     if _reaper_started and _reaper_thread is not None and _reaper_thread.is_alive():
         return

@@ -488,7 +488,8 @@ function renderXrefsTab(container, data) {
     if (callers.length) {
         for (var i = 0; i < callers.length; i++) {
             var c = callers[i];
-            var dotClass = 'xref-triage-dot dot-' + (c.triage || 'unreviewed');
+            var triageVal = (['unreviewed','suspicious','clean','flagged'].indexOf(c.triage) !== -1) ? c.triage : 'unreviewed';
+            var dotClass = 'xref-triage-dot dot-' + triageVal;
             html += '<div class="xref-clickable xref-entry" data-addr="' + escapeHtml(c.address) + '" title="Go to ' + escapeHtml(c.address) + '">';
             html += '<span class="' + dotClass + '"></span> ';
             html += '<span class="mono dim">' + escapeHtml(c.address) + '</span> ';
@@ -506,7 +507,8 @@ function renderXrefsTab(container, data) {
     if (callees.length) {
         for (var i = 0; i < callees.length; i++) {
             var c = callees[i];
-            var dotClass = 'xref-triage-dot dot-' + (c.triage || 'unreviewed');
+            var triageVal = (['unreviewed','suspicious','clean','flagged'].indexOf(c.triage) !== -1) ? c.triage : 'unreviewed';
+            var dotClass = 'xref-triage-dot dot-' + triageVal;
             html += '<div class="xref-clickable xref-entry" data-addr="' + escapeHtml(c.address) + '" title="Go to ' + escapeHtml(c.address) + '">';
             html += '<span class="' + dotClass + '"></span> ';
             html += '<span class="mono dim">' + escapeHtml(c.address) + '</span> ';

@@ -54,7 +54,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements-ci.txt
-          pip install ruff
+          pip install ruff==0.9.10
 
       - name: Check syntax (all Python files)
         run: |
@@ -109,3 +109,11 @@ jobs:
           python -c "from arkana.constants import MAX_MCP_RESPONSE_SIZE_BYTES; print('constants OK')"
           python -c "from arkana.state import AnalyzerState; print('state OK')"
           python -c "from arkana.cache import AnalysisCache; print('cache OK')"
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t arkana-test .

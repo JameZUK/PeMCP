@@ -23,6 +23,8 @@ def _validate_file_path(filepath):
     """
     if not filepath:
         raise ValueError("No file path provided")
+    # Resolve symlinks to prevent path traversal via symlink chains
+    filepath = os.path.realpath(filepath)
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"File not found: {filepath}")
     if not os.path.isfile(filepath):
