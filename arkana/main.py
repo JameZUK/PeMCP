@@ -55,6 +55,7 @@ import arkana.mcp.tools_classification
 import arkana.mcp.tools_samples
 import arkana.mcp.tools_qiling
 import arkana.mcp.tools_debug
+import arkana.mcp.tools_emulate_inspect
 import arkana.mcp.tools_notes
 import arkana.mcp.tools_history
 import arkana.mcp.tools_session

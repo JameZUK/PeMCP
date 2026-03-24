@@ -934,6 +934,13 @@ async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]
     except Exception:
         pass
 
+    # Clean up emulation inspect sessions before clearing state
+    try:
+        if hasattr(state, '_emulation_manager') and state._emulation_manager is not None:
+            state._emulation_manager.cleanup_all()
+    except Exception:
+        pass
+
     # C5: Clear decompile meta cache for this session only
     try:
         from arkana.mcp.tools_angr import clear_decompile_meta

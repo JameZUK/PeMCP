@@ -20,6 +20,7 @@ from arkana.imports import (  # noqa: E402,F401
     _SPEAKEASY_VENV_PYTHON, _SPEAKEASY_RUNNER, _check_speakeasy_available,
     _UNIPACKER_VENV_PYTHON, _UNIPACKER_RUNNER, _check_unipacker_available,
     _QILING_VENV_PYTHON, _QILING_RUNNER, _QILING_DEFAULT_ROOTFS, _check_qiling_available, _DEBUG_RUNNER,
+    _QILING_EMULATE_RUNNER, _SPEAKEASY_EMULATE_RUNNER,
     _speakeasy_check_lock, _unipacker_check_lock, _qiling_check_lock,
     _DE4DOT_PATH, _check_de4dot_available, _de4dot_check_lock,
     _NETREACTORSLAYER_PATH, _check_netreactorslayer_available, _netreactorslayer_check_lock,

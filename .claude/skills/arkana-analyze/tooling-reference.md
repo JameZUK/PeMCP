@@ -173,6 +173,12 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `emulate_pe_with_windows_apis` | PE emulation with Windows API sim (Speakeasy) | — |
 | `emulate_shellcode_with_speakeasy` | Shellcode with Speakeasy | `shellcode`, `arch` |
 | `emulate_with_watchpoints` | Emulation with memory/register breakpoints (timeout 300s, partial results on timeout: captured events) | `address`, `watchpoints` |
+| `emulate_and_inspect` | Emulate binary/shellcode and keep session alive for post-emulation memory inspection. Supports both Qiling and Speakeasy engines. Returns behavioral report + session_id | `engine` (qiling/speakeasy), `file_path`, `shellcode_hex`, `architecture`, `timeout_seconds` |
+| `emulation_read_memory` | Read memory from a completed emulation session (max 1MB) | `address`, `length`, `session_id` |
+| `emulation_search_memory` | Search emulated memory for string (UTF-8+UTF-16LE) or hex patterns | `search_patterns`, `search_hex`, `context_bytes`, `limit`, `session_id` |
+| `emulation_memory_map` | Get full memory map of the emulated process (regions, permissions, labels) | `session_id` |
+| `emulation_session_status` | List all active emulation inspect sessions | — |
+| `close_emulation_session` | Close an emulation session and release resources | `session_id` |
 | `debug_start` | Start interactive debug session — persistent Qiling subprocess, pauses at entry. `stub_crt` (default True) installs ~47 CRT stubs, `stub_io` (default True) installs console stubs | `rootfs_path`, `stub_crt`, `stub_io` |
 | `debug_stop` | Stop and destroy a debug session | `session_id` |
 | `debug_status` | Check session liveness and current state | `session_id` |

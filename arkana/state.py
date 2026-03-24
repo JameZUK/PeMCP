@@ -187,6 +187,9 @@ class AnalyzerState:
         # Debug Sessions (managed by tools_debug._DebugSessionManager)
         self._debug_manager = None  # Lazily created _DebugSessionManager
 
+        # Emulation Inspect Sessions (managed by tools_emulate_inspect._EmulationSessionManager)
+        self._emulation_manager = None  # Lazily created _EmulationSessionManager
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Thread-safe read of a background task."""
         with self._task_lock:
@@ -1096,6 +1099,12 @@ def _session_reaper_loop() -> None:
                             stale._debug_manager.cleanup_all()
                     except Exception:
                         logger.warning("Session reaper: debug cleanup error", exc_info=True)
+                    # Clean up emulation inspect sessions for reaped state
+                    try:
+                        if getattr(stale, '_emulation_manager', None) is not None:
+                            stale._emulation_manager.cleanup_all()
+                    except Exception:
+                        logger.warning("Session reaper: emulation cleanup error", exc_info=True)
                 except Exception:
                     logger.warning("Session reaper: cleanup error for session", exc_info=True)
             if stale_to_cleanup:

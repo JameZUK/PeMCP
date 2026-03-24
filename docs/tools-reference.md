@@ -380,6 +380,21 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 
 > **Note:** Debug sessions use the same isolated Qiling venv (`/app/qiling-venv`) as the fire-and-forget emulation tools. Sessions time out after 30 minutes of inactivity (`ARKANA_DEBUG_SESSION_TTL`). Each execution command has a 5-minute timeout (`ARKANA_DEBUG_COMMAND_TIMEOUT`). When the timeout fires, the session is **paused, not killed** — the runner calls `emu_stop()` (Unicorn's thread-safe stop) to halt emulation while preserving all CPU state, memory, and hooks. You can inspect the paused session with `debug_read_state`/`debug_read_memory`/`debug_search_memory`, then resume with `debug_continue`. Emulation fidelity limitations apply — complex anti-emulation, threading, and some Windows APIs may not work correctly.
 
+## Post-Emulation Memory Inspection (6 tools)
+
+Persistent emulation sessions that keep the Qiling or Speakeasy subprocess alive after `run()` completes. Unlike fire-and-forget emulation tools, these allow unlimited memory queries on the same emulation state without re-running the binary.
+
+| Tool | Description |
+|------|-------------|
+| `emulate_and_inspect` | Emulate a binary or shellcode with Qiling or Speakeasy, keep the session alive. Returns behavioral report + `session_id` for subsequent memory queries. |
+| `emulation_read_memory` | Read raw bytes at a virtual address in the emulated process (max 1MB). |
+| `emulation_search_memory` | Search all mapped memory regions for string (UTF-8 + UTF-16LE) or hex patterns. |
+| `emulation_memory_map` | List all mapped memory regions with addresses, sizes, permissions, and labels. |
+| `emulation_session_status` | List all active emulation inspect sessions with metadata. |
+| `close_emulation_session` | Close an emulation session and release subprocess resources. |
+
+> **Note:** Max 3 concurrent emulation sessions (`ARKANA_MAX_EMULATION_SESSIONS`). Sessions idle for 30 minutes are automatically cleaned up (`ARKANA_EMULATION_SESSION_TTL`). Emulation uses the same isolated venvs as fire-and-forget tools (Qiling venv for Qiling, Speakeasy venv for Speakeasy).
+
 ## Multi-Format Binary Analysis (9 tools)
 
 All multi-format analysis tools support pagination via `limit` (default 20) and `offset` (default 0) parameters.
