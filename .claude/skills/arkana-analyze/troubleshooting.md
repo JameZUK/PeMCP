@@ -39,3 +39,17 @@ blindly.
 - "No file loaded" → Call `open_file()` first. Use `list_samples()` to find files.
 - "Background tasks active" on `open_file`/`close_file` → Use
   `abort_background_task(task_id)` or pass `force_switch=True`.
+
+## Null-Byte Regions and Fake Functions
+
+**Symptom**: `get_function_map` shows thousands of tiny functions (1-3 blocks each) with no meaningful names, all in a contiguous address range. Memory usage explodes during enrichment.
+
+**Cause**: Large null-byte regions (BSS sections, shellcode staging areas, resource padding) where angr interprets `0x00 0x00` as `add [rax], al` instructions, creating thousands of fake functions.
+
+**Solution**:
+1. These functions are auto-filtered from `get_function_map` and the enrichment decompile sweep
+2. Run `detect_null_regions()` to see where null regions are and their classification
+3. If angr already consumed excessive memory, use `release_angr_memory()` to free it
+4. The `decompile_function_with_angr` tool warns if you try to decompile a null-artifact function
+
+**Prevention**: The filtering is automatic — no action needed for most analyses. For very large shellcode blobs (>1MB), consider using `emulate_shellcode_with_qiling()` instead of angr for initial analysis.

@@ -84,6 +84,7 @@ class AnalyzerState:
         self.angr_loop_cache = None
         self.angr_loop_cache_config = None
         self.angr_hooks: Dict[str, Dict[str, Any]] = {}  # addr_hex -> hook info
+        self._cfg_null_artifact_count: int = 0  # null-byte disassembly artifacts filtered out
 
         # Background Tasks
         self._task_lock = threading.Lock()

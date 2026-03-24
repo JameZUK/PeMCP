@@ -528,6 +528,101 @@ async def abort_background_task(ctx: Context, task_id: str) -> Dict[str, Any]:
 
 
 @tool_decorator
+async def release_angr_memory(ctx: Context) -> Dict[str, Any]:
+    """
+    [Phase: utility] Release angr project and CFG from memory without closing
+    the loaded file. PE data, notes, renames, tool history, and all session
+    state are preserved. Use this when angr analysis is complete and you need
+    to free memory (typically 200MB-10GB).
+
+    After release, any angr-dependent tool will automatically rebuild the
+    project and CFG from disk when called.
+
+    When to use: After angr CFG build consumed excessive memory (check via
+    get_resource_usage), or when switching to non-angr analysis tools.
+
+    This tool does not work while background angr tasks are running —
+    abort them first with abort_background_task().
+    """
+    import gc
+    from arkana.state import get_current_state
+    current_state = get_current_state()
+
+    # Block if angr tasks are active
+    _angr_task_ids = {"startup-angr", "angr-cfg", "angr-analysis"}
+    active = []
+    for tid in _angr_task_ids:
+        task = current_state.get_task(tid)
+        if task and task.get("status") in (TASK_RUNNING, TASK_OVERTIME):
+            active.append(tid)
+    if active:
+        return {
+            "error": "Cannot release angr memory while background tasks are active.",
+            "active_tasks": active,
+            "hint": "Call abort_background_task() on each active task first.",
+        }
+
+    # Capture RSS before
+    rss_before = None
+    try:
+        from arkana.resource_monitor import get_resource_snapshot
+        snap = get_resource_snapshot()
+        if snap:
+            rss_before = snap.get("rss_mb")
+    except Exception:
+        pass
+
+    had_angr = current_state.angr_project is not None
+
+    # Release angr
+    current_state.reset_angr()
+
+    # Clear decompile caches
+    from arkana.mcp.tools_angr import clear_decompile_meta
+    clear_decompile_meta(session_uuid=current_state._state_uuid)
+
+    # Clear result cache
+    if hasattr(current_state, 'result_cache') and current_state.result_cache is not None:
+        current_state.result_cache.clear()
+
+    # Force garbage collection
+    gc.collect()
+
+    # Linux: return freed heap to OS via malloc_trim
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6")
+        libc.malloc_trim(0)
+    except Exception:
+        pass  # Not Linux/glibc, or not available
+
+    # Capture RSS after
+    rss_after = None
+    try:
+        from arkana.resource_monitor import get_resource_snapshot as _snap
+        snap = _snap()
+        if snap:
+            rss_after = snap.get("rss_mb")
+    except Exception:
+        pass
+
+    response = {
+        "status": "released" if had_angr else "no_angr_loaded",
+        "preserved": ["filepath", "pe_data", "notes", "renames", "custom_types",
+                       "tool_history", "artifacts", "triage_status"],
+        "cleared": ["angr_project", "angr_cfg", "decompile_cache", "result_cache",
+                     "loop_cache", "angr_hooks"],
+    }
+    if rss_before is not None and rss_after is not None:
+        response["rss_before_mb"] = round(rss_before, 1)
+        response["rss_after_mb"] = round(rss_after, 1)
+        response["rss_freed_mb"] = round(rss_before - rss_after, 1)
+    if had_angr:
+        response["hint"] = "angr tools will rebuild project and CFG from disk when next called."
+    return response
+
+
+@tool_decorator
 async def get_resource_usage(ctx: Context) -> Dict[str, Any]:
     """
     [Phase: utility] Returns current process resource usage: RSS memory,

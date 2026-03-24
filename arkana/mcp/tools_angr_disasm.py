@@ -16,6 +16,22 @@ if ANGR_AVAILABLE:
     import angr
 
 
+def _is_null_region_artifact(func, project) -> bool:
+    """Check if a function appears to be a null-byte disassembly artifact.
+
+    Returns True if the function's first block consists entirely of 0x00 bytes
+    (which angr interprets as 'add [rax], al' on x86/x64).
+    """
+    try:
+        block = project.factory.block(func.addr)
+        if block.size == 0:
+            return False
+        raw = project.loader.memory.load(func.addr, min(block.size, 64))
+        return raw == b'\x00' * len(raw)
+    except Exception:
+        return False
+
+
 # ---- Disassemble Address Range --------------------------------
 
 @tool_decorator
@@ -683,8 +699,13 @@ def _build_scored_functions(current_state, include_details: bool = False) -> Lis
     entry_addr = current_state.angr_project.entry
 
     scored_funcs = []
+    null_artifact_count = 0
     for addr, func in current_state.angr_cfg.functions.items():
         if func.is_simprocedure or func.is_syscall:
+            continue
+        # Skip null-byte disassembly artifacts (e.g., BSS/staging areas)
+        if _is_null_region_artifact(func, current_state.angr_project):
+            null_artifact_count += 1
             continue
         try:
             block_count = func.graph.number_of_nodes() if func.graph else len(list(func.blocks))  # L6-v10: O(1)
@@ -775,6 +796,8 @@ def _build_scored_functions(current_state, include_details: bool = False) -> Lis
             if len(callers) > 10:
                 entry["_callers_truncated"] = len(callers)
         scored_funcs.append(entry)
+
+    current_state._cfg_null_artifact_count = null_artifact_count
 
     scored_funcs.sort(key=lambda x: x['score'], reverse=True)
 

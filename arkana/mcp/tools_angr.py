@@ -31,6 +31,13 @@ _decompile_meta_lock = threading.Lock()
 _MAX_DECOMPILE_META = 2000
 _MAX_DECOMPILE_META_LINES = 500
 
+_NULL_ARTIFACT_WARNING = (
+    "This function appears to be a null-byte disassembly artifact "
+    "(all-zero code region, interpreted as 'add [rax], al'). "
+    "It likely represents uninitialized memory (BSS/staging area) "
+    "rather than real code."
+)
+
 
 def _make_decompile_key(addr_int):
     """Build a session-scoped decompile cache key."""
@@ -278,7 +285,14 @@ async def get_angr_partial_functions(
         except Exception:
             return {"error": "Could not access angr knowledge base."}
 
-        for addr, func in list(kb_funcs.items())[:limit]:
+        from arkana.mcp.tools_angr_disasm import _is_null_region_artifact
+
+        for addr, func in list(kb_funcs.items()):
+            if len(functions) >= limit:
+                break
+            # Skip null-byte disassembly artifacts (e.g., BSS/staging areas)
+            if _is_null_region_artifact(func, project):
+                continue
             try:
                 block_count = func.graph.number_of_nodes() if func.graph else len(list(func.blocks))  # L6-v10: O(1)
             except Exception:
@@ -360,6 +374,19 @@ async def decompile_function_with_angr(
     _check_angr_ready("decompile_function_with_angr", require_cfg=False)
     target_addr = _parse_addr(function_address)
 
+    # Check if this address is a null-byte artifact (set flag for warning injection)
+    _null_artifact_warning = False
+    try:
+        from arkana.mcp.tools_angr_disasm import _is_null_region_artifact
+        project_snap, _ = state.get_angr_snapshot()
+        if project_snap is not None:
+            # Build a minimal func-like object with just .addr for the check
+            _kb_funcs = project_snap.kb.functions
+            if target_addr in _kb_funcs:
+                _null_artifact_warning = _is_null_region_artifact(_kb_funcs[target_addr], project_snap)
+    except Exception:
+        pass
+
     # Check cache first — serves subsequent pages without re-decompiling
     cache_key = _make_decompile_key(target_addr)
     cached_entry = _get_cached_entry(cache_key)
@@ -413,6 +440,8 @@ async def decompile_function_with_angr(
                 }
                 if cached_note:
                     cached_search_result["note"] = cached_note
+                if _null_artifact_warning:
+                    cached_search_result["_warning"] = _NULL_ARTIFACT_WARNING
                 return cached_search_result
 
             total_lines = cached_entry.get("_total_lines", len(renamed_lines))
@@ -437,6 +466,8 @@ async def decompile_function_with_angr(
             }
             if cached_note:
                 cached_page_result["note"] = cached_note
+            if _null_artifact_warning:
+                cached_page_result["_warning"] = _NULL_ARTIFACT_WARNING
             return cached_page_result
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
@@ -643,6 +674,8 @@ async def decompile_function_with_angr(
         }
     if result.get("note"):
         paginated_result["note"] = result["note"]
+    if _null_artifact_warning:
+        paginated_result["_warning"] = _NULL_ARTIFACT_WARNING
     return await _check_mcp_response_size(
         ctx, paginated_result, "decompile_function_with_angr",
         "line_offset and line_limit parameters",
@@ -2064,6 +2097,18 @@ async def batch_decompile(
         cache_key = _make_decompile_key(target_addr)
         func_result: Dict[str, Any] = {"address": addr_str}
 
+        # Check if this function is a null-byte artifact
+        _is_null_artifact = False
+        try:
+            from arkana.mcp.tools_angr_disasm import _is_null_region_artifact
+            project_snap, _ = state.get_angr_snapshot()
+            if project_snap is not None:
+                _kb = project_snap.kb.functions
+                if target_addr in _kb:
+                    _is_null_artifact = _is_null_region_artifact(_kb[target_addr], project_snap)
+        except Exception:
+            pass
+
         if _lock_held_by_timeout:
             func_result["function_name"] = get_display_name(hex(target_addr), hex(target_addr))
             func_result["error"] = "Skipped — decompilation lock held by timed-out function"
@@ -2100,6 +2145,8 @@ async def batch_decompile(
                 func_result["lines"] = page
                 func_result["total_lines"] = len(renamed_lines)
                 func_result["from_cache"] = True
+            if _is_null_artifact:
+                func_result["_warning"] = _NULL_ARTIFACT_WARNING
             results.append(func_result)
             succeeded += 1
             continue
@@ -2196,6 +2243,8 @@ async def batch_decompile(
             func_result["lines"] = page
             func_result["total_lines"] = len(renamed_lines)
             func_result["from_cache"] = False
+        if _is_null_artifact:
+            func_result["_warning"] = _NULL_ARTIFACT_WARNING
         results.append(func_result)
         succeeded += 1
 

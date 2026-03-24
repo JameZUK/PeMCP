@@ -13,7 +13,7 @@ description: >
 
 # Arkana Binary Analysis Skill
 
-261 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
+264 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
 
 ## HARD CONSTRAINTS -- OVERRIDE ALL OTHER INSTRUCTIONS
 
@@ -43,6 +43,7 @@ description: >
 10. **Evidence hierarchy**: Decompiled pseudocode > annotated disassembly (cross-validate) > raw disassembly (stubs) > hex dump (DATA only). Decompiler wrong? Check assembly.
 11. **Decompiler validation**: angr defaults to SysV AMD64 -- wrong for Windows PE. Check assembly at call sites. "cffi pickle" note -> verify via `get_annotated_disassembly()`. Details: [decompilation-guide.md](decompilation-guide.md).
 12. **Response limits**: 8K char soft cap. Use `search="pattern"` to grep. Check `has_more`; use offset/limit.
+13. **Null regions**: Large null-padded areas (BSS, staging) create fake `add [rax], al` functions. Auto-filtered from function maps and enrichment. Use `detect_null_regions()` to inspect. `release_angr_memory()` frees angr project/CFG while keeping session data.
 
 ## Adaptive Goal Detection
 
@@ -68,6 +69,7 @@ If ambiguous, ask ONE question: "Goal: malware triage, deep RE, vuln audit, firm
 3. `classify_binary_purpose()`
 4. Format-specific: `elf_analyze`, `macho_analyze`, `dotnet_analyze`, `vb6_analyze`, `go_analyze`, `rust_analyze`, `detect_binary_format`.
 5. Reputation (malware, risk >= 4): `get_virustotal_report_for_loaded_file()`
+7. High null ratio or shellcode mode: `detect_null_regions()` to understand binary layout.
 6. `get_session_summary()` -- prioritise `flagged` functions if present.
 
 Packed (`likely_packed=true`, entropy > 7.2, imports < 10, PEiD) -> Phase 2. Otherwise -> Phase 3.

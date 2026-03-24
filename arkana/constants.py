@@ -54,6 +54,8 @@ __all__ = [
     # Data flow analysis
     "MAX_DATA_FLOW_FUNCTIONS", "MAX_DATA_FLOW_FINDINGS",
     "DATA_FLOW_PER_FUNC_TIMEOUT", "DATA_FLOW_AGGREGATE_TIMEOUT",
+    # CFG null-artifact filtering
+    "CFG_NULL_REGION_MIN_SIZE",
     # Obfuscation detection
     "CFF_MIN_BLOCKS", "CFF_DISPATCHER_IN_DEGREE_THRESHOLD",
     "CFF_BACK_EDGE_RATIO_THRESHOLD",
@@ -226,6 +228,9 @@ MAX_DATA_FLOW_FUNCTIONS = 50       # max functions to analyse for source→sink 
 MAX_DATA_FLOW_FINDINGS = 100       # max flow findings to return
 DATA_FLOW_PER_FUNC_TIMEOUT = 30    # per-function RDA timeout (seconds)
 DATA_FLOW_AGGREGATE_TIMEOUT = 120  # overall tool timeout (seconds)
+
+# --- CFG Null-Artifact Filtering ---
+CFG_NULL_REGION_MIN_SIZE = 512  # minimum null-byte run for detection (env: ARKANA_CFG_NULL_MIN_SIZE)
 
 # --- Obfuscation Detection ---
 CFF_MIN_BLOCKS = 6                              # skip functions with fewer blocks

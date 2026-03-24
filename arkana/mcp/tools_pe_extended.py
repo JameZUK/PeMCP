@@ -1055,3 +1055,135 @@ async def get_import_hash_analysis(ctx: Context, compact: bool = False) -> Dict[
         "categorized_imports": import_categories,
         "category_counts": {k: len(v) for k, v in import_categories.items()},
     }
+
+
+# ===================================================================
+#  NULL REGION DETECTION
+# ===================================================================
+
+@tool_decorator
+async def detect_null_regions(
+    ctx: Context,
+    min_region_size: int = 512,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """
+    [Phase: explore] Scan the loaded binary for contiguous null-byte (0x00)
+    regions. These regions cause angr's CFG to create fake 'add [rax], al'
+    functions, wasting analysis time and memory.
+
+    Common causes: BSS sections, shellcode staging areas, resource padding,
+    PE overlay padding, uninitialized data sections.
+
+    When to use: Before deep angr analysis on shellcode or binaries with
+    high null ratios (shown in file_integrity from open_file). Also useful
+    for understanding binary layout before emulation.
+
+    Args:
+        ctx: MCP Context.
+        min_region_size: (int) Minimum null-byte run length to report. Default 512.
+        limit: (int) Maximum number of regions to return. Default 100.
+
+    Returns:
+        Dictionary with null regions, total null bytes, and estimated CFG impact.
+    """
+    _check_pe_loaded("detect_null_regions")
+    min_region_size = max(16, min(min_region_size, 1_000_000))
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
+
+    # Get raw binary data
+    data = None
+    if state.filepath and os.path.isfile(state.filepath):
+        with open(state.filepath, "rb") as f:
+            data = f.read()
+    if data is None or len(data) == 0:
+        return {"error": "No file data available for scanning."}
+
+    await ctx.info(f"Scanning {len(data)} bytes for null regions (min size: {min_region_size})...")
+
+    def _scan():
+        regions = []
+        total_null = 0
+        i = 0
+        length = len(data)
+        while i < length:
+            if data[i] == 0:
+                start = i
+                while i < length and data[i] == 0:
+                    i += 1
+                region_len = i - start
+                if region_len >= min_region_size:
+                    regions.append((start, region_len))
+                    total_null += region_len
+            else:
+                i += 1
+
+        # Classify regions using PE section info if available
+        classified = []
+        pe_sections = []
+        if state.pe_data:
+            for sec in (state.pe_data.get("sections") or []):
+                try:
+                    sec_start = sec.get("pointer_to_raw_data", 0)
+                    sec_size = sec.get("size_of_raw_data", 0)
+                    sec_name = sec.get("name", "")
+                    sec_chars = sec.get("characteristics_flags", [])
+                    pe_sections.append((sec_start, sec_start + sec_size, sec_name, sec_chars))
+                except (TypeError, KeyError):
+                    continue
+
+        for offset, rlen in regions[:limit]:
+            classification = "unknown"
+            section_name = None
+            for sec_start, sec_end, sec_name, sec_chars in pe_sections:
+                if sec_start <= offset < sec_end:
+                    section_name = sec_name
+                    if "bss" in sec_name.lower() or "IMAGE_SCN_CNT_UNINITIALIZED_DATA" in str(sec_chars):
+                        classification = "bss"
+                    elif ".rsrc" in sec_name.lower():
+                        classification = "resource_padding"
+                    elif "IMAGE_SCN_MEM_EXECUTE" in str(sec_chars):
+                        classification = "code_padding"
+                    else:
+                        classification = "data_padding"
+                    break
+            else:
+                # Check if it's in overlay (past all sections)
+                if pe_sections and offset >= max(s[1] for s in pe_sections):
+                    classification = "overlay_padding"
+
+            classified.append({
+                "offset": hex(offset),
+                "offset_int": offset,
+                "length": rlen,
+                "length_human": f"{rlen / 1024:.1f} KB" if rlen >= 1024 else f"{rlen} bytes",
+                "end": hex(offset + rlen),
+                "classification": classification,
+                "section": section_name,
+                "pct_of_file": round(rlen / length * 100, 1),
+            })
+
+        return classified, total_null, length
+
+    classified, total_null, file_size = await asyncio.to_thread(_scan)
+
+    # Estimate CFG impact
+    estimated_fake_funcs = total_null // 200  # rough: ~200 bytes per fake function
+    estimated_fake_blocks = total_null // 16   # rough: ~16 bytes per block
+
+    response = {
+        "file_size": file_size,
+        "total_null_bytes": total_null,
+        "null_percentage": round(total_null / file_size * 100, 1) if file_size > 0 else 0,
+        "regions_found": len(classified),
+        "null_regions": classified,
+        "cfg_impact": {
+            "estimated_fake_functions": estimated_fake_funcs,
+            "estimated_fake_blocks": estimated_fake_blocks,
+            "note": "Null bytes are interpreted as 'add [rax], al' (x86/x64), creating fake CFG functions."
+                    " These are auto-filtered from get_function_map and enrichment."
+                    if total_null > 0 else "No significant null regions found.",
+        },
+    }
+
+    return await _check_mcp_response_size(ctx, response, "detect_null_regions")
