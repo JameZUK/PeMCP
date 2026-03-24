@@ -23,11 +23,91 @@ from arkana.utils import _safe_env_int
 
 logger = logging.getLogger("Arkana")
 
-# Runtime-configurable thresholds (env vars override constants)
+
+# ---------------------------------------------------------------------------
+#  Dynamic memory detection
+# ---------------------------------------------------------------------------
+
+def _detect_available_memory_mb() -> tuple:
+    """Detect available memory from cgroups or system total.
+
+    Returns (available_mb, source_str) where source is one of:
+    'cgroup_v2', 'cgroup_v1', 'psutil', or 'default'.
+    Returns (None, 'default') if detection fails.
+    """
+    # 1. cgroup v2 (Docker, Podman, K8s on modern kernels)
+    try:
+        with open("/sys/fs/cgroup/memory.max", "r") as f:
+            val = f.read().strip()
+        if val != "max":
+            mb = int(val) // (1024 * 1024)
+            if mb > 0:
+                return mb, "cgroup_v2"
+    except (OSError, ValueError):
+        pass
+
+    # 2. cgroup v1 (older Docker)
+    try:
+        with open("/sys/fs/cgroup/memory/memory.limit_in_bytes", "r") as f:
+            val = int(f.read().strip())
+        # cgroup v1 reports a very large number (~2^63) when unlimited
+        if 0 < val < (1 << 62):
+            mb = val // (1024 * 1024)
+            if mb > 0:
+                return mb, "cgroup_v1"
+    except (OSError, ValueError):
+        pass
+
+    # 3. System total via psutil
+    if PSUTIL_AVAILABLE:
+        try:
+            import psutil
+            total = psutil.virtual_memory().total
+            mb = total // (1024 * 1024)
+            if mb > 0:
+                return mb, "psutil"
+        except Exception:
+            pass
+
+    return None, "default"
+
+
+def _compute_thresholds(available_mb):
+    """Compute HIGH/CRITICAL thresholds from available memory.
+
+    HIGH  = 60% of available (leave 40% headroom)
+    CRITICAL = 80% of available (imminent OOM risk)
+
+    Floor: HIGH >= 512 MB, CRITICAL >= 1024 MB
+    Ceiling: HIGH <= 32768 MB, CRITICAL <= 65536 MB
+    """
+    if available_mb is None:
+        return RESOURCE_MEMORY_HIGH_MB, RESOURCE_MEMORY_CRITICAL_MB
+    high = max(512, min(int(available_mb * 0.6), 32768))
+    critical = max(1024, min(int(available_mb * 0.8), 65536))
+    return high, critical
+
+
+# Detect available memory once at module load
+_detected_available_mb, _detected_source = _detect_available_memory_mb()
+_dynamic_high, _dynamic_critical = _compute_thresholds(_detected_available_mb)
+
+# Runtime-configurable thresholds — env vars override dynamic defaults
 _INTERVAL = _safe_env_int("ARKANA_RESOURCE_MONITOR_INTERVAL", RESOURCE_MONITOR_INTERVAL, min_val=1, max_val=3600)
-_MEMORY_HIGH = _safe_env_int("ARKANA_RESOURCE_MEMORY_HIGH_MB", RESOURCE_MEMORY_HIGH_MB, min_val=100)
-_MEMORY_CRITICAL = _safe_env_int("ARKANA_RESOURCE_MEMORY_CRITICAL_MB", RESOURCE_MEMORY_CRITICAL_MB, min_val=100)
+_MEMORY_HIGH = _safe_env_int("ARKANA_RESOURCE_MEMORY_HIGH_MB", _dynamic_high, min_val=100)
+_MEMORY_CRITICAL = _safe_env_int("ARKANA_RESOURCE_MEMORY_CRITICAL_MB", _dynamic_critical, min_val=100)
 _CPU_HIGH = _safe_env_int("ARKANA_RESOURCE_CPU_HIGH_PERCENT", RESOURCE_CPU_HIGH_PERCENT, min_val=1, max_val=100)
+
+# Track whether env vars overrode the auto-detected defaults
+_env_override_high = os.environ.get("ARKANA_RESOURCE_MEMORY_HIGH_MB") is not None
+_env_override_critical = os.environ.get("ARKANA_RESOURCE_MEMORY_CRITICAL_MB") is not None
+
+logger.info(
+    "Memory monitor: available=%s MB (source=%s), thresholds: high=%d MB, critical=%d MB%s",
+    _detected_available_mb or "unknown", _detected_source,
+    _MEMORY_HIGH, _MEMORY_CRITICAL,
+    " (env override)" if (_env_override_high or _env_override_critical) else " (auto-detected)"
+)
 
 # Module-level state
 _latest_snapshot: Optional[Dict[str, Any]] = None
@@ -128,20 +208,28 @@ def get_resource_alert() -> Optional[Dict[str, Any]]:
     if snap is None:
         return None
 
-    level = snap["memory_level"]
-    if level == "normal":
+    mem_level = snap["memory_level"]
+    cpu_high = snap["cpu_percent"] >= _CPU_HIGH
+
+    if mem_level == "normal" and not cpu_high:
         return None
 
-    if level == "critical":
-        hint = (
+    # Build hint from active pressure sources
+    hints = []
+    if mem_level == "critical":
+        hints.append(
             f"Memory usage is critical ({snap['rss_mb']} MB, threshold {_MEMORY_CRITICAL} MB). "
             "Abort background tasks or reduce analysis scope to avoid OOM."
         )
-    else:
-        hint = (
+    elif mem_level == "high":
+        hints.append(
             f"Memory usage is high ({snap['rss_mb']} MB, threshold {_MEMORY_HIGH} MB). "
             "Consider aborting background tasks to free memory."
         )
+    if cpu_high:
+        hints.append(f"CPU usage is high ({snap['cpu_percent']}%, threshold {_CPU_HIGH}%).")
+
+    level = mem_level if mem_level != "normal" else "high"  # CPU-only pressure is "high"
 
     return {
         "type": "resource_pressure",
@@ -149,8 +237,9 @@ def get_resource_alert() -> Optional[Dict[str, Any]]:
         "rss_mb": snap["rss_mb"],
         "cpu_percent": snap["cpu_percent"],
         "thread_count": snap["thread_count"],
-        "threshold_mb": _MEMORY_CRITICAL if level == "critical" else _MEMORY_HIGH,
-        "hint": hint,
+        "threshold_mb": _MEMORY_CRITICAL if mem_level == "critical" else _MEMORY_HIGH,
+        "cpu_threshold": _CPU_HIGH,
+        "hint": " ".join(hints),
     }
 
 

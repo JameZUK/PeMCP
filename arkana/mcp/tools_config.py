@@ -637,6 +637,8 @@ async def get_resource_usage(ctx: Context) -> Dict[str, Any]:
     from arkana.resource_monitor import (
         get_resource_snapshot, get_resource_history,
         _MEMORY_HIGH, _MEMORY_CRITICAL, _CPU_HIGH,
+        _detected_available_mb, _detected_source,
+        _env_override_high, _env_override_critical,
         PSUTIL_AVAILABLE,
     )
     if not PSUTIL_AVAILABLE:
@@ -664,6 +666,11 @@ async def get_resource_usage(ctx: Context) -> Dict[str, Any]:
             "memory_high_mb": _MEMORY_HIGH,
             "memory_critical_mb": _MEMORY_CRITICAL,
             "cpu_high_percent": _CPU_HIGH,
+        },
+        "system": {
+            "available_memory_mb": _detected_available_mb,
+            "detection_source": _detected_source,
+            "thresholds_auto_detected": not (_env_override_high or _env_override_critical),
         },
     }
 
