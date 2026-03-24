@@ -482,10 +482,18 @@ async def decompile_function_with_angr(
         # increments/decrements cannot cause incorrect behavior.
         state._decompile_on_demand_count += 1
         try:
-            if not state._decompile_lock.acquire(timeout=60):
-                raise RuntimeError(
-                    "Decompilation lock busy — background analysis in progress. Retry shortly."
-                )
+            _LOCK_RETRY_INTERVAL = 5
+            _LOCK_MAX_WAIT = 120
+            _waited = 0
+            while not state._decompile_lock.acquire(timeout=_LOCK_RETRY_INTERVAL):
+                _waited += _LOCK_RETRY_INTERVAL
+                if _waited >= _LOCK_MAX_WAIT:
+                    raise RuntimeError(
+                        f"Decompilation lock still held after {_waited}s — background enrichment "
+                        "has not yielded. Use abort_background_task('auto-enrichment') to stop it, "
+                        "or try again after enrichment completes."
+                    )
+                bridge.info(f"Waiting for decompile lock ({_waited}s)... background enrichment in progress")
         except Exception:
             state._decompile_on_demand_count -= 1
             raise
@@ -2155,9 +2163,18 @@ async def batch_decompile(
         # Lock is acquired/released inside the thread worker (not across await).
         def _decompile_one(t_addr=target_addr):
             state._decompile_on_demand_count += 1
-            if not state._decompile_lock.acquire(timeout=60):
-                state._decompile_on_demand_count -= 1
-                return {"error": "Decompilation lock busy — background analysis in progress. Retry shortly."}
+            _LOCK_RETRY_INTERVAL = 5
+            _LOCK_MAX_WAIT = 120
+            _waited = 0
+            while not state._decompile_lock.acquire(timeout=_LOCK_RETRY_INTERVAL):
+                _waited += _LOCK_RETRY_INTERVAL
+                if _waited >= _LOCK_MAX_WAIT:
+                    state._decompile_on_demand_count = max(0, state._decompile_on_demand_count - 1)
+                    return {
+                        "error": f"Decompilation lock still held after {_waited}s — background enrichment "
+                                 "has not yielded. Use abort_background_task('auto-enrichment') to stop it."
+                    }
+                logger.info("batch_decompile: waiting for decompile lock (%ds)...", _waited)
             try:
                 try:
                     func, addr_used = _resolve_function_address(t_addr)

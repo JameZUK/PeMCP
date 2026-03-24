@@ -404,13 +404,20 @@ async def open_file(
     acquired = False
     try:
         # M-ST2: Add timeout to prevent indefinite hang when all semaphore slots are occupied
-        try:
-            await asyncio.wait_for(_analysis_semaphore.acquire(), timeout=120)
-        except asyncio.TimeoutError:
-            raise RuntimeError(
-                "[open_file] Server is busy — too many concurrent analyses. "
-                "Please try again shortly."
-            )
+        _sem_waited = 0
+        _SEM_POLL = 10
+        while True:
+            try:
+                await asyncio.wait_for(_analysis_semaphore.acquire(), timeout=_SEM_POLL)
+                break  # acquired
+            except asyncio.TimeoutError:
+                _sem_waited += _SEM_POLL
+                if _sem_waited >= 120:
+                    raise RuntimeError(
+                        f"[open_file] Server is busy after {_sem_waited}s — too many concurrent analyses. "
+                        "Please try again shortly."
+                    )
+                await ctx.info(f"Waiting for analysis slot ({_sem_waited}s)... other analyses in progress")
         acquired = True
         # --- Early hash for cache lookup ---
         await ctx.report_progress(2, 100)

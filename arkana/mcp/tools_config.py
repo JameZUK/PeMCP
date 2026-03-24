@@ -649,7 +649,15 @@ async def get_resource_usage(ctx: Context) -> Dict[str, Any]:
 
     snapshot = get_resource_snapshot()
     if not snapshot:
-        return {"error": "Resource monitor has not collected data yet. Try again shortly."}
+        # Brief wait for first snapshot on fresh startup
+        import time as _time
+        for _ in range(6):
+            _time.sleep(0.5)
+            snapshot = get_resource_snapshot()
+            if snapshot:
+                break
+        if not snapshot:
+            return {"error": "Resource monitor has not collected data yet after 3s. Try again shortly."}
 
     history = get_resource_history()
     trend: Dict[str, Any] = {}

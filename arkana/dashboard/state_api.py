@@ -1579,9 +1579,13 @@ def trigger_decompile(address_hex: str) -> Dict[str, Any]:
     # L2-v10: Signal on-demand decompile to enrichment sweep for cooperative yielding
     st._decompile_on_demand_count += 1
     # Acquire decompile lock for mutual exclusion with background enrichment sweep
-    if not st._decompile_lock.acquire(timeout=30):
-        st._decompile_on_demand_count -= 1
-        return {"cached": False, "error": "Decompilation lock timeout — background enrichment may be running. Try again shortly."}
+    _waited = 0
+    while not st._decompile_lock.acquire(timeout=5):
+        _waited += 5
+        if _waited >= 60:
+            st._decompile_on_demand_count -= 1
+            return {"cached": False, "error": f"Decompilation lock busy after {_waited}s — background enrichment may be running. Try again shortly."}
+        logger.info("Dashboard decompile: waiting for lock (%ds)...", _waited)
     try:
         from arkana.mcp._angr_helpers import _safe_decompile, DECOMPILE_FALLBACK_NOTE
         dec, used_fallback = _safe_decompile(project, func, decompiler_cfg)
