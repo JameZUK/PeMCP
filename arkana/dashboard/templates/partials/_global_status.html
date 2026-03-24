@@ -1,4 +1,4 @@
-{% if data.active_tool or data.background_tasks or data.resource_usage %}
+{% if data.active_tool or data.active_tools or data.background_tasks or data.resource_usage %}
 <div class="global-status-inner">
     {% if data.resource_usage %}
     <div class="gs-item gs-resource">
@@ -10,7 +10,29 @@
         <span class="gs-tool-name">{{ data.resource_usage.thread_count }}</span>
     </div>
     {% endif %}
-    {% if data.active_tool %}
+    {% if data.active_tools and data.active_tools | length > 1 %}
+    {# Multiple concurrent tools — show badges only (progress is shared/ambiguous) #}
+    <div class="gs-item gs-active-tool">
+        {% for tool in data.active_tools %}
+        <span class="badge badge-active">ACTIVE</span>
+        <span class="gs-tool-name">{{ tool }}</span>
+        {% if not loop.last %}<span class="gs-tool-sep">&middot;</span>{% endif %}
+        {% endfor %}
+    </div>
+    {% elif data.active_tools and data.active_tools | length == 1 %}
+    {# Single tool — show progress bar #}
+    <div class="gs-item gs-active-tool">
+        <span class="badge badge-active">ACTIVE</span>
+        <span class="gs-tool-name">{{ data.active_tools[0] }}</span>
+        {% set pct = ((data.active_tool_progress / data.active_tool_total * 100) | int) if data.active_tool_total else 0 %}
+        <div class="gs-progress-wrap">
+            <div class="progress-bar progress-bar-inline">
+                <div class="progress-fill" data-width="{{ pct }}"></div>
+            </div>
+        </div>
+        <span class="gs-percent">{{ pct }}%</span>
+    </div>
+    {% elif data.active_tool %}
     <div class="gs-item gs-active-tool">
         <span class="badge badge-active">ACTIVE</span>
         <span class="gs-tool-name">{{ data.active_tool }}</span>

@@ -906,7 +906,7 @@ async def extract_strings_from_binary(
 
 
 @tool_decorator
-async def search_for_specific_strings(ctx: Context, search_terms: List[str], limit_per_term: Optional[int] = 100) -> Dict[str, List[str]]:
+async def search_for_specific_strings(ctx: Context, search_terms: List[str], limit_per_term: Optional[int] = 100) -> Dict[str, Any]:
     """
     [Phase: explore] Searches for exact ASCII string occurrences in the binary data,
     returning file offsets for each match.

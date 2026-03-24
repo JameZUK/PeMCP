@@ -18,6 +18,7 @@ if TLSH_AVAILABLE:
 
 MAX_BATCH_FILES = 50
 _MAX_TOTAL_BATCH_SIZE = 2 * 1024 * 1024 * 1024  # M1-v9: 2GB total batch limit
+_MAX_BATCH_FILE_SIZE = 200 * 1024 * 1024  # 200 MB per individual file
 
 # Magic bytes for supported binary formats
 _BINARY_MAGIC = {
@@ -49,8 +50,6 @@ def _parse_single_file(filepath):
         "filename": os.path.basename(filepath),  # L3-v9: no full path in response
         "size": 0,
     }
-
-    _MAX_BATCH_FILE_SIZE = 200 * 1024 * 1024  # 200 MB
 
     try:
         entry["size"] = os.path.getsize(filepath)

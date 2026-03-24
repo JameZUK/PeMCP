@@ -74,7 +74,7 @@ logger = logging.getLogger("Arkana.dashboard")
 # Prevents dashboard requests from being starved when MCP tools or background
 # tasks saturate the default executor (which has only min(32, cpu+4) threads).
 _dashboard_executor = ThreadPoolExecutor(
-    max_workers=_safe_env_int("ARKANA_DASHBOARD_THREADS", DASHBOARD_THREAD_POOL_SIZE),
+    max_workers=_safe_env_int("ARKANA_DASHBOARD_THREADS", DASHBOARD_THREAD_POOL_SIZE, min_val=1, max_val=32),
     thread_name_prefix="arkana-dash",
 )
 atexit.register(_dashboard_executor.shutdown, wait=False)

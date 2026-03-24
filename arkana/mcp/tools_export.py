@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import tarfile
+import tempfile
 
 from pathlib import Path
 from typing import Dict, Any, Optional
@@ -373,9 +374,19 @@ async def import_project(
         cache_entry_dir.mkdir(parents=True, exist_ok=True, mode=0o700)  # M1-v10
         cache_entry_path = cache_entry_dir / f"{sha256}.json.gz"
 
-        # Write the wrapper directly as a cache entry
-        with gzip.open(cache_entry_path, "wt", encoding="utf-8") as f:
-            json.dump(wrapper, f)
+        # Write the wrapper directly as a cache entry (atomic write)
+        tmp_fd = tempfile.NamedTemporaryFile(
+            dir=str(cache_entry_dir), suffix=".tmp", delete=False,
+        )
+        tmp_path = Path(tmp_fd.name)
+        try:
+            tmp_fd.close()
+            with gzip.open(tmp_path, "wt", encoding="utf-8") as gz:
+                json.dump(wrapper, gz)
+            tmp_path.replace(cache_entry_path)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
         # Update cache metadata via public API
         import time as _time

@@ -15,12 +15,13 @@ from arkana.config import (
 from arkana.state import get_session_key_from_context, activate_session_state, get_current_state, TASK_RUNNING, TASK_OVERTIME
 from arkana.utils import _safe_env_int
 from arkana.warning_handler import _current_tool_var
+from arkana.mcp._input_helpers import _ToolResultCache
 
 # Soft character limit — primary truncation threshold.
 # Claude Code CLI truncates MCP responses at character thresholds far below 64KB,
 # so we default to 8K chars.  Non-Claude-Code clients can set the env var to
 # a higher value (e.g. 65536) to restore the old 64KB-only behaviour.
-_SOFT_LIMIT = _safe_env_int("ARKANA_MCP_RESPONSE_LIMIT_CHARS", MCP_SOFT_RESPONSE_LIMIT_CHARS)
+_SOFT_LIMIT = _safe_env_int("ARKANA_MCP_RESPONSE_LIMIT_CHARS", MCP_SOFT_RESPONSE_LIMIT_CHARS, min_val=1000)
 
 # --- MCP Server Setup ---
 mcp_server = FastMCP("Arkana")
@@ -44,9 +45,9 @@ _SKIP_HISTORY_TOOLS = frozenset({
 
 # --- Heartbeat configuration ---
 # Delay before the first heartbeat fires (avoids noise for fast tools).
-_HEARTBEAT_START_DELAY_SECONDS = _safe_env_int("ARKANA_HEARTBEAT_START_DELAY", 10)
+_HEARTBEAT_START_DELAY_SECONDS = _safe_env_int("ARKANA_HEARTBEAT_START_DELAY", 10, min_val=1, max_val=300)
 # Interval between subsequent heartbeat pings.
-_HEARTBEAT_INTERVAL_SECONDS = _safe_env_int("ARKANA_HEARTBEAT_INTERVAL", 15)
+_HEARTBEAT_INTERVAL_SECONDS = _safe_env_int("ARKANA_HEARTBEAT_INTERVAL", 15, min_val=1, max_val=300)
 
 # Tools that manage their own MCP progress reporting.  The generic heartbeat
 # is skipped for these to avoid conflicting or redundant messages.
@@ -170,6 +171,11 @@ def _build_result_summary(result: Any) -> str:
 
 _ALERT_MIN_AGE_SECONDS = 5  # Don't alert for transient tasks
 
+# Periodic cache sweep to proactively evict TTL-expired entries
+_cache_sweep_state = {"count": 0, "last": 0.0}
+_CACHE_SWEEP_INTERVAL = 60  # seconds between sweeps
+_CACHE_SWEEP_CALLS = 50     # tool calls between sweeps
+
 
 def _collect_background_alerts(current_state) -> list:
     """Collect alerts for running and overtime background tasks."""
@@ -252,8 +258,8 @@ def tool_decorator(func):
 
         # Track active tool on state for dashboard visibility
         if tool_name not in _SKIP_HISTORY_TOOLS:
+            current_state.push_active_tool(tool_name)
             with current_state._active_tool_lock:
-                current_state.active_tool = tool_name
                 current_state.active_tool_progress = 0
                 current_state.active_tool_total = 100
 
@@ -332,9 +338,20 @@ def tool_decorator(func):
                     pass
             # Clear active tool on state for dashboard
             if tool_name not in _SKIP_HISTORY_TOOLS:
+                current_state.pop_active_tool(tool_name)
                 with current_state._active_tool_lock:
-                    current_state.active_tool = None
                     current_state.active_tool_progress = 0
+            # Periodic cache sweep to evict TTL-expired entries
+            _cache_sweep_state["count"] += 1
+            _now = time.time()
+            if (_cache_sweep_state["count"] >= _CACHE_SWEEP_CALLS
+                    or (_now - _cache_sweep_state["last"]) >= _CACHE_SWEEP_INTERVAL):
+                _cache_sweep_state["count"] = 0
+                _cache_sweep_state["last"] = _now
+                try:
+                    _ToolResultCache.sweep_all_expired()
+                except Exception:
+                    pass
 
         # Safety net: enforce soft char limit for tools that don't call
         # _check_mcp_response_size explicitly.  Fast no-op when the response
@@ -596,6 +613,12 @@ async def _check_mcp_response_size(
                 largest_len = 0
 
                 for k, v in modified_data.items():
+                    # Skip pagination metadata and truncation warnings —
+                    # these are small control fields, not data to truncate.
+                    if k.endswith("_pagination") or k == "_pagination":
+                        continue
+                    if k == "_truncation_warning":
+                        continue
                     try:
                         v_len = len(json.dumps(v, ensure_ascii=False))
                         if v_len > largest_len:
@@ -614,6 +637,12 @@ async def _check_mcp_response_size(
                         new_len = int(orig_len * reduction_ratio)
                         new_len = max(1, new_len)  # Keep at least 1
                         modified_data[largest_key] = val[:new_len]
+                        # Update sibling pagination metadata if present
+                        for pag_key in (f"{largest_key}_pagination", "_pagination"):
+                            if pag_key in modified_data and isinstance(modified_data[pag_key], dict):
+                                modified_data[pag_key]["returned"] = new_len
+                                modified_data[pag_key]["has_more"] = True
+                                break
                         modified_data["_truncation_warning"] = (
                             f"Data in '{largest_key}' truncated from {orig_len} to {new_len} items "
                             f"(response exceeded {_SOFT_LIMIT}-char limit). "

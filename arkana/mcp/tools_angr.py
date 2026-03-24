@@ -18,7 +18,7 @@ from arkana.state import TASK_RUNNING, TASK_FAILED
 from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception, _register_background_task
 from arkana.mcp._progress_bridge import ProgressBridge
-from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict, _safe_decompile, DECOMPILE_FALLBACK_NOTE
+from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _build_region_cfg, _init_lock, _parse_addr, _resolve_function_address, _raise_on_error_dict, _safe_decompile, DECOMPILE_FALLBACK_NOTE, _cleanup_kb_decompile_artifacts
 from arkana.mcp._rename_helpers import apply_function_renames_to_lines, apply_variable_renames_to_lines, get_display_name
 from arkana.mcp._search_helpers import search_lines_with_context
 
@@ -29,6 +29,7 @@ from arkana.mcp._search_helpers import search_lines_with_context
 _decompile_meta: collections.OrderedDict = collections.OrderedDict()  # cache_key -> {function_name, address, lines}
 _decompile_meta_lock = threading.Lock()
 _MAX_DECOMPILE_META = 2000
+_MAX_DECOMPILE_META_LINES = 500
 
 
 def _make_decompile_key(addr_int):
@@ -69,6 +70,12 @@ def _get_cached_meta(cache_key):
 def _set_decompile_meta(cache_key, value):
     """Thread-safe store with LRU eviction when exceeding max size."""
     with _decompile_meta_lock:
+        lines = value.get("lines")
+        if lines and len(lines) > _MAX_DECOMPILE_META_LINES:
+            value = dict(value)  # shallow copy
+            value["_total_lines"] = len(lines)
+            value["lines"] = lines[:_MAX_DECOMPILE_META_LINES]
+            value["_lines_capped"] = True
         if cache_key in _decompile_meta:
             _decompile_meta.move_to_end(cache_key)  # M-14: LRU touch on update
         _decompile_meta[cache_key] = value
@@ -354,68 +361,76 @@ async def decompile_function_with_angr(
     if cached_entry is not None:
         cached_lines = cached_entry.get("lines", [])
         cached_note = cached_entry.get("note")
-        # Apply user renames to output
-        renamed_lines = apply_function_renames_to_lines(cached_lines)
-        renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
-        display_name = get_display_name(hex(target_addr), cached_entry.get("function_name", "unknown"))
+        lines_capped = cached_entry.get("_lines_capped", False)
 
-        if search:
-            search_result = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
-            flat_lines = []
-            for region in search_result["matched_regions"]:
-                flat_lines.extend(region["items"])
-            page = flat_lines[line_offset:line_offset + line_limit]
-            has_more = (line_offset + line_limit) < len(flat_lines)
-            cached_search_result = {
+        # If lines were capped and user requests beyond cached range, fall through
+        # to re-decompile so they get full output.
+        if lines_capped and line_offset >= _MAX_DECOMPILE_META_LINES and not search:
+            pass  # fall through to fresh decompilation below
+        else:
+            # Apply user renames to output
+            renamed_lines = apply_function_renames_to_lines(cached_lines)
+            renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
+            display_name = get_display_name(hex(target_addr), cached_entry.get("function_name", "unknown"))
+
+            if search:
+                search_result = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
+                flat_lines = []
+                for region in search_result["matched_regions"]:
+                    flat_lines.extend(region["items"])
+                page = flat_lines[line_offset:line_offset + line_limit]
+                has_more = (line_offset + line_limit) < len(flat_lines)
+                cached_search_result = {
+                    "function_name": display_name,
+                    "address": cached_entry.get("address", hex(target_addr)),
+                    "lines": page,
+                    "count": len(page),
+                    "_search": {
+                        "pattern": search,
+                        "total_matches": search_result["total_matches"],
+                        "total_lines": search_result["total_lines"],
+                        "truncated": search_result["truncated"],
+                        "regions": len(search_result["matched_regions"]),
+                    },
+                    "_pagination": {
+                        "total": len(flat_lines),
+                        "offset": line_offset,
+                        "limit": line_limit,
+                        "has_more": has_more,
+                    },
+                    "next_step": (
+                        f"Call decompile_function_with_angr('{function_address}', search='{search}', line_offset={line_offset + line_limit}) to see more matches."
+                        if has_more else
+                        "Call auto_note_function(address) to save a behavioral summary of this function."
+                    ),
+                }
+                if cached_note:
+                    cached_search_result["note"] = cached_note
+                return cached_search_result
+
+            total_lines = cached_entry.get("_total_lines", len(renamed_lines))
+            page = renamed_lines[line_offset:line_offset + line_limit]
+            has_more = (line_offset + line_limit) < total_lines
+            cached_page_result = {
                 "function_name": display_name,
                 "address": cached_entry.get("address", hex(target_addr)),
                 "lines": page,
                 "count": len(page),
-                "_search": {
-                    "pattern": search,
-                    "total_matches": search_result["total_matches"],
-                    "total_lines": search_result["total_lines"],
-                    "truncated": search_result["truncated"],
-                    "regions": len(search_result["matched_regions"]),
-                },
                 "_pagination": {
-                    "total": len(flat_lines),
+                    "total": total_lines,
                     "offset": line_offset,
                     "limit": line_limit,
                     "has_more": has_more,
                 },
                 "next_step": (
-                    f"Call decompile_function_with_angr('{function_address}', search='{search}', line_offset={line_offset + line_limit}) to see more matches."
+                    f"Call decompile_function_with_angr('{function_address}', line_offset={line_offset + line_limit}) to see more lines."
                     if has_more else
                     "Call auto_note_function(address) to save a behavioral summary of this function."
                 ),
             }
             if cached_note:
-                cached_search_result["note"] = cached_note
-            return cached_search_result
-
-        page = renamed_lines[line_offset:line_offset + line_limit]
-        has_more = (line_offset + line_limit) < len(renamed_lines)
-        cached_page_result = {
-            "function_name": display_name,
-            "address": cached_entry.get("address", hex(target_addr)),
-            "lines": page,
-            "count": len(page),
-            "_pagination": {
-                "total": len(renamed_lines),
-                "offset": line_offset,
-                "limit": line_limit,
-                "has_more": has_more,
-            },
-            "next_step": (
-                f"Call decompile_function_with_angr('{function_address}', line_offset={line_offset + line_limit}) to see more lines."
-                if has_more else
-                "Call auto_note_function(address) to save a behavioral summary of this function."
-            ),
-        }
-        if cached_note:
-            cached_page_result["note"] = cached_note
-        return cached_page_result
+                cached_page_result["note"] = cached_note
+            return cached_page_result
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
@@ -522,12 +537,16 @@ async def decompile_function_with_angr(
             except Exception as e:
                 return {"error": f"Decompilation failed: {e}"}
         finally:
-            state._decompile_on_demand_count -= 1
+            state._decompile_on_demand_count = max(0, state._decompile_on_demand_count - 1)
             state._decompile_lock.release()
+            # Help GC reclaim angr objects if this thread was abandoned after timeout
+            project = None
+            func = None
 
     try:
         result = await asyncio.wait_for(asyncio.to_thread(_decompile), timeout=ANGR_ANALYSIS_TIMEOUT)
     except asyncio.TimeoutError:
+        state._decompile_on_demand_count = max(0, state._decompile_on_demand_count - 1)
         # Note: the worker thread continues running and holds _decompile_lock
         # until it finishes naturally.  Subsequent decompile requests will wait
         # on the lock (up to 60s) until the abandoned thread completes.
@@ -547,6 +566,10 @@ async def decompile_function_with_angr(
     if result.get("note"):
         meta["note"] = result["note"]
     _set_decompile_meta(cache_key, meta)
+    # Reclaim KB decompiler artifacts now that text is cached
+    project_snapshot, _ = state.get_angr_snapshot()
+    if project_snapshot is not None:
+        _cleanup_kb_decompile_artifacts(project_snapshot, target_addr)
 
     # Persist to disk cache (throttled, non-blocking)
     try:
@@ -1178,13 +1201,13 @@ async def get_function_xrefs(
         if target_addr in cfg_snap.functions.callgraph:
              for pred in cfg_snap.functions.callgraph.predecessors(target_addr):
                  try: callers.append({"name": cfg_snap.functions[pred].name, "address": hex(pred)})
-                 except Exception: callers.append({"name": "Unknown", "address": hex(pred)})
+                 except (KeyError, AttributeError): callers.append({"name": "Unknown", "address": hex(pred)})
 
         callees = []
         if target_addr in cfg_snap.functions.callgraph:
             for succ in cfg_snap.functions.callgraph.successors(target_addr):
                 try: callees.append({"name": cfg_snap.functions[succ].name, "address": hex(succ)})
-                except Exception: callees.append({"name": "External", "address": hex(succ)})
+                except (KeyError, AttributeError): callees.append({"name": "External", "address": hex(succ)})
 
         return {
             "function_name": func.name,
@@ -2026,12 +2049,21 @@ async def batch_decompile(
     succeeded = 0
     failed = 0
     total_search_matches = 0
+    _lock_held_by_timeout = False
 
     for i, addr_str in enumerate(addresses):
         await ctx.report_progress(i, len(addresses))
         target_addr = _parse_addr(addr_str)
         cache_key = _make_decompile_key(target_addr)
         func_result: Dict[str, Any] = {"address": addr_str}
+
+        if _lock_held_by_timeout:
+            func_result["function_name"] = get_display_name(hex(target_addr), hex(target_addr))
+            func_result["error"] = "Skipped — decompilation lock held by timed-out function"
+            func_result["skipped"] = True
+            results.append(func_result)
+            failed += 1
+            continue
 
         # Check per-function cache first (no lock needed — _decompile_meta has its own lock)
         cached_lines = _get_cached_lines(cache_key)
@@ -2094,8 +2126,11 @@ async def batch_decompile(
                 except Exception as e:
                     return {"error": f"Decompilation failed for {hex(t_addr)}: {e}"}
             finally:
-                state._decompile_on_demand_count -= 1
+                state._decompile_on_demand_count = max(0, state._decompile_on_demand_count - 1)
                 state._decompile_lock.release()
+                # Help GC reclaim angr objects if this thread was abandoned after timeout
+                project = None
+                func = None
 
         try:
             # Note: asyncio.wait_for timeout is advisory — the thread continues
@@ -2105,7 +2140,10 @@ async def batch_decompile(
                 timeout=BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT,
             )
         except asyncio.TimeoutError:
-            func_result["error"] = f"Timed out after {BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT}s."
+            state._decompile_on_demand_count = max(0, state._decompile_on_demand_count - 1)
+            _lock_held_by_timeout = True
+            func_result["function_name"] = get_display_name(hex(target_addr), hex(target_addr))
+            func_result["error"] = f"Timed out after {BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT}s. Remaining functions skipped."
             results.append(func_result)
             failed += 1
             continue
@@ -2123,6 +2161,10 @@ async def batch_decompile(
             "address": result["address"],
             "lines": all_lines,
         })
+        # Reclaim KB decompiler artifacts now that text is cached
+        project_snapshot, _ = state.get_angr_snapshot()
+        if project_snapshot is not None:
+            _cleanup_kb_decompile_artifacts(project_snapshot, target_addr)
         renamed_lines = apply_function_renames_to_lines(all_lines)
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
         display_name = get_display_name(hex(target_addr), result["function_name"])

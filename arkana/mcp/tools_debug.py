@@ -95,6 +95,7 @@ class _DebugSession:
         self.crt_stubs = False
         self.api_trace_enabled = False
         self._desynchronised = False
+        self._evicted = False
         self._cmd_lock = asyncio.Lock()
         # Drain stderr in background to prevent pipe deadlock
         self._stderr_task: Optional[asyncio.Task] = None
@@ -112,12 +113,14 @@ class _DebugSession:
                 if not line:
                     break
                 logger.debug("debug_runner stderr: %s", line.decode(errors="replace").rstrip())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("debug_runner stderr drain error: %s", e)
 
     async def send_command(self, cmd: dict, timeout: int = DEBUG_COMMAND_TIMEOUT) -> dict:
         """Send JSONL command, read JSONL response."""
         async with self._cmd_lock:
+            if self._evicted:
+                return {"error": "Debug session was evicted to make room for a new session. Use debug_start() to create a new one."}
             if self._desynchronised:
                 return {"error": "Debug session is desynchronised after a timeout — destroy and recreate it"}
             if self.proc.returncode is not None:
@@ -201,6 +204,7 @@ class _DebugSessionManager:
             if len(self._sessions) >= MAX_DEBUG_SESSIONS:
                 oldest_id = min(self._sessions, key=lambda k: self._sessions[k].last_active)
                 old_to_kill = self._sessions.pop(oldest_id)
+                old_to_kill._evicted = True  # Signal before kill
                 logger.debug("Debug session evicted: %s", oldest_id)
             self._counter += 1
             session_id = f"debug-{self._counter}"

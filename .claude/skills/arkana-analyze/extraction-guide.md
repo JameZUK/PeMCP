@@ -4,6 +4,30 @@ Operational detail for Phase 5 extraction operations. The main SKILL.md contains
 the evidence-first gate and automated extraction tools; this file covers manual
 refinery operations, batch mode, and extraction chain documentation.
 
+## Speculative Decryption Safety Gate
+
+"Concrete evidence" means you decompiled the function that performs the operation
+and can cite: the specific algorithm (e.g., "sub_401830 calls CryptDecrypt with
+CALG_RC4"), the key source (e.g., "16-byte key loaded from .rdata+0x5000"), and
+the data location (e.g., "reads 54KB from RCDATA/202").
+
+Specifically forbidden without decompilation evidence:
+- Guessing XOR keys or trying `brute_force_simple_crypto` (this tool produces
+  false positives — a coincidental "MZ" match does NOT mean you found the right
+  key; it means 2 bytes out of thousands happened to align)
+- Trying random decompression algorithms on high-entropy data
+- Chaining speculative `refinery_pipeline` operations hoping something works
+- Trying multiple RC4/AES/XOR key combinations from different resources
+- Deriving keys from known-plaintext XOR and assuming they repeat
+
+The ONLY exceptions:
+- `extract_config_automated()` and `extract_config_for_family()`, which use
+  validated family-specific logic internally
+- `brute_force_simple_crypto()` AFTER decompilation reveals the algorithm is
+  simple XOR but the key can't be traced statically — and even then, validate
+  results thoroughly (a valid PE needs more than just "MZ at offset 0"; check
+  e_lfanew, section count, import table)
+
 ## Binary Refinery Operations
 
 For manual decoding when automated extraction fails. Key tools now support

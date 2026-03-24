@@ -36,7 +36,7 @@ from arkana.utils import _safe_env_int
 # This is a global semaphore shared across all HTTP sessions.  In multi-tenant
 # deployments, one user's analysis can block another if the limit is reached.
 # Increase via ARKANA_MAX_CONCURRENT_ANALYSES for high-concurrency environments.
-_analysis_semaphore = asyncio.Semaphore(_safe_env_int("ARKANA_MAX_CONCURRENT_ANALYSES", _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3)))
+_analysis_semaphore = asyncio.Semaphore(_safe_env_int("ARKANA_MAX_CONCURRENT_ANALYSES", _safe_env_int("PEMCP_MAX_CONCURRENT_ANALYSES", 3), min_val=1, max_val=32))
 
 if ANGR_AVAILABLE:
     import angr
@@ -125,6 +125,7 @@ def _start_floss_background_task(current_state, floss_args: tuple):
 
             # Merge into pe_data in place — preserve static strings if deep failed
             if current_state.pe_data:
+                current_state._ensure_pe_data_owned()
                 current_state.pe_data["floss_analysis"] = result
 
             status_msg = result.get("status", "Complete")
@@ -350,6 +351,7 @@ async def open_file(
         # M-ST1: Batch state reset under pe_lock to prevent dashboard seeing partial state
         with state._pe_lock:
             state.pe_data = None
+            state._pe_data_shared = False
             state.filepath = None
         # Clear cached dashboard data from previous file
         state._cached_triage = None
@@ -473,6 +475,7 @@ async def open_file(
                     with state._pe_lock:
                         state.filepath = abs_path
                         state.pe_data = cached
+                        state._pe_data_shared = False
                     state.loaded_from_cache = True
                     # Still need a pe_object for tools that access it directly
                     if mode == "shellcode" or mode in ("elf", "macho"):
@@ -585,6 +588,7 @@ async def open_file(
                     with state._pe_lock:
                         state.filepath = abs_path
                         state.pe_data = pe_data
+                        state._pe_data_shared = False
 
                 await asyncio.to_thread(_load_shellcode)
                 await ctx.report_progress(30, 100)
@@ -605,6 +609,7 @@ async def open_file(
                         _perform_unified_string_sifting(updated)
                         with state._pe_lock:
                             state.pe_data = updated
+                            state._pe_data_shared = False
 
                     await asyncio.to_thread(_run_floss)
 
@@ -647,6 +652,7 @@ async def open_file(
                     with state._pe_lock:
                         state.filepath = abs_path
                         state.pe_data = pe_data
+                        state._pe_data_shared = False
 
                 await asyncio.to_thread(_load_non_pe)
                 await ctx.report_progress(50, 100)
@@ -714,6 +720,7 @@ async def open_file(
                     )
                     with state._pe_lock:
                         state.pe_data = _pe_result
+                        state._pe_data_shared = False
                 except asyncio.TimeoutError:
                     raise RuntimeError(
                         f"[open_file] PE analysis timed out after {_PE_ANALYSIS_TIMEOUT}s. "
@@ -786,6 +793,7 @@ async def open_file(
 
         # Include per-task timing breakdown from PE analysis
         if state.pe_data and not _loaded_from_cache:
+            state._ensure_pe_data_owned()
             timing = state.pe_data.pop("_timing", None)
             if timing:
                 result["timing"] = timing
@@ -810,6 +818,7 @@ async def open_file(
 
         # Launch deep FLOSS analysis as a background task if static-only was used
         if state.pe_data and not _loaded_from_cache:
+            state._ensure_pe_data_owned()
             floss_deep_args = state.pe_data.pop("_floss_deep_args", None)
             if floss_deep_args:
                 _start_floss_background_task(state, floss_deep_args)
@@ -838,6 +847,7 @@ async def open_file(
         with state._pe_lock:
             state.filepath = None
             state.pe_data = None
+            state._pe_data_shared = False
         # Clear any cached enrichment data from partial init
         state._cached_triage = None
         state._cached_function_scores = None
@@ -929,6 +939,7 @@ async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]
     state.reset_angr()
     with state._pe_lock:
         state.pe_data = None
+        state._pe_data_shared = False
         state.filepath = None
     state.loaded_from_cache = False
     state.clear_notes()
@@ -1251,6 +1262,7 @@ async def reanalyze_loaded_pe_file(
         state.pe_object = new_pe_obj_from_thread
         with state._pe_lock:
             state.pe_data = new_parsed_data_from_thread
+            state._pe_data_shared = False
 
         # M-E3: Rank strings with StringSifter via to_thread to avoid blocking event loop
         await asyncio.to_thread(_perform_unified_string_sifting, state.pe_data)

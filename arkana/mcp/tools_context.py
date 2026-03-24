@@ -33,15 +33,15 @@ def _gather_context(
     # --- Triage status ---
     try:
         result["triage_status"] = state.get_triage_status(addr_hex)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("triage_status lookup failed for %s: %s", addr_hex, e)
 
     # --- Enrichment score ---
     try:
         scores = getattr(state, "_cached_function_scores", None) or {}
         result["enrichment_score"] = scores.get(addr_hex)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("enrichment_score lookup failed for %s: %s", addr_hex, e)
 
     # --- Resolve function via angr ---
     func = None
@@ -224,7 +224,8 @@ def _gather_context(
                             "created_at": note.get("created_at"),
                         })
             result["notes"] = func_notes
-        except Exception:
+        except Exception as e:
+            logger.debug("notes lookup failed for %s: %s", addr_hex, e)
             result["notes"] = []
 
     # --- Complexity ---
@@ -236,8 +237,8 @@ def _gather_context(
                 "is_simprocedure": func.is_simprocedure if hasattr(func, 'is_simprocedure') else False,
                 "is_plt": func.is_plt if hasattr(func, 'is_plt') else False,
             }
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("complexity lookup failed for %s: %s", addr_hex, e)
 
     return result
 

@@ -46,6 +46,7 @@
 
     /** Build HTML for rows from a fetched data response. */
     function buildRowsHtml(lines) {
+        if (!Array.isArray(lines)) return "";
         var html = "";
         for (var i = 0; i < lines.length; i++) {
             var line = lines[i];
@@ -82,8 +83,9 @@
         // Trim top if DOM is too large
         while (tbody.children.length > MAX_DOM_ROWS) {
             tbody.removeChild(tbody.firstChild);
-            _renderedStart += 16;
         }
+        _renderedStart = _renderedEnd - (tbody.children.length * 16);
+        if (_renderedStart < 0) _renderedStart = 0;
         updateRangeBadge();
     }
 
@@ -105,8 +107,9 @@
         // Trim bottom if DOM is too large
         while (tbody.children.length > MAX_DOM_ROWS) {
             tbody.removeChild(tbody.lastChild);
-            _renderedEnd -= 16;
         }
+        _renderedEnd = _renderedStart + (tbody.children.length * 16);
+        if (_totalSize > 0 && _renderedEnd > _totalSize) _renderedEnd = _totalSize;
         updateRangeBadge();
     }
 

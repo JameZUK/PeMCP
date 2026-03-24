@@ -37,7 +37,7 @@ _ON_DEMAND_YIELD_TIMEOUT = 120
 
 # Environment overrides
 _AUTO_ENRICHMENT_ENABLED = os.environ.get("ARKANA_AUTO_ENRICHMENT", "1") != "0"
-_MAX_DECOMPILE = _safe_env_int("ARKANA_ENRICHMENT_MAX_DECOMPILE", ENRICHMENT_MAX_DECOMPILE)
+_MAX_DECOMPILE = _safe_env_int("ARKANA_ENRICHMENT_MAX_DECOMPILE", ENRICHMENT_MAX_DECOMPILE, min_val=0)
 
 TASK_ID = "auto-enrichment"
 
@@ -431,6 +431,10 @@ def _decompile_sweep(
                     if used_fallback:
                         meta["note"] = DECOMPILE_FALLBACK_NOTE
                     _set_decompile_meta(cache_key, meta)
+                    # Reclaim KB decompiler artifacts now that text is cached
+                    if proj is not None:
+                        from arkana.mcp._angr_helpers import _cleanup_kb_decompile_artifacts
+                        _cleanup_kb_decompile_artifacts(proj, addr_int)
                     state._newly_decompiled.append(hex(addr_int))
                     decompiled += 1
 

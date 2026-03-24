@@ -24,10 +24,10 @@ from arkana.utils import _safe_env_int
 logger = logging.getLogger("Arkana")
 
 # Runtime-configurable thresholds (env vars override constants)
-_INTERVAL = _safe_env_int("ARKANA_RESOURCE_MONITOR_INTERVAL", RESOURCE_MONITOR_INTERVAL)
-_MEMORY_HIGH = _safe_env_int("ARKANA_RESOURCE_MEMORY_HIGH_MB", RESOURCE_MEMORY_HIGH_MB)
-_MEMORY_CRITICAL = _safe_env_int("ARKANA_RESOURCE_MEMORY_CRITICAL_MB", RESOURCE_MEMORY_CRITICAL_MB)
-_CPU_HIGH = _safe_env_int("ARKANA_RESOURCE_CPU_HIGH_PERCENT", RESOURCE_CPU_HIGH_PERCENT)
+_INTERVAL = _safe_env_int("ARKANA_RESOURCE_MONITOR_INTERVAL", RESOURCE_MONITOR_INTERVAL, min_val=1, max_val=3600)
+_MEMORY_HIGH = _safe_env_int("ARKANA_RESOURCE_MEMORY_HIGH_MB", RESOURCE_MEMORY_HIGH_MB, min_val=100)
+_MEMORY_CRITICAL = _safe_env_int("ARKANA_RESOURCE_MEMORY_CRITICAL_MB", RESOURCE_MEMORY_CRITICAL_MB, min_val=100)
+_CPU_HIGH = _safe_env_int("ARKANA_RESOURCE_CPU_HIGH_PERCENT", RESOURCE_CPU_HIGH_PERCENT, min_val=1, max_val=100)
 
 # Module-level state
 _latest_snapshot: Optional[Dict[str, Any]] = None

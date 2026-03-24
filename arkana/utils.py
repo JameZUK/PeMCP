@@ -83,7 +83,9 @@ _NESTED_QUANTIFIER_RE = re.compile(
     r'\((?:\?[:=!])?[^)]*[+*}\?][^)]*\)\s*[+*{]'
 )
 # Detects alternation inside quantified groups, e.g. (a|ab)+, (foo|foobar)*
-# These can cause catastrophic backtracking when the alternatives overlap.
+# Conservative: not all such patterns cause catastrophic backtracking (only those
+# with overlapping alternatives), but detecting overlap statically is infeasible.
+# The 5-second timeout in safe_regex_search() provides the real safety net.
 _ALTERNATION_QUANTIFIER_RE = re.compile(
     r'\([^)]*\|[^)]*\)[*+?]|\([^)]*\|[^)]*\)\{'
 )

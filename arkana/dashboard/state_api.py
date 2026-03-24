@@ -916,10 +916,12 @@ def get_overview_data() -> Dict[str, Any]:
 
     # Active tool (for loading status)
     active_tool = None
+    active_tools = []
     active_tool_progress = 0
     active_tool_total = 100
     with st._active_tool_lock:
         active_tool = st.active_tool
+        active_tools = list(st._active_tools)
         active_tool_progress = st.active_tool_progress
         active_tool_total = st.active_tool_total
 
@@ -954,6 +956,7 @@ def get_overview_data() -> Dict[str, Any]:
         "custom_type_count": custom_type_count,
         "recent_artifacts": recent_artifacts,
         "active_tool": active_tool,
+        "active_tools": active_tools,
         "active_tool_progress": active_tool_progress,
         "active_tool_total": active_tool_total,
         "resource_usage": resource_usage,
@@ -1408,19 +1411,23 @@ def get_timeline_data(limit: int = 100) -> List[Dict[str, Any]]:
     entries.sort(key=lambda e: e["timestamp_epoch"])
     result = entries[-limit:]
 
-    # Inject active tool as a live entry at the end
+    # Inject active tools as live entries at the end
     with st._active_tool_lock:
-        if st.active_tool:
-            result.append({
-                "type": "active",
-                "timestamp": "",
-                "timestamp_epoch": time.time(),
-                "name": st.active_tool,
-                "summary": f"Running... {st.active_tool_progress}%",
-                "duration_ms": 0,
-                "progress": st.active_tool_progress,
-                "total": st.active_tool_total,
-            })
+        active_tools = list(st._active_tools)
+        progress = st.active_tool_progress
+        total = st.active_tool_total
+    now = time.time()
+    for tool_name in active_tools:
+        result.append({
+            "type": "active",
+            "timestamp": "",
+            "timestamp_epoch": now,
+            "name": tool_name,
+            "summary": f"Running... {progress}%",
+            "duration_ms": 0,
+            "progress": progress,
+            "total": total,
+        })
 
     return result
 

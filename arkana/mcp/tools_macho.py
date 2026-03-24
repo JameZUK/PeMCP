@@ -11,6 +11,12 @@ if LIEF_AVAILABLE:
     import lief
 
 
+def _enum_name(val):
+    """Extract name from LIEF enum repr (e.g. 'CPU_TYPES.x86_64' → 'x86_64')."""
+    s = str(val)
+    return s.rsplit(".", 1)[-1] if "." in s else s
+
+
 @tool_decorator
 async def macho_analyze(
     ctx: Context,
@@ -43,7 +49,7 @@ async def macho_analyze(
 
         # Check if it's actually Mach-O
         if binary.format != lief.Binary.FORMATS.MACHO:
-            return {"error": f"Not a Mach-O binary (detected format: {str(binary.format).split('.')[-1]})"}
+            return {"error": f"Not a Mach-O binary (detected format: {_enum_name(binary.format)})"}
 
         macho = binary
         result: Dict[str, Any] = {"file": os.path.basename(target), "is_macho": True}
@@ -52,8 +58,8 @@ async def macho_analyze(
         header = macho.header
         result["header"] = {
             "magic": hex(int(header.magic)) if hasattr(header, 'magic') else None,
-            "cpu_type": str(header.cpu_type).split(".")[-1] if hasattr(header, 'cpu_type') else None,
-            "file_type": str(header.file_type).split(".")[-1] if hasattr(header, 'file_type') else None,
+            "cpu_type": _enum_name(header.cpu_type) if hasattr(header, 'cpu_type') else None,
+            "file_type": _enum_name(header.file_type) if hasattr(header, 'file_type') else None,
             "number_of_commands": header.nb_cmds if hasattr(header, 'nb_cmds') else None,
             "flags": hex(header.flags) if hasattr(header, 'flags') else None,
         }
@@ -63,7 +69,7 @@ async def macho_analyze(
         try:
             for cmd in macho.commands:
                 cmd_entry = {
-                    "type": str(cmd.command).split(".")[-1] if hasattr(cmd, 'command') else str(type(cmd).__name__),
+                    "type": _enum_name(cmd.command) if hasattr(cmd, 'command') else str(type(cmd).__name__),
                     "size": cmd.size if hasattr(cmd, 'size') else None,
                 }
                 commands.append(cmd_entry)

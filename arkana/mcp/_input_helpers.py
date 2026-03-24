@@ -97,7 +97,7 @@ class _ToolResultCache:
                 need_global_decrement = True
             else:
                 bucket.move_to_end(params_key)
-                return entry["items"]
+                return list(entry["items"])
         # Decrement global counter outside self._lock (consistent lock ordering)
         if need_global_decrement:
             with _ToolResultCache._global_lock:
@@ -142,6 +142,14 @@ class _ToolResultCache:
             _ToolResultCache._global_entry_count = max(0, _ToolResultCache._global_entry_count - removed)
 
     @classmethod
+    def sweep_all_expired(cls) -> int:
+        """Proactively remove all TTL-expired entries. Returns entries removed."""
+        with cls._global_lock:
+            before = cls._global_entry_count
+            cls._cleanup_expired()
+            return before - cls._global_entry_count
+
+    @classmethod
     def _on_instance_gc(cls, instance_id: int) -> None:
         """Weakref finalizer — recount global entries when an instance is collected."""
         with cls._global_lock:
@@ -183,8 +191,13 @@ def _make_hashable(v, _depth=0):
     if isinstance(v, dict):
         return tuple(sorted((k, _make_hashable(val, _depth + 1)) for k, val in v.items()))
     if isinstance(v, (set, frozenset)):
-        # Sort sets for deterministic cache keys
-        return tuple(sorted(_make_hashable(item, _depth + 1) for item in v))
+        # Sort sets for deterministic cache keys; fall back to sort-by-repr
+        # if items are mixed types that can't be compared (e.g. int vs str).
+        items = tuple(_make_hashable(item, _depth + 1) for item in v)
+        try:
+            return tuple(sorted(items))
+        except TypeError:
+            return tuple(sorted(items, key=repr))
     if isinstance(v, (list, tuple)):
         return tuple(_make_hashable(item, _depth + 1) for item in v)
     return v

@@ -340,6 +340,14 @@ class AnalysisCache:
             entry_dir.mkdir(parents=True, exist_ok=True)
             entry_path = self._entry_path(sha256)
 
+            # Record mtime before write so we can detect concurrent
+            # update_session_data() modifications inside the lock.
+            pre_write_mtime = None
+            try:
+                pre_write_mtime = entry_path.stat().st_mtime if entry_path.exists() else None
+            except OSError:
+                pass
+
             # M-10: Use NamedTemporaryFile to avoid .tmp collisions between
             # concurrent put() calls for different SHA256 values that share
             # the same entry_dir.
@@ -351,7 +359,8 @@ class AnalysisCache:
                 fd.close()  # close the raw fd; gzip.open re-opens by path
                 with gzip.open(tmp, "wt", encoding="utf-8") as gz:
                     json.dump(wrapper, gz)
-                tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
+                # tmp.replace moved into lock block below to prevent
+                # clobbering concurrent update_session_data() writes.
             except Exception:
                 tmp.unlink(missing_ok=True)
                 raise
@@ -359,8 +368,46 @@ class AnalysisCache:
             logger.error("Cache serialization error for %s...: %s", sha256[:12], e)
             return False
 
+        _SESSION_FIELDS = ("notes", "tool_history", "artifacts", "renames", "custom_types", "triage_status")
+
         with self._lock:
             try:
+                # Check if session data was updated during our write
+                try:
+                    current_mtime = entry_path.stat().st_mtime if entry_path.exists() else None
+                except OSError:
+                    current_mtime = None
+
+                if current_mtime is not None and current_mtime != pre_write_mtime:
+                    # Session data was updated during our write — merge it
+                    try:
+                        with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                            on_disk = json.load(f)
+                        with gzip.open(tmp, "rt", encoding="utf-8") as f:
+                            our_data = json.load(f)
+                        for field in _SESSION_FIELDS:
+                            if field in on_disk:
+                                our_data[field] = on_disk[field]
+                        # Write merged data to a NEW temp file (not tmp itself)
+                        # to avoid corrupting tmp if the write fails mid-way.
+                        merge_fd = tempfile.NamedTemporaryFile(
+                            dir=str(entry_dir), suffix='.tmp', delete=False,
+                        )
+                        merge_tmp = Path(merge_fd.name)
+                        try:
+                            merge_fd.close()
+                            with gzip.open(merge_tmp, "wt", encoding="utf-8") as gz:
+                                json.dump(our_data, gz)
+                            # Replace the original tmp with the merged version
+                            merge_tmp.replace(tmp)
+                        except Exception:
+                            merge_tmp.unlink(missing_ok=True)
+                            raise
+                    except Exception as e:
+                        logger.warning("Failed to merge session data during cache put: %s", e)
+
+                tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
+
                 file_size = entry_path.stat().st_size
                 meta = self._load_meta()
                 meta[sha256] = {
@@ -390,6 +437,7 @@ class AnalysisCache:
 
             except OSError as e:
                 logger.error("Cache write error for %s...: %s", sha256[:12], e)
+                tmp.unlink(missing_ok=True)
                 return False
 
     # ------------------------------------------------------------------

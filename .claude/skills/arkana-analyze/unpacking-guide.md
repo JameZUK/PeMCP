@@ -4,6 +4,31 @@ Strategies for identifying and unpacking packed, encrypted, or obfuscated binari
 
 ---
 
+## Phase 2 Anti-Pattern Warning
+
+**ACTUALLY CALL THE UNPACKING TOOLS**: Do not just think about which unpacking
+tool to use — call it. The most common failure mode is recognizing the binary
+is packed, identifying the right tool in your reasoning, but then trying
+something else instead (hex dumps, refinery operations, manual stub analysis).
+The method cascade below exists for a reason: call `auto_unpack_pe()` first,
+then `try_all_unpackers()`, then `qiling_dump_unpacked_binary()`. Only attempt
+manual stub analysis (Method 4) after all three automated methods have been
+tried and have returned explicit failure results.
+
+**Do NOT decompile or decrypt while packed**: The packing stub is designed to
+defeat static analysis — angr's CFG builder will stall or produce useless
+results on obfuscated/encrypted code. The resources, strings, and encrypted
+blobs inside a packed binary are there to be processed by the UNPACKED code.
+You cannot understand the decryption without first understanding the code that
+performs it, and you cannot understand that code until the binary is unpacked.
+
+If ALL unpacking and emulation methods fail: Report what IS known (packer ID,
+entropy, import count, any VT results, any strings or IOCs extracted from the
+packed binary) and clearly state that deeper analysis was blocked by packing. Do
+not guess at the payload's nature.
+
+---
+
 ## Identifying Packed Binaries
 
 ### Automated Detection

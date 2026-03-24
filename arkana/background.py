@@ -213,9 +213,9 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
         soft_t = soft_timeout if soft_timeout is not None else (
             timeout if timeout is not None else _safe_env_int(
                 "ARKANA_BACKGROUND_TASK_SOFT_TIMEOUT", BACKGROUND_TASK_SOFT_TIMEOUT))
-        check_interval = _safe_env_int("ARKANA_OVERTIME_CHECK_INTERVAL", OVERTIME_CHECK_INTERVAL)
-        stall_kill = _safe_env_int("ARKANA_OVERTIME_STALL_KILL", OVERTIME_STALL_KILL)
-        max_runtime = _safe_env_int("ARKANA_OVERTIME_MAX_RUNTIME", OVERTIME_MAX_RUNTIME)
+        check_interval = _safe_env_int("ARKANA_OVERTIME_CHECK_INTERVAL", OVERTIME_CHECK_INTERVAL, min_val=5)
+        stall_kill = _safe_env_int("ARKANA_OVERTIME_STALL_KILL", OVERTIME_STALL_KILL, min_val=10)
+        max_runtime = _safe_env_int("ARKANA_OVERTIME_MAX_RUNTIME", OVERTIME_MAX_RUNTIME, min_val=60)
 
         task_start = time.time()
         coro = asyncio.to_thread(_thread_wrapper)
@@ -440,9 +440,9 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
     # Resolve timeouts
     cfg_hard = _safe_env_int("ARKANA_ANGR_CFG_TIMEOUT", ANGR_CFG_TIMEOUT)
     cfg_soft = _safe_env_int("ARKANA_ANGR_CFG_SOFT_TIMEOUT", ANGR_CFG_SOFT_TIMEOUT)
-    check_interval = _safe_env_int("ARKANA_OVERTIME_CHECK_INTERVAL", OVERTIME_CHECK_INTERVAL)
-    stall_kill = _safe_env_int("ARKANA_OVERTIME_STALL_KILL", OVERTIME_STALL_KILL)
-    max_runtime = _safe_env_int("ARKANA_OVERTIME_MAX_RUNTIME", OVERTIME_MAX_RUNTIME)
+    check_interval = _safe_env_int("ARKANA_OVERTIME_CHECK_INTERVAL", OVERTIME_CHECK_INTERVAL, min_val=5)
+    stall_kill = _safe_env_int("ARKANA_OVERTIME_STALL_KILL", OVERTIME_STALL_KILL, min_val=10)
+    max_runtime = _safe_env_int("ARKANA_OVERTIME_MAX_RUNTIME", OVERTIME_MAX_RUNTIME, min_val=60)
 
     bridge = _progress_bridge  # shorter alias
     my_gen = _session_state._analysis_generation if _session_state else 0

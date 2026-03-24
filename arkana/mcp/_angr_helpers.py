@@ -60,8 +60,8 @@ def _rebuild_project_with_hooks():
         except ValueError:
             try:
                 proj.hook_symbol(key, hook_proc)
-            except Exception:
-                logger.warning("Failed to re-apply hook for '%s' during CFG rebuild", key)
+            except Exception as e:
+                logger.warning("Failed to re-apply hook for '%s' during CFG rebuild: %s", key, e)
 
     state.set_angr_results(proj, None, state.angr_loop_cache, state.angr_loop_cache_config)
 
@@ -260,6 +260,31 @@ def _safe_decompile(project, func, cfg_model):
                     f"fallback: {fallback_err})"
                 ) from e
         raise
+
+
+def _cleanup_kb_decompile_artifacts(project, func_addr):
+    """Remove decompiler-internal KB artifacts for a function after caching.
+
+    After decompiled text is cached in _decompile_meta, the angr KB retains
+    StructuredCodeGenerator and Clinic objects that are never reused. Clearing
+    them per-function reclaims ~200KB-1MB each.
+
+    Does NOT clear kb.variables — used by get_function_variables and dashboard.
+    """
+    try:
+        kb = project.kb
+        if hasattr(kb, 'structured_code'):
+            sc = kb.structured_code
+            if hasattr(sc, '_results'):
+                keys_to_remove = [k for k in sc._results if isinstance(k, tuple) and k[0] == func_addr]
+                for k in keys_to_remove:
+                    del sc._results[k]
+        if hasattr(kb, 'clinic'):
+            clinic = kb.clinic
+            if hasattr(clinic, '_results') and func_addr in clinic._results:
+                del clinic._results[func_addr]
+    except Exception:
+        pass  # Best-effort cleanup
 
 
 def _format_cc_info(func) -> Dict[str, Any]:

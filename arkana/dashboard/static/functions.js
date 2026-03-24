@@ -15,6 +15,9 @@ function _ensureDetailPanel(addr) {
         while (_openDetailPanelKeys.length > _OPEN_DETAIL_PANELS_MAX) {
             var evict = _openDetailPanelKeys.shift();
             delete _openDetailPanels[evict];
+            delete _analysisCache[evict];
+            var cacheIdx = _analysisCacheKeys.indexOf(evict);
+            if (cacheIdx !== -1) _analysisCacheKeys.splice(cacheIdx, 1);
         }
         _openDetailPanels[addr] = {};
     }
@@ -246,6 +249,9 @@ function toggleAnalysisPanel(btn) {
             // Already on xrefs tab — toggle off
             detailRow.remove();
             delete _openDetailPanels[addr];
+            delete _analysisCache[addr];
+            var cacheIdx = _analysisCacheKeys.indexOf(addr);
+            if (cacheIdx !== -1) _analysisCacheKeys.splice(cacheIdx, 1);
             return;
         }
         // Switch to xrefs tab
@@ -269,6 +275,9 @@ function toggleDecompile(btn) {
             // Already on code tab — toggle off
             detailRow.remove();
             delete _openDetailPanels[addr];
+            delete _analysisCache[addr];
+            var cacheIdx = _analysisCacheKeys.indexOf(addr);
+            if (cacheIdx !== -1) _analysisCacheKeys.splice(cacheIdx, 1);
             return;
         }
         // Switch to code tab (trigger decompile if needed)
@@ -565,6 +574,9 @@ function toggleDetailTab(btn, tabName) {
         if (activeTab && activeTab.dataset.tab === tabName) {
             detailRow.remove();
             delete _openDetailPanels[addr];
+            delete _analysisCache[addr];
+            var cacheIdx = _analysisCacheKeys.indexOf(addr);
+            if (cacheIdx !== -1) _analysisCacheKeys.splice(cacheIdx, 1);
             return;
         }
         var tab = detailRow.querySelector('.detail-tab[data-tab="' + tabName + '"]');

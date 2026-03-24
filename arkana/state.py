@@ -56,6 +56,7 @@ class AnalyzerState:
         self._state_uuid: str = str(uuid.uuid4())
         self.filepath: Optional[str] = None
         self.pe_data: Optional[Dict[str, Any]] = None
+        self._pe_data_shared: bool = False  # True when pe_data is a shared reference from _default_state
         self.pe_object: Optional[Any] = None  # pefile.PE or MockPE
         self._inherited_pe_object: bool = False  # True if pe_object was inherited from _default_state
         self.pefile_version: Optional[str] = None
@@ -160,6 +161,7 @@ class AnalyzerState:
         # Active tool tracking (for dashboard live status)
         self._active_tool_lock = threading.Lock()
         self.active_tool: Optional[str] = None
+        self._active_tools: List[str] = []
         self.active_tool_progress: int = 0
         self.active_tool_total: int = 100
 
@@ -273,6 +275,26 @@ class AnalyzerState:
         if self._closing:
             return
         self.last_active = time.time()
+
+    def push_active_tool(self, name: str):
+        """Register a tool as actively running (thread-safe)."""
+        with self._active_tool_lock:
+            self._active_tools.append(name)
+            self.active_tool = name
+
+    def pop_active_tool(self, name: str):
+        """Unregister a tool as actively running (thread-safe)."""
+        with self._active_tool_lock:
+            try:
+                self._active_tools.remove(name)
+            except ValueError:
+                pass
+            self.active_tool = self._active_tools[-1] if self._active_tools else None
+
+    def get_active_tools(self) -> list:
+        """Return a snapshot of all currently active tools (thread-safe)."""
+        with self._active_tool_lock:
+            return list(self._active_tools)
 
     def increment_generation(self) -> int:
         """Increment analysis generation counter.
@@ -814,6 +836,17 @@ class AnalyzerState:
             self.angr_loop_cache = loop_cache
             self.angr_loop_cache_config = loop_cache_config
 
+    def _ensure_pe_data_owned(self):
+        """Deep-copy pe_data if shared, making it safe to mutate in-place.
+
+        Called before any in-place mutation of ``pe_data`` (key assignment,
+        pop, etc.) to implement copy-on-write semantics.  Read-only access
+        (``get()``, ``[key]`` reads) does NOT require this call.
+        """
+        if self._pe_data_shared and self.pe_data is not None:
+            self.pe_data = copy.deepcopy(self.pe_data)
+            self._pe_data_shared = False
+
     def get_file_snapshot(self):
         """Return (pe_data, filepath) atomically under _pe_lock."""
         with self._pe_lock:
@@ -968,8 +1001,9 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
             # replaces the reference on the session only.
             if _default_state.filepath is not None:
                 new_state.filepath = _default_state.filepath
-                # C7: Deep copy pe_data so sessions can't mutate shared state
-                new_state.pe_data = copy.deepcopy(_default_state.pe_data)
+                # Share pe_data read-only; copy-on-write via _ensure_pe_data_owned()
+                new_state.pe_data = _default_state.pe_data
+                new_state._pe_data_shared = True
                 new_state.pe_object = _default_state.pe_object
                 new_state._inherited_pe_object = True
                 new_state.pefile_version = _default_state.pefile_version

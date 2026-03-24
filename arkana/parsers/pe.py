@@ -7,6 +7,7 @@ import warnings
 import re
 import concurrent.futures
 import logging
+import threading
 
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple, Callable
@@ -1121,6 +1122,7 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
             return result, round(_time.monotonic() - t0, 2)
 
         pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(_parallel_tasks))
+        _abandoned_futures = []
         try:
             futures = {
                 pool.submit(_timed_safe_parse, key, func, *args): key
@@ -1143,8 +1145,26 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                         "results": None,
                     }
                     _timing[key] = float(timeout) if timeout else 0.0
+                    _abandoned_futures.append((future, key))
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
+
+        if _abandoned_futures:
+            def _monitor_abandoned(futs):
+                for future, key in futs:
+                    try:
+                        future.result(timeout=600)
+                        logger.info("Abandoned %s analysis thread completed.", key)
+                    except concurrent.futures.TimeoutError:
+                        logger.warning("Abandoned %s thread still running after 10min.", key)
+                    except Exception as e:
+                        logger.debug("Abandoned %s thread error: %s", key, e)
+            threading.Thread(
+                target=_monitor_abandoned,
+                args=(_abandoned_futures,),
+                daemon=True,
+                name="pe-parser-abandon-monitor",
+            ).start()
 
         _timing["parallel_scans_wall"] = round(_time.monotonic() - _t_parallel, 2)
 
