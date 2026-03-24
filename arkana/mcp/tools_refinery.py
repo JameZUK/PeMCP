@@ -773,7 +773,7 @@ async def refinery_carve(
         file_type: (str) File type to carve (for operation='files'). Default 'pe'.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
         decode: (bool) Auto-decode carved patterns. Default True.
-        limit: (int) Max items. Default 50.
+        limit: (int) Max items. Default 20.
         output_path: (Optional[str]) Save carved items to disk. For multiple items, appends _N suffix.
 
     Returns:
@@ -1180,7 +1180,6 @@ _PIPELINE_UNIT_MAP = {
     "lzma": ("refinery.units.compression.lz", "lzma", {}),
     "lz4": ("refinery.units.compression.lz4", "lz4", {}),
     "decompress": ("refinery.units.compression.decompress", "decompress", {}),
-    "rot": ("refinery.units.crypto.cipher.rot", "rot", {}),
 }
 
 _MAX_BATCH_PIPELINE = 100
@@ -1257,6 +1256,15 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
             mod = importlib.import_module(mod_path)
             unit_cls = getattr(mod, cls_name)
             kwargs = {}
+            # Special handling for rot cipher (takes 'amount' integer, not hex key)
+            if cipher_name == "rot":
+                if len(parts) > 1:
+                    try:
+                        kwargs["amount"] = int(parts[1])
+                    except ValueError:
+                        kwargs["amount"] = 13  # default ROT13
+                current = current | unit_cls(**kwargs) | bytes
+                continue
             # Positional: key, mode, iv
             if len(parts) > 1 and "=" not in parts[1]:
                 kwargs["key"] = _safe_fromhex(parts[1], "cipher key")
