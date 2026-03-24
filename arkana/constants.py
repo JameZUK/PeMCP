@@ -246,6 +246,7 @@ MAX_OPAQUE_SCAN_FUNCTIONS = 100                  # max functions to scan for opa
 MAX_DEBUG_SESSIONS = 3               # Max concurrent debug sessions per state (env: ARKANA_MAX_DEBUG_SESSIONS)
 DEBUG_SESSION_TTL = 1800             # 30-minute idle timeout (env: ARKANA_DEBUG_SESSION_TTL)
 DEBUG_COMMAND_TIMEOUT = 300          # 5-minute timeout per debug command (env: ARKANA_DEBUG_COMMAND_TIMEOUT)
+DEBUG_RUNNER_TIMEOUT_BUFFER = 15     # Extra seconds for client-side timeout beyond runner timeout
 MAX_DEBUG_SNAPSHOTS = 10             # Max snapshots per session (env: ARKANA_MAX_DEBUG_SNAPSHOTS)
 MAX_DEBUG_INSTRUCTIONS = 10_000_000  # Max instructions per continue/run_until
 MAX_DEBUG_MEMORY_READ = 1_048_576    # 1MB max memory read per call

@@ -378,7 +378,7 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 | `debug_list_stubs` | List all installed API stubs: builtin I/O stubs (8 console APIs), builtin CRT stubs (~47 MSVC init APIs), and user-defined stubs. |
 | `debug_remove_stub` | Remove a user-defined API stub. Builtin I/O and CRT stubs cannot be removed — restart the session with `stub_io=False` or `stub_crt=False` to disable them. |
 
-> **Note:** Debug sessions use the same isolated Qiling venv (`/app/qiling-venv`) as the fire-and-forget emulation tools. Sessions time out after 30 minutes of inactivity (`ARKANA_DEBUG_SESSION_TTL`). Each debug command has a 5-minute timeout (`ARKANA_DEBUG_COMMAND_TIMEOUT`). Emulation fidelity limitations apply  - complex anti-emulation, threading, and some Windows APIs may not work correctly.
+> **Note:** Debug sessions use the same isolated Qiling venv (`/app/qiling-venv`) as the fire-and-forget emulation tools. Sessions time out after 30 minutes of inactivity (`ARKANA_DEBUG_SESSION_TTL`). Each execution command has a 5-minute timeout (`ARKANA_DEBUG_COMMAND_TIMEOUT`). When the timeout fires, the session is **paused, not killed** — the runner calls `emu_stop()` (Unicorn's thread-safe stop) to halt emulation while preserving all CPU state, memory, and hooks. You can inspect the paused session with `debug_read_state`/`debug_read_memory`/`debug_search_memory`, then resume with `debug_continue`. Emulation fidelity limitations apply — complex anti-emulation, threading, and some Windows APIs may not work correctly.
 
 ## Multi-Format Binary Analysis (9 tools)
 

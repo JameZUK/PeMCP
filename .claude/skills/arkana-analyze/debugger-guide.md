@@ -77,6 +77,42 @@ Find data in mapped memory regions:
 Max 3 concurrent sessions, 1800s TTL, 10M instruction cap, 1MB max memory read,
 100 breakpoints, 50 watchpoints, 10 snapshots.
 
+## Timeout Behaviour — Pause, Don't Kill
+
+Execution commands (`debug_continue`, `debug_step`, `debug_step_over`,
+`debug_run_until`) have a **runner-side timeout** (`DEBUG_COMMAND_TIMEOUT`, 300s
+by default, env: `ARKANA_DEBUG_COMMAND_TIMEOUT`).
+
+When the timeout fires, the runner calls `_ql.emu_stop()` (Unicorn's thread-safe
+stop API) which causes the current `_ql.run()` to return cleanly. The session is
+**paused, not killed** — all CPU state, memory, hooks, breakpoints, and watchpoints
+are fully preserved.
+
+After a timeout you can:
+- `debug_read_state()` — see registers, PC, next instructions
+- `debug_read_memory(address, length)` — dump memory regions
+- `debug_search_memory(pattern)` — find decrypted strings/data
+- `debug_get_api_trace()` — review API calls made so far
+- `debug_continue()` / `debug_step()` — **resume execution** from exactly where it stopped
+
+The response includes `stop_reason: "timeout"` with a hint explaining the session
+is still alive and resumable.
+
+**Example — unpacking a packed binary:**
+```
+debug_continue(max_instructions=10000000)
+  → timeout after 300s, stop_reason="timeout", instructions_executed=8234521
+
+debug_search_memory(pattern="MZ", pattern_type="string")
+  → found at 0x5003000 (unpacked PE in heap)
+
+debug_read_memory(address="0x5003000", length=4096)
+  → dump the unpacked payload
+
+debug_continue(max_instructions=10000000)
+  → resumes from where it paused, hits connect() breakpoint
+```
+
 ## Known Limitations and Workarounds
 
 ### 1. Register writes do not redirect execution

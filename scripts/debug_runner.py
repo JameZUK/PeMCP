@@ -19,6 +19,7 @@ import json
 import os
 import struct
 import sys
+import threading
 import time
 import traceback
 
@@ -1239,12 +1240,19 @@ def cmd_init(cmd):
     return result
 
 
-def _run_with_reentry(max_insns):
+def _run_with_reentry(max_insns, timeout_seconds=None):
     """Run emulation with re-entry loop for API hook processing.
 
     Qiling's ql.run() returns after each API hook dispatch (simprocedure
     handling). This loop re-enters ql.run() until we either hit max_insns,
-    a stop reason is set (breakpoint/watchpoint), or the emulation exits.
+    a stop reason is set (breakpoint/watchpoint), the emulation exits,
+    or the timeout is reached.
+
+    When ``timeout_seconds`` is set, each ``_ql.run()`` call is executed in
+    a daemon thread.  If the deadline is exceeded the main thread calls
+    ``_ql.emu_stop()`` (Unicorn's thread-safe stop) which causes the
+    current ``ql.run()`` to return cleanly.  All CPU / memory state is
+    preserved, so the session can be inspected and resumed afterwards.
 
     Returns (error_extra: dict or None). If None, check _stop_reason.
     """
@@ -1254,18 +1262,68 @@ def _run_with_reentry(max_insns):
     reentries = 0
     max_reentries = 500  # Hard cap on total loop iterations
 
+    deadline = (time.monotonic() + timeout_seconds) if timeout_seconds else None
+
     while remaining > 0 and reentries < max_reentries:
         reentries += 1
         prev_count = _insn_count
         prev_pc = _get_pc()
 
-        try:
-            _ql.run(count=remaining)
-        except Exception as e:
-            err_str = str(e)
-            if "unmapped" in err_str.lower() or "exit" in err_str.lower():
-                return {"stop_reason": "exited", "exit_reason": err_str[:500]}
-            return {"stop_reason": "exception", "error_detail": err_str[:500]}
+        # Check deadline before each iteration
+        if deadline and time.monotonic() >= deadline:
+            return {"stop_reason": "timeout",
+                    "timeout_seconds": timeout_seconds,
+                    "note": ("Command timed out. Session is still alive and "
+                             "resumable — use debug_read_state, debug_read_memory, "
+                             "debug_search_memory to inspect, then debug_continue "
+                             "to resume execution.")}
+
+        if deadline:
+            # Run emulation in a thread so we can interrupt via emu_stop()
+            run_result = [None]  # [exception | None]
+
+            def _emu_thread():
+                try:
+                    _ql.run(count=remaining)
+                except Exception as exc:
+                    run_result[0] = exc
+
+            t = threading.Thread(target=_emu_thread, daemon=True)
+            t.start()
+
+            wait_time = max(0.0, deadline - time.monotonic())
+            t.join(timeout=wait_time)
+
+            if t.is_alive():
+                # Deadline exceeded while _ql.run() is still going —
+                # emu_stop() is thread-safe (Unicorn guarantee).
+                try:
+                    _ql.emu_stop()
+                except Exception:
+                    pass
+                t.join(timeout=5)  # Give Unicorn a moment to wind down
+                return {"stop_reason": "timeout",
+                        "timeout_seconds": timeout_seconds,
+                        "note": ("Command timed out. Session is still alive and "
+                                 "resumable — use debug_read_state, debug_read_memory, "
+                                 "debug_search_memory to inspect, then debug_continue "
+                                 "to resume execution.")}
+
+            if run_result[0] is not None:
+                e = run_result[0]
+                err_str = str(e)
+                if "unmapped" in err_str.lower() or "exit" in err_str.lower():
+                    return {"stop_reason": "exited", "exit_reason": err_str[:500]}
+                return {"stop_reason": "exception", "error_detail": err_str[:500]}
+        else:
+            # No timeout — run directly (original fast path)
+            try:
+                _ql.run(count=remaining)
+            except Exception as e:
+                err_str = str(e)
+                if "unmapped" in err_str.lower() or "exit" in err_str.lower():
+                    return {"stop_reason": "exited", "exit_reason": err_str[:500]}
+                return {"stop_reason": "exception", "error_detail": err_str[:500]}
 
         # Check if a stop reason was set (breakpoint, watchpoint, temp bp)
         if _stop_reason:
@@ -1298,12 +1356,13 @@ def cmd_step(cmd):
         return {"error": "No debug session active. Call 'init' first."}
 
     count = max(1, min(cmd.get("count", 1), 10000))
+    timeout_seconds = cmd.get("timeout_seconds")
     _stop_reason = ""
     _hit_bp_id = None
     _hit_wp_id = None
     _wp_access_info = None
 
-    error_extra = _run_with_reentry(count)
+    error_extra = _run_with_reentry(count, timeout_seconds=timeout_seconds)
     if error_extra:
         return _build_execution_state(error_extra)
 
@@ -1356,7 +1415,8 @@ def cmd_step_over(cmd):
         return {"error": f"Failed to set temp breakpoint: {e}"}
 
     max_insns = cmd.get("max_instructions", 1_000_000)
-    error_extra = _run_with_reentry(max_insns)
+    timeout_seconds = cmd.get("timeout_seconds")
+    error_extra = _run_with_reentry(max_insns, timeout_seconds=timeout_seconds)
 
     # Remove temp hook
     try:
@@ -1387,12 +1447,13 @@ def cmd_continue(cmd):
         return {"error": "No debug session active. Call 'init' first."}
 
     max_insns = max(1, min(cmd.get("max_instructions", 10_000_000), 10_000_000))
+    timeout_seconds = cmd.get("timeout_seconds")
     _stop_reason = ""
     _hit_bp_id = None
     _hit_wp_id = None
     _wp_access_info = None
 
-    error_extra = _run_with_reentry(max_insns)
+    error_extra = _run_with_reentry(max_insns, timeout_seconds=timeout_seconds)
     if error_extra:
         return _build_execution_state(error_extra)
 
@@ -1425,13 +1486,15 @@ def cmd_run_until(cmd):
     _hit_wp_id = None
     _wp_access_info = None
 
+    timeout_seconds = cmd.get("timeout_seconds")
+
     temp_callback = _make_temp_bp_callback()
     try:
         hook = _ql.hook_address(temp_callback, address)
     except Exception as e:
         return {"error": f"Failed to set temp breakpoint at {_hex(address)}: {e}"}
 
-    error_extra = _run_with_reentry(max_insns)
+    error_extra = _run_with_reentry(max_insns, timeout_seconds=timeout_seconds)
 
     # Remove temp hook
     try:

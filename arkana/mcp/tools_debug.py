@@ -24,6 +24,7 @@ from arkana.config import (
 from arkana.imports import _DEBUG_RUNNER
 from arkana.constants import (
     MAX_DEBUG_SESSIONS, DEBUG_SESSION_TTL, DEBUG_COMMAND_TIMEOUT,
+    DEBUG_RUNNER_TIMEOUT_BUFFER,
     MAX_DEBUG_SNAPSHOTS, MAX_DEBUG_INSTRUCTIONS, MAX_DEBUG_MEMORY_READ,
     MAX_DEBUG_BREAKPOINTS, MAX_DEBUG_WATCHPOINTS, MAX_DEBUG_WATCHPOINT_SIZE,
     MAX_DEBUG_CAPTURED_OUTPUT, MAX_DEBUG_PENDING_INPUT, MAX_DEBUG_API_TRACE,
@@ -117,7 +118,15 @@ class _DebugSession:
             logger.debug("debug_runner stderr drain error: %s", e)
 
     async def send_command(self, cmd: dict, timeout: int = DEBUG_COMMAND_TIMEOUT) -> dict:
-        """Send JSONL command, read JSONL response."""
+        """Send JSONL command, read JSONL response.
+
+        Execution commands (step/continue/run_until/step_over) include
+        ``timeout_seconds`` in the payload so the runner handles its own
+        deadline via ``emu_stop()``.  The client-side ``asyncio.wait_for``
+        timeout is set to *runner timeout + buffer* as a last-resort
+        safety net — it should rarely fire now that the runner responds
+        within its own deadline.
+        """
         async with self._cmd_lock:
             if self._evicted:
                 return {"error": "Debug session was evicted to make room for a new session. Use debug_start() to create a new one."}
@@ -125,23 +134,34 @@ class _DebugSession:
                 return {"error": "Debug session is desynchronised after a timeout — destroy and recreate it"}
             if self.proc.returncode is not None:
                 return {"error": "Debug session has exited unexpectedly"}
+
+            # If the command carries a runner-side timeout, give the
+            # client-side safety net extra headroom so the runner has
+            # time to call emu_stop() and write its response.
+            runner_timeout = cmd.get("timeout_seconds")
+            if runner_timeout:
+                client_timeout = runner_timeout + DEBUG_RUNNER_TIMEOUT_BUFFER
+            else:
+                client_timeout = timeout
+
             line = json.dumps(cmd) + "\n"
             self.proc.stdin.write(line.encode())
             await self.proc.stdin.drain()
             try:
                 resp_line = await asyncio.wait_for(
-                    self.proc.stdout.readline(), timeout=timeout
+                    self.proc.stdout.readline(), timeout=client_timeout
                 )
             except asyncio.TimeoutError:
-                # Kill the subprocess — its stdout is now in an unknown state
-                # and any future read could return stale data from this command.
+                # Last-resort kill — the runner should have responded
+                # within its own timeout, so reaching here indicates a
+                # genuine hang (not a slow emulation loop).
                 self._desynchronised = True
                 self.status = "error"
                 try:
                     self.proc.kill()
                 except Exception:
                     pass
-                return {"error": f"Debug command timed out after {timeout}s — session killed (protocol desync)"}
+                return {"error": f"Debug command timed out after {client_timeout}s — session killed (protocol desync)"}
             if not resp_line:
                 return {"error": "Debug subprocess closed unexpectedly"}
             self.last_active = time.time()
@@ -519,7 +539,11 @@ async def debug_step(
     count = max(1, min(count, 10000))
     await ctx.info(f"Stepping {count} instruction(s)...")
 
-    result = await session.send_command({"action": "step", "count": count})
+    result = await session.send_command({
+        "action": "step",
+        "count": count,
+        "timeout_seconds": DEBUG_COMMAND_TIMEOUT,
+    })
     if "error" in result and "stop_reason" not in result:
         return result
 
@@ -552,6 +576,7 @@ async def debug_step_over(
     result = await session.send_command({
         "action": "step_over",
         "max_instructions": max_instructions,
+        "timeout_seconds": DEBUG_COMMAND_TIMEOUT,
     })
     if "error" in result and "stop_reason" not in result:
         return result
@@ -586,6 +611,7 @@ async def debug_continue(
     result = await session.send_command({
         "action": "continue",
         "max_instructions": max_instructions,
+        "timeout_seconds": DEBUG_COMMAND_TIMEOUT,
     })
     if "error" in result and "stop_reason" not in result:
         return result
@@ -622,6 +648,7 @@ async def debug_run_until(
         "action": "run_until",
         "address": address,
         "max_instructions": max_instructions,
+        "timeout_seconds": DEBUG_COMMAND_TIMEOUT,
     })
     if "error" in result and "stop_reason" not in result:
         return result

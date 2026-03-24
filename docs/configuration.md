@@ -135,7 +135,7 @@ Beyond the cache and API key settings above, Arkana supports several environment
 |---|---|---|
 | `ARKANA_MAX_DEBUG_SESSIONS` | `3` | Maximum concurrent interactive debug sessions. When reached, the oldest session is evicted. |
 | `ARKANA_DEBUG_SESSION_TTL` | `1800` | Idle timeout (seconds) for debug sessions. Sessions inactive for this long are automatically cleaned up. |
-| `ARKANA_DEBUG_COMMAND_TIMEOUT` | `300` | Timeout (seconds) per debug command (step, continue, read_memory, etc.). Prevents hung commands from blocking indefinitely. |
+| `ARKANA_DEBUG_COMMAND_TIMEOUT` | `300` | Timeout (seconds) per execution command (step, continue, run_until, step_over). When the timeout fires, the session is paused (not killed) — emulation is halted via `emu_stop()` and can be inspected and resumed. |
 | `ARKANA_MAX_DEBUG_SNAPSHOTS` | `10` | Maximum saved snapshots per debug session. Each snapshot captures full CPU + memory state. |
 
 ### Auto-Enrichment
