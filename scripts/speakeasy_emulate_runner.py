@@ -160,6 +160,46 @@ def _get_memory_regions(emu):
     return None
 
 
+def _probe_memory_regions(emu):
+    """Fallback: probe common PE memory ranges when get_address_map is unavailable.
+
+    Tries to read at standard base addresses and reports which are readable.
+    This gives search_memory something to scan even without a proper map.
+    """
+    regions = []
+    # Standard PE bases, common DLL ranges, stack, heap
+    probes = [
+        (0x400000, 0x100000, "PE image"),
+        (0x10000, 0x10000, "low memory"),
+        (0x10000000, 0x100000, "DLL range 1"),
+        (0x70000000, 0x100000, "DLL range 2"),
+        (0x7FFE0000, 0x1000, "KUSER_SHARED_DATA"),
+    ]
+
+    # Also try to detect the actual image size from the PE header
+    try:
+        pe_header = _mem_read(emu, 0x400000, 0x200)
+        if pe_header[:2] == b'MZ':
+            import struct
+            e_lfanew = struct.unpack_from('<I', pe_header, 0x3C)[0]
+            if e_lfanew < 0x200:
+                size_of_image = struct.unpack_from('<I', pe_header, e_lfanew + 0x50)[0]
+                if 0 < size_of_image < 0x10000000:
+                    probes[0] = (0x400000, size_of_image, "PE image")
+    except Exception:
+        pass
+
+    for base, size, label in probes:
+        try:
+            # Try reading the first byte to check if the region is mapped
+            _mem_read(emu, base, 1)
+            regions.append({"base": base, "size": size, "tag": label})
+        except Exception:
+            continue
+
+    return regions if regions else None
+
+
 # ---------------------------------------------------------------------------
 #  Command handlers
 # ---------------------------------------------------------------------------
@@ -336,6 +376,9 @@ def cmd_memory_map(cmd):
 
     addr_map = _get_memory_regions(emu)
     if addr_map is None:
+        # Fallback: probe standard PE memory ranges
+        addr_map = _probe_memory_regions(emu)
+    if not addr_map:
         return {"error": "Memory map not available in this Speakeasy version."}
 
     regions = []
@@ -391,6 +434,8 @@ def cmd_search_memory(cmd):
 
     addr_map = _get_memory_regions(emu)
     if addr_map is None:
+        addr_map = _probe_memory_regions(emu)
+    if not addr_map:
         return {"error": "Memory map not available — cannot enumerate regions for search."}
 
     matches = []
