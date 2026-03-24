@@ -40,8 +40,16 @@ description: >
 7. **Refinery incrementally**: 1-2 steps, verify, add more.
 8. **Packed = unpack first**: `likely_packed=true` -> Phase 2 immediately.
 9. **Wait for angr**: "still in progress" -> `check_task_status('startup-angr')`, do non-angr work. Stalled -> `decompile_function_with_angr` (local CFG), `get_angr_partial_functions()`, or `disassemble_at_address()`. `abort_background_task(task_id)` to cancel.
-10. **Evidence hierarchy**: Decompiled pseudocode > annotated disassembly (cross-validate) > raw disassembly (stubs) > hex dump (DATA only). Decompiler wrong? Check assembly.
-11. **Decompiler validation**: angr defaults to SysV AMD64 -- wrong for Windows PE. Check assembly at call sites. "cffi pickle" note -> verify via `get_annotated_disassembly()`. Details: [decompilation-guide.md](decompilation-guide.md).
+10. **Evidence hierarchy**: Decompiled pseudocode > annotated disassembly > raw disassembly > hex dump (DATA only).
+11. **MANDATORY assembly cross-checks** — run `get_annotated_disassembly()` alongside decompilation when ANY of these apply:
+    - **Crypto/cipher functions** — verify XOR operands, rotation amounts/direction, shift widths. One wrong constant breaks everything.
+    - **Windows PE call sites** — angr uses SysV ABI (rdi,rsi,rdx,rcx) but Windows uses rcx,rdx,r8,r9. Decompiler parameter names are WRONG. Check the caller's register setup.
+    - **Decompiled code doesn't match expected behavior** — the decompiler is wrong, not your understanding.
+    - **Functions with 5+ parameters** — stack-passed args frequently misidentified.
+    - **Short stubs (<20 instructions)** — assembly is faster and more reliable than decompilation.
+    - **"cffi pickle" note in response** — reduced decompiler quality; verify critical logic.
+    - **Anti-analysis / obfuscation** — decompiler may simplify away the interesting part.
+    Full guide with examples: [decompilation-guide.md](decompilation-guide.md).
 12. **Response limits**: 8K char soft cap. Use `search="pattern"` to grep. Check `has_more`; use offset/limit.
 13. **Null regions**: Large null-padded areas (BSS, staging) create fake `add [rax], al` functions. Auto-filtered from function maps and enrichment. Use `detect_null_regions()` to inspect. `release_angr_memory()` frees angr project/CFG while keeping session data.
 
@@ -96,6 +104,8 @@ Also: `get_top_sifted_strings`, `get_floss_analysis_info`, `identify_malware_fam
 
 ### Tier 1: Static (start here)
 `decompile_function_with_angr`, `batch_decompile` (`search=`, `summary_mode=True`), `auto_note_function`, `rename_function`, `rename_variable`, `add_label`, `get_function_cfg`, `get_function_xrefs`, `get_annotated_disassembly` (`search=`), `get_function_variables`, `get_calling_conventions`. Search-first for hypotheses: [search-patterns.md](search-patterns.md).
+
+**Hybrid workflow**: Decompile first for structure, then assembly to validate. For crypto/cipher functions, ALWAYS run both `decompile_function_with_angr` AND `get_annotated_disassembly(search="xor|rol|ror|shr|shl")` and cross-check. For Windows PE call sites, disassemble the CALLER to verify rcx/rdx/r8/r9 parameter mapping.
 
 ### Tier 2: Data Flow
 `get_reaching_definitions`, `get_data_dependencies`, `get_control_dependencies`, `propagate_constants`, `get_value_set_analysis`, `get_backward_slice`, `get_forward_slice`, `parse_binary_struct`, `create_struct`/`create_enum`/`apply_type_at_offset`, `find_dangerous_data_flows`, `detect_control_flow_flattening`, `detect_opaque_predicates`.
