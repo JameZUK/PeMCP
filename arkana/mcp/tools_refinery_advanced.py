@@ -110,10 +110,13 @@ async def refinery_regex_replace(
     from arkana.utils import validate_regex_pattern
     validate_regex_pattern(pattern)
 
+    _used_text_fallback = False
     try:
         data = _hex_to_bytes(data_hex)
     except (ValueError, TypeError):
+        logger.warning("refinery_regex_replace: input is not valid hex, treating as raw text")
         data = data_hex.encode("utf-8")
+        _used_text_fallback = True
 
     if len(data) > _MAX_INPUT_SIZE:
         raise RuntimeError(f"Input too large ({len(data)} bytes).")
@@ -126,14 +129,17 @@ async def refinery_regex_replace(
         return data | resub(pattern, repl_bytes) | bytes
 
     result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "pattern": pattern,
         "replacement": replacement,
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result, max_len=2000),
-    }, "refinery_regex_replace")
+    }
+    if _used_text_fallback:
+        response["_warning"] = "Input was not valid hex — treated as raw UTF-8 text. Verify your input."
+    return await _check_mcp_response_size(ctx, response, "refinery_regex_replace")
 
 
 # ===================================================================
@@ -145,6 +151,8 @@ async def refinery_auto_decrypt(
     ctx: Context,
     data_hex: Optional[str] = None,
     output_path: Optional[str] = None,
+    plaintext_hex: Optional[str] = None,
+    key_range_max: int = 32,
 ) -> Dict[str, Any]:
     """Auto-detect and decrypt XOR/SUB encrypted data via Binary Refinery.
 
@@ -155,21 +163,35 @@ async def refinery_auto_decrypt(
         ctx: MCP Context.
         data_hex: (Optional[str]) Encrypted data as hex. If None, uses loaded file.
         output_path: (Optional[str]) Save decrypted output to this path and register as artifact.
+        plaintext_hex: (Optional[str]) Known plaintext crib as hex for known-plaintext attack.
+        key_range_max: (int) Maximum key length to try (default 32 bytes, max 256).
 
     Returns:
         Dictionary with decrypted output and detected key.
     """
     _require_refinery("refinery_auto_decrypt")
 
+    # Validate key_range_max bounds
+    key_range_max = max(1, min(key_range_max, 256))
+
     data = _get_data_from_hex_or_file(data_hex)
     if len(data) > _MAX_INPUT_SIZE:
         data = data[:_MAX_INPUT_SIZE]
 
-    await ctx.info(f"Auto-decrypting {len(data)} bytes...")
+    # Validate plaintext_hex if provided
+    plaintext_bytes = None
+    if plaintext_hex:
+        plaintext_bytes = _hex_to_bytes(plaintext_hex)
+
+    await ctx.info(f"Auto-decrypting {len(data)} bytes (key range 1-{key_range_max})...")
 
     def _run():
         from refinery.units.misc.autoxor import autoxor
-        return data | autoxor() | bytes
+        kwargs: Dict[str, Any] = {}
+        if plaintext_bytes:
+            kwargs["plaintext"] = plaintext_bytes
+        kwargs["range"] = slice(1, key_range_max + 1)
+        return data | autoxor(**kwargs) | bytes
 
     result = await asyncio.to_thread(_run)
     response: Dict[str, Any] = {
@@ -177,7 +199,10 @@ async def refinery_auto_decrypt(
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result, max_len=2000),
+        "key_range_max": key_range_max,
     }
+    if plaintext_hex:
+        response["plaintext_crib"] = plaintext_hex
     if output_path:
         artifact_meta = await asyncio.to_thread(
             _write_output_and_register_artifact,
@@ -204,7 +229,7 @@ async def refinery_key_derive(
 ) -> Dict[str, Any]:
     """Derive cryptographic keys from passwords via Binary Refinery.
 
-    Methods: pbkdf2, hkdf, hmac.
+    Methods: pbkdf2, hkdf, hmac, scrypt, argon2, pbkdf1, deskd, kblob, mscdk, mspdb, unixcrypt.
 
     Args:
         ctx: MCP Context.
@@ -212,7 +237,7 @@ async def refinery_key_derive(
         password_hex: (str) Password/input key material as hex.
         salt_hex: (Optional[str]) Salt as hex.
         key_length: (int) Desired key length in bytes. Default 32.
-        iterations: (int) Iteration count for PBKDF2. Default 10000.
+        iterations: (int) Iteration count for iterative KDFs (pbkdf2, argon2, pbkdf1, mspdb). Default 10000.
         hash_algorithm: (str) Hash: SHA256, SHA1, SHA512, MD5. Default SHA256.
 
     Returns:
@@ -239,7 +264,18 @@ async def refinery_key_derive(
         "pbkdf2": "refinery.units.crypto.keyderive.pbkdf2:pbkdf2",
         "hkdf": "refinery.units.crypto.keyderive.hkdf:hkdf",
         "hmac": "refinery.units.crypto.keyderive.hmac:hmac",
+        "scrypt": "refinery.units.crypto.keyderive.scrypt:scrypt",
+        "argon2": "refinery.units.crypto.keyderive.argon2:argon2",
+        "pbkdf1": "refinery.units.crypto.keyderive.pbkdf1:pbkdf1",
+        "deskd": "refinery.units.crypto.keyderive.deskd:deskd",
+        "kblob": "refinery.units.crypto.keyderive.kblob:kblob",
+        "mscdk": "refinery.units.crypto.keyderive.mscdk:mscdk",
+        "mspdb": "refinery.units.crypto.keyderive.mspdb:mspdb",
+        "unixcrypt": "refinery.units.crypto.keyderive.unixcrypt:ucrypt",
     }
+
+    # KDFs that use iterations
+    _ITERATIVE_KDFS = {"pbkdf2", "argon2", "pbkdf1", "mspdb"}
 
     if method_lower not in _KDF_MAP:
         return {"error": f"Unknown method '{method}'.", "supported": sorted(_KDF_MAP.keys())}
@@ -257,17 +293,59 @@ async def refinery_key_derive(
             return password | unit_cls(key_length, salt, hash=hash_algorithm) | bytes
         elif method_lower == "hmac":
             return password | unit_cls(salt, hash=hash_algorithm) | bytes
-        return b""
+        elif method_lower == "scrypt":
+            return password | unit_cls(key_length, salt) | bytes
+        elif method_lower == "argon2":
+            return password | unit_cls(key_length, salt, iter=iterations) | bytes
+        elif method_lower == "pbkdf1":
+            return password | unit_cls(key_length, salt, iter=iterations, hash=hash_algorithm) | bytes
+        elif method_lower == "deskd":
+            return password | unit_cls(key_length) | bytes
+        elif method_lower == "kblob":
+            return password | unit_cls() | bytes
+        elif method_lower == "mscdk":
+            return password | unit_cls(key_length, hash=hash_algorithm) | bytes
+        elif method_lower == "mspdb":
+            return password | unit_cls(key_length, salt, iter=iterations, hash=hash_algorithm) | bytes
+        elif method_lower == "unixcrypt":
+            return password | unit_cls() | bytes
+        else:
+            # Generic fallback — introspect constructor params
+            import inspect
+            kdf_kwargs: Dict[str, Any] = {}
+            try:
+                sig = inspect.signature(unit_cls.__init__)
+                params = set(sig.parameters.keys()) - {"self"}
+                if "size" in params and key_length:
+                    kdf_kwargs["size"] = key_length
+                if "salt" in params and salt:
+                    kdf_kwargs["salt"] = salt
+                if "iter" in params and iterations > 1:
+                    kdf_kwargs["iter"] = iterations
+                if "hash" in params and hash_algorithm:
+                    kdf_kwargs["hash"] = hash_algorithm
+            except Exception:
+                pass
+            return password | unit_cls(**kdf_kwargs) | bytes
 
     result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "method": method,
         "hash_algorithm": hash_algorithm,
         "key_length": key_length,
-        "iterations": iterations if method_lower == "pbkdf2" else None,
+        "iterations": iterations if method_lower in _ITERATIVE_KDFS else None,
         "derived_key_hex": result.hex(),
         "derived_key_length": len(result),
-    }, "refinery_key_derive")
+    }
+    if method_lower == "hmac":
+        response["note"] = f"HMAC output size is determined by {hash_algorithm} digest length, not key_length parameter."
+    elif method_lower == "kblob":
+        response["note"] = "kblob extracts key material from Windows DPAPI/CNG key blobs. key_length parameter is ignored."
+    elif method_lower == "unixcrypt":
+        response["note"] = "unixcrypt derives a DES-based Unix crypt hash. key_length parameter is ignored."
+    elif method_lower == "deskd":
+        response["note"] = "deskd derives DES key material. salt and iterations parameters are ignored."
+    return await _check_mcp_response_size(ctx, response, "refinery_key_derive")
 
 
 # ===================================================================
@@ -296,10 +374,13 @@ async def refinery_string_operations(
     """
     _require_refinery("refinery_string_operations")
 
+    _used_text_fallback = False
     try:
         data = _hex_to_bytes(data_hex)
     except (ValueError, TypeError):
+        logger.warning("refinery_string_operations: input is not valid hex, treating as raw text")
         data = data_hex.encode("utf-8")
+        _used_text_fallback = True
 
     if len(data) > _MAX_INPUT_SIZE:
         raise RuntimeError(f"Input too large ({len(data)} bytes).")
@@ -362,13 +443,16 @@ async def refinery_string_operations(
             raise ValueError(f"Unknown operation '{op}'. Supported: snip, trim, replace, lower, upper, swapcase.")
 
     result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "operation": op,
         "input_size": len(data),
         "output_size": len(result),
         "output_hex": _bytes_to_hex(result),
         "output_text": _safe_decode(result, max_len=2000),
-    }, "refinery_string_operations")
+    }
+    if _used_text_fallback:
+        response["_warning"] = "Input was not valid hex — treated as raw UTF-8 text. Verify your input."
+    return await _check_mcp_response_size(ctx, response, "refinery_string_operations")
 
 
 # ===================================================================
@@ -395,10 +479,13 @@ async def refinery_pretty_print(
     """
     _require_refinery("refinery_pretty_print")
 
+    _used_text_fallback = False
     try:
         data = _hex_to_bytes(data_hex)
     except (ValueError, TypeError):
+        logger.warning("refinery_pretty_print: input is not valid hex, treating as raw text")
         data = data_hex.encode("utf-8")
+        _used_text_fallback = True
 
     if len(data) > _MAX_INPUT_SIZE:
         raise RuntimeError(f"Input too large ({len(data)} bytes).")
@@ -424,12 +511,15 @@ async def refinery_pretty_print(
         return data | unit_cls() | bytes
 
     result = await asyncio.to_thread(_run)
-    return await _check_mcp_response_size(ctx, {
+    response: Dict[str, Any] = {
         "format": fmt,
         "input_size": len(data),
         "output_size": len(result),
         "formatted_text": _safe_decode(result, max_len=8000),
-    }, "refinery_pretty_print")
+    }
+    if _used_text_fallback:
+        response["_warning"] = "Input was not valid hex — treated as raw UTF-8 text. Verify your input."
+    return await _check_mcp_response_size(ctx, response, "refinery_pretty_print")
 
 
 # ===================================================================

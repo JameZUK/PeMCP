@@ -64,11 +64,14 @@ async def refinery_forensic(
 
     # ── defang / url_guards accept text directly ────────────────────
     if op in ("defang", "url_guards"):
+        _used_text_fallback = False
         if data_hex:
             try:
                 data = _hex_to_bytes(data_hex)
             except (ValueError, TypeError):
+                logger.warning("refinery_forensic: input is not valid hex, treating as raw text")
                 data = data_hex.encode("utf-8")
+                _used_text_fallback = True
         else:
             data = _get_file_data()
 
@@ -79,23 +82,29 @@ async def refinery_forensic(
                 from refinery.units.pattern.defang import defang
                 return data | defang() | bytes
             result = await asyncio.to_thread(_run_defang)
-            return await _check_mcp_response_size(ctx, {
+            response: Dict[str, Any] = {
                 "operation": op,
                 "input_size": len(data),
                 "output_size": len(result),
                 "defanged_text": _safe_decode(result, max_len=8000),
-            }, "refinery_forensic")
+            }
+            if _used_text_fallback:
+                response["_warning"] = "Input was not valid hex — treated as raw UTF-8 text. Verify your input."
+            return await _check_mcp_response_size(ctx, response, "refinery_forensic")
         else:  # url_guards
             def _run_urlguards():
                 from refinery.units.pattern.urlguards import urlguards
                 return data | urlguards() | bytes
             result = await asyncio.to_thread(_run_urlguards)
-            return await _check_mcp_response_size(ctx, {
+            response = {
                 "operation": op,
                 "input_size": len(data),
                 "output_size": len(result),
                 "cleaned_text": _safe_decode(result, max_len=4000),
-            }, "refinery_forensic")
+            }
+            if _used_text_fallback:
+                response["_warning"] = "Input was not valid hex — treated as raw UTF-8 text. Verify your input."
+            return await _check_mcp_response_size(ctx, response, "refinery_forensic")
 
     # ── All other operations get data from hex or file ──────────────
     data = _get_data_from_hex_or_file(data_hex)

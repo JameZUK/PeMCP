@@ -181,6 +181,8 @@ async def refinery_executable(
             cleaned = data_hex.replace(" ", "").replace("\\x", "")
             if cleaned.startswith(("0x", "0X")):
                 cleaned = cleaned[2:]
+            if len(cleaned) > 2 * 1024 * 1024:  # 1MB decoded
+                raise ValueError(f"Hex input too large ({len(cleaned) // 2} bytes). Max: 1MB.")
             data = bytes.fromhex(cleaned)
         elif address:
             # Read bytes at the specified virtual address

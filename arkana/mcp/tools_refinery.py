@@ -48,6 +48,14 @@ _ENCODING_MAP = {
     "morse": "refinery.units.encoding.morse:morse",
     "htmlesc": "refinery.units.encoding.htmlesc:htmlesc",
     "z85": "refinery.units.encoding.z85:z85",
+    "atbash": "refinery.units.encoding.atbash:atbash",
+    "b65536": "refinery.units.encoding.b65536:b65536",
+    "base": "refinery.units.encoding.base:base",
+    "escps": "refinery.units.encoding.escps:escps",
+    "escvb": "refinery.units.encoding.escvb:escvb",
+    "puny": "refinery.units.encoding.puny:puny",
+    "qp": "refinery.units.encoding.qp:qp",
+    "recode": "refinery.units.encoding.recode:recode",
 }
 
 _CIPHER_MAP = {
@@ -86,6 +94,11 @@ _CIPHER_MAP = {
     "codebook": "refinery.units.crypto.cipher.codebook:codebook",
     "rc4mod": "refinery.units.crypto.cipher.rc4mod:rc4mod",
     "secstr": "refinery.units.crypto.cipher.secstr:secstr",
+    "rsa": "refinery.units.crypto.cipher.rsa:rsa",
+    "rsakey": "refinery.units.crypto.cipher.rsakey:rsakey",
+    "twofish": "refinery.units.crypto.cipher.twofish:twofish",
+    "aria": "refinery.units.crypto.cipher.aria:aria",
+    "simon": "refinery.units.crypto.cipher.simon:simon",
 }
 
 _COMPRESS_MAP = {
@@ -113,6 +126,7 @@ _COMPRESS_MAP = {
     "szdd": "refinery.units.compression.szdd:szdd",
     "flz": "refinery.units.compression.flz:flz",
     "jcalg": "refinery.units.compression.jcalg:jcalg",
+    "gz": "refinery.units.compression.zl:zl",
 }
 
 
@@ -127,11 +141,13 @@ async def refinery_codec(
     encoding: str = "b64",
     direction: str = "decode",
     output_path: Optional[str] = None,
+    urlsafe: bool = False,
 ) -> Dict[str, Any]:
     """Encode or decode data using Binary Refinery encoding units.
 
     Encodings: b64, hex, b32, b58, b62, b85, a85, b92, url, esc, u16,
-    uuenc, netbios, cp1252, wshenc, morse, htmlesc, z85.
+    uuenc, netbios, cp1252, wshenc, morse, htmlesc, z85, atbash, b65536,
+    base, escps, escvb, puny, qp, recode.
 
     Args:
         ctx: MCP Context.
@@ -139,6 +155,7 @@ async def refinery_codec(
         encoding: (str) Encoding name. Default 'b64'.
         direction: (str) 'decode' (default) or 'encode'.
         output_path: (Optional[str]) Save output to this path and register as artifact.
+        urlsafe: (bool) Use URL-safe Base64 alphabet (for b64 encoding only). Default False.
 
     Returns:
         Dictionary with transformed output (hex + text preview).
@@ -173,9 +190,12 @@ async def refinery_codec(
         import importlib
         mod = importlib.import_module(mod_path)
         unit_cls = getattr(mod, cls_name)
+        kwargs = {}
+        if encoding_lower == "b64" and urlsafe:
+            kwargs["urlsafe"] = True
         if d == "encode":
-            return input_data | -unit_cls() | bytes
-        return input_data | unit_cls() | bytes
+            return input_data | -unit_cls(**kwargs) | bytes
+        return input_data | unit_cls(**kwargs) | bytes
 
     result = await asyncio.to_thread(_run)
     response: Dict[str, Any] = {
@@ -187,7 +207,7 @@ async def refinery_codec(
         "output_text": _safe_decode(result, max_len=2000),
     }
     if _used_text_fallback:
-        response["warning"] = "Input was not valid hex — treated as raw UTF-8 text"
+        response["_warning"] = "Input was not valid hex — treated as raw UTF-8 text"
     if output_path:
         artifact_meta = await asyncio.to_thread(
             _write_output_and_register_artifact,
@@ -210,14 +230,25 @@ async def refinery_decrypt(
     key_hex: str,
     iv_hex: Optional[str] = None,
     mode: Optional[str] = None,
+    padding: Optional[str] = None,
+    nonce_hex: Optional[str] = None,
+    tag_hex: Optional[str] = None,
+    segment_size: Optional[int] = None,
+    block_size: Optional[int] = None,
     output_path: Optional[str] = None,
+    raw: bool = False,
+    little_endian: bool = False,
+    aad_hex: Optional[str] = None,
+    discard: Optional[int] = None,
+    rounds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Decrypt data using Binary Refinery cipher units.
 
     Ciphers: aes, des, des3, rc4, blowfish, camellia, cast, chacha, salsa,
     serpent, tea, xtea, xxtea, rc2, rc5, rc6, sm4, rabbit, seal, gost,
     fernet, speck, hc128, hc256, isaac, sosemanuk, vigenere, rot, rijndael,
-    chaskey, blabla, rncrypt, codebook, rc4mod, secstr.
+    chaskey, blabla, rncrypt, codebook, rc4mod, secstr, rsa, rsakey,
+    twofish, aria, simon.
 
     Args:
         ctx: MCP Context.
@@ -226,7 +257,18 @@ async def refinery_decrypt(
         key_hex: (str) Key as hex.
         iv_hex: (Optional[str]) IV/nonce as hex (for CBC/CTR modes).
         mode: (Optional[str]) Block cipher mode: ECB, CBC, CTR, CFB, OFB, GCM.
+        padding: (Optional[str]) Padding scheme: 'pkcs7', 'iso7816', 'x923', 'raw', or 'none'.
+            Use 'raw' or 'none' when data has no standard padding (default: auto-detect).
+        nonce_hex: (Optional[str]) Nonce as hex for CTR/GCM modes (when distinct from IV).
+        tag_hex: (Optional[str]) Authentication tag as hex for GCM mode verification.
+        segment_size: (Optional[int]) Segment size in bits for CFB mode (e.g. 8, 128).
+        block_size: (Optional[int]) Block size for Rijndael (128, 192, or 256 bits).
         output_path: (Optional[str]) Save decrypted output to this path and register as artifact.
+        raw: (bool) Raw key mode — skip key padding/normalization. Default False.
+        little_endian: (bool) Process blocks in little-endian order. Default False.
+        aad_hex: (Optional[str]) Additional Authenticated Data as hex for GCM mode.
+        discard: (Optional[int]) Drop first N bytes of keystream (RC4-drop-N variant).
+        rounds: (Optional[int]) Number of cipher rounds (e.g., 8/12/20 for ChaCha/Salsa).
 
     Returns:
         Dictionary with decrypted plaintext (hex + text preview).
@@ -252,14 +294,36 @@ async def refinery_decrypt(
             kwargs["amount"] = int(key_hex, 10)
         except ValueError:
             kwargs["amount"] = key[0] if len(key) == 1 else int.from_bytes(key, "big")
-    elif algo in ("vigenere", "codebook"):
-        kwargs["key"] = key
     else:
         kwargs["key"] = key
     if iv_hex:
         kwargs["iv"] = _hex_to_bytes(iv_hex)
     if mode:
         kwargs["mode"] = mode.upper()
+    if padding:
+        p = padding.lower()
+        if p in ("none", "raw"):
+            kwargs["padding"] = "raw"
+        else:
+            kwargs["padding"] = p
+    if nonce_hex:
+        kwargs["nonce"] = _hex_to_bytes(nonce_hex)
+    if tag_hex:
+        kwargs["tag"] = _hex_to_bytes(tag_hex)
+    if segment_size is not None:
+        kwargs["segment_size"] = segment_size
+    if block_size is not None:
+        kwargs["block_size"] = block_size
+    if raw:
+        kwargs["raw"] = True
+    if little_endian:
+        kwargs["little_endian"] = True
+    if aad_hex:
+        kwargs["aad"] = _hex_to_bytes(aad_hex)
+    if discard is not None:
+        kwargs["discard"] = discard
+    if rounds is not None:
+        kwargs["rounds"] = rounds
 
     def _run():
         import importlib
@@ -267,7 +331,16 @@ async def refinery_decrypt(
         unit_cls = getattr(mod, cls_name)
         return ciphertext | unit_cls(**kwargs) | bytes
 
-    result = await asyncio.to_thread(_run)
+    try:
+        result = await asyncio.to_thread(_run)
+    except ValueError as e:
+        error_msg = str(e)
+        if "padding" in error_msg.lower():
+            raise RuntimeError(
+                f"Decryption failed: {error_msg}. "
+                "Hint: if the data has no standard padding, use padding='raw' or padding='none'."
+            ) from e
+        raise
     response: Dict[str, Any] = {
         "algorithm": algorithm,
         "mode": mode or "default",
@@ -303,6 +376,8 @@ async def refinery_xor(
     key_step: Optional[int] = None,
     key_max: Optional[int] = None,
     key_wrap: Optional[int] = None,
+    blocksize: Optional[int] = None,
+    bigendian: bool = False,
 ) -> Dict[str, Any]:
     """XOR operations via Binary Refinery.
 
@@ -326,6 +401,8 @@ async def refinery_xor(
         key_step: (Optional[int]) Key increment per byte for 'rolling'. Default 1.
         key_max: (Optional[int]) Key wraps when exceeding this value for 'rolling'. Default 255.
         key_wrap: (Optional[int]) Key resets to this value on wrap for 'rolling'. Default 0.
+        blocksize: (Optional[int]) Process XOR in N-byte blocks (e.g. 4 for DWORD XOR). Default None (byte-level).
+        bigendian: (bool) Process blocks in big-endian byte order. Default False.
 
     Returns:
         Dictionary with XOR result or guessed key + preview.
@@ -350,7 +427,12 @@ async def refinery_xor(
 
         def _run_apply():
             from refinery.units.blockwise.xor import xor
-            return data | xor(key) | bytes
+            xor_kwargs = {}
+            if blocksize is not None:
+                xor_kwargs["blocksize"] = blocksize
+            if bigendian:
+                xor_kwargs["bigendian"] = True
+            return data | xor(key, **xor_kwargs) | bytes
 
         result = await asyncio.to_thread(_run_apply)
 
@@ -447,8 +529,15 @@ async def refinery_xor(
 
     def _run_guess():
         from refinery.units.misc.xkey import xkey
+        xkey_kwargs = {}
+        if data_hex and len(data_hex) > 2 and key_hex:
+            # Use key_hex as known plaintext crib for guess_key
+            try:
+                xkey_kwargs["plaintext"] = _hex_to_bytes(key_hex)
+            except (ValueError, TypeError):
+                pass
         keys = []
-        for chunk in data | xkey():
+        for chunk in data | xkey(**xkey_kwargs):
             keys.append(bytes(chunk))
             if len(keys) >= _MAX_OUTPUT_ITEMS:
                 break
@@ -488,10 +577,14 @@ async def refinery_decompress(
     data_hex: Optional[str] = None,
     algorithm: str = "auto",
     output_path: Optional[str] = None,
+    window: Optional[int] = None,
+    zlib_header: Optional[bool] = None,
+    gzip_header: Optional[bool] = None,
+    raw: bool = False,
 ) -> Dict[str, Any]:
     """Decompress data using Binary Refinery.
 
-    Algorithms: auto, zl, bz2, lzma, lz4, brotli, zstd, lznt1, lzo, ap,
+    Algorithms: auto, zl, gz, bz2, lzma, lz4, brotli, zstd, lznt1, lzo, ap,
     blz, lzf, lzg, lzip, lzjb, lzw, lzx, mscf, nrv, pkw, qlz, szdd, flz, jcalg.
 
     Args:
@@ -499,6 +592,10 @@ async def refinery_decompress(
         data_hex: (Optional[str]) Compressed data as hex. If None, uses loaded file.
         algorithm: (str) Compression algorithm or 'auto'. Default 'auto'.
         output_path: (Optional[str]) Save decompressed output to this path and register as artifact.
+        window: (Optional[int]) Window size for zlib decompression (zl algorithm only).
+        zlib_header: (Optional[bool]) Expect zlib header in input (zl algorithm only).
+        gzip_header: (Optional[bool]) Expect gzip header in input (zl algorithm only).
+        raw: (bool) Raw LZMA stream without header (lzma algorithm only). Default False.
 
     Returns:
         Dictionary with decompressed output (hex + text preview + size).
@@ -525,11 +622,26 @@ async def refinery_decompress(
         import importlib
         mod = importlib.import_module(mod_path)
         unit_cls = getattr(mod, cls_name)
+        # Build algorithm-specific kwargs
+        kwargs = {}
+        if algo in ("zl", "gz"):
+            if window is not None:
+                kwargs["window"] = window
+            if zlib_header is not None:
+                kwargs["zlib_header"] = zlib_header
+            if gzip_header is not None:
+                kwargs["gzip_header"] = gzip_header
+            # gz alias implies gzip_header=True unless explicitly overridden
+            if algo == "gz" and gzip_header is None:
+                kwargs["gzip_header"] = True
+        elif algo == "lzma":
+            if raw:
+                kwargs["raw"] = True
         # Iterate chunks incrementally to avoid OOM from decompression bombs.
         # Binary Refinery's pipe yields chunks; accumulate with a size guard.
         parts = []
         total = 0
-        for chunk in data | unit_cls():
+        for chunk in data | unit_cls(**kwargs):
             piece = bytes(chunk)
             total += len(piece)
             if total > _MAX_DECOMPRESS_OUTPUT:
@@ -652,7 +764,7 @@ async def refinery_carve(
 
     Operations:
     - 'pattern': Carve encoded blobs. pattern: b64/hex/b32/b85/url/intarray/string.
-    - 'files': Carve embedded files. file_type: pe/zip/7z/rtf/json/xml/lnk/der.
+    - 'files': Carve embedded files. file_type: pe/zip/7z/rtf/json/xml/lnk/der/png/tar/elf.
 
     Args:
         ctx: MCP Context.
@@ -738,6 +850,9 @@ async def refinery_carve(
         "xml": "refinery.units.pattern.carve_xml:carve_xml",
         "lnk": "refinery.units.pattern.carve_lnk:carve_lnk",
         "der": "refinery.units.pattern.carve_der:carve_der",
+        "png": "refinery.units.pattern.carve_png:carve_png",
+        "tar": "refinery.units.pattern.carve_tar:carve_tar",
+        "elf": "refinery.units.pattern.carve_elf:carve_elf",
     }
 
     ftype = file_type.lower()
@@ -977,7 +1092,8 @@ async def refinery_hash(
 ) -> Dict[str, Any]:
     """Compute hashes using Binary Refinery.
 
-    Supports: md5, sha1, sha256, sha384, sha512, crc32, adler32.
+    Supports: md5, sha1, sha256, sha384, sha512, crc32, adler32,
+    fnv0, fnv1, fnv1a, murmur32, murmur64, xxhash, imphash, sm3.
 
     Args:
         ctx: MCP Context.
@@ -1010,14 +1126,33 @@ async def refinery_hash(
             "sha384": sha384, "sha512": sha512,
             "crc32": crc32, "adler32": adler32,
         }
+        # Lazy-load optional hash modules
+        _optional_hash_modules = {
+            "fnv0": ("refinery.units.crypto.hash.fnv", "fnv0"),
+            "fnv1": ("refinery.units.crypto.hash.fnv", "fnv1"),
+            "fnv1a": ("refinery.units.crypto.hash.fnv", "fnv1a"),
+            "murmur32": ("refinery.units.crypto.hash.murmur", "m3h32"),
+            "murmur64": ("refinery.units.crypto.hash.murmur", "m3h64"),
+            "xxhash": ("refinery.units.crypto.hash.xxhash", "xxh"),
+            "imphash": ("refinery.units.crypto.hash.imphash", "imphash"),
+            "sm3": ("refinery.units.crypto.hash.sm3", "sm3"),
+        }
         results = {}
         for algo in algorithms:
+            algo_lower = algo.lower()
             try:
-                if algo in _hash_units:
-                    h = data | _hash_units[algo]() | bytes
+                if algo_lower in _hash_units:
+                    h = data | _hash_units[algo_lower]() | bytes
+                    results[algo] = h.hex()
+                elif algo_lower in _optional_hash_modules:
+                    mod_path, cls_name = _optional_hash_modules[algo_lower]
+                    mod = importlib.import_module(mod_path)
+                    unit_cls = getattr(mod, cls_name)
+                    h = data | unit_cls() | bytes
                     results[algo] = h.hex()
                 else:
-                    results[algo] = f"unsupported (try: {', '.join(sorted(_hash_units.keys()))})"
+                    all_supported = sorted(set(_hash_units.keys()) | set(_optional_hash_modules.keys()))
+                    results[algo] = f"unsupported (try: {', '.join(all_supported)})"
             except Exception as e:
                 results[algo] = f"error: {e}"
         return results
@@ -1070,6 +1205,19 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
             )
         return bytes.fromhex(hex_str)
 
+    def _parse_blockwise_kwargs(parts: list) -> dict:
+        """Extract blocksize= and bigendian= keyword params from step parts."""
+        bw = {}
+        for p in parts[1:]:
+            if "=" in p:
+                k, v = p.split("=", 1)
+                k = k.lower()
+                if k == "blocksize":
+                    bw["blocksize"] = int(v)
+                elif k == "bigendian":
+                    bw["bigendian"] = v.lower() in ("true", "1", "yes")
+        return bw
+
     current = data
     step_log = [{"step": "input", "size": len(current)}]
 
@@ -1077,35 +1225,73 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
         parts = step_str.split(":")
         unit_name = parts[0].lower()
 
-        _CIPHER_NAMES = ("rc4", "aes", "des", "blowfish", "chacha", "salsa")
-
         if unit_name == "xor":
             from refinery.units.blockwise.xor import xor
-            key = _safe_fromhex(parts[1], "xor key") if len(parts) > 1 else b"\x00"
-            current = current | xor(key) | bytes
+            if len(parts) < 2 or (not parts[1] and "=" not in "".join(parts[1:])):
+                raise ValueError("xor step requires a key: 'xor:HEX_KEY' or 'xor:HEX_KEY:blocksize=4'")
+            key = None
+            xor_kwargs = {}
+            for p in parts[1:]:
+                if "=" in p:
+                    k, v = p.split("=", 1)
+                    k = k.lower()
+                    if k == "blocksize":
+                        xor_kwargs["blocksize"] = int(v)
+                    elif k == "bigendian":
+                        xor_kwargs["bigendian"] = v.lower() in ("true", "1", "yes")
+                    elif k == "key":
+                        key = _safe_fromhex(v, "xor key")
+                elif key is None:
+                    key = _safe_fromhex(p, "xor key")
+            if key is None:
+                raise ValueError("xor step requires a key")
+            current = current | xor(key, **xor_kwargs) | bytes
 
         # ── Ciphers (decrypt by default, enc_ prefix to encrypt) ──
-        elif unit_name in _CIPHER_NAMES or (
-            unit_name.startswith("enc_") and unit_name[4:] in _CIPHER_NAMES
+        elif unit_name in _CIPHER_MAP or (
+            unit_name.startswith("enc_") and unit_name[4:] in _CIPHER_MAP
         ):
             encrypt_mode = unit_name.startswith("enc_")
             cipher_name = unit_name[4:] if encrypt_mode else unit_name
-            mod_path = f"refinery.units.crypto.cipher.{cipher_name}"
+            mod_path, cls_name = _CIPHER_MAP[cipher_name].rsplit(":", 1)
             mod = importlib.import_module(mod_path)
-            unit_cls = getattr(mod, cipher_name)
+            unit_cls = getattr(mod, cls_name)
             kwargs = {}
-            if len(parts) > 1:
+            # Positional: key, mode, iv
+            if len(parts) > 1 and "=" not in parts[1]:
                 kwargs["key"] = _safe_fromhex(parts[1], "cipher key")
-            if len(parts) > 2:
+            if len(parts) > 2 and "=" not in parts[2]:
                 kwargs["mode"] = parts[2].upper()
-            if len(parts) > 3:
+            if len(parts) > 3 and "=" not in parts[3]:
                 kwargs["iv"] = _safe_fromhex(parts[3], "cipher iv")
-            if encrypt_mode:
-                # Stream ciphers (rc4) are symmetric — reverse isn't needed/accepted.
-                # Block ciphers (aes, des, blowfish) use reverse to switch direction.
-                _STREAM_CIPHERS = {"rc4", "chacha", "salsa"}
-                if cipher_name not in _STREAM_CIPHERS:
-                    kwargs["reverse"] = True
+            # Keyword params: padding=raw, nonce=HEX, tag=HEX, segment_size=N, block_size=N
+            for p in parts[1:]:
+                if "=" in p:
+                    k, v = p.split("=", 1)
+                    k = k.lower()
+                    if k == "padding":
+                        kwargs["padding"] = "raw" if v.lower() in ("none", "raw") else v.lower()
+                    elif k == "nonce":
+                        kwargs["nonce"] = _safe_fromhex(v, "cipher nonce")
+                    elif k == "tag":
+                        kwargs["tag"] = _safe_fromhex(v, "cipher tag")
+                    elif k in ("segment_size", "block_size", "discard", "rounds"):
+                        kwargs[k] = int(v)
+                    elif k == "key":
+                        kwargs["key"] = _safe_fromhex(v, "cipher key")
+                    elif k == "mode":
+                        kwargs["mode"] = v.upper()
+                    elif k == "iv":
+                        kwargs["iv"] = _safe_fromhex(v, "cipher iv")
+                    elif k == "raw":
+                        kwargs["raw"] = v.lower() in ("true", "1", "yes")
+                    elif k == "little_endian":
+                        kwargs["little_endian"] = v.lower() in ("true", "1", "yes")
+                    elif k == "aad":
+                        kwargs["aad"] = _safe_fromhex(v, "cipher aad")
+            _STREAM_CIPHERS = {"rc4", "rc4mod", "chacha", "salsa", "blabla", "rabbit", "seal", "hc128", "hc256", "isaac", "sosemanuk"}
+            if encrypt_mode and cipher_name not in _STREAM_CIPHERS:
+                kwargs["reverse"] = True
             current = current | unit_cls(**kwargs) | bytes
 
         # ── Byte slicing ──
@@ -1113,17 +1299,16 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
             slice_args = parts[1:]
             if len(slice_args) == 0:
                 pass  # no-op
-            elif len(slice_args) == 1:
-                current = current[int(slice_args[0]):]
-            elif len(slice_args) == 2:
-                start = int(slice_args[0]) if slice_args[0] else None
-                stop = int(slice_args[1]) if slice_args[1] else None
-                current = current[slice(start, stop)]
             else:
-                start = int(slice_args[0]) if slice_args[0] else None
-                stop = int(slice_args[1]) if slice_args[1] else None
-                step = int(slice_args[2]) if slice_args[2] else None
-                current = current[slice(start, stop, step)]
+                try:
+                    start_val = int(slice_args[0]) if (len(slice_args) > 0 and slice_args[0]) else None
+                    stop_val = int(slice_args[1]) if (len(slice_args) > 1 and slice_args[1]) else None
+                    step_val = int(slice_args[2]) if (len(slice_args) > 2 and slice_args[2]) else None
+                except ValueError as e:
+                    raise ValueError(f"snip: invalid integer argument: {e}") from e
+                if step_val is not None and step_val == 0:
+                    raise ValueError("snip: step cannot be zero")
+                current = current[slice(start_val, stop_val, step_val)]
 
         # ── Chunking ──
         elif unit_name == "chop":
@@ -1172,69 +1357,114 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
         elif unit_name == "ror":
             from refinery.units.blockwise.rotr import rotr
             if len(parts) < 2:
-                raise ValueError("ror requires shift amount: 'ror:13' or 'ror:13:dword'")
+                raise ValueError("ror requires shift amount: 'ror:13' or 'ror:13:dword' or 'ror:13:blocksize=4'")
             shift = int(parts[1])
-            bs = 4 if (len(parts) > 2 and parts[2] == "dword") else 1
-            current = current | rotr(shift, blocksize=bs) | bytes
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            # Legacy 'dword' shorthand (backwards compatible)
+            if "blocksize" not in bw_kwargs and len(parts) > 2 and parts[2] == "dword":
+                bw_kwargs["blocksize"] = 4
+            if "blocksize" not in bw_kwargs:
+                bw_kwargs["blocksize"] = 1
+            current = current | rotr(shift, **bw_kwargs) | bytes
 
         elif unit_name == "rol":
             from refinery.units.blockwise.rotl import rotl
             if len(parts) < 2:
-                raise ValueError("rol requires shift amount: 'rol:3' or 'rol:3:dword'")
+                raise ValueError("rol requires shift amount: 'rol:3' or 'rol:3:dword' or 'rol:3:blocksize=4'")
             shift = int(parts[1])
-            bs = 4 if (len(parts) > 2 and parts[2] == "dword") else 1
-            current = current | rotl(shift, blocksize=bs) | bytes
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            # Legacy 'dword' shorthand (backwards compatible)
+            if "blocksize" not in bw_kwargs and len(parts) > 2 and parts[2] == "dword":
+                bw_kwargs["blocksize"] = 4
+            if "blocksize" not in bw_kwargs:
+                bw_kwargs["blocksize"] = 1
+            current = current | rotl(shift, **bw_kwargs) | bytes
 
         elif unit_name == "shl":
             from refinery.units.blockwise.shl import shl as _shl
             if len(parts) < 2:
-                raise ValueError("shl requires shift amount: 'shl:2'")
-            current = current | _shl(int(parts[1])) | bytes
+                raise ValueError("shl requires shift amount: 'shl:2' or 'shl:2:blocksize=4'")
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            current = current | _shl(int(parts[1]), **bw_kwargs) | bytes
 
         elif unit_name == "shr":
             from refinery.units.blockwise.shr import shr as _shr
             if len(parts) < 2:
-                raise ValueError("shr requires shift amount: 'shr:2'")
-            current = current | _shr(int(parts[1])) | bytes
+                raise ValueError("shr requires shift amount: 'shr:2' or 'shr:2:blocksize=4'")
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            current = current | _shr(int(parts[1]), **bw_kwargs) | bytes
 
         elif unit_name in ("and", "bitand"):
             from refinery.units.blockwise.alu import alu
             if len(parts) < 2:
-                raise ValueError("and requires hex mask: 'and:0F'")
-            current = current | alu("B&A", int(parts[1], 16)) | bytes
+                raise ValueError("and requires hex mask: 'and:0F' or 'and:0F:blocksize=4'")
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            current = current | alu("B&A", int(parts[1], 16), **bw_kwargs) | bytes
 
         elif unit_name in ("or", "bitor"):
             from refinery.units.blockwise.alu import alu
             if len(parts) < 2:
-                raise ValueError("or requires hex mask: 'or:80'")
-            current = current | alu("B|A", int(parts[1], 16)) | bytes
+                raise ValueError("or requires hex mask: 'or:80' or 'or:80:blocksize=4'")
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            current = current | alu("B|A", int(parts[1], 16), **bw_kwargs) | bytes
 
         elif unit_name in ("not", "bitnot"):
             from refinery.units.blockwise.neg import neg
-            current = current | neg() | bytes
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            current = current | neg(**bw_kwargs) | bytes
 
         elif unit_name == "add":
             from refinery.units.blockwise.add import add as _add
             if len(parts) < 2:
-                raise ValueError("add requires value: 'add:5'")
-            current = current | _add(int(parts[1])) | bytes
+                raise ValueError("add requires value: 'add:5' or 'add:5:blocksize=4'")
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            current = current | _add(int(parts[1]), **bw_kwargs) | bytes
 
         elif unit_name == "sub":
             from refinery.units.blockwise.sub import sub as _sub
             if len(parts) < 2:
-                raise ValueError("sub requires value: 'sub:5'")
-            current = current | _sub(int(parts[1])) | bytes
+                raise ValueError("sub requires value: 'sub:5' or 'sub:5:blocksize=4'")
+            bw_kwargs = _parse_blockwise_kwargs(parts)
+            current = current | _sub(int(parts[1]), **bw_kwargs) | bytes
+
+        # ── Byte swapping ──
+        elif unit_name == "byteswap":
+            from refinery.units.blockwise.byteswap import byteswap
+            bsw_size = int(parts[1]) if len(parts) > 1 else 4
+            current = current | byteswap(size=bsw_size) | bytes
+
+        # ── Hex load (parse hex dump back to bytes) ──
+        elif unit_name == "hexload":
+            from refinery.units.formats.hexload import hexload
+            current = current | hexload() | bytes
+
+        # ── Batch script deobfuscation ──
+        elif unit_name == "bat":
+            from refinery.units.formats.bat import bat as bat_deob
+            current = current | bat_deob() | bytes
 
         # ── Refinery built-in units ──
         elif unit_name in _PIPELINE_UNIT_MAP:
             mod_path, cls_name, kwargs = _PIPELINE_UNIT_MAP[unit_name]
             mod = importlib.import_module(mod_path)
             unit_cls = getattr(mod, cls_name)
+            # Parse keyword params from step parts for generic units
+            unit_kwargs = dict(kwargs)
+            for p in parts[1:]:
+                if "=" in p:
+                    k, v = p.split("=", 1)
+                    k = k.lower()
+                    if k == "urlsafe":
+                        unit_kwargs["urlsafe"] = v.lower() in ("true", "1", "yes")
+                    elif k in ("window",):
+                        unit_kwargs[k] = int(v)
+                    elif k in ("zlib_header", "gzip_header", "raw"):
+                        unit_kwargs[k] = v.lower() in ("true", "1", "yes")
             if unit_name in _PIPELINE_DECOMPRESS_UNITS:
                 # Streaming decompression with bomb protection
                 output_chunks = []
                 total = 0
-                for chunk in current | unit_cls(**kwargs):
+                for chunk in current | unit_cls(**unit_kwargs):
                     piece = bytes(chunk)
                     total += len(piece)
                     if total > _PIPELINE_MAX_INTERMEDIATE_SIZE:
@@ -1245,7 +1475,7 @@ def _run_pipeline_single(data: bytes, steps: list) -> tuple:
                     output_chunks.append(piece)
                 current = b"".join(output_chunks)
             else:
-                current = current | unit_cls(**kwargs) | bytes
+                current = current | unit_cls(**unit_kwargs) | bytes
         else:
             raise ValueError(f"Unknown pipeline unit: '{unit_name}'")
 
@@ -1276,13 +1506,19 @@ async def refinery_pipeline(
     Each step is 'unit_name:arg1:arg2'.
 
     Available pipeline steps:
-    - Encoding: b64, hex, b32, b85, url, esc, u16
-    - Compression: zl, bz2, lzma, lz4, decompress
-    - Crypto: xor:KEY, rc4:KEY, aes:KEY:MODE:IV, des, blowfish, chacha, salsa
-      Prefix with enc_ to encrypt: enc_rc4:KEY, enc_aes:KEY:CBC:IV
+    - Encoding: b64, hex, b32, b85, url, esc, u16 (keyword params: urlsafe=true for b64)
+    - Compression: zl, bz2, lzma, lz4, decompress (keyword params: window=N, zlib_header=true,
+      gzip_header=true, raw=true)
+    - Crypto: xor:KEY[:blocksize=N:bigendian=true], rc4:KEY, aes:KEY:MODE:IV, des, blowfish,
+      chacha, salsa (keyword params: padding=raw, raw=true, little_endian=true, aad=HEX,
+      discard=N, rounds=N). Prefix with enc_ to encrypt: enc_rc4:KEY, enc_aes:KEY:CBC:IV
     - Slicing: snip:start:stop (Python slice, negative indices OK), chop:size[:index], pick:N
     - Padding: pad:blocksize, terminate (strip nulls), terminate:add (add null)
-    - Bitwise: ror:N[:dword], rol:N[:dword], shl:N, shr:N, and:HH, or:HH, not, add:N, sub:N
+    - Bitwise: ror:N[:dword|blocksize=N], rol:N[:dword|blocksize=N], shl:N[:blocksize=N],
+      shr:N[:blocksize=N], and:HH[:blocksize=N], or:HH[:blocksize=N], not[:blocksize=N],
+      add:N[:blocksize=N], sub:N[:blocksize=N] (all support bigendian=true)
+    - Byteswap: byteswap[:N] (swap byte order in N-byte blocks, default 4)
+    - Format: hexload (parse hex dump to bytes), bat (batch script deobfuscation)
     - Utility: rot, nop (passthrough)
 
     Args:
