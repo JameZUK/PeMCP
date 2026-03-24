@@ -413,8 +413,12 @@ class AnalysisCache:
                         tmp.unlink(missing_ok=True)
                         tmp = None  # signal to skip replace
 
-                if tmp is not None:
-                    tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
+                if tmp is None:
+                    # Merge failed — on-disk entry preserved with session data.
+                    # Skip metadata update since we didn't write a new entry.
+                    return True
+
+                tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
 
                 file_size = entry_path.stat().st_size
                 meta = self._load_meta()
@@ -445,7 +449,8 @@ class AnalysisCache:
 
             except OSError as e:
                 logger.error("Cache write error for %s...: %s", sha256[:12], e)
-                tmp.unlink(missing_ok=True)
+                if tmp is not None:
+                    tmp.unlink(missing_ok=True)
                 return False
 
     # ------------------------------------------------------------------
