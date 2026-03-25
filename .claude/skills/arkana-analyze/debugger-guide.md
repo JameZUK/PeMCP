@@ -41,9 +41,21 @@ crashing. Output is captured and retrievable via `debug_get_output()`. Input is
 consumed from a queue populated by `debug_set_input()`.
 
 **Custom API stubs** — extend stubbing at runtime:
-- `debug_stub_api(api_name, return_value, num_params, writes)` — create a stub
+- `debug_stub_api(api_name, return_value, num_params, writes, set_last_error)` — create a stub
 - `debug_list_stubs()` — show all stubs (builtin I/O, builtin CRT, user-defined)
 - `debug_remove_stub(api_name)` — remove a user-defined stub
+
+**GetLastError() anti-emulation bypass** — many packers (TA505, etc.) call a Windows API with
+invalid parameters, then check `GetLastError()` for the expected error code. Use `set_last_error`
+to make the stub set the correct error code before returning:
+```
+debug_stub_api(api_name="GetWindowContextHelpId", return_value="0x0",
+               set_last_error="0x578")   # ERROR_INVALID_WINDOW_HANDLE
+debug_stub_api(api_name="SetClassLongA", return_value="0x0",
+               set_last_error="0x578")   # ERROR_INVALID_WINDOW_HANDLE
+```
+GetLastError and SetLastError are dynamic CRT stubs — they read/write a shared `_last_error_code`
+variable, so `set_last_error` on any stub automatically affects subsequent `GetLastError()` calls.
 
 ## API Tracing
 

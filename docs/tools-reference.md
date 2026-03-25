@@ -279,7 +279,7 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `patch_with_assembly` | Assemble and patch instructions into the binary. |
 | `compute_similarity_hashes` | Compute ssdeep and TLSH fuzzy hashes. |
 | `compare_file_similarity` | Compare two files using fuzzy hash similarity. |
-| `emulate_pe_with_windows_apis` | Full Windows API emulation with Speakeasy. Paginated (default limit 20). |
+| `emulate_pe_with_windows_apis` | Full Windows API emulation with Speakeasy. Use `track_allocations=True` to track VirtualAlloc/VirtualProtect/HeapAlloc calls and return a memory allocation timeline with anomaly detection (RWX allocations, large allocations, alloc-then-protect sequences). Paginated (default limit 20). |
 | `emulate_shellcode_with_speakeasy` | Emulate shellcode with Windows API hooks. Paginated (default limit 20). |
 | `auto_unpack_pe` | Automatically unpack packed PEs (UPX, ASPack, FSG, etc.). |
 | `scan_for_embedded_files` | Detect embedded files/firmware with Binwalk. Paginated (default limit 20). |
@@ -293,7 +293,7 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `emulate_shellcode_with_qiling` | Multi-architecture shellcode emulation (x86, x64, ARM, ARM64, MIPS) with API/syscall capture. Paginated (default limit 20). |
 | `qiling_trace_execution` | Instruction-level execution tracing with addresses, sizes, and raw bytes for each executed instruction. Paginated (default limit 50). |
 | `qiling_hook_api_calls` | Hook specific APIs/syscalls to capture arguments and return values during emulation. Paginated (default limit 20). |
-| `qiling_dump_unpacked_binary` | Dynamic unpacking via emulation  - handles custom/unknown packers that YARA-based unipacker cannot identify. |
+| `qiling_dump_unpacked_binary` | Dynamic unpacking via emulation — handles custom/unknown packers that YARA-based unipacker cannot identify. `smart_unpack` (default True) hooks VirtualAlloc/VirtualAllocEx to track allocations, then scans for PE headers (MZ + PE signature) in tracked regions. Falls back to largest-region heuristic if no PE found. |
 | `qiling_resolve_api_hashes` | Resolve API hash values (ROR13, CRC32, DJB2, FNV-1a) against known DLL exports. |
 | `qiling_memory_search` | Run a binary then search process memory for decrypted strings, C2 URLs, keys, or byte patterns. Paginated (default limit 20). |
 | `qiling_setup_check` | Check Qiling Framework setup status  - venv availability, rootfs directory structure, and essential DLLs for each architecture. Provides specific copy commands for missing DLLs. |
@@ -374,7 +374,7 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 
 | Tool | Description |
 |---|---|
-| `debug_stub_api` | Create a custom API stub at runtime. When the binary calls the specified Windows API, the stub intercepts it, sets the return value, optionally writes data to output pointer parameters, and returns cleanly. Useful for stubbing APIs not covered by builtin CRT/I/O stubs. Max 200 user stubs. |
+| `debug_stub_api` | Create a custom API stub at runtime. When the binary calls the specified Windows API, the stub intercepts it, sets the return value, optionally writes data to output pointer parameters, and returns cleanly. `set_last_error` parameter bypasses GetLastError() anti-emulation techniques (e.g. `set_last_error="0x578"` for ERROR_INVALID_WINDOW_HANDLE). Useful for stubbing APIs not covered by builtin CRT/I/O stubs. Max 200 user stubs. |
 | `debug_list_stubs` | List all installed API stubs: builtin I/O stubs (8 console APIs), builtin CRT stubs (~47 MSVC init APIs), and user-defined stubs. |
 | `debug_remove_stub` | Remove a user-defined API stub. Builtin I/O and CRT stubs cannot be removed — restart the session with `stub_io=False` or `stub_crt=False` to disable them. |
 

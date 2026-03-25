@@ -108,21 +108,31 @@ try_all_unpackers()
 ### Method 3: qiling_dump_unpacked_binary() — Emulation-Based
 
 **Best for**: Custom packers, unknown packers, heavily obfuscated stubs where
-static unpacking fails.
+static unpacking fails. Especially effective for packers that VirtualAlloc +
+decrypt + execute (e.g. TA505).
 
 ```
 qiling_setup_check()                       → verify rootfs is available
-qiling_dump_unpacked_binary()              → emulate until OEP, dump
+qiling_dump_unpacked_binary()              → emulate, track VirtualAlloc, scan for PE headers
+qiling_dump_unpacked_binary(smart_unpack=False)  → fallback: dump largest mapped region
 ```
 
-- Emulates the packer stub execution using Qiling Framework
-- Detects when the original entry point is reached
-- Dumps the unpacked binary image from memory
+- `smart_unpack` (default True) hooks VirtualAlloc/VirtualAllocEx to track all
+  allocations during emulation, then scans tracked regions for MZ + PE signature
+  headers. Dumps the best PE candidate found. This is much more reliable than
+  the fallback largest-region heuristic for most real-world packers.
+- Falls back to dumping the largest mapped region if no PE found in allocations,
+  or if `smart_unpack=False`.
+- Response includes `dump_source` ("virtualalloc_pe_detection" or "largest_region_fallback"),
+  `tracked_allocations` count, and `pe_header_detected` flag.
 - Works on packers that are resistant to static analysis
 - Requires Qiling rootfs (check with `qiling_setup_check()`)
+- `_MAX_TRACKED_ALLOCS` (1000) caps tracked allocations to prevent memory issues
 
 **Troubleshooting**:
-- If emulation hangs: packer may have anti-emulation. Try with hooks.
+- If emulation hangs: packer may have anti-emulation. Use the debugger with
+  `debug_stub_api(set_last_error="0x578")` to bypass GetLastError() checks.
+- If smart_unpack finds wrong PE: try `smart_unpack=False` or specify `dump_address`.
 - If dump is corrupt: OEP detection may be wrong. Try Method 4.
 
 ### Method 4: Manual OEP Recovery + Reconstruction

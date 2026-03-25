@@ -28,6 +28,10 @@ blindly.
 
 - CRT init crash → Check `debug_get_api_trace()` for the last API call. Stub the
   failing API with `debug_stub_api()`. Common: `_initterm_e`, `GetSystemTimeAsFileTime`.
+- GetLastError() anti-emulation → Packer calls an API with invalid params, then checks
+  `GetLastError()` for a specific error code. Use `debug_stub_api(api_name="TheAPI",
+  return_value="0x0", set_last_error="0x578")` to set the expected error code. Common
+  pattern in TA505 and other packers. See [debugger-guide.md](debugger-guide.md).
 - No output captured → Verify `stub_io=True` was set in `debug_start`. Check
   `debug_get_output()` — output may be buffered.
 - "Rootfs not found" → Run `qiling_setup_check()` to verify setup.
