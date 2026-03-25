@@ -105,6 +105,7 @@ _tls_counter = 0                     # For TlsAlloc stub
 _stub_alloc_base = None              # Pre-mapped page for string-returning stubs
 _stub_alloc_offset = 0               # Current offset within alloc page
 _crt_stub_names = set()              # Names of installed CRT stubs
+_last_error_code = 0                 # Thread-local last error (for GetLastError/SetLastError)
 
 # hook_address() refactor state
 _api_address_map = {}                # api_name → [sym_addr, ...] built once at init
@@ -524,15 +525,18 @@ def _alloc_stub_data(data_bytes):
     return addr
 
 
-def _make_generic_stub(api_name, retval, writes=None):
+def _make_generic_stub(api_name, retval, writes=None, set_last_error=None):
     """Factory: create a CALL-hook closure for a data-driven stub.
 
     Args:
         api_name: API function name (for trace logging)
         retval: Return value (int) or None for void
         writes: List of {"param_index": int, "data_hex": str, "size": int}
+        set_last_error: If not None, set _last_error_code to this value before
+            returning. Used to bypass GetLastError() anti-emulation checks.
     """
     def _generic_stub(ql, address, _api_name):
+        global _last_error_code
         params = {}
         if writes:
             for w in writes:
@@ -545,6 +549,8 @@ def _make_generic_stub(api_name, retval, writes=None):
                         ql.mem.write(ptr, data)
                     except Exception:
                         pass
+        if set_last_error is not None:
+            _last_error_code = set_last_error & 0xFFFFFFFF
         _add_trace_entry(api_name, address, params, retval)
         if retval is not None:
             _stub_set_retval(retval)
@@ -567,8 +573,8 @@ _CRT_SIMPLE_STUBS = [
     {"name": "GetProcessHeap", "params": 0, "return_value": 0x10000},
     {"name": "HeapSetInformation", "params": 4, "return_value": 1},
     {"name": "SetUnhandledExceptionFilter", "params": 1, "return_value": 0},
-    {"name": "GetLastError", "params": 0, "return_value": 0},
-    {"name": "SetLastError", "params": 1, "return_value": None},
+    # GetLastError/SetLastError are installed as Type 3 custom handlers below
+    # to support dynamic _last_error_code state for anti-emulation bypass.
     {"name": "FlsSetValue", "params": 2, "return_value": 1},
     {"name": "FlsGetValue", "params": 1, "return_value": 0},
     {"name": "FlsFree", "params": 1, "return_value": 1},
@@ -680,6 +686,32 @@ def _install_crt_stubs():
             pass
 
     # --- Install Type 3: custom handler stubs ---
+
+    # GetLastError / SetLastError — dynamic stubs that read/write _last_error_code
+    # to support anti-emulation bypass (e.g. TA505 GetLastError technique).
+    def _stub_GetLastError(ql, address, _api_name):
+        _add_trace_entry("GetLastError", address, {}, _last_error_code)
+        _stub_set_retval(_last_error_code)
+
+    def _stub_SetLastError(ql, address, _api_name):
+        global _last_error_code
+        error_code = _stub_read_param(0) & 0xFFFFFFFF
+        _last_error_code = error_code
+        _add_trace_entry("SetLastError", address,
+                         {"dwErrCode": _hex(error_code)}, None)
+
+    for _le_name, _le_fn, _le_params in [
+        ("GetLastError", _stub_GetLastError, 0),
+        ("SetLastError", _stub_SetLastError, 1),
+    ]:
+        _le_wrapped = _wrap_for_hook_address(_le_fn, _le_name)
+        try:
+            _le_hooks, _ = _hook_api_by_address(_le_name, _le_wrapped, _le_params)
+            if _le_hooks:
+                _stub_hooks[_le_name] = _le_hooks
+                _crt_stub_names.add(_le_name)
+        except Exception:
+            pass
 
     def _stub_IsProcessorFeaturePresent(ql, address, _api_name):
         feature = _stub_read_param(0) & 0xFFFFFFFF
@@ -1142,7 +1174,7 @@ def cmd_init(cmd):
     global _stub_io, _captured_output, _pending_input, _io_seq_counter
     global _api_trace, _api_trace_seq, _api_trace_filter, _api_trace_enabled
     global _stub_crt, _user_stubs, _fls_counter, _tls_counter
-    global _stub_alloc_base, _stub_alloc_offset, _crt_stub_names
+    global _stub_alloc_base, _stub_alloc_offset, _crt_stub_names, _last_error_code
     global _api_address_map, _stub_hooks, _trace_hooks, _io_stub_names
 
     filepath = cmd["filepath"]
@@ -1191,6 +1223,7 @@ def cmd_init(cmd):
     _stub_alloc_base = None
     _stub_alloc_offset = 0
     _crt_stub_names = set()
+    _last_error_code = 0
 
     # Reset hook_address refactor state
     _api_address_map = {}
@@ -2406,8 +2439,29 @@ def cmd_stub_api(cmd):
                 return {"error": f"writes[{i}].data_hex is not valid hex"}
             writes.append({"param_index": pi, "data_hex": dh, "size": len(dh) // 2})
 
+    # Parse set_last_error (for GetLastError anti-emulation bypass)
+    set_last_error_val = cmd.get("set_last_error")
+    if set_last_error_val is not None:
+        try:
+            if isinstance(set_last_error_val, int):
+                pass  # Already an int from MCP layer
+            elif isinstance(set_last_error_val, str):
+                if set_last_error_val.startswith(("0x", "0X")):
+                    set_last_error_val = int(set_last_error_val, 16)
+                else:
+                    set_last_error_val = int(set_last_error_val)
+            else:
+                return {"error": f"Invalid set_last_error type: {type(set_last_error_val).__name__}"}
+            if set_last_error_val < 0 or set_last_error_val > 0xFFFFFFFF:
+                return {"error": "set_last_error must be 0-0xFFFFFFFF"}
+        except (ValueError, TypeError):
+            return {"error": f"Invalid set_last_error: '{set_last_error_val}'. Use hex or decimal."}
+
     # Create and register the stub
-    stub_fn = _make_generic_stub(api_name, return_value, writes if writes else None)
+    stub_fn = _make_generic_stub(
+        api_name, return_value, writes if writes else None,
+        set_last_error=set_last_error_val,
+    )
     wrapped = _wrap_for_hook_address(stub_fn, api_name)
     hooks, patched = _hook_api_by_address(api_name, wrapped, num_params)
     _stub_hooks[api_name] = hooks
@@ -2417,12 +2471,14 @@ def cmd_stub_api(cmd):
         "num_params": num_params,
         "writes": writes,
         "patched": patched,
+        "set_last_error": set_last_error_val,
     }
 
     return {
         "status": "ok",
         "api_name": api_name,
         "return_value": _hex(return_value) if isinstance(return_value, int) else None,
+        "set_last_error": _hex(set_last_error_val) if set_last_error_val is not None else None,
         "num_params": num_params,
         "writes_count": len(writes),
         "patched": patched,
@@ -2448,13 +2504,17 @@ def cmd_list_stubs(cmd):
     # User stubs
     user_stubs = []
     for name, info in _user_stubs.items():
-        user_stubs.append({
+        entry = {
             "api_name": name,
             "return_value": _hex(info["return_value"]) if isinstance(info["return_value"], int) else None,
             "num_params": info["num_params"],
             "writes_count": len(info.get("writes", [])),
             "patched": info["patched"],
-        })
+        }
+        sle = info.get("set_last_error")
+        if sle is not None:
+            entry["set_last_error"] = _hex(sle)
+        user_stubs.append(entry)
 
     return {
         "status": "ok",

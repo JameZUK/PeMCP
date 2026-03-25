@@ -450,6 +450,7 @@ async def qiling_dump_unpacked_binary(
     dump_size: Optional[int] = None,
     timeout_seconds: int = 120,
     max_instructions: int = 0,
+    smart_unpack: bool = True,
 ) -> Dict[str, Any]:
     """
     Dynamically unpacks the loaded binary by emulating it with Qiling until it
@@ -458,7 +459,14 @@ async def qiling_dump_unpacked_binary(
 
     If dump_address is specified, Qiling will stop emulation when that address is
     reached (e.g., the Original Entry Point) and dump from that address.  Otherwise,
-    it runs until timeout and dumps the largest mapped memory region.
+    when smart_unpack is True (default), it hooks VirtualAlloc/VirtualAllocEx to
+    track memory allocations during emulation, then scans tracked regions for PE
+    headers (MZ + PE signature) and dumps the best candidate.  This is much more
+    reliable than the fallback of dumping the largest mapped region, especially
+    for packers that allocate+decrypt+execute in heap memory (e.g. TA505).
+
+    Falls back to dumping the largest mapped region if smart_unpack finds no PE
+    headers, or if smart_unpack is disabled.
 
     Rootfs requirements: Same as emulate_binary_with_qiling.  Windows PE unpacking
     requires real DLLs in the rootfs because most packers call Windows APIs
@@ -471,6 +479,9 @@ async def qiling_dump_unpacked_binary(
         dump_size: Number of bytes to dump from dump_address. Required if dump_address is set.
         timeout_seconds: Max emulation time in seconds.
         max_instructions: Max CPU instructions to emulate (0 = unlimited).
+        smart_unpack: If True (default), hooks VirtualAlloc to track allocations
+            and scans for PE headers in allocated regions after emulation. More
+            reliable than the largest-region fallback for most packers.
     """
     await ctx.info("Dynamically unpacking with Qiling")
     _check_qiling("qiling_dump_unpacked_binary")
@@ -497,6 +508,7 @@ async def qiling_dump_unpacked_binary(
             "dump_size": dump_size,
             "timeout_seconds": timeout_seconds,
             "max_instructions": max_instructions,
+            "smart_unpack": smart_unpack,
         }, timeout_seconds)
     finally:
         progress_task.cancel()

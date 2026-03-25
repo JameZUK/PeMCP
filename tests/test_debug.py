@@ -1369,6 +1369,80 @@ class TestCRTStubsAndUserStubs:
         assert "error" in result
         assert "Too many" in result["error"]
 
+    # --- debug_stub_api with set_last_error ---
+
+    def test_stub_api_with_set_last_error(self, clean_state, mock_ctx):
+        """Stub with set_last_error for anti-emulation bypass."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        resp = {"status": "ok", "api_name": "GetWindowContextHelpId",
+                "return_value": "0x0", "set_last_error": "0x578",
+                "num_params": 1, "writes_count": 0, "patched": True,
+                "total_user_stubs": 1}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_stub_api(mock_ctx,
+                                      api_name="GetWindowContextHelpId",
+                                      return_value="0x0",
+                                      num_params=1,
+                                      set_last_error="0x578"))
+        assert result["status"] == "ok"
+        assert result["set_last_error"] == "0x578"
+        # Verify command sent to subprocess includes set_last_error
+        stdin = clean_state._debug_manager._sessions["debug-1"].proc.stdin
+        cmd = json.loads(stdin.written[-1].decode())
+        assert cmd["set_last_error"] == 0x578
+
+    def test_stub_api_set_last_error_decimal(self, clean_state, mock_ctx):
+        """Decimal set_last_error value."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        resp = {"status": "ok", "api_name": "SetClassLongA",
+                "return_value": "0x0", "set_last_error": "0x578",
+                "num_params": 3, "writes_count": 0, "patched": True,
+                "total_user_stubs": 1}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_stub_api(mock_ctx,
+                                      api_name="SetClassLongA",
+                                      return_value="0x0",
+                                      num_params=3,
+                                      set_last_error="1400"))
+        assert result["status"] == "ok"
+        stdin = clean_state._debug_manager._sessions["debug-1"].proc.stdin
+        cmd = json.loads(stdin.written[-1].decode())
+        assert cmd["set_last_error"] == 1400
+
+    def test_stub_api_set_last_error_invalid(self, clean_state, mock_ctx):
+        """Invalid set_last_error value."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        self._setup_session(clean_state, [])
+        result = _run(debug_stub_api(mock_ctx,
+                                      api_name="TestAPI",
+                                      set_last_error="not_a_number"))
+        assert "error" in result
+
+    def test_stub_api_set_last_error_out_of_range(self, clean_state, mock_ctx):
+        """set_last_error above 32-bit range."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        self._setup_session(clean_state, [])
+        result = _run(debug_stub_api(mock_ctx,
+                                      api_name="TestAPI",
+                                      set_last_error="0x1FFFFFFFF"))
+        assert "error" in result
+
+    def test_stub_api_set_last_error_empty_is_noop(self, clean_state, mock_ctx):
+        """Empty set_last_error string means no last error is set."""
+        from arkana.mcp.tools_debug import debug_stub_api
+        resp = {"status": "ok", "api_name": "NormalAPI",
+                "return_value": "0x1", "num_params": 0, "writes_count": 0,
+                "patched": True, "total_user_stubs": 1}
+        self._setup_session(clean_state, [resp])
+        result = _run(debug_stub_api(mock_ctx,
+                                      api_name="NormalAPI",
+                                      return_value="0x1",
+                                      set_last_error=""))
+        assert result["status"] == "ok"
+        stdin = clean_state._debug_manager._sessions["debug-1"].proc.stdin
+        cmd = json.loads(stdin.written[-1].decode())
+        assert "set_last_error" not in cmd
+
     # --- debug_list_stubs ---
 
     def test_list_stubs(self, clean_state, mock_ctx):

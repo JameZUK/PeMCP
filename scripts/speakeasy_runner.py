@@ -67,11 +67,127 @@ def _collect_api_calls(report, limit):
     return api_calls
 
 
+def _parse_int(val):
+    """Parse a Speakeasy argument value to int."""
+    if isinstance(val, int):
+        return val
+    if isinstance(val, str):
+        try:
+            return int(val, 0) if val.startswith(("0x", "0X")) else int(val)
+        except (ValueError, TypeError):
+            return 0
+    return 0
+
+
+# Windows memory protection constants
+_PROTECT_FLAGS = {
+    0x01: "PAGE_NOACCESS", 0x02: "PAGE_READONLY",
+    0x04: "PAGE_READWRITE", 0x08: "PAGE_WRITECOPY",
+    0x10: "PAGE_EXECUTE", 0x20: "PAGE_EXECUTE_READ",
+    0x40: "PAGE_EXECUTE_READWRITE", 0x80: "PAGE_EXECUTE_WRITECOPY",
+}
+
+
+def _analyze_allocation_activity(report, limit):
+    """Analyze memory allocation patterns from Speakeasy API call log.
+
+    Tracks VirtualAlloc, VirtualAllocEx, VirtualProtect, VirtualFree,
+    HeapAlloc, and HeapCreate calls. Flags suspicious patterns like
+    RWX allocations and allocation-then-execute sequences.
+    """
+    allocations = []
+    anomalies = []
+    max_ops = limit * 2  # Safety cap
+
+    for event in report.get("api_calls", []):
+        api_name = event.get("api_name") or ""
+        api_lower = api_name.lower()
+        args = event.get("args", [])
+        ret = event.get("ret_val")
+
+        if "virtualalloc" in api_lower and "free" not in api_lower:
+            is_ex = "ex" in api_lower
+            size_idx = 2 if is_ex else 1
+            prot_idx = 4 if is_ex else 3
+            size = _parse_int(args[size_idx]) if len(args) > size_idx else 0
+            protect = _parse_int(args[prot_idx]) if len(args) > prot_idx else 0
+            prot_name = _PROTECT_FLAGS.get(protect & 0xFF, hex(protect))
+
+            allocations.append({
+                "api": api_name, "type": "alloc",
+                "address": hex(ret) if isinstance(ret, int) else str(ret),
+                "size": size, "protection": prot_name,
+            })
+
+            if protect & 0x40:  # PAGE_EXECUTE_READWRITE
+                anomalies.append({
+                    "type": "RWX_ALLOCATION", "severity": "high",
+                    "api": api_name, "size": size,
+                    "detail": f"Allocated {size} bytes with RWX — common in unpacking and shellcode injection",
+                })
+            if size > 1048576:
+                anomalies.append({
+                    "type": "LARGE_ALLOCATION", "severity": "medium",
+                    "api": api_name, "size": size,
+                    "detail": f"Large allocation ({size} bytes) — may indicate process hollowing or payload staging",
+                })
+
+        elif "virtualprotect" in api_lower:
+            prot_idx = 2
+            new_protect = _parse_int(args[prot_idx]) if len(args) > prot_idx else 0
+            prot_name = _PROTECT_FLAGS.get(new_protect & 0xFF, hex(new_protect))
+            allocations.append({
+                "api": api_name, "type": "protect",
+                "address": str(args[0]) if args else "?",
+                "size": _parse_int(args[1]) if len(args) > 1 else 0,
+                "new_protection": prot_name,
+            })
+            if new_protect & 0x40:
+                anomalies.append({
+                    "type": "RWX_PROTECTION_CHANGE", "severity": "high",
+                    "api": api_name,
+                    "detail": "Protection changed to RWX — often precedes shellcode execution",
+                })
+
+        elif "virtualfree" in api_lower:
+            allocations.append({
+                "api": api_name, "type": "free",
+                "address": str(args[0]) if args else "?",
+            })
+
+        elif "heapalloc" in api_lower or "heapcreate" in api_lower:
+            size = _parse_int(args[-1]) if args else 0
+            allocations.append({"api": api_name, "type": "heap", "size": size})
+
+        if len(allocations) >= max_ops:
+            break
+
+    # Detect allocation-then-execute pattern
+    has_allocs = any(e.get("type") == "alloc" for e in allocations)
+    has_protect = any(e.get("type") == "protect" for e in allocations)
+    if has_allocs and has_protect:
+        anomalies.append({
+            "type": "ALLOC_THEN_PROTECT_SEQUENCE", "severity": "high",
+            "detail": "VirtualAlloc followed by VirtualProtect — classic unpacking/injection pattern",
+        })
+
+    return {
+        "memory_operations": allocations[:limit],
+        "anomalies": anomalies[:limit],
+        "summary": {
+            "total_operations": len(allocations),
+            "total_anomalies": len(anomalies),
+            "anomaly_types": sorted(set(a["type"] for a in anomalies)),
+        },
+    }
+
+
 def emulate_pe(cmd):
     filepath = cmd["filepath"]
     _validate_file_path(filepath)
     timeout_seconds = cmd.get("timeout_seconds", 60)
     limit = cmd.get("limit", 200)
+    track_allocations = cmd.get("track_allocations", False)
 
     se = speakeasy.Speakeasy()
     try:
@@ -89,7 +205,7 @@ def emulate_pe(cmd):
         print(f"[speakeasy] Emulation exception (non-fatal): {type(e).__name__}: {e}", file=sys.stderr)
 
     report = se.get_report()
-    return {
+    result = {
         "status": "completed",
         "total_api_calls": len(report.get("api_calls", [])),
         "api_calls": _collect_api_calls(report, limit),
@@ -98,6 +214,11 @@ def emulate_pe(cmd):
         "file_activity": _safe_slice(report.get("file_access", []), 50),
         "registry_activity": _safe_slice(report.get("registry", []), 50),
     }
+
+    if track_allocations:
+        result["allocation_activity"] = _analyze_allocation_activity(report, limit)
+
+    return result
 
 
 def emulate_shellcode(cmd):

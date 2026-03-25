@@ -1283,6 +1283,7 @@ async def debug_stub_api(
     return_value: str = "0x0",
     num_params: int = 0,
     writes: str = "",
+    set_last_error: str = "",
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Create a custom API stub at runtime.
@@ -1294,11 +1295,24 @@ async def debug_stub_api(
     CRT stubs (~47 APIs) are installed by default. Use this for additional APIs
     that crash during emulation (e.g. custom DLL imports, rare Win32 APIs).
 
+    The set_last_error parameter enables bypassing GetLastError() anti-emulation
+    techniques. Many packers (e.g. TA505) call an API with invalid parameters,
+    then check GetLastError() for the expected error code. By stubbing the API
+    with the correct set_last_error value, the subsequent GetLastError() call
+    returns the expected code, allowing emulation to continue past the check.
+
+    Example: To bypass a GetWindowContextHelpId anti-emulation check:
+        debug_stub_api(api_name="GetWindowContextHelpId", return_value="0x0",
+                       set_last_error="0x578")  # ERROR_INVALID_WINDOW_HANDLE
+
     Args:
         api_name: Windows API function name (e.g. "GetVersionExW", "CreateMutexA")
         return_value: Return value as hex (e.g. "0x1") or "void" for no return (default "0x0")
         num_params: Number of STDCALL parameters (0-20, for x86 stack cleanup)
         writes: JSON array of pointer writes, e.g. '[{"param_index": 0, "data_hex": "0100", "size": 2}]'
+        set_last_error: Windows error code to set before returning (hex or decimal, e.g. "0x578").
+            When set, subsequent GetLastError() calls will return this value.
+            Common values: 0x578 (ERROR_INVALID_WINDOW_HANDLE), 0x57 (ERROR_INVALID_PARAMETER).
         session_id: Session to use (uses most recent if empty)
 
     Returns:
@@ -1339,6 +1353,18 @@ async def debug_stub_api(
             cmd["writes"] = parsed_writes
         except json.JSONDecodeError as e:
             return {"error": f"Invalid writes JSON: {e}"}
+
+    if set_last_error:
+        try:
+            if set_last_error.startswith(("0x", "0X")):
+                le_val = int(set_last_error, 16)
+            else:
+                le_val = int(set_last_error)
+            if le_val < 0 or le_val > 0xFFFFFFFF:
+                return {"error": "set_last_error must be 0-0xFFFFFFFF"}
+            cmd["set_last_error"] = le_val
+        except (ValueError, TypeError):
+            return {"error": f"Invalid set_last_error: '{set_last_error}'. Use hex (0x578) or decimal."}
 
     result = await session.send_command(cmd)
     return result

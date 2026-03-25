@@ -956,8 +956,56 @@ def hook_api_calls(cmd):
         _cleanup_staged_binary(staged_path)
 
 
+def _find_pe_in_allocations(ql, allocs):
+    """Scan tracked VirtualAlloc regions for PE headers (MZ + PE signature).
+
+    Returns the best candidate {"address": int, "size": int} or None.
+    Prefers regions with valid PE\\0\\0 signature over bare MZ magic.
+    Among equal-quality candidates, prefers the most recently allocated (last).
+    """
+    candidates = []
+    for i, alloc in enumerate(allocs):
+        addr = alloc["address"]
+        size = alloc["size"]
+        if size < 512:  # Too small for a valid PE
+            continue
+        try:
+            header = bytes(ql.mem.read(addr, min(size, 1024)))
+        except Exception:
+            continue
+        if header[:2] != b'MZ':
+            continue
+        pe_score = 1  # Has MZ magic
+        try:
+            if len(header) >= 0x40:
+                e_lfanew = struct.unpack_from('<I', header, 0x3C)[0]
+                if e_lfanew < size and e_lfanew + 4 <= len(header):
+                    if header[e_lfanew:e_lfanew + 4] == b'PE\x00\x00':
+                        pe_score = 10  # Valid PE signature
+        except Exception:
+            pass
+        candidates.append((addr, size, pe_score, i))
+
+    if not candidates:
+        return None
+    # Prefer valid PE sig, then most recently allocated (highest index)
+    candidates.sort(key=lambda c: (-c[2], -c[3]))
+    best = candidates[0]
+    return {"address": best[0], "size": best[1]}
+
+
+_MAX_TRACKED_ALLOCS = 1000  # Safety cap for VirtualAlloc tracking
+
+
 def dump_unpacked(cmd):
-    """Dynamic unpacking: run binary until OEP, then dump memory."""
+    """Dynamic unpacking: run binary until OEP, then dump memory.
+
+    When no dump_address is specified and smart_unpack is True (default),
+    hooks VirtualAlloc/VirtualAllocEx to track allocations during emulation.
+    After emulation, scans tracked regions for PE headers (MZ + PE signature)
+    and dumps the best candidate. Falls back to the largest mapped region
+    if no PE headers are found in tracked allocations.
+    """
     filepath = cmd["filepath"]
     _validate_file_path(filepath)
     rootfs_path = cmd.get("rootfs_path")
@@ -966,6 +1014,7 @@ def dump_unpacked(cmd):
     dump_size = cmd.get("dump_size")
     timeout_seconds = cmd.get("timeout_seconds", 120)
     max_instructions = cmd.get("max_instructions", 0)
+    smart_unpack = cmd.get("smart_unpack", True)
 
     ql, os_type, arch, fmt_desc, init_result, staged_path = _init_qiling_for_binary(filepath, rootfs_path)
     if ql is None:
@@ -984,6 +1033,47 @@ def dump_unpacked(cmd):
                     ql.emu_stop()
             ql.hook_address(_dump_hook, addr)
 
+        # --- Smart unpack: track VirtualAlloc calls for PE detection ---
+        tracked_allocs = []
+        if smart_unpack and not dump_address and os_type == "windows":
+            try:
+                from qiling.const import QL_INTERCEPT
+
+                def _va_on_exit(ql, *args, **kwargs):
+                    """Capture VirtualAlloc return value (allocated address) + size."""
+                    if len(tracked_allocs) >= _MAX_TRACKED_ALLOCS:
+                        return
+                    try:
+                        retval = ql.arch.regs.read("rax") if arch in ("x8664", "x86_64") else ql.arch.regs.read("eax")
+                    except Exception:
+                        try:
+                            retval = ql.arch.regs.eax if hasattr(ql.arch.regs, 'eax') else 0
+                        except Exception:
+                            return
+                    if retval and retval != 0xFFFFFFFF and retval != 0xFFFFFFFFFFFFFFFF:
+                        # Store with placeholder size — will update from ENTER hook
+                        tracked_allocs.append({
+                            "address": retval,
+                            "size": _va_pending.get("size", 0),
+                        })
+
+                _va_pending = {}
+
+                def _va_on_enter(ql, address, params):
+                    """Capture VirtualAlloc size parameter."""
+                    if not isinstance(params, dict):
+                        return
+                    _va_pending["size"] = params.get("dwSize", 0)
+
+                for api in ("VirtualAlloc", "VirtualAllocEx"):
+                    try:
+                        ql.os.set_api(api, _va_on_enter, QL_INTERCEPT.ENTER)
+                        ql.os.set_api(api, _va_on_exit, QL_INTERCEPT.EXIT)
+                    except Exception:
+                        pass
+            except ImportError:
+                pass  # QL_INTERCEPT not available in this Qiling version
+
         try:
             kwargs = {"timeout": timeout_seconds * 1000000}
             if max_instructions > 0:
@@ -994,37 +1084,58 @@ def dump_unpacked(cmd):
 
         # Dump memory
         try:
+            dump_source = "explicit_address"
             if dump_address and dump_size:
                 addr = int(dump_address, 0)
                 size = int(dump_size, 0) if isinstance(dump_size, str) else dump_size
                 data = ql.mem.read(addr, size)
             else:
-                # Dump the main mapped region (image base + size)
-                # Find the largest mapped region that looks like the PE image
-                maps = ql.mem.get_mapinfo()
-                best_region = None
-                best_size = 0
-                for start, end, perms, label, _path in maps:
-                    region_size = end - start
-                    if region_size > best_size:
-                        best_size = region_size
-                        best_region = (start, region_size)
-                if best_region:
-                    data = ql.mem.read(best_region[0], best_region[1])
+                # Smart unpack: check tracked VirtualAlloc regions for MZ/PE headers
+                mz_candidate = None
+                if smart_unpack and tracked_allocs:
+                    mz_candidate = _find_pe_in_allocations(ql, tracked_allocs)
+
+                if mz_candidate:
+                    data = ql.mem.read(mz_candidate["address"], mz_candidate["size"])
+                    dump_source = "virtualalloc_pe_detection"
                 else:
-                    return {"error": "No mapped memory regions found to dump."}
+                    # Fallback: find the largest mapped region
+                    maps = ql.mem.get_mapinfo()
+                    best_region = None
+                    best_size = 0
+                    for start, end, perms, label, _path in maps:
+                        region_size = end - start
+                        if region_size > best_size:
+                            best_size = region_size
+                            best_region = (start, region_size)
+                    if best_region:
+                        data = ql.mem.read(best_region[0], best_region[1])
+                        dump_source = "largest_region_fallback"
+                    else:
+                        return {"error": "No mapped memory regions found to dump."}
 
             with open(output_path, "wb") as f:
                 f.write(data)
+
+            dump_addr_display = dump_address
+            if not dump_address:
+                if mz_candidate:
+                    dump_addr_display = _hex(mz_candidate["address"])
+                elif best_region:
+                    dump_addr_display = _hex(best_region[0])
 
             result = {
                 "status": "success",
                 "input_file": filepath,
                 "output_file": output_path,
                 "output_size": len(data),
-                "dump_address": dump_address or _hex(best_region[0]) if not dump_address and best_region else dump_address,
+                "dump_address": dump_addr_display,
+                "dump_source": dump_source,
                 "sha256": hashlib.sha256(data).hexdigest(),
+                "tracked_allocations": len(tracked_allocs),
             }
+            if data[:2] == b'MZ':
+                result["pe_header_detected"] = True
             if dll_warning:
                 result["warning"] = dll_warning
             return result
