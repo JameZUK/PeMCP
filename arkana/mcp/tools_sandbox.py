@@ -158,9 +158,9 @@ async def correlate_static_dynamic(
     # Compare static imports with dynamic API calls
     pe_data = state.pe_data or {}
     static_imports = set()
-    for dll_info in pe_data.get("imports", {}).get("import_details", []):
+    for dll_info in (pe_data.get("imports") or []):
         if isinstance(dll_info, dict):
-            for imp in dll_info.get("imports", []):
+            for imp in dll_info.get("symbols", []):
                 name = imp.get("name", "") if isinstance(imp, dict) else str(imp)
                 if name:
                     static_imports.add(name)

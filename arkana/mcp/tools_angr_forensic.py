@@ -2478,8 +2478,8 @@ async def detect_vm_protection(
                 pass
 
         # ── 4. Import table analysis ────────────────────────────────
-        imports = pe_data.get("imports", {})
-        import_count = imports.get("import_count", 0)
+        imports_list = pe_data.get("imports") or []
+        import_count = sum(len(d.get("symbols", [])) for d in imports_list if isinstance(d, dict))
 
         # Very few imports + VM section = strong VM protection signal
         if import_count < 10 and result["virtualized_sections"]:

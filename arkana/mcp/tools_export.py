@@ -543,7 +543,10 @@ def _write_script_and_register(abs_path: str, script_text: str, source_tool: str
 
 def _escape_python_string(s: str) -> str:
     """Escape a string for use inside a Python repr/string literal."""
-    return s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+    s = s.replace("\\", "\\\\").replace('"', '\\"')
+    s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t").replace("\x00", "\\x00")
+    # Escape remaining control characters
+    return "".join(c if c.isprintable() or c == " " else f"\\x{ord(c):02x}" for c in s)
 
 
 def _collect_function_notes(notes: List[Dict[str, Any]]) -> Dict[str, str]:

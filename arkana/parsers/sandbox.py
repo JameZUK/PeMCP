@@ -32,7 +32,7 @@ def detect_sandbox_format(data: Dict[str, Any]) -> str:
         isinstance(p, dict) and "uuid" in p for p in data.get("processes", [])[:5]
     ):
         return "anyrun"
-    if "mitre_attcks" in data or "verdict" in data and "threat_score" in data:
+    if "mitre_attcks" in data or ("verdict" in data and "threat_score" in data):
         return "hybrid_analysis"
     if "mitreattack" in data or "signaturedetections" in data:
         return "joe"
