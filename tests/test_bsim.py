@@ -283,6 +283,17 @@ class TestSQLiteOperations:
         # Second call should not raise
         init_db(db)
 
+    def test_init_db_creates_architecture_index(self, tmp_path):
+        db = self._tmp_db(tmp_path)
+        import sqlite3
+        conn = sqlite3.connect(str(db))
+        indexes = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index'"
+        ).fetchall()
+        index_names = {idx[0] for idx in indexes}
+        assert "idx_functions_arch" in index_names
+        conn.close()
+
     def test_store_and_list_binaries(self, tmp_path):
         db = self._tmp_db(tmp_path)
         features = [
@@ -412,6 +423,99 @@ class TestSQLiteOperations:
         results = query_similar_functions(target, threshold=0.0, db_path=db)
         # 50 > 5*3=15, so the pre-filter should exclude it
         assert len(results) == 0
+
+    def test_query_pre_filter_instruction_count(self, tmp_path):
+        """instruction_count pre-filter excludes candidates outside 3x range."""
+        db = self._tmp_db(tmp_path)
+        # Target: 50 instructions → range [16, 150]
+        target = _make_features(block_count=5, instruction_count=50)
+        # Candidate with 200 instructions (outside 3x range)
+        distant = _make_features(block_count=5, instruction_count=200)
+        store_binary_features("hash_ic", "distant_instr.exe", "x86", 500, [distant], db)
+
+        results = query_similar_functions(target, threshold=0.0, db_path=db)
+        assert len(results) == 0
+
+    def test_query_pre_filter_instruction_count_within_range(self, tmp_path):
+        """instruction_count pre-filter includes candidates within 3x range."""
+        db = self._tmp_db(tmp_path)
+        target = _make_features(block_count=5, instruction_count=50)
+        # Candidate with 100 instructions (within 3x range: [16, 150])
+        nearby = _make_features(block_count=5, instruction_count=100)
+        store_binary_features("hash_ic2", "nearby_instr.exe", "x86", 500, [nearby], db)
+
+        results = query_similar_functions(target, threshold=0.0, db_path=db)
+        assert len(results) >= 1
+
+    def test_query_pre_filter_instruction_count_zero_skipped(self, tmp_path):
+        """instruction_count filter is skipped when target has 0 instructions."""
+        db = self._tmp_db(tmp_path)
+        target = _make_features(block_count=5, instruction_count=0)
+        # Candidate with many instructions — should still match since filter is skipped
+        candidate = _make_features(block_count=5, instruction_count=500)
+        store_binary_features("hash_ic3", "any_instr.exe", "x86", 500, [candidate], db)
+
+        results = query_similar_functions(target, threshold=0.0, db_path=db)
+        assert len(results) >= 1
+
+    def test_query_pre_filter_architecture_match(self, tmp_path):
+        """Architecture pre-filter includes only matching architecture."""
+        db = self._tmp_db(tmp_path)
+        target = _make_features(block_count=5)
+        candidate = _make_features(block_count=5)
+        store_binary_features("hash_arch1", "x86.exe", "x86", 500, [candidate], db)
+
+        results = query_similar_functions(
+            target, threshold=0.0, db_path=db, source_architecture="x86",
+        )
+        assert len(results) >= 1
+
+    def test_query_pre_filter_architecture_excludes_mismatch(self, tmp_path):
+        """Architecture pre-filter excludes different architectures."""
+        db = self._tmp_db(tmp_path)
+        target = _make_features(block_count=5)
+        candidate = _make_features(block_count=5)
+        store_binary_features("hash_arch2", "arm.elf", "ARM", 500, [candidate], db)
+
+        results = query_similar_functions(
+            target, threshold=0.0, db_path=db, source_architecture="AMD64",
+        )
+        assert len(results) == 0
+
+    def test_query_pre_filter_architecture_none_matches_all(self, tmp_path):
+        """When source_architecture is None, all architectures are searched."""
+        db = self._tmp_db(tmp_path)
+        target = _make_features(block_count=5)
+        candidate = _make_features(block_count=5)
+        store_binary_features("hash_arch3", "any.exe", "MIPS32", 500, [candidate], db)
+
+        results = query_similar_functions(
+            target, threshold=0.0, db_path=db, source_architecture=None,
+        )
+        assert len(results) >= 1
+
+    def test_query_pre_filter_combined_filters(self, tmp_path):
+        """All three pre-filters (blocks, instructions, architecture) work together."""
+        db = self._tmp_db(tmp_path)
+        target = _make_features(block_count=10, instruction_count=100)
+
+        # Good candidate: same arch, blocks and instructions in range
+        good = _make_features(block_count=12, instruction_count=120)
+        store_binary_features("hash_good", "good.exe", "AMD64", 500, [good], db)
+
+        # Bad: wrong architecture
+        wrong_arch = _make_features(block_count=12, instruction_count=120)
+        store_binary_features("hash_bad_arch", "bad_arch.exe", "ARM", 500, [wrong_arch], db)
+
+        # Bad: instructions out of range
+        wrong_instr = _make_features(block_count=12, instruction_count=500)
+        store_binary_features("hash_bad_instr", "bad_instr.exe", "AMD64", 500, [wrong_instr], db)
+
+        results = query_similar_functions(
+            target, threshold=0.0, db_path=db, source_architecture="AMD64",
+        )
+        assert len(results) == 1
+        assert results[0]["binary_sha256"] == "hash_good"
 
 
 # ===================================================================

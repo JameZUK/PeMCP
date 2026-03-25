@@ -188,6 +188,21 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             logger.warning("Enrichment: similarity hashes failed: %s", e)
             phases_failed.append(("similarity_hashes", str(e)))
 
+        # ── Phase 1d: Malware family identification ──────────────
+        if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
+            return
+        _update(state, 27, "Identifying malware family...")
+        try:
+            from arkana.mcp.tools_malware_identify import _identify_family_internal
+            result = _identify_family_internal(state)
+            if result and not result.get("error"):
+                state._cached_malware_family = result
+                phases_completed.append("malware_family")
+        except Exception as e:
+            logger.warning("Enrichment: malware family ID failed: %s", e)
+            phases_failed.append(("malware_family", str(e)))
+
         # ── Phase 2a: MITRE ATT&CK mapping ──────────────────────────
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
@@ -215,6 +230,66 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
         except Exception as e:
             logger.warning("Enrichment: IOC collection failed: %s", e)
             phases_failed.append(("iocs", str(e)))
+
+        # ── Phase 2c: API hash detection ──────────────────────────
+        if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
+            return
+        _update(state, 30, "Scanning for API hashes...")
+        try:
+            from arkana.mcp.tools_pe_extended import _scan_api_hashes_internal
+            result = _scan_api_hashes_internal(state)
+            if result and result.get("resolved_count", 0) > 0:
+                state._cached_api_hashes = result
+                phases_completed.append("api_hashes")
+        except Exception as e:
+            logger.warning("Enrichment: API hash scan failed: %s", e)
+            phases_failed.append(("api_hashes", str(e)))
+
+        # ── Phase 2d: C2 indicator matching ───────────────────────
+        if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
+            return
+        _update(state, 31, "Matching C2 indicators...")
+        try:
+            from arkana.mcp.tools_malware_detect import _match_c2_internal
+            result = _match_c2_internal(state)
+            if result and (result.get("indicators") or result.get("matches")):
+                state._cached_c2_indicators = result
+                phases_completed.append("c2_indicators")
+        except Exception as e:
+            logger.warning("Enrichment: C2 indicator matching failed: %s", e)
+            phases_failed.append(("c2_indicators", str(e)))
+
+        # ── Phase 2e: DGA indicator detection ─────────────────────
+        if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
+            return
+        _update(state, 31, "Detecting DGA indicators...")
+        try:
+            from arkana.mcp.tools_malware_detect import _detect_dga_internal
+            result = _detect_dga_internal(state)
+            if result and (result.get("indicators") or result.get("dga_score", 0) > 0):
+                state._cached_dga_indicators = result
+                phases_completed.append("dga_indicators")
+        except Exception as e:
+            logger.warning("Enrichment: DGA detection failed: %s", e)
+            phases_failed.append(("dga_indicators", str(e)))
+
+        # ── Phase 2f: Crypto constant detection ───────────────────
+        if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
+            return
+        _update(state, 31, "Detecting crypto constants...")
+        try:
+            from arkana.mcp.tools_pe_extended import _detect_crypto_internal
+            result = _detect_crypto_internal(state)
+            if result and result.get("crypto_constants"):
+                state._cached_crypto_constants = result
+                phases_completed.append("crypto_constants")
+        except Exception as e:
+            logger.warning("Enrichment: crypto detection failed: %s", e)
+            phases_failed.append(("crypto_constants", str(e)))
 
         # ── Incremental save: persist fast-phase results ──────────────
         try:
@@ -531,6 +606,11 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
             cached_mitre_mapping = state._cached_mitre_mapping
             cached_iocs = state._cached_iocs
             cached_function_scores = state._cached_function_scores
+            cached_malware_family = state._cached_malware_family
+            cached_api_hashes = state._cached_api_hashes
+            cached_c2_indicators = state._cached_c2_indicators
+            cached_dga_indicators = state._cached_dga_indicators
+            cached_crypto_constants = state._cached_crypto_constants
 
         if cached_triage:
             serializable['_cached_triage'] = cached_triage
@@ -544,6 +624,16 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
             serializable['_cached_iocs'] = cached_iocs
         if cached_function_scores:
             serializable['_cached_function_scores'] = cached_function_scores
+        if cached_malware_family:
+            serializable['_cached_malware_family'] = cached_malware_family
+        if cached_api_hashes:
+            serializable['_cached_api_hashes'] = cached_api_hashes
+        if cached_c2_indicators:
+            serializable['_cached_c2_indicators'] = cached_c2_indicators
+        if cached_dga_indicators:
+            serializable['_cached_dga_indicators'] = cached_dga_indicators
+        if cached_crypto_constants:
+            serializable['_cached_crypto_constants'] = cached_crypto_constants
 
         # Save decompiled functions (metadata + code lines) for cache restore
         # Only save entries belonging to the current session (key[0] == session UUID)

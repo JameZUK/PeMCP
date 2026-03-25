@@ -1,9 +1,11 @@
 """MCP tools for managing analysis notes on the currently loaded file."""
 import asyncio
+import json
 from typing import Dict, Any, Optional, List
 from arkana.config import state, logger, Context, analysis_cache, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.constants import MAX_TOOL_LIMIT
+from arkana.state import MAX_HYPOTHESIS_EVIDENCE
 
 
 def _persist_notes_to_cache() -> None:
@@ -22,6 +24,9 @@ async def add_note(
     category: str = "general",
     address: Optional[str] = None,
     tool_name: Optional[str] = None,
+    confidence: Optional[float] = None,
+    status: Optional[str] = None,
+    evidence: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Add a note to the currently loaded file. Notes persist in
@@ -34,15 +39,32 @@ async def add_note(
     Notes feed into get_analysis_digest() which aggregates all findings into a
     single context-efficient summary.
 
+    For hypothesis notes (category='hypothesis'), additional fields are supported:
+    - confidence: Initial confidence score (0.0-1.0, default 0.5)
+    - status: Lifecycle status (proposed/investigating/supported/refuted/confirmed, default proposed)
+    - evidence: JSON string containing a list of evidence items, each with
+      {"tool": str, "finding": str, "supports": bool}
+
+    Use update_hypothesis() to evolve hypothesis confidence and status as evidence
+    accumulates during analysis.
+
     Args:
         ctx: The MCP Context object.
         content: (str) The note text content.
         category: (str) Note category: 'general' (default), 'function', 'tool_result',
-            'ioc' (for IOC findings), 'hypothesis' (for condensed verdict),
-            'conclusion' (for full detailed analysis write-up with markdown),
-            or 'manual' (for manually researched findings).
+            'ioc' (for IOC findings), 'hypothesis' (for condensed verdict with
+            confidence tracking), 'conclusion' (for full detailed analysis write-up
+            with markdown), or 'manual' (for manually researched findings).
         address: (Optional[str]) For 'function' notes: a hex address (e.g. '0x401000').
         tool_name: (Optional[str]) For 'tool_result' notes: the tool that produced the finding.
+        confidence: (Optional[float]) For 'hypothesis' notes: initial confidence 0.0-1.0.
+            Ignored for non-hypothesis categories.
+        status: (Optional[str]) For 'hypothesis' notes: initial lifecycle status.
+            One of 'proposed', 'investigating', 'supported', 'refuted', 'confirmed'.
+            Ignored for non-hypothesis categories.
+        evidence: (Optional[str]) For 'hypothesis' notes: JSON string with a list of
+            evidence items, e.g. '[{"tool": "get_triage_report", "finding": "High entropy", "supports": true}]'.
+            Ignored for non-hypothesis categories.
 
     Returns:
         A dictionary with the created note including its ID.
@@ -54,7 +76,23 @@ async def add_note(
     if len(content) > 50_000:
         raise ValueError("Note content exceeds 50KB limit.")
 
-    note = state.add_note(content=content, category=category, address=address, tool_name=tool_name)
+    # Parse hypothesis-specific fields
+    evidence_list: Optional[List[Dict[str, Any]]] = None
+    if category == "hypothesis" and evidence is not None:
+        try:
+            parsed = json.loads(evidence)
+            if not isinstance(parsed, list):
+                raise ValueError("Evidence must be a JSON array.")
+            evidence_list = parsed[:MAX_HYPOTHESIS_EVIDENCE]
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid evidence JSON: {e}") from e
+
+    note = state.add_note(
+        content=content, category=category, address=address, tool_name=tool_name,
+        confidence=confidence if category == "hypothesis" else None,
+        status=status if category == "hypothesis" else None,
+        evidence=evidence_list,
+    )
     _persist_notes_to_cache()
     await ctx.info(f"Note added: {note['id']}")
     return {"status": "success", "note": note}
@@ -173,13 +211,165 @@ async def delete_note(
     return {"status": "success", "message": f"Note '{note_id}' deleted."}
 
 
+@tool_decorator
+async def update_hypothesis(
+    ctx: Context,
+    note_id: str,
+    confidence: Optional[float] = None,
+    status: Optional[str] = None,
+    add_evidence: Optional[str] = None,
+    superseded_by: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: context] Update a hypothesis note's confidence, status, or evidence.
+    Hypotheses are living notes that evolve as analysis progresses.
+
+    When to use: After each analysis step that produces evidence for or against
+    a hypothesis. Update confidence and status as findings accumulate. This
+    creates a clear audit trail of how conclusions were reached.
+
+    Typical workflow:
+      1. add_note(category='hypothesis', content='Binary is a RAT', confidence=0.3, status='proposed')
+      2. After finding C2 indicators: update_hypothesis(note_id, confidence=0.6, status='investigating',
+         add_evidence='{"tool": "match_c2_indicators", "finding": "Found C2 beacon pattern", "supports": true}')
+      3. After confirming: update_hypothesis(note_id, confidence=0.9, status='confirmed')
+
+    Args:
+        ctx: The MCP Context object.
+        note_id: (str) The hypothesis note ID (e.g. 'n_1708300000_1') returned by add_note.
+        confidence: (Optional[float]) Updated confidence score 0.0-1.0. Clamped to valid range.
+        status: (Optional[str]) Updated lifecycle status. One of:
+            'proposed' (initial), 'investigating' (actively testing),
+            'supported' (evidence supports), 'refuted' (evidence contradicts),
+            'confirmed' (high confidence conclusion).
+        add_evidence: (Optional[str]) JSON string with a single evidence item to append:
+            '{"tool": "tool_name", "finding": "what was found", "supports": true/false}'.
+            Evidence is appended to the existing list (max 50 items).
+        superseded_by: (Optional[str]) Note ID of a newer hypothesis that replaces this one.
+            The target note must exist.
+
+    Returns:
+        A dictionary with the updated hypothesis note, or an error if not found
+        or if the note is not a hypothesis.
+    """
+    _check_pe_loaded("update_hypothesis")
+
+    # Validate the note exists and is a hypothesis
+    notes = state.get_notes()
+    target_note = None
+    for n in notes:
+        if n["id"] == note_id:
+            target_note = n
+            break
+    if target_note is None:
+        return {"status": "not_found", "message": f"No note found with ID '{note_id}'."}
+    if target_note.get("category") != "hypothesis":
+        return {
+            "status": "error",
+            "message": f"Note '{note_id}' has category '{target_note.get('category')}', not 'hypothesis'. "
+                       "Use update_note() for non-hypothesis notes.",
+        }
+
+    # Validate status if provided
+    valid_statuses = ("proposed", "investigating", "supported", "refuted", "confirmed")
+    if status is not None and status not in valid_statuses:
+        raise ValueError(f"Invalid status '{status}'. Must be one of: {', '.join(valid_statuses)}.")
+
+    # Parse add_evidence JSON
+    evidence_item: Optional[Dict[str, Any]] = None
+    if add_evidence is not None:
+        try:
+            evidence_item = json.loads(add_evidence)
+            if not isinstance(evidence_item, dict):
+                raise ValueError("Evidence must be a JSON object with 'tool', 'finding', and 'supports' keys.")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid add_evidence JSON: {e}") from e
+
+    # Validate superseded_by target exists
+    if superseded_by is not None:
+        found = False
+        for n in notes:
+            if n["id"] == superseded_by:
+                found = True
+                break
+        if not found:
+            return {
+                "status": "error",
+                "message": f"Superseded-by target note '{superseded_by}' not found.",
+            }
+
+    # Build kwargs for state.update_note
+    kwargs: Dict[str, Any] = {}
+    if confidence is not None:
+        kwargs["confidence"] = confidence
+    if status is not None:
+        kwargs["hypothesis_status"] = status
+    if evidence_item is not None:
+        kwargs["evidence"] = evidence_item
+    if superseded_by is not None:
+        kwargs["superseded_by"] = superseded_by
+
+    updated = state.update_note(note_id, **kwargs)
+    if updated is None:
+        return {"status": "error", "message": f"Failed to update note '{note_id}'."}
+
+    _persist_notes_to_cache()
+    await ctx.info(f"Hypothesis updated: {note_id}")
+    return {"status": "success", "note": updated}
+
+
 _MAX_BATCH_AUTO_NOTE = 20
+
+
+def _scan_pseudocode_patterns(code: str) -> Dict[str, Any]:
+    """Scan decompiled pseudocode for behavioural patterns and notable strings.
+
+    Returns a dict with 'patterns' (list of str) and 'strings' (list of str).
+    Deterministic regex-based analysis — no LLM.
+    """
+    import re
+
+    patterns: List[str] = []
+    if re.search(r'\^|xor\b', code, re.IGNORECASE):
+        patterns.append("xor_operation")
+    if re.search(r'>>|<<|shr\b|shl\b', code, re.IGNORECASE):
+        patterns.append("bit_shift")
+    if re.search(r'\bwhile\b|\bfor\b|\bdo\b', code):
+        patterns.append("loop")
+    if re.search(r'VirtualAlloc|HeapAlloc|malloc|calloc|new\b', code, re.IGNORECASE):
+        patterns.append("memory_allocation")
+    if re.search(r'memcpy|memmove|RtlCopyMemory|CopyMemory', code, re.IGNORECASE):
+        patterns.append("memory_copy")
+    if re.search(r'CreateFile|fopen|open\b', code, re.IGNORECASE):
+        patterns.append("file_access")
+    if re.search(r'connect\b|send\b|recv\b|WSA|InternetOpen|HttpOpen|WinHttp|socket\b', code, re.IGNORECASE):
+        patterns.append("network_activity")
+    if re.search(r'RegOpenKey|RegSetValue|RegCreateKey', code, re.IGNORECASE):
+        patterns.append("registry_access")
+    if re.search(r'CreateProcess|ShellExecute|WinExec|system\b', code, re.IGNORECASE):
+        patterns.append("process_creation")
+    if re.search(r'CreateRemoteThread|WriteProcessMemory|VirtualAllocEx', code, re.IGNORECASE):
+        patterns.append("process_injection")
+    if re.search(r'Crypt|AES|DES|RC4|SHA|MD5|encrypt|decrypt', code, re.IGNORECASE):
+        patterns.append("crypto_operation")
+
+    # Extract notable string literals (URLs, paths, commands, etc.)
+    string_pattern = re.compile(r'"([^"\\]|\\.){1,200}"')
+    strings: List[str] = []
+    for match in string_pattern.finditer(code):
+        s = match.group(0)[1:-1]  # Strip quotes
+        if s and len(s) >= 4 and s not in strings:
+            strings.append(s)
+    strings = strings[:10]  # Cap to avoid bloated notes
+
+    return {"patterns": patterns, "strings": strings}
 
 
 def _auto_note_single(function_address: str, custom_summary=None):
     """Core logic for auto-noting a single function. Returns result dict.
 
-    Performs angr lookup if available, generates summary, and upserts the note.
+    Performs angr lookup if available, scans cached pseudocode for behavioural
+    patterns, generates summary, and upserts the note.
     Does NOT persist to cache — caller is responsible for that.
     """
     from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB, CATEGORY_DESCRIPTIONS
@@ -187,6 +377,9 @@ def _auto_note_single(function_address: str, custom_summary=None):
     apis_called: List[str] = []
     category_tags: List[str] = []
     func_name = f"sub_{function_address.replace('0x', '')}"
+    code_findings: List[str] = []
+    code_patterns: List[str] = []
+    code_strings: List[str] = []
 
     angr_proj, angr_cfg = state.get_angr_snapshot()
     if ANGR_AVAILABLE and angr_proj is not None and angr_cfg is not None:
@@ -220,6 +413,28 @@ def _auto_note_single(function_address: str, custom_summary=None):
         except Exception as e:
             logger.debug("auto_note_function: angr lookup failed: %s", e)
 
+    # --- Scan cached pseudocode for behavioural patterns ---
+    try:
+        from arkana.mcp.tools_angr import _get_cached_lines, _make_decompile_key
+        from arkana.mcp._angr_helpers import _parse_addr as _pa
+        addr_int = _pa(function_address)
+        cache_key = _make_decompile_key(addr_int)
+        cached_lines = _get_cached_lines(cache_key)
+        if cached_lines:
+            code_text = "\n".join(cached_lines)
+            scan = _scan_pseudocode_patterns(code_text)
+            code_patterns = scan["patterns"]
+            code_strings = scan["strings"]
+            # Build human-readable findings fragments
+            if code_patterns:
+                code_findings.append(", ".join(code_patterns[:5]))
+            if code_strings:
+                # Include up to 3 notable strings inline
+                str_previews = [f"'{s[:50]}'" for s in code_strings[:3]]
+                code_findings.append(f"string{'s' if len(str_previews) > 1 else ''} {', '.join(str_previews)}")
+    except Exception as e:
+        logger.debug("auto_note_function: pseudocode scan failed: %s", e)
+
     if custom_summary:
         summary = custom_summary
     elif apis_called:
@@ -232,8 +447,14 @@ def _auto_note_single(function_address: str, custom_summary=None):
             summary = f"{'; '.join(cat_descs)} using {api_list}"
         else:
             summary = f"Calls {api_list}"
+        # Append code findings if available
+        if code_findings:
+            summary += f". Code contains: {'; '.join(code_findings)}."
     else:
-        summary = custom_summary or f"Function at {function_address} (no suspicious APIs detected)"
+        if code_findings:
+            summary = f"Function at {function_address}: {'; '.join(code_findings)}"
+        else:
+            summary = custom_summary or f"Function at {function_address} (no suspicious APIs detected)"
 
     # Upsert
     existing = state.get_notes(category="function", address=function_address)
@@ -254,7 +475,7 @@ def _auto_note_single(function_address: str, custom_summary=None):
         )
         was_update = False
 
-    return {
+    result: Dict[str, Any] = {
         "address": function_address,
         "function_name": func_name,
         "auto_summary": summary,
@@ -263,6 +484,11 @@ def _auto_note_single(function_address: str, custom_summary=None):
         "apis_called": apis_called[:10],
         "category_tags": category_tags,
     }
+    if code_patterns:
+        result["code_patterns"] = code_patterns
+    if code_strings:
+        result["code_strings"] = code_strings[:10]
+    return result
 
 
 @tool_decorator

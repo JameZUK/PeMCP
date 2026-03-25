@@ -76,9 +76,10 @@ If ambiguous, ask ONE question: "Goal: malware triage, deep RE, vuln audit, firm
 2. `get_triage_report(compact=True)` -- packing, sig, imports, capa, IOCs, risk.
 3. `classify_binary_purpose()`
 4. Format-specific: `elf_analyze`, `macho_analyze`, `dotnet_analyze`, `vb6_analyze`, `go_analyze`, `rust_analyze`, `detect_binary_format`.
-5. Reputation (malware, risk >= 4): `get_virustotal_report_for_loaded_file()`
+5. **API hash detection**: `scan_for_api_hashes()` -- detects dynamic API resolution (ror13, djb2, crc32, fnv1a). Essential when imports < 10 or shellcode mode, since the real import table is constructed at runtime. If hashes found, follow up with `qiling_resolve_api_hashes()` to map hash constants to API names. Feed resolved APIs into `identify_malware_family(hash_algorithm=..., hash_seed=...)`.
+6. Reputation (malware, risk >= 4): `get_virustotal_report_for_loaded_file()`
 7. High null ratio or shellcode mode: `detect_null_regions()` to understand binary layout.
-6. `get_session_summary()` -- prioritise `flagged` functions if present.
+8. `get_session_summary()` -- prioritise `flagged` functions if present.
 
 Packed (`likely_packed=true`, entropy > 7.2, imports < 10, PEiD) -> Phase 2. Otherwise -> Phase 3.
 
@@ -166,6 +167,16 @@ Offer: `generate_analysis_report()`, `generate_yara_rule()`/`generate_sigma_rule
 
 `get_analysis_digest()` between phases (not mid-phase). Note categories: `tool_result` (findings), `ioc` (indicators), `hypothesis` (conclusion), `conclusion` (write-up), `manual` (observations). Session persists via `~/.arkana`. `get_tool_history()`, `suggest_next_action()`. After patching: `reanalyze_loaded_pe_file()`.
 
+### Record Hypotheses Early and Often
+
+Hypotheses survive context compression -- they are persisted in notes and surfaced by `get_analysis_digest()`. Record them at three checkpoints:
+
+1. **After initial triage** (end of Phase 1): `add_note(category='hypothesis', content='Preliminary: <assessment based on triage, imports, packing, risk score>')`.
+2. **After capability mapping** (end of Phase 3): `update_note(note_id=N, content='Refined: <assessment incorporating MITRE mappings, capa results, string analysis, API hash findings>')`. Use `update_note` on the existing hypothesis rather than creating a duplicate.
+3. **After deep dive** (end of Phase 4): `update_note(note_id=N, content='Final: <verdict with decompilation evidence, data flow results, emulation findings>')`.
+
+If the assessment changes substantially (e.g., benign -> malicious, or new family attribution), create a new hypothesis note with `add_note(category='hypothesis')` and reference the previous one. The goal is a clear audit trail: when context is compressed, `get_analysis_digest()` returns the latest hypothesis as the analysis verdict.
+
 ## Prefer / Avoid
 
 | Instead of... | Prefer... | Why |
@@ -186,6 +197,29 @@ Offer: `generate_analysis_report()`, `generate_yara_rule()`/`generate_sigma_rule
 | Decompiling many functions for a pattern | `batch_decompile(addresses, search="pattern")` | Only matching functions returned |
 | `get_hex_dump()` + manual byte matching | `search_hex_pattern(pattern)` | Hex search with `??` wildcards, section filter |
 | Manually checking for overflows | `find_dangerous_data_flows()` | Automated source-to-sink tracing via RDA |
+| `decompile_function_with_angr` + `get_function_xrefs` + `get_strings_for_function` + `get_notes` + triage check | `get_analysis_context_for_function(address)` | Single-call aggregator: returns decompilation, xrefs, strings, notes, complexity, and triage status. Use individual tools only when you need deeper data (full paginated decompilation, CFG, data flow) |
+
+## Use `search=` Instead of Paginating
+
+Three tools accept `search` (regex) to return only matching lines with surrounding context instead of full output: `decompile_function_with_angr`, `batch_decompile`, and `get_annotated_disassembly`. This is significantly more token-efficient than paginating through hundreds of lines looking for a pattern.
+
+**Parameters**: `search="pattern"` (regex), `context_lines=2` (default, max 20), `case_sensitive=False` (default).
+
+**When to use**: Always prefer `search=` when you have a specific hypothesis to test. Paginate only when you need to read the full function from top to bottom.
+
+**Useful search patterns for malware analysis**:
+| Pattern | Finds |
+|---------|-------|
+| `search="VirtualAlloc\|VirtualProtect\|WriteProcessMemory"` | Memory manipulation for code injection |
+| `search="xor\|rol\|ror\|shr\|shl"` (on `get_annotated_disassembly`) | Crypto/encoding operations in assembly |
+| `search="socket\|connect\|send\|recv\|http\|url"` | Network communication |
+| `search="RegOpenKey\|RegSetValue\|CreateService"` | Persistence mechanisms |
+| `search="CreateRemoteThread\|NtUnmapViewOfSection\|ZwWriteVirtualMemory"` | Process injection |
+| `search="IsDebuggerPresent\|NtQueryInformationProcess\|rdtsc\|cpuid"` | Anti-analysis (use on disassembly for rdtsc/cpuid) |
+| `search="crypt\|aes\|rc4\|encrypt\|decrypt\|key\|iv"` | Crypto API usage |
+| `search="0x[0-9a-f]{6,}"` | Large hex constants (potential keys, hashes, magic values) |
+
+**Batch search**: `batch_decompile(addresses=[...], search="pattern")` scans up to 20 functions and returns only those with matches -- ideal for sweeping a function list for a specific capability.
 
 ## Lazy-Load References -- Read On Demand
 

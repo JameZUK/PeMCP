@@ -657,6 +657,68 @@ async def deobfuscate_xor_multi_byte(
     }
 
 
+def _detect_crypto_internal(current_state) -> Dict[str, Any]:
+    """Detect crypto constants synchronously. No MCP context needed.
+
+    Scans the PE binary for known cryptographic constant byte patterns.
+    Used by the enrichment pipeline.
+    """
+    from arkana.state import set_current_state
+    set_current_state(current_state)
+
+    if current_state.pe_object is None:
+        return {}
+
+    pe = current_state.pe_object
+    file_data = pe.__data__
+
+    CRYPTO_SIGS = [
+        (bytes([0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5]), "AES S-box"),
+        (bytes([0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38]), "AES inverse S-box"),
+        (bytes([0xd7, 0x6a, 0xa4, 0x78]), "SHA-256 initial hash (H0)"),
+        (bytes([0x67, 0x45, 0x23, 0x01]), "MD5/SHA-1 init (little-endian)"),
+        (bytes([0x01, 0x23, 0x45, 0x67]), "MD5/SHA-1 init (big-endian)"),
+        (bytes([0x6a, 0x09, 0xe6, 0x67]), "SHA-256 init (big-endian H0)"),
+        (bytes([0xcb, 0xbb, 0x9d, 0x5d, 0xc1, 0x05, 0x9e, 0xd8]), "SHA-512 initial hash"),
+        (bytes([0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+                0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f]), "Identity permutation (RC4 init?)"),
+        (bytes([0x30, 0x2C, 0x61, 0x2E, 0x69, 0x68, 0x00, 0x71]), "Blowfish P-array fragment"),
+        (bytes([0x3a, 0x39, 0xce, 0x37, 0xd3, 0xfa, 0xf5, 0xcf]), "DES initial permutation fragment"),
+    ]
+
+    findings = []
+    scan_limit = 50
+    for sig_bytes, name in CRYPTO_SIGS:
+        offset = 0
+        while True:
+            idx = file_data.find(sig_bytes, offset)
+            if idx == -1:
+                break
+            section_name = None
+            try:
+                sec = pe.get_section_by_offset(idx)
+                if sec:
+                    section_name = sec.Name.decode('utf-8', 'ignore').strip('\x00')
+            except Exception:
+                pass
+            findings.append({
+                "offset": hex(idx),
+                "algorithm": name,
+                "matched_bytes": len(sig_bytes),
+                "section": section_name,
+            })
+            offset = idx + len(sig_bytes)
+            if len(findings) >= scan_limit:
+                break
+        if len(findings) >= scan_limit:
+            break
+
+    return {
+        "crypto_constants": findings,
+        "total_found": len(findings),
+    }
+
+
 @tool_decorator
 async def detect_crypto_constants(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     """
@@ -811,6 +873,78 @@ async def analyze_entropy_by_offset(
         "high_entropy_regions": high_regions[:50],
         "entropy_curve": points[:limit],
     }
+
+
+def _scan_api_hashes_internal(current_state) -> Dict[str, Any]:
+    """Scan for API hashes synchronously. No MCP context needed.
+
+    Runs the API hash scan on the loaded PE using all supported algorithms,
+    returning the first algorithm that yields matches, or ror13 results.
+    Used by the enrichment pipeline.
+    """
+    from arkana.state import set_current_state
+    set_current_state(current_state)
+
+    if current_state.pe_object is None or current_state.pe_data is None:
+        return {}
+
+    try:
+        from arkana.mcp._helpers_api_hashes import (
+            get_all_api_names, build_hash_lookup,
+            HASH_ALGORITHMS,
+        )
+    except ImportError:
+        return {}
+
+    pe = current_state.pe_object
+    file_data = pe.__data__
+
+    # Try each algorithm, return the first with matches
+    best_result: Optional[Dict[str, Any]] = None
+    best_count = 0
+
+    for algo in ["ror13", "djb2", "crc32", "fnv1a"]:
+        if algo not in HASH_ALGORITHMS:
+            continue
+        try:
+            api_names = get_all_api_names(include_extended=False)
+            hash_to_api = build_hash_lookup(api_names, algo, seed=None, case_handling=None)
+
+            matches = []
+            for i in range(0, len(file_data) - 3, 4):
+                val = struct.unpack_from('<I', file_data, i)[0]
+                if val in hash_to_api:
+                    section_name = None
+                    try:
+                        sec = pe.get_section_by_offset(i)
+                        if sec:
+                            section_name = sec.Name.decode('utf-8', 'ignore').strip('\x00')
+                    except Exception:
+                        pass
+                    matches.append({
+                        "offset": hex(i),
+                        "hash_value": hex(val),
+                        "resolved_api": hash_to_api[val],
+                        "algorithm": algo,
+                        "section": section_name,
+                    })
+                    if len(matches) >= 50:
+                        break
+
+            if len(matches) > best_count:
+                best_count = len(matches)
+                best_result = {
+                    "algorithm": algo,
+                    "resolved_count": len(matches),
+                    "matches": matches,
+                }
+                # If we found a good number of matches, stop searching
+                if len(matches) >= 5:
+                    break
+        except Exception:
+            continue
+
+    return best_result or {"resolved_count": 0}
 
 
 @tool_decorator

@@ -358,7 +358,7 @@ class TestCompactTriageDataAccess:
         with open(triage_path) as f:
             source = f.read()
         compact_idx = source.index("if compact:")
-        compact_block = source[compact_idx:compact_idx + 2500]
+        compact_block = source[compact_idx:compact_idx + 3500]
         assert 'sig.get("embedded_signature_present")' not in compact_block, \
             "Compact triage should use 'present' key, not 'embedded_signature_present'"
         assert 'sig.get("present")' in compact_block

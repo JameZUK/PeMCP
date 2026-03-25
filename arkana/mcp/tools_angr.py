@@ -2046,6 +2046,107 @@ async def get_cross_reference_map(
     return await _check_mcp_response_size(ctx, result, "get_cross_reference_map")
 
 
+# ---------------------------------------------------------------------------
+#  Digest helper for batch_decompile — deterministic behavioral summary
+# ---------------------------------------------------------------------------
+
+def _build_function_digest(lines: list, function_name: str, address: str) -> Dict[str, Any]:
+    """Build a structured behavioral digest from decompiled pseudocode lines."""
+    import re
+
+    code = "\n".join(lines)
+
+    # Extract function prototype (first non-empty, non-comment line)
+    prototype = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("//") and not stripped.startswith("/*"):
+            prototype = stripped
+            break
+
+    # Extract function calls: name(args...)
+    call_pattern = re.compile(r'\b([A-Za-z_]\w*)\s*\(([^)]*)\)')
+    calls: List[Dict[str, str]] = []
+    seen_calls: set = set()
+    _skip_keywords = {"if", "while", "for", "switch", "return", "sizeof", "typeof", "else"}
+    for match in call_pattern.finditer(code):
+        func_name = match.group(1)
+        if func_name in _skip_keywords:
+            continue
+        if func_name not in seen_calls:
+            seen_calls.add(func_name)
+            args_preview = match.group(2).strip()[:80]
+            calls.append({"name": func_name, "args_preview": args_preview})
+
+    # Extract string literals
+    string_pattern = re.compile(r'"([^"\\]|\\.){1,200}"')
+    strings: List[str] = []
+    for match in string_pattern.finditer(code):
+        s = match.group(0)[1:-1]  # Strip quotes
+        if s and s not in strings:
+            strings.append(s)
+    strings = strings[:20]  # Cap
+
+    # Detect behavioural patterns
+    patterns: List[str] = []
+    if re.search(r'\^|xor\b', code, re.IGNORECASE):
+        patterns.append("xor_operation")
+    if re.search(r'>>|<<|shr\b|shl\b', code, re.IGNORECASE):
+        patterns.append("bit_shift")
+    if re.search(r'~[^=]', code):
+        patterns.append("bitwise_not")
+    if re.search(r'\bwhile\b|\bfor\b|\bdo\b', code):
+        patterns.append("loop")
+    if re.search(r'VirtualAlloc|HeapAlloc|malloc|calloc|new\b', code, re.IGNORECASE):
+        patterns.append("memory_allocation")
+    if re.search(r'memcpy|memmove|RtlCopyMemory|CopyMemory', code, re.IGNORECASE):
+        patterns.append("memory_copy")
+    if re.search(r'CreateFile|fopen|open\b', code, re.IGNORECASE):
+        patterns.append("file_access")
+    if re.search(r'connect\b|send\b|recv\b|WSA|InternetOpen|HttpOpen|WinHttp|socket\b', code, re.IGNORECASE):
+        patterns.append("network_activity")
+    if re.search(r'RegOpenKey|RegSetValue|RegCreateKey', code, re.IGNORECASE):
+        patterns.append("registry_access")
+    if re.search(r'CreateProcess|ShellExecute|WinExec|system\b', code, re.IGNORECASE):
+        patterns.append("process_creation")
+    if re.search(r'CreateRemoteThread|WriteProcessMemory|VirtualAllocEx', code, re.IGNORECASE):
+        patterns.append("process_injection")
+    if re.search(r'Crypt|AES|DES|RC4|SHA|MD5|encrypt|decrypt', code, re.IGNORECASE):
+        patterns.append("crypto_operation")
+
+    # Complexity metrics
+    block_indicators = code.count("{")
+    loop_count = len(re.findall(r'\b(while|for|do)\b', code))
+    branch_count = len(re.findall(r'\bif\b', code))
+
+    # Build one-liner summary
+    summary_parts: List[str] = []
+    if patterns:
+        summary_parts.append(f"Patterns: {', '.join(patterns[:5])}")
+    if calls:
+        top_calls = [c["name"] for c in calls[:5]]
+        summary_parts.append(f"Calls: {', '.join(top_calls)}")
+    if strings:
+        summary_parts.append(f"Strings: {len(strings)} refs")
+    one_liner = "; ".join(summary_parts) if summary_parts else "No notable patterns detected"
+
+    return {
+        "address": address,
+        "function_name": function_name,
+        "prototype": prototype,
+        "api_calls": calls[:30],  # Cap at 30
+        "strings": strings,
+        "patterns": patterns,
+        "complexity": {
+            "lines": len(lines),
+            "blocks": block_indicators,
+            "loops": loop_count,
+            "branches": branch_count,
+        },
+        "one_liner": one_liner,
+    }
+
+
 @tool_decorator
 async def batch_decompile(
     ctx: Context,
@@ -2055,6 +2156,7 @@ async def batch_decompile(
     search: Optional[str] = None,
     context_lines: int = 2,
     case_sensitive: bool = False,
+    digest: bool = False,
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Decompile multiple functions in a single call. Results
@@ -2063,6 +2165,12 @@ async def batch_decompile(
     When ``search`` is provided, only functions containing matches are returned,
     with matched lines and context.  Useful for finding a pattern across many
     functions (e.g. ``search="xor"`` to locate crypto routines).
+
+    When ``digest`` is True, returns structured behavioral summaries instead of
+    raw pseudocode lines. Each function gets a digest with: prototype, api_calls,
+    strings, behavioural patterns (xor, network, crypto, etc.), complexity metrics,
+    and a one_liner summary. Dramatically reduces response size. The ``search``
+    parameter is ignored when ``digest`` is True.
 
     When to use: After get_function_map identifies several interesting functions,
     batch-decompile them to get a quick overview before deep-diving into specifics.
@@ -2076,6 +2184,9 @@ async def batch_decompile(
             are included in results.
         context_lines: Number of context lines around each match (default 2, max 20).
         case_sensitive: Whether the search is case-sensitive (default False).
+        digest: (bool) If True, return structured behavioral digests instead of
+            raw lines. Includes prototype, API calls, strings, patterns, and
+            complexity metrics per function. Default False.
 
     Returns:
         Decompilation results for each function.
@@ -2133,7 +2244,10 @@ async def batch_decompile(
             renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
             display_name = get_display_name(hex(target_addr), meta.get("function_name", "unknown"))
 
-            if search:
+            if digest:
+                func_result = _build_function_digest(renamed_lines, display_name, addr_str)
+                func_result["from_cache"] = True
+            elif search:
                 sr = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
                 if sr["total_matches"] == 0:
                     succeeded += 1  # Decompiled OK, just no search matches
@@ -2240,7 +2354,10 @@ async def batch_decompile(
         renamed_lines = apply_variable_renames_to_lines(renamed_lines, hex(target_addr))
         display_name = get_display_name(hex(target_addr), result["function_name"])
 
-        if search:
+        if digest:
+            func_result = _build_function_digest(renamed_lines, display_name, addr_str)
+            func_result["from_cache"] = False
+        elif search:
             sr = search_lines_with_context(renamed_lines, search, context_lines, case_sensitive)
             if sr["total_matches"] == 0:
                 succeeded += 1  # Decompiled OK, just no search matches
@@ -2266,7 +2383,7 @@ async def batch_decompile(
         succeeded += 1
 
     await ctx.report_progress(len(addresses), len(addresses))
-    output = {
+    output: Dict[str, Any] = {
         "functions": results,
         "summary": {
             "requested": len(addresses),
@@ -2274,9 +2391,10 @@ async def batch_decompile(
             "failed": failed,
             "summary_mode": summary_mode,
             "max_lines_per_function": lines_limit,
+            "digest_mode": digest,
         },
     }
-    if search:
+    if search and not digest:
         output["_search"] = {
             "pattern": search,
             "functions_with_matches": len([r for r in results if "match_count" in r]),

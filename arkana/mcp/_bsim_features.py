@@ -425,6 +425,9 @@ CREATE TABLE IF NOT EXISTS functions (
 
 CREATE INDEX IF NOT EXISTS idx_functions_structural
     ON functions(block_count, instruction_count);
+
+CREATE INDEX IF NOT EXISTS idx_functions_arch
+    ON binaries(architecture);
 """
 
 
@@ -450,7 +453,12 @@ def _get_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:
 
 
 def init_db(db_path: Optional[Path] = None) -> None:
-    """Initialise the schema (idempotent)."""
+    """Initialise the schema (idempotent).
+
+    Uses CREATE TABLE/INDEX IF NOT EXISTS, so safe to call on existing DBs.
+    New indexes (e.g. idx_functions_arch) are created automatically on
+    databases created before the index was added.
+    """
     conn = _get_connection(db_path)
     try:
         conn.executescript(_SCHEMA_SQL)
@@ -584,11 +592,30 @@ def query_similar_functions(
     metrics: str = "combined",
     limit: int = 10,
     db_path: Optional[Path] = None,
+    source_architecture: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Two-phase query: SQL pre-filter then full similarity scoring.
 
-    Phase 1: SQL filters candidates by block_count within 3x range.
+    Phase 1: SQL filters candidates by block_count and instruction_count
+             within 3x range, plus optional architecture exact match.
     Phase 2: Full feature vector scoring on remaining candidates.
+
+    Parameters
+    ----------
+    target_features : dict
+        Feature vector from extract_function_features().
+    threshold : float
+        Minimum similarity score (0.0-1.0).
+    metrics : str
+        Scoring metric for primary ranking.
+    limit : int
+        Maximum results to return.
+    db_path : Path, optional
+        Override signature DB path.
+    source_architecture : str, optional
+        Architecture of the source binary (e.g. 'AMD64', 'X86').
+        When provided, only candidates from the same architecture are
+        considered.  Skipped when None or empty.
     """
     db = db_path or get_db_path()
     if not db.exists():
@@ -597,20 +624,41 @@ def query_similar_functions(
     conn = _get_connection(db)
     try:
         target_blocks = target_features.get("cfg_structural", {}).get("block_count", 0)
-        # Pre-filter: block count within 3x range (eliminates ~80-90% of candidates)
+        target_instruction_count = target_features.get("size_metrics", {}).get("instruction_count", 0)
+
+        # Build dynamic pre-filter query
+        conditions: List[str] = ["f.block_count BETWEEN ? AND ?"]
         min_blocks = max(1, target_blocks // 3)
         max_blocks = max(target_blocks * 3, 3)
+        params: List[Any] = [min_blocks, max_blocks]
 
-        cursor = conn.execute(
+        # Instruction count filter (skip if unknown/zero)
+        if target_instruction_count > 0:
+            instr_min = max(1, target_instruction_count // 3)
+            instr_max = target_instruction_count * 3
+            conditions.append("f.instruction_count BETWEEN ? AND ?")
+            params.extend([instr_min, instr_max])
+
+        # Architecture filter (skip if unknown/empty)
+        if source_architecture:
+            conditions.append("b.architecture = ?")
+            params.append(source_architecture)
+
+        where_clause = " AND ".join(conditions)
+        query = (
             "SELECT f.*, b.sha256, b.filename, b.architecture "
             "FROM functions f JOIN binaries b ON f.binary_id = b.id "
-            "WHERE f.block_count BETWEEN ? AND ? "
-            "LIMIT 10000",
-            (min_blocks, max_blocks),
+            f"WHERE {where_clause} "
+            "LIMIT 10000"
         )
 
+        cursor = conn.execute(query, params)
+
+        # Log pre-filter candidate count for diagnostics
         results = []
+        candidate_count = 0
         for row in cursor:
+            candidate_count += 1
             candidate = _row_to_features(row)
             scores = compute_similarity(target_features, candidate, metrics)
             score_key = metrics if metrics != "combined" else "combined"
@@ -623,6 +671,14 @@ def query_similar_functions(
                     "architecture": row["architecture"],
                     "scores": {k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
                 })
+
+        logger.debug(
+            "BSim pre-filter: %d candidates (blocks=%d-%d, instr=%s, arch=%s)",
+            candidate_count, min_blocks, max_blocks,
+            f"{max(1, target_instruction_count // 3)}-{target_instruction_count * 3}"
+            if target_instruction_count > 0 else "any",
+            source_architecture or "any",
+        )
 
         # Sort by combined score descending
         results.sort(key=lambda r: r["scores"].get("combined", 0), reverse=True)

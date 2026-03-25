@@ -32,6 +32,7 @@ MAX_NOTES = 10_000
 MAX_ARTIFACTS = 1_000
 MAX_RENAMES = 10_000
 MAX_TRIAGE_STATUS = 100_000
+MAX_HYPOTHESIS_EVIDENCE = 50
 
 # Stale session TTL in seconds (1 hour).
 SESSION_TTL_SECONDS = 3600
@@ -146,6 +147,16 @@ class AnalyzerState:
         self._cached_similarity_hashes: Optional[Dict[str, Any]] = None
         self._cached_mitre_mapping: Optional[Dict[str, Any]] = None
         self._cached_iocs: Optional[Dict[str, Any]] = None
+
+        # Extended enrichment cached results (populated by background auto-enrichment)
+        self._cached_malware_family: Optional[Dict[str, Any]] = None
+        self._cached_api_hashes: Optional[Dict[str, Any]] = None
+        self._cached_c2_indicators: Optional[Dict[str, Any]] = None
+        self._cached_dga_indicators: Optional[Dict[str, Any]] = None
+        self._cached_crypto_constants: Optional[Dict[str, Any]] = None
+
+        # Sandbox report (imported via tools_sandbox.import_sandbox_report)
+        self._sandbox_report: Optional[Dict[str, Any]] = None
 
         # Decompilation priority control (background vs on-demand)
         self._decompile_lock = threading.Lock()
@@ -351,8 +362,17 @@ class AnalyzerState:
     # ------------------------------------------------------------------
 
     def add_note(self, content: str, category: str = "general",
-                 address: Optional[str] = None, tool_name: Optional[str] = None) -> Dict[str, Any]:
-        """Thread-safe note creation. Returns the new note dict."""
+                 address: Optional[str] = None, tool_name: Optional[str] = None,
+                 confidence: Optional[float] = None, status: Optional[str] = None,
+                 evidence: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        """Thread-safe note creation. Returns the new note dict.
+
+        For hypothesis notes, extra fields are attached:
+        - confidence (float 0.0-1.0, default 0.5)
+        - hypothesis_status (proposed/investigating/supported/refuted/confirmed)
+        - evidence (list of evidence dicts)
+        - superseded_by (note ID or None)
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
         epoch = time.time()
         with self._notes_lock:
@@ -369,6 +389,12 @@ class AnalyzerState:
                 "created_at_epoch": epoch,
                 "updated_at": now.isoformat(),
             }
+            if category == "hypothesis":
+                note["confidence"] = max(0.0, min(1.0, confidence)) if confidence is not None else 0.5
+                _valid_statuses = ("proposed", "investigating", "supported", "refuted", "confirmed")
+                note["hypothesis_status"] = status if status in _valid_statuses else "proposed"
+                note["evidence"] = list(evidence)[:MAX_HYPOTHESIS_EVIDENCE] if evidence else []
+                note["superseded_by"] = None
             self.notes.append(note)
             return dict(note)
 
@@ -384,13 +410,38 @@ class AnalyzerState:
         return result
 
     def update_note(self, note_id: str, **kwargs) -> Optional[Dict[str, Any]]:
-        """Thread-safe partial update. Returns updated note or None."""
+        """Thread-safe partial update. Returns updated note or None.
+
+        For hypothesis notes, also accepts: confidence, hypothesis_status,
+        evidence (appended, not replaced), superseded_by.
+        """
         with self._notes_lock:
             for note in self.notes:
                 if note["id"] == note_id:
                     for k, v in kwargs.items():
                         if k in ("content", "category", "address", "tool_name") and v is not None:
                             note[k] = v
+                    # Hypothesis-specific fields
+                    if note.get("category") == "hypothesis":
+                        if "confidence" in kwargs and kwargs["confidence"] is not None:
+                            note["confidence"] = max(0.0, min(1.0, kwargs["confidence"]))
+                        if "hypothesis_status" in kwargs and kwargs["hypothesis_status"] is not None:
+                            _valid_statuses = ("proposed", "investigating", "supported", "refuted", "confirmed")
+                            if kwargs["hypothesis_status"] in _valid_statuses:
+                                note["hypothesis_status"] = kwargs["hypothesis_status"]
+                        if "evidence" in kwargs and kwargs["evidence"] is not None:
+                            existing = note.get("evidence", [])
+                            new_item = kwargs["evidence"]
+                            if isinstance(new_item, dict):
+                                if len(existing) < MAX_HYPOTHESIS_EVIDENCE:
+                                    existing.append(new_item)
+                                    note["evidence"] = existing
+                            elif isinstance(new_item, list):
+                                remaining = MAX_HYPOTHESIS_EVIDENCE - len(existing)
+                                existing.extend(new_item[:remaining])
+                                note["evidence"] = existing
+                        if "superseded_by" in kwargs:
+                            note["superseded_by"] = kwargs["superseded_by"]
                     note["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
                     return dict(note)
         return None

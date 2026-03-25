@@ -84,6 +84,8 @@ import arkana.mcp.tools_frida
 import arkana.mcp.tools_vuln
 import arkana.mcp.tools_dotnet_deobfuscate
 import arkana.mcp.tools_vb6
+import arkana.mcp.tools_macro
+import arkana.mcp.tools_sandbox
 # Only register refinery tools when binary-refinery is installed.
 # When absent this saves ~20 tool definitions from the MCP catalog,
 # avoiding wasted context tokens for tools that would fail at runtime.

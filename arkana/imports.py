@@ -30,10 +30,11 @@ __all__ = [
     "QILING_AVAILABLE", "QILING_IMPORT_ERROR",
     "DOTNETFILE_AVAILABLE", "PPDEEP_AVAILABLE", "TLSH_AVAILABLE",
     "BINWALK_AVAILABLE", "BINWALK_CLI_ONLY",
-    "PYGORE_AVAILABLE", "PYELFTOOLS_AVAILABLE",
+    "PYGORE_AVAILABLE", "GORESYM_AVAILABLE", "PYELFTOOLS_AVAILABLE",
     "DNFILE_AVAILABLE", "DNCIL_AVAILABLE",
     "RUSTBININFO_AVAILABLE", "RUST_DEMANGLER_AVAILABLE",
     "REFINERY_AVAILABLE",
+    "OLETOOLS_AVAILABLE",
     "PSUTIL_AVAILABLE",
     "DE4DOT_AVAILABLE", "DE4DOT_IMPORT_ERROR",
     "NETREACTORSLAYER_AVAILABLE", "NETREACTORSLAYER_IMPORT_ERROR",
@@ -541,6 +542,20 @@ try:
 except ImportError:
     pass
 
+GORESYM_AVAILABLE = False
+_GORESYM_PATH = ""
+# Check standard locations for GoReSym binary
+for _candidate in [
+    shutil.which("GoReSym") or "",
+    shutil.which("goresym") or "",
+    os.path.expanduser("~/.arkana/tools/GoReSym"),
+    os.path.expanduser("~/.arkana/tools/goresym"),
+]:
+    if _candidate and os.path.isfile(_candidate):
+        GORESYM_AVAILABLE = True
+        _GORESYM_PATH = _candidate
+        break
+
 PYELFTOOLS_AVAILABLE = False
 try:
     from elftools.elf.elffile import ELFFile  # noqa: F401
@@ -587,6 +602,14 @@ try:
 except ImportError:
     pass
 
+OLETOOLS_AVAILABLE = False
+try:
+    import oletools.olevba  # noqa: F401
+    import oletools.oleid  # noqa: F401
+    OLETOOLS_AVAILABLE = True
+except ImportError:
+    pass
+
 PSUTIL_AVAILABLE = False
 try:
     import psutil  # noqa: F401
@@ -627,6 +650,10 @@ def log_library_availability():
         logger.info("Angr library found. Advanced binary analysis (Decompilation, Symbolic Execution) enabled.")
     else:
         logger.warning("Angr library not found. Advanced binary analysis tools will be unavailable.")
+    if GORESYM_AVAILABLE:
+        logger.info("GoReSym binary found at %s. Go binary deep analysis enabled.", _GORESYM_PATH)
+    else:
+        logger.info("GoReSym binary not found. Go analysis will use pygore or string-scan fallback.")
     if REFINERY_AVAILABLE:
         logger.info("Binary Refinery library found. Data transformation tools enabled.")
     else:

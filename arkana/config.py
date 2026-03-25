@@ -25,6 +25,7 @@ from arkana.imports import (  # noqa: E402,F401
     _DE4DOT_PATH, _check_de4dot_available, _de4dot_check_lock,
     _NETREACTORSLAYER_PATH, _check_netreactorslayer_available, _netreactorslayer_check_lock,
     _ILSPYCMD_PATH, _check_ilspycmd_available, _ilspycmd_check_lock,
+    _GORESYM_PATH,
 )
 
 from arkana.state import AnalyzerState, StateProxy

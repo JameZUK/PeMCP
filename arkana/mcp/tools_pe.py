@@ -371,6 +371,12 @@ async def open_file(
         state._cached_similarity_hashes = None
         state._cached_mitre_mapping = None
         state._cached_iocs = None
+        state._cached_malware_family = None
+        state._cached_api_hashes = None
+        state._cached_c2_indicators = None
+        state._cached_dga_indicators = None
+        state._cached_crypto_constants = None
+        state._sandbox_report = None
         with state._notes_lock:
             state.notes = []
             state._notes_counter = 0
@@ -553,6 +559,11 @@ async def open_file(
                         ('_cached_mitre_mapping', '_cached_mitre_mapping'),
                         ('_cached_iocs', '_cached_iocs'),
                         ('_cached_function_scores', '_cached_function_scores'),
+                        ('_cached_malware_family', '_cached_malware_family'),
+                        ('_cached_api_hashes', '_cached_api_hashes'),
+                        ('_cached_c2_indicators', '_cached_c2_indicators'),
+                        ('_cached_dga_indicators', '_cached_dga_indicators'),
+                        ('_cached_crypto_constants', '_cached_crypto_constants'),
                     ]
                     for pe_key, state_attr in _enrichment_keys:
                         val = cached.get(pe_key)
@@ -884,6 +895,12 @@ async def open_file(
         state._cached_similarity_hashes = None
         state._cached_mitre_mapping = None
         state._cached_iocs = None
+        state._cached_malware_family = None
+        state._cached_api_hashes = None
+        state._cached_c2_indicators = None
+        state._cached_dga_indicators = None
+        state._cached_crypto_constants = None
+        state._sandbox_report = None
         try:
             state.result_cache.clear()
         except Exception:
@@ -993,6 +1010,12 @@ async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]
     state._cached_similarity_hashes = None
     state._cached_mitre_mapping = None
     state._cached_iocs = None
+    state._cached_malware_family = None
+    state._cached_api_hashes = None
+    state._cached_c2_indicators = None
+    state._cached_dga_indicators = None
+    state._cached_crypto_constants = None
+    state._sandbox_report = None
     state.result_cache.clear()
     state.clear_warnings()
     # Clear dashboard caches

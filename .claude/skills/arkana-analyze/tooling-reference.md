@@ -26,7 +26,8 @@ Source files: `arkana/mcp/tools_*.py`
 | Paginating through full decompilation to find a pattern | `decompile_function_with_angr(address, search="pattern")` | Regex grep returns only matching lines with context — saves tokens |
 | Decompiling many functions looking for a pattern | `batch_decompile(addresses, search="pattern")` | Grep across up to 20 functions; only functions with matches are returned |
 | `get_hex_dump()` + manual byte matching | `search_hex_pattern(pattern)` | Direct hex pattern search with `??` wildcards, section filter support |
-| Manually checking each function for buffer overflows | `find_dangerous_data_flows()` | Automated source→sink tracing with RDA; covers all functions at once |
+| Manually checking each function for buffer overflows | `find_dangerous_data_flows()` | Automated source->sink tracing with RDA; covers all functions at once |
+| Calling `decompile_function_with_angr` + `get_function_xrefs` + `get_strings_for_function` + `get_notes` + triage check separately | `get_analysis_context_for_function(address)` | Single-call aggregator returns decompilation, xrefs, strings, notes, complexity, and triage status; use individual tools only for deeper data (full paginated decompilation, CFG, data flow) |
 
 ---
 

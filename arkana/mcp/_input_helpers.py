@@ -211,7 +211,7 @@ _SKIP = frozenset({"offset", "limit", "compact", "ctx", "line_offset", "line_lim
                     "ioc_limit", "ioc_offset",
                     "unexplored_offset", "unexplored_limit",
                     "indicator_offset", "indicator_limit",
-                    "method_limit", "max_suggestions"})
+                    "method_limit", "max_suggestions", "digest"})
 
 
 def _make_cache_key(**params) -> tuple:

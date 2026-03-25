@@ -1516,7 +1516,264 @@ def _triage_compiler_language(all_string_values: set) -> Tuple[Dict[str, Any], i
 
 
 # ===================================================================
-#  Section 9 — Risk Score & Suggested Next Tools
+#  Section 9 — VM/Sandbox Indicator Strings
+# ===================================================================
+
+# VM/sandbox indicator byte strings — reuses the same patterns as
+# find_anti_debug_comprehensive in tools_angr_forensic.py, but scans
+# raw PE data without requiring a CFG.
+_VM_INDICATORS = [
+    # --- VMware ---
+    (b"VMwareVMware", "VMware", "CPUID brand string"),
+    (b"vmware", "VMware", "Driver/service name"),
+    (b"VMware Virtual", "VMware", "Hardware string"),
+    (b"vmci.sys", "VMware", "VMCI driver"),
+    (b"vmhgfs.sys", "VMware", "HGFS shared folders driver"),
+    (b"vmmouse.sys", "VMware", "VM mouse driver"),
+    (b"vmrawdsk.sys", "VMware", "Raw disk driver"),
+    (b"vmusbmouse.sys", "VMware", "USB mouse driver"),
+    (b"vmx86.sys", "VMware", "VMX driver"),
+    (b"vmnet.sys", "VMware", "Network driver"),
+    (b"VMTools", "VMware", "Guest tools service"),
+    (b"vmtoolsd", "VMware", "Tools daemon"),
+    (b"vmwaretray", "VMware", "System tray tool"),
+    # --- VirtualBox ---
+    (b"VBoxGuest", "VirtualBox", "Guest additions driver"),
+    (b"VBoxMiniRdr", "VirtualBox", "Shared folders driver"),
+    (b"VBoxSF", "VirtualBox", "Shared folders service"),
+    (b"vboxservice", "VirtualBox", "Guest service"),
+    (b"VBOX HARDDISK", "VirtualBox", "Disk identifier"),
+    (b"VBoxMouse", "VirtualBox", "Mouse integration"),
+    (b"VBoxVideo", "VirtualBox", "Video driver"),
+    (b"VBoxTray", "VirtualBox", "Tray application"),
+    (b"innotek GmbH", "VirtualBox", "BIOS vendor"),
+    (b"VirtualBox", "VirtualBox", "Product name"),
+    (b"vboxdrv", "VirtualBox", "Kernel driver"),
+    # --- Hyper-V ---
+    (b"Virtual HD", "Hyper-V", "Disk identifier"),
+    (b"Microsoft Hv", "Hyper-V", "CPUID brand string"),
+    (b"vmicheartbeat", "Hyper-V", "Heartbeat IC"),
+    (b"vmicshutdown", "Hyper-V", "Shutdown IC"),
+    (b"vmickvpexchange", "Hyper-V", "KVP exchange IC"),
+    (b"vmbus", "Hyper-V", "VMBus driver"),
+    (b"Hyper-V", "Hyper-V", "Product name"),
+    (b"storvsc", "Hyper-V", "Storage VSC driver"),
+    (b"netvsc", "Hyper-V", "Network VSC driver"),
+    # --- QEMU/KVM ---
+    (b"QEMU HARDDISK", "QEMU", "Disk identifier"),
+    (b"QEMU DVD-ROM", "QEMU", "DVD identifier"),
+    (b"KVMKVMKVM", "KVM", "CPUID brand string"),
+    (b"BOCHS", "QEMU/Bochs", "BIOS vendor string"),
+    (b"SeaBIOS", "QEMU", "BIOS firmware"),
+    (b"virtio", "QEMU/KVM", "VirtIO driver string"),
+    (b"qemu-ga", "QEMU", "Guest agent"),
+    # --- Xen ---
+    (b"Xen ", "Xen", "Hypervisor string"),
+    (b"XenVMMXenVMM", "Xen", "CPUID brand string"),
+    (b"xenbus", "Xen", "Xen bus driver"),
+    # --- Parallels ---
+    (b"prl_fs", "Parallels", "Shared folders driver"),
+    (b"prl_tg", "Parallels", "Tools gate driver"),
+    (b"Parallels", "Parallels", "Product name"),
+    # --- Sandbox indicators ---
+    (b"SbieDll", "Sandboxie", "Sandbox DLL"),
+    (b"sbiedll", "Sandboxie", "Sandbox DLL"),
+    (b"cuckoomon", "Cuckoo", "Cuckoo sandbox monitor"),
+    (b"CWSandbox", "CWSandbox", "Sandbox indicator"),
+    (b"JoeBox", "JoeSandbox", "Sandbox indicator"),
+    # --- Analysis tool indicators ---
+    (b"dbghelp", "Debugger", "Debug helper library"),
+    (b"wireshark", "Wireshark", "Network analysis tool"),
+    (b"procmon", "Procmon", "Process monitor"),
+    (b"procexp", "Procexp", "Process explorer"),
+    (b"ollydbg", "OllyDbg", "Debugger"),
+    (b"x64dbg", "x64dbg", "Debugger"),
+    (b"ImmunityDebugger", "Immunity", "Debugger"),
+    (b"ida.exe", "IDA Pro", "Disassembler"),
+    (b"Fiddler", "Fiddler", "HTTP proxy"),
+    # --- Registry paths (VM-specific) ---
+    (b"SOFTWARE\\VMware, Inc.\\VMware Tools", "VMware", "Registry: VMware Tools path"),
+    (b"SOFTWARE\\Oracle\\VirtualBox Guest Additions", "VirtualBox", "Registry: VBox GA path"),
+    (b"SYSTEM\\CurrentControlSet\\Services\\VBoxGuest", "VirtualBox", "Registry: VBox service"),
+    (b"SYSTEM\\CurrentControlSet\\Services\\VMTools", "VMware", "Registry: VMware service"),
+    (b"HARDWARE\\ACPI\\DSDT\\VBOX__", "VirtualBox", "Registry: VBox ACPI table"),
+    (b"HARDWARE\\ACPI\\FADT\\VBOX__", "VirtualBox", "Registry: VBox ACPI table"),
+    (b"HARDWARE\\Description\\System\\SystemBiosVersion", "Generic", "Registry: BIOS version query"),
+    # --- WMI query strings ---
+    (b"Win32_ComputerSystem", "Generic", "WMI: computer system query"),
+    (b"Win32_BIOS", "Generic", "WMI: BIOS info query"),
+    (b"Win32_BaseBoard", "Generic", "WMI: baseboard info query"),
+    (b"Win32_DiskDrive", "Generic", "WMI: disk drive query"),
+    (b"Win32_NetworkAdapter", "Generic", "WMI: network adapter query"),
+    (b"Win32_PhysicalMemory", "Generic", "WMI: physical memory query"),
+    (b"MSAcpi_ThermalZoneTemperature", "Generic", "WMI: thermal zone (absent in VMs)"),
+    # --- MAC OUI strings ---
+    (b"00:0C:29", "VMware", "MAC OUI: VMware"),
+    (b"00:50:56", "VMware", "MAC OUI: VMware"),
+    (b"00-0C-29", "VMware", "MAC OUI: VMware (dash)"),
+    (b"00-50-56", "VMware", "MAC OUI: VMware (dash)"),
+    (b"08:00:27", "VirtualBox", "MAC OUI: VirtualBox"),
+    (b"08-00-27", "VirtualBox", "MAC OUI: VirtualBox (dash)"),
+    (b"00:15:5D", "Hyper-V", "MAC OUI: Hyper-V"),
+    (b"00-15-5D", "Hyper-V", "MAC OUI: Hyper-V (dash)"),
+    (b"52:54:00", "QEMU", "MAC OUI: QEMU"),
+    (b"52-54-00", "QEMU", "MAC OUI: QEMU (dash)"),
+]
+
+# Pre-built case-insensitive lookup and compiled regex for single-pass scanning
+_VM_IND_LOOKUP = {ind.lower(): (ind, target, detail)
+                  for ind, target, detail in _VM_INDICATORS}
+_VM_IND_PATTERN = re.compile(
+    b'(' + b'|'.join(re.escape(ind) for ind in _VM_IND_LOOKUP) + b')',
+    re.IGNORECASE,
+)
+
+
+def _triage_vm_indicator_strings(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
+    """Scan raw binary data for VM/sandbox/analysis-tool indicator strings.
+
+    Uses the same comprehensive indicator list as ``find_anti_debug_comprehensive``
+    but runs on raw PE data without requiring a CFG.  Single-pass regex scan.
+    """
+    risk_score = 0
+    pe_obj = state.pe_object
+    if not pe_obj or not hasattr(pe_obj, '__data__'):
+        return {"vm_indicators": [], "count": 0, "has_vm_detection": False}, risk_score
+
+    try:
+        raw_data = pe_obj.__data__
+    except (AttributeError, TypeError):
+        return {"vm_indicators": [], "count": 0, "has_vm_detection": False}, risk_score
+
+    indicators: List[Dict[str, str]] = []
+    hypervisor_breakdown: Dict[str, List[str]] = {}
+    seen: set = set()
+
+    for m in _VM_IND_PATTERN.finditer(raw_data):
+        matched_lower = m.group().lower()
+        if matched_lower in seen:
+            continue
+        seen.add(matched_lower)
+        ind_bytes, target, detail = _VM_IND_LOOKUP[matched_lower]
+        indicator_str = ind_bytes.decode('ascii', 'replace')
+        indicators.append({
+            "indicator": indicator_str,
+            "target": target,
+            "detail": detail,
+        })
+        hypervisor_breakdown.setdefault(target, []).append(indicator_str)
+        if len(indicators) >= indicator_limit:
+            break
+
+    # Risk contribution: 3 for 5+ unique VM indicators, 2 for 3+, 1 for any
+    if len(indicators) >= 5:
+        risk_score += 3
+    elif len(indicators) >= 3:
+        risk_score += 2
+    elif indicators:
+        risk_score += 1
+
+    hypervisor_breakdown = {k: sorted(set(v)) for k, v in hypervisor_breakdown.items()}
+
+    return {
+        "vm_indicators": indicators[:indicator_limit],
+        "count": len(indicators),
+        "has_vm_detection": len(indicators) > 0,
+        "hypervisor_breakdown": hypervisor_breakdown,
+    }, risk_score
+
+
+# ===================================================================
+#  Section 10 — Anti-Debug Instruction Patterns
+# ===================================================================
+
+# Anti-debug/anti-analysis instruction byte patterns for x86/x64.
+# Same patterns as find_anti_debug_comprehensive in tools_angr_forensic.py.
+_ANTI_DEBUG_INSN_PATTERNS = [
+    (b'\x0f\x31', "RDTSC", "timing_check", "medium",
+     "Read timestamp counter — timing-based anti-debug/VM detection"),
+    (b'\x0f\xa2', "CPUID", "vm_detection", "high",
+     "CPUID — leaf 1 bit 31 = hypervisor, leaf 0x40000000 = vendor ID"),
+    (b'\xcd\x2d', "INT 2Dh", "debugger_check", "high",
+     "Debug service interrupt — execution differs under debugger"),
+    (b'\x0f\x01\x0d', "SIDT", "vm_detection", "low",
+     "Store IDT register — Red Pill VM detection (unreliable on modern CPUs)"),
+]
+
+
+def _triage_anti_debug_instructions(indicator_limit: int) -> Tuple[Dict[str, Any], int]:
+    """Scan executable PE sections for anti-debug/anti-analysis instruction patterns.
+
+    Searches for known byte sequences (RDTSC, CPUID, INT 2Dh, SIDT) in
+    executable sections.  Fast raw-bytes scan — no disassembly or CFG needed.
+    """
+    risk_score = 0
+    pe_obj = state.pe_object
+    if not pe_obj:
+        return {"anti_debug_instructions": [], "count": 0, "has_anti_debug_instructions": False}, risk_score
+
+    try:
+        sections = pe_obj.sections
+    except (AttributeError, TypeError):
+        return {"anti_debug_instructions": [], "count": 0, "has_anti_debug_instructions": False}, risk_score
+
+    findings: List[Dict[str, Any]] = []
+    image_base = getattr(pe_obj.OPTIONAL_HEADER, 'ImageBase', 0) if hasattr(pe_obj, 'OPTIONAL_HEADER') else 0
+
+    for section in sections:
+        try:
+            chars = getattr(section, 'Characteristics', 0) or 0
+            if not (chars & 0x20000000):  # IMAGE_SCN_MEM_EXECUTE
+                continue
+
+            sec_name = section.Name.rstrip(b'\x00').decode('ascii', 'replace')
+            sec_rva = getattr(section, 'VirtualAddress', 0) or 0
+            section_data = section.get_data()
+
+            for pattern_bytes, mnemonic, category, severity, description in _ANTI_DEBUG_INSN_PATTERNS:
+                addresses: List[str] = []
+                offset = 0
+                while offset <= len(section_data) - len(pattern_bytes):
+                    pos = section_data.find(pattern_bytes, offset)
+                    if pos == -1:
+                        break
+                    addresses.append(hex(image_base + sec_rva + pos))
+                    offset = pos + len(pattern_bytes)
+                    if len(addresses) >= 100:  # Cap per pattern per section
+                        break
+
+                if addresses:
+                    findings.append({
+                        "instruction": mnemonic,
+                        "description": description,
+                        "category": category,
+                        "severity": severity,
+                        "section": sec_name,
+                        "count": len(addresses),
+                        "addresses": addresses[:10],
+                    })
+        except Exception:
+            continue
+
+    # Risk contribution based on high-severity findings
+    high_sev = sum(1 for f in findings if f["severity"] == "high")
+    med_sev = sum(1 for f in findings if f["severity"] == "medium")
+    if high_sev >= 2:
+        risk_score += 3
+    elif high_sev >= 1:
+        risk_score += 2
+    elif med_sev >= 1:
+        risk_score += 1
+
+    return {
+        "anti_debug_instructions": findings[:indicator_limit],
+        "count": len(findings),
+        "has_anti_debug_instructions": len(findings) > 0,
+    }, risk_score
+
+
+# ===================================================================
+#  Section 11 — Risk Score & Suggested Next Tools
 # ===================================================================
 
 def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_report: Dict[str, Any]) -> Dict[str, Any]:
@@ -1572,6 +1829,10 @@ def _triage_risk_and_suggestions(risk_score: int, analysis_mode: str, triage_rep
             suggested.append("vb6_analyze — extract VB6 project info, forms, modules, and Declare Function APIs")
         if triage_report.get("tls_callbacks", {}).get("present") and triage_report["tls_callbacks"].get("callback_count", 0) > 0:
             suggested.append("get_pe_data(key='tls_info') — inspect TLS callback addresses")
+        has_vm = triage_report.get("vm_indicator_strings", {}).get("has_vm_detection", False)
+        has_ad = triage_report.get("anti_debug_instructions", {}).get("has_anti_debug_instructions", False)
+        if has_vm or has_ad:
+            suggested.append("find_anti_debug_comprehensive — deep anti-analysis detection with CFG (expands on triage VM/anti-debug findings)")
         suggested.append("classify_binary_purpose — determine if GUI app, service, DLL, etc.")
     elif analysis_mode == 'elf':
         suggested.append("elf_analyze — full ELF header, section, and symbol analysis")
@@ -1680,6 +1941,30 @@ def _auto_save_triage_notes(triage_report: Dict[str, Any],
                 tool_name="get_triage_report",
             )
 
+    # Note VM/sandbox indicator findings
+    vm_data = triage_report.get("vm_indicator_strings", {})
+    if isinstance(vm_data, dict) and vm_data.get("has_vm_detection"):
+        breakdown = vm_data.get("hypervisor_breakdown", {})
+        targets = sorted(breakdown.keys()) if breakdown else []
+        if targets:
+            state.add_note(
+                content=f"VM/sandbox detection: {vm_data.get('count', 0)} indicators targeting {', '.join(targets)}",
+                category="tool_result",
+                tool_name="get_triage_report",
+            )
+
+    # Note anti-debug instruction findings
+    ad_data = triage_report.get("anti_debug_instructions", {})
+    if isinstance(ad_data, dict) and ad_data.get("has_anti_debug_instructions"):
+        instrs = ad_data.get("anti_debug_instructions", [])
+        high_sev = [f["instruction"] for f in instrs if isinstance(f, dict) and f.get("severity") == "high"]
+        if high_sev:
+            state.add_note(
+                content=f"Anti-debug instructions: {', '.join(sorted(set(high_sev)))} (high severity)",
+                category="tool_result",
+                tool_name="get_triage_report",
+            )
+
     _persist_notes_to_cache()
 
 
@@ -1716,6 +2001,7 @@ def _run_triage_internal(
         "security_mitigations": {}, "delay_load_risks": {}, "version_info_anomalies": {},
         "dotnet_indicators": {}, "export_anomalies": {}, "high_value_strings": [],
         "elf_security": {}, "macho_security": {}, "compiler_language": {},
+        "vm_indicator_strings": {}, "anti_debug_instructions": {},
         "risk_score": 0, "risk_level": "UNKNOWN", "suggested_next_tools": [],
     }
 
@@ -1876,6 +2162,17 @@ def _run_triage_internal(
     triage_report["compiler_language"] = lang_data
     risk_score += delta
 
+    _report(86, "Scanning for VM/sandbox indicators...")
+    vm_data, delta = _triage_vm_indicator_strings(indicator_limit)
+    if vm_data.get("has_vm_detection"):
+        triage_report["vm_indicator_strings"] = vm_data
+    risk_score += delta
+
+    anti_dbg_data, delta = _triage_anti_debug_instructions(indicator_limit)
+    if anti_dbg_data.get("has_anti_debug_instructions"):
+        triage_report["anti_debug_instructions"] = anti_dbg_data
+    risk_score += delta
+
     if strings_truncated:
         triage_report["strings_truncated"] = True
         triage_report["strings_truncated_at"] = _MAX_TRIAGE_STRINGS
@@ -1923,12 +2220,13 @@ async def get_triage_report(
     [Phase: triage] START HERE after opening a file. Comprehensive automated triage
     of the loaded binary with risk scoring and format-aware next-tool recommendations.
 
-    Analyses 25+ dimensions including entropy, packing, digital signatures,
+    Analyses 27+ dimensions including entropy, packing, digital signatures,
     suspicious imports, capa capabilities, network IOCs, section anomalies,
     timestamps, Rich header, overlay data, resources, YARA, header corruption,
     TLS callbacks, security mitigations (CFG/CET/ASLR/DEP), delay-load evasion,
-    version info spoofing, .NET indicators, export anomalies, and platform-specific
-    security features (ELF: PIE/NX/RELRO/canaries, Mach-O: code signing/PIE).
+    version info spoofing, .NET indicators, export anomalies, VM/sandbox indicator
+    strings, anti-debug instruction patterns, and platform-specific security
+    features (ELF: PIE/NX/RELRO/canaries, Mach-O: code signing/PIE).
 
     Designed to give an AI analyst a complete first-look assessment without needing
     to call multiple individual tools. The response includes 'suggested_next_tools'
@@ -1968,6 +2266,8 @@ async def get_triage_report(
         - elf_security: PIE, NX, RELRO, stack canaries, stripped status (ELF)
         - macho_security: PIE, code signing, entitlements (Mach-O)
         - compiler_language: detected source language (Go, Rust, .NET, Delphi, MSVC)
+        - vm_indicator_strings: VM/sandbox/analysis-tool indicator strings found in raw data (PE only, omitted if none)
+        - anti_debug_instructions: anti-debug instruction byte patterns in executable sections (PE only, omitted if none)
         - risk_score / risk_level: cumulative risk assessment
         - suggested_next_tools: format-aware recommended next analysis steps
     """
@@ -2000,8 +2300,9 @@ async def get_triage_report(
                 page, pag_meta = _paginate_field(items, indicator_offset, indicator_limit)
                 net_iocs[field_key] = page
                 net_iocs[f"{field_key}_pagination"] = pag_meta
-        # Re-paginate nested dict fields (export_anomalies, delay_load_risks)
-        for nested_key in ("export_anomalies", "delay_load_risks"):
+        # Re-paginate nested dict fields (export_anomalies, delay_load_risks, vm/anti-debug)
+        for nested_key in ("export_anomalies", "delay_load_risks",
+                           "vm_indicator_strings", "anti_debug_instructions"):
             nested = triage_report.get(nested_key, {})
             if isinstance(nested, dict):
                 for sub_key, sub_val in list(nested.items()):
@@ -2061,6 +2362,16 @@ async def get_triage_report(
             for cap in caps[:3]:
                 if isinstance(cap, dict):
                     findings.append(f"Capability: {cap.get('capability', '?')} ({cap.get('namespace', '?')})")
+        # VM/sandbox indicators
+        vm = triage_report.get("vm_indicator_strings", {})
+        if isinstance(vm, dict) and vm.get("has_vm_detection"):
+            targets = sorted(vm.get("hypervisor_breakdown", {}).keys())
+            findings.append(f"VM/sandbox indicators: {vm.get('count', 0)} strings ({', '.join(targets[:3])})")
+        # Anti-debug instructions
+        ad = triage_report.get("anti_debug_instructions", {})
+        if isinstance(ad, dict) and ad.get("has_anti_debug_instructions"):
+            instrs = [f["instruction"] for f in ad.get("anti_debug_instructions", []) if isinstance(f, dict)]
+            findings.append(f"Anti-debug instructions: {', '.join(sorted(set(instrs)))}")
         # digital_signature uses key "present" (from _triage_digital_signature)
         sig = triage_report.get("digital_signature", {})
         if isinstance(sig, dict):

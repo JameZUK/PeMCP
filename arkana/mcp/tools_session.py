@@ -527,6 +527,22 @@ async def get_analysis_digest(
         result["analyst_notes"] = an_page
         result["analyst_notes_pagination"] = an_pag
 
+    # Hypotheses with confidence and lifecycle tracking
+    hypothesis_notes = notes_by_cat.get("hypothesis", [])
+    if hypothesis_notes:
+        result["hypotheses"] = [
+            {
+                "id": note["id"],
+                "content": note["content"][:200],
+                "confidence": note.get("confidence", 0.5),
+                "status": note.get("hypothesis_status", "proposed"),
+                "evidence_count": len(note.get("evidence", [])),
+                "created_at": note["created_at"],
+            }
+            for note in hypothesis_notes
+            if _note_is_new(note)
+        ]
+
     # Dashboard triage flags (user-tagged functions)
     triage_snapshot = state.get_all_triage_snapshot()
     if triage_snapshot:

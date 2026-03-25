@@ -526,11 +526,19 @@ async def query_signature_db(
         func, _ = _resolve_function_address(addr)
         features = extract_function_features(project, cfg, func, include_vex=False)
 
+        # Extract architecture for pre-filter selectivity
+        arch = None
+        try:
+            arch = project.arch.name
+        except Exception:
+            pass
+
         matches = query_similar_functions(
             target_features=features,
             threshold=threshold,
             metrics=metrics,
             limit=limit,
+            source_architecture=arch,
         )
 
         return {

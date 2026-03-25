@@ -19,7 +19,7 @@ from arkana.constants import (
     OBFUSCATION_DETECTION_TIMEOUT,
     MAX_CFF_SCAN_FUNCTIONS, MAX_OPAQUE_SCAN_FUNCTIONS,
 )
-from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_mcp_response_size
+from arkana.mcp.server import tool_decorator, _check_angr_ready, _check_pe_loaded, _check_mcp_response_size
 from arkana.background import _update_progress, _run_background_task_wrapper, _log_task_exception, _register_background_task
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _resolve_function_address, _raise_on_error_dict
@@ -2319,3 +2319,286 @@ async def detect_opaque_predicates(
         )
 
     return await _check_mcp_response_size(ctx, result, "detect_opaque_predicates")
+
+
+# =====================================================================
+#  VM Protection Detection
+# =====================================================================
+
+@tool_decorator
+async def detect_vm_protection(
+    ctx: Context,
+) -> Dict[str, Any]:
+    """Detect VM-based code obfuscation (VMProtect, Themida, Code Virtualizer).
+
+    Phase: 3 — Map
+
+    Identifies virtual machine-based code protection by analyzing section
+    names, entropy patterns, dispatcher structures, and known protector
+    signatures. Does NOT attempt devirtualization — provides characterization
+    for the analyst to decide on behavioral analysis vs. manual reversing.
+
+    When to use: When triage or detect_packing() suggests heavy obfuscation,
+    when section names or entropy patterns hint at VM protection, or when
+    decompiled code shows handler-dispatch loops.
+
+    Next steps: emulate_pe_with_windows_apis() for behavioral profiling,
+    emulate_and_inspect() for post-emulation memory analysis,
+    detect_control_flow_flattening() for complementary obfuscation detection.
+    """
+    _check_pe_loaded("detect_vm_protection")
+
+    pe_data = state.pe_data or {}
+    pe_obj = state.pe_object
+
+    def _analyze():
+        result = {
+            "vm_protection_detected": False,
+            "protector": None,
+            "confidence": 0,
+            "indicators": [],
+            "virtualized_sections": [],
+            "entry_point_info": {},
+            "recommendation": "",
+        }
+
+        # ── 1. Section name analysis ────────────────────────────────
+        _VM_SECTION_SIGS = {
+            # VMProtect
+            ".vmp0": ("VMProtect", 90),
+            ".vmp1": ("VMProtect", 90),
+            ".vmp2": ("VMProtect", 90),
+            ".VMProtect": ("VMProtect", 95),
+            # Themida / WinLicense
+            ".themida": ("Themida/WinLicense", 95),
+            ".winlice": ("WinLicense", 90),
+            # Code Virtualizer
+            ".cvirt": ("Code Virtualizer", 85),
+            ".cv": ("Code Virtualizer", 70),
+            # Enigma Protector
+            ".enigma1": ("Enigma Protector", 90),
+            ".enigma2": ("Enigma Protector", 90),
+            # Obsidium
+            ".obsidium": ("Obsidium", 90),
+            # ASProtect
+            ".aspack": ("ASProtect", 80),
+            # Generic VM indicators
+            ".vm": ("Unknown VM Protector", 50),
+        }
+
+        sections = pe_data.get("sections", {}).get("details", [])
+        if not sections and pe_obj is not None and hasattr(pe_obj, 'sections'):
+            sections = []
+            for s in pe_obj.sections:
+                try:
+                    name = s.Name.decode("utf-8", errors="replace").rstrip("\x00").strip()
+                    sections.append({
+                        "name": name,
+                        "entropy": s.get_entropy(),
+                        "virtual_size": s.Misc_VirtualSize,
+                        "raw_size": s.SizeOfRawData,
+                        "characteristics": s.Characteristics,
+                    })
+                except Exception:
+                    continue
+
+        for sec in sections:
+            sec_name = sec.get("name", "").strip()
+            sec_lower = sec_name.lower()
+            for pattern, (protector, conf) in _VM_SECTION_SIGS.items():
+                if sec_lower == pattern.lower() or sec_lower.startswith(pattern.lower()):
+                    result["indicators"].append({
+                        "type": "section_name",
+                        "value": sec_name,
+                        "protector": protector,
+                        "confidence": conf,
+                    })
+                    result["virtualized_sections"].append({
+                        "name": sec_name,
+                        "entropy": round(sec.get("entropy", 0), 2),
+                        "virtual_size": sec.get("virtual_size", 0),
+                        "raw_size": sec.get("raw_size", 0),
+                    })
+                    if conf > result["confidence"]:
+                        result["confidence"] = conf
+                        result["protector"] = protector
+
+        # ── 2. High-entropy non-standard sections ───────────────────
+        standard_names = {
+            ".text", ".rdata", ".data", ".rsrc", ".reloc",
+            ".pdata", ".idata", ".edata", ".bss", ".tls", ".CRT",
+        }
+        for sec in sections:
+            sec_name = sec.get("name", "").strip()
+            entropy = sec.get("entropy", 0)
+            if sec_name not in standard_names and entropy > 7.0:
+                rsize = sec.get("raw_size", 0)
+                if rsize > 4096:  # Non-trivial section
+                    result["indicators"].append({
+                        "type": "high_entropy_section",
+                        "value": f"{sec_name} (entropy: {entropy:.2f}, size: {rsize})",
+                        "protector": result.get("protector") or "Unknown",
+                        "confidence": 40,
+                    })
+                    if not result["protector"]:
+                        result["confidence"] = max(result["confidence"], 40)
+
+        # ── 3. Entry point analysis ─────────────────────────────────
+        if pe_obj is not None:
+            try:
+                ep = pe_obj.OPTIONAL_HEADER.AddressOfEntryPoint
+                ep_section = None
+                for sec in pe_obj.sections:
+                    sec_va = sec.VirtualAddress
+                    sec_end = sec_va + sec.Misc_VirtualSize
+                    if sec_va <= ep < sec_end:
+                        ep_section = sec.Name.decode("utf-8", errors="replace").rstrip("\x00")
+                        break
+
+                result["entry_point_info"] = {
+                    "address": hex(ep + pe_obj.OPTIONAL_HEADER.ImageBase),
+                    "rva": hex(ep),
+                    "section": ep_section or "unknown",
+                }
+
+                # Entry point in a VM section is a strong indicator
+                if ep_section:
+                    ep_lower = ep_section.strip().lower()
+                    for pattern in _VM_SECTION_SIGS:
+                        if ep_lower == pattern.lower() or ep_lower.startswith(pattern.lower()):
+                            result["indicators"].append({
+                                "type": "entry_in_vm_section",
+                                "value": f"Entry point in {ep_section}",
+                                "protector": _VM_SECTION_SIGS[pattern][0],
+                                "confidence": 95,
+                            })
+                            result["confidence"] = max(result["confidence"], 95)
+                            break
+            except Exception:
+                pass
+
+        # ── 4. Import table analysis ────────────────────────────────
+        imports = pe_data.get("imports", {})
+        import_count = imports.get("import_count", 0)
+
+        # Very few imports + VM section = strong VM protection signal
+        if import_count < 10 and result["virtualized_sections"]:
+            result["indicators"].append({
+                "type": "minimal_imports",
+                "value": f"Only {import_count} imports with VM sections present",
+                "protector": result.get("protector") or "Unknown",
+                "confidence": 70,
+            })
+            result["confidence"] = max(result["confidence"], 70)
+
+        # ── 5. String-based signatures ──────────────────────────────
+        if pe_obj is not None:
+            try:
+                raw_data = pe_obj.__data__
+                # Scan first 2 MB only
+                raw_str = raw_data[:min(len(raw_data), 2 * 1024 * 1024)]
+                raw_text = raw_str.decode("latin-1", errors="replace")
+
+                _STRING_SIGS = [
+                    ("VMProtect begin", "VMProtect", 95),
+                    ("VMProtect end", "VMProtect", 95),
+                    ("VMProtect.Ultimate", "VMProtect", 98),
+                    ("VMProtect.Mutation", "VMProtect", 90),
+                    (".vmp.dll", "VMProtect", 85),
+                    ("Themida", "Themida", 85),
+                    ("WinLicense", "WinLicense", 85),
+                    ("Code Virtualizer", "Code Virtualizer", 90),
+                    ("Oreans Technologies", "Themida/Code Virtualizer", 90),
+                    ("Enigma protector", "Enigma Protector", 90),
+                    ("Obsidium", "Obsidium", 85),
+                ]
+
+                raw_lower = raw_text.lower()
+                for sig_str, protector, conf in _STRING_SIGS:
+                    if sig_str.lower() in raw_lower:
+                        result["indicators"].append({
+                            "type": "string_signature",
+                            "value": sig_str,
+                            "protector": protector,
+                            "confidence": conf,
+                        })
+                        if conf > result["confidence"]:
+                            result["confidence"] = conf
+                            result["protector"] = protector
+            except Exception:
+                pass
+
+        # ── 6. Dispatcher detection (if angr CFG available) ─────────
+        # Optional enhancement — does not block if angr is unavailable
+        proj = state.angr_project
+        cfg = state.angr_cfg
+        if proj is not None and cfg is not None:
+            try:
+                dispatch_candidates = []
+                func_count = 0
+                for func_addr, func in cfg.functions.items():
+                    if func_count >= 500:
+                        break
+                    func_count += 1
+                    if func.is_simprocedure or func.is_plt:
+                        continue
+
+                    try:
+                        blocks = list(func.blocks)
+                    except Exception:
+                        continue
+                    if len(blocks) <= 20:
+                        continue
+
+                    # Look for high in-degree blocks (dispatcher pattern)
+                    try:
+                        graph = func.graph
+                        if graph is None:
+                            continue
+                        for node in graph.nodes():
+                            in_degree = graph.in_degree(node)
+                            if in_degree > 10:
+                                dispatch_candidates.append({
+                                    "function": hex(func_addr),
+                                    "block": hex(node.addr),
+                                    "in_degree": in_degree,
+                                    "total_blocks": len(blocks),
+                                })
+                                break  # One per function
+                    except Exception:
+                        continue
+
+                if dispatch_candidates:
+                    dispatch_candidates.sort(key=lambda x: x["in_degree"], reverse=True)
+                    result["dispatcher_candidates"] = dispatch_candidates[:10]
+                    result["indicators"].append({
+                        "type": "high_indegree_dispatcher",
+                        "value": f"{len(dispatch_candidates)} functions with dispatcher-like patterns",
+                        "protector": result.get("protector") or "Unknown VM",
+                        "confidence": 60,
+                    })
+                    result["confidence"] = max(result["confidence"], 60)
+            except Exception:
+                pass
+
+        # ── Final assessment ────────────────────────────────────────
+        result["vm_protection_detected"] = result["confidence"] >= 50
+
+        if result["vm_protection_detected"]:
+            protector = result["protector"] or "Unknown"
+            result["recommendation"] = (
+                f"{protector} protection detected (confidence: {result['confidence']}%). "
+                "Full devirtualization is not feasible via automated analysis. "
+                "Recommended approach: (1) Use emulate_pe_with_windows_apis() for behavioral profiling, "
+                "(2) Use emulate_and_inspect() for post-emulation memory analysis, "
+                "(3) Focus on unprotected functions for static analysis."
+            )
+        else:
+            result["recommendation"] = "No VM-based protection detected."
+
+        result["indicator_count"] = len(result["indicators"])
+
+        return result
+
+    result = await asyncio.to_thread(_analyze)
+    return await _check_mcp_response_size(ctx, result, "detect_vm_protection")
