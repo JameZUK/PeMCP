@@ -117,9 +117,10 @@ async def _run_goresym(filepath: str) -> Dict[str, Any]:
             proc.communicate(), timeout=_GORESYM_TIMEOUT,
         )
     except asyncio.TimeoutError:
-        # Kill the process on timeout
+        # Kill the process on timeout and reap to avoid zombie
         try:
             proc.kill()
+            await proc.wait()
         except ProcessLookupError:
             pass
         raise RuntimeError(

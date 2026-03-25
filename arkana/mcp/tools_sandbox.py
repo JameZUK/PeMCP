@@ -77,7 +77,7 @@ async def import_sandbox_report(
         "next_step": "Call correlate_static_dynamic() to compare with static analysis findings.",
     }
 
-    return _check_mcp_response_size(summary)
+    return await _check_mcp_response_size(ctx, summary, "import_sandbox_report")
 
 
 @tool_decorator
@@ -185,7 +185,7 @@ async def correlate_static_dynamic(
 
         result["config_correlation"] = {
             "family": config.get("family", ""),
-            "confirmed_c2": sorted(config_c2 & dynamic_ips | config_c2 & dynamic_domains)[:20],
+            "confirmed_c2": sorted((config_c2 & dynamic_ips) | (config_c2 & dynamic_domains))[:20],
             "uncontacted_c2": sorted(config_c2 - dynamic_ips - dynamic_domains)[:20],
         }
 
@@ -209,7 +209,7 @@ async def correlate_static_dynamic(
     )
     result["confidence_level"] = confidence
 
-    return _check_mcp_response_size(result)
+    return await _check_mcp_response_size(ctx, result, "correlate_static_dynamic")
 
 
 @tool_decorator

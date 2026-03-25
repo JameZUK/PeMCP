@@ -13,7 +13,7 @@ description: >
 
 # Arkana Binary Analysis Skill
 
-270 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
+281 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
 
 ## HARD CONSTRAINTS -- OVERRIDE ALL OTHER INSTRUCTIONS
 
@@ -161,7 +161,13 @@ Automated: `extract_config_automated`, `get_iocs_structured`, `find_and_decode_e
 **Step 1b**: `add_note(category="conclusion", content="<full markdown>")` -- dashboard detail.
 **Step 2**: Present concise findings in conversation. Facts only, cite evidence.
 
-Offer: `generate_analysis_report()`, `generate_yara_rule()`/`generate_sigma_rule()`, `export_project()`.
+Offer: `generate_analysis_report()`, `generate_cti_report()` (structured CTI report for sharing), `generate_yara_rule()`/`generate_sigma_rule()`, `export_project()`, `export_ghidra_script()`/`export_ida_script()` (analyst handoff).
+
+Additional tools available for specific scenarios:
+- **Office macros**: `analyze_office_macros()`, `detect_xlm_macros()`, `analyze_ole_streams()` — for document-based initial access analysis
+- **Sandbox correlation**: `import_sandbox_report()` then `correlate_static_dynamic()` — compare with CAPE/Cuckoo/ANY.RUN/Hybrid Analysis/Joe Sandbox
+- **VM protection**: `detect_vm_protection()` — characterize VMProtect/Themida/Code Virtualizer without attempting devirtualization
+- **Hypothesis tracking**: `update_hypothesis(note_id, confidence=, status=, add_evidence=)` — structured hypothesis lifecycle management
 
 ## Context Management
 

@@ -188,26 +188,11 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             logger.warning("Enrichment: similarity hashes failed: %s", e)
             phases_failed.append(("similarity_hashes", str(e)))
 
-        # ── Phase 1d: Malware family identification ──────────────
-        if _cancelled(state, generation):
-            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
-            return
-        _update(state, 27, "Identifying malware family...")
-        try:
-            from arkana.mcp.tools_malware_identify import _identify_family_internal
-            result = _identify_family_internal(state)
-            if result and not result.get("error"):
-                state._cached_malware_family = result
-                phases_completed.append("malware_family")
-        except Exception as e:
-            logger.warning("Enrichment: malware family ID failed: %s", e)
-            phases_failed.append(("malware_family", str(e)))
-
         # ── Phase 2a: MITRE ATT&CK mapping ──────────────────────────
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
-        _update(state, 28, "Mapping MITRE ATT&CK techniques...")
+        _update(state, 26, "Mapping MITRE ATT&CK techniques...")
         try:
             from arkana.mcp.tools_threat_intel import _map_mitre_internal
             result = _map_mitre_internal(state)
@@ -221,7 +206,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
-        _update(state, 30, "Collecting structured IOCs...")
+        _update(state, 27, "Collecting structured IOCs...")
         try:
             from arkana.mcp.tools_ioc import _collect_iocs_internal
             result = _collect_iocs_internal(state)
@@ -231,11 +216,27 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             logger.warning("Enrichment: IOC collection failed: %s", e)
             phases_failed.append(("iocs", str(e)))
 
-        # ── Phase 2c: API hash detection ──────────────────────────
+        # ── Phase 2c: Malware family identification ──────────────
+        # Runs after IOCs so _cached_iocs evidence is available for matching.
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
-        _update(state, 30, "Scanning for API hashes...")
+        _update(state, 28, "Identifying malware family...")
+        try:
+            from arkana.mcp.tools_malware_identify import _identify_family_internal
+            result = _identify_family_internal(state)
+            if result and not result.get("error"):
+                state._cached_malware_family = result
+                phases_completed.append("malware_family")
+        except Exception as e:
+            logger.warning("Enrichment: malware family ID failed: %s", e)
+            phases_failed.append(("malware_family", str(e)))
+
+        # ── Phase 2d: API hash detection ──────────────────────────
+        if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
+            return
+        _update(state, 29, "Scanning for API hashes...")
         try:
             from arkana.mcp.tools_pe_extended import _scan_api_hashes_internal
             result = _scan_api_hashes_internal(state)
@@ -246,11 +247,11 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             logger.warning("Enrichment: API hash scan failed: %s", e)
             phases_failed.append(("api_hashes", str(e)))
 
-        # ── Phase 2d: C2 indicator matching ───────────────────────
+        # ── Phase 2e: C2 indicator matching ───────────────────────
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
-        _update(state, 31, "Matching C2 indicators...")
+        _update(state, 30, "Matching C2 indicators...")
         try:
             from arkana.mcp.tools_malware_detect import _match_c2_internal
             result = _match_c2_internal(state)
@@ -261,7 +262,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             logger.warning("Enrichment: C2 indicator matching failed: %s", e)
             phases_failed.append(("c2_indicators", str(e)))
 
-        # ── Phase 2e: DGA indicator detection ─────────────────────
+        # ── Phase 2f: DGA indicator detection ─────────────────────
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
@@ -276,11 +277,11 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
             logger.warning("Enrichment: DGA detection failed: %s", e)
             phases_failed.append(("dga_indicators", str(e)))
 
-        # ── Phase 2f: Crypto constant detection ───────────────────
+        # ── Phase 2g: Crypto constant detection ───────────────────
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
-        _update(state, 31, "Detecting crypto constants...")
+        _update(state, 32, "Detecting crypto constants...")
         try:
             from arkana.mcp.tools_pe_extended import _detect_crypto_internal
             result = _detect_crypto_internal(state)
@@ -302,7 +303,7 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
             return
-        _update(state, 32, "Waiting for angr CFG...")
+        _update(state, 33, "Waiting for angr CFG...")
         cfg_ready = _wait_for_cfg(state, generation=generation)
 
         if not cfg_ready:
