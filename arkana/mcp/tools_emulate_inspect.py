@@ -87,8 +87,11 @@ class _EmulationSession:
                 return {"error": "Emulation subprocess has exited unexpectedly."}
 
             line = json.dumps(cmd) + "\n"
-            self.proc.stdin.write(line.encode())
-            await self.proc.stdin.drain()
+            try:
+                self.proc.stdin.write(line.encode())
+                await self.proc.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return {"error": "Emulation subprocess pipe broken — session is dead."}
             try:
                 resp_line = await asyncio.wait_for(
                     self.proc.stdout.readline(), timeout=timeout
@@ -341,7 +344,7 @@ async def emulate_and_inspect(
     if shellcode_hex or (not file_path and not shellcode_hex):
         if not shellcode_hex:
             # Use loaded file as shellcode
-            _check_pe_loaded(ctx, "emulate_and_inspect")
+            _check_pe_loaded("emulate_and_inspect")
             file_path = state.filepath
 
         if engine == "qiling":
@@ -441,6 +444,7 @@ async def emulation_read_memory(
     ctx: Context,
     address: str = "",
     length: int = 256,
+    format: str = "hex",
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Read memory from a completed emulation session.
@@ -451,10 +455,12 @@ async def emulation_read_memory(
     Args:
         address: Memory address to read (hex, e.g. "0x401000").
         length: Number of bytes to read (1 to 1MB, default 256).
+        format: "hex" for raw hex dump (default), "disasm" for hex + disassembly.
+            Disassembly requires Capstone (available in Qiling venv).
         session_id: Session to query (uses most recent if empty).
 
     Returns:
-        Hex dump and ASCII representation of the memory region.
+        Hex dump, ASCII representation, and optional disassembly of the memory region.
     """
     mgr = _get_emulation_manager()
     session = await mgr.get_session(session_id or None)
@@ -467,6 +473,7 @@ async def emulation_read_memory(
         "action": "read_memory",
         "address": address,
         "length": length,
+        "format": format,
     })
     if "error" in result:
         return result
@@ -549,3 +556,44 @@ async def emulation_memory_map(
 
     result["session_id"] = session.session_id
     return await _check_mcp_response_size(ctx, result, "emulation_memory_map")
+
+
+@tool_decorator
+async def emulation_write_memory(
+    ctx: Context,
+    address: str = "",
+    hex_bytes: str = "",
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Write bytes to memory in a completed emulation session.
+
+    Writes raw bytes at a virtual address in the emulated process. Useful for
+    patching code, modifying data, or bypassing checks. The emulator must have
+    been started with emulate_and_inspect().
+
+    Args:
+        address: Memory address to write to (hex, e.g. "0x401000").
+        hex_bytes: Hex-encoded bytes to write (e.g. "90909090" for NOPs).
+        session_id: Session to use (uses most recent if empty).
+
+    Returns:
+        Confirmation with address and number of bytes written.
+    """
+    mgr = _get_emulation_manager()
+    session = await mgr.get_session(session_id or None)
+
+    if not address:
+        return {"error": "'address' is required."}
+    if not hex_bytes:
+        return {"error": "'hex_bytes' is required."}
+
+    result = await session.send_command({
+        "action": "write_memory",
+        "address": address,
+        "hex_bytes": hex_bytes,
+    })
+    if "error" in result:
+        return result
+
+    result["session_id"] = session.session_id
+    return result

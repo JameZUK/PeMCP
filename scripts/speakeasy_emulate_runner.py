@@ -17,6 +17,7 @@ Protocol:
     <- {"status": "ok"}
 """
 import json
+import struct
 import sys
 import traceback
 
@@ -180,9 +181,8 @@ def _probe_memory_regions(emu):
     try:
         pe_header = _mem_read(emu, 0x400000, 0x200)
         if pe_header[:2] == b'MZ':
-            import struct
             e_lfanew = struct.unpack_from('<I', pe_header, 0x3C)[0]
-            if e_lfanew < 0x200:
+            if e_lfanew + 0x54 <= len(pe_header):
                 size_of_image = struct.unpack_from('<I', pe_header, e_lfanew + 0x50)[0]
                 if 0 < size_of_image < 0x10000000:
                     probes[0] = (0x400000, size_of_image, "PE image")
@@ -303,7 +303,12 @@ def cmd_emulate_shellcode(cmd):
 
     emulation_exception = None
     try:
-        se.run_shellcode(addr, timeout=timeout_seconds)
+        # Speakeasy's run_shellcode signature varies by version —
+        # some accept timeout= kwarg, others only positional.
+        try:
+            se.run_shellcode(addr, timeout=timeout_seconds)
+        except TypeError:
+            se.run_shellcode(addr)
     except (SystemExit, KeyboardInterrupt):
         raise
     except Exception as e:
@@ -343,8 +348,11 @@ def cmd_read_memory(cmd):
         return {"error": "Memory inspection not available — cannot access Speakeasy emulator internals."}
 
     address = cmd.get("address", "")
-    if isinstance(address, str):
-        address = int(address, 16) if address.startswith(("0x", "0X")) else int(address)
+    try:
+        if isinstance(address, str):
+            address = int(address, 16) if address.startswith(("0x", "0X")) else int(address)
+    except (ValueError, AttributeError):
+        return {"error": f"Invalid address format: {address!r}. Expected hex (0x...) or decimal."}
     length = min(max(1, cmd.get("length", 256)), _MAX_MEMORY_READ)
 
     try:
@@ -427,7 +435,10 @@ def cmd_search_memory(cmd):
         needles.append(("string", pat, pat.encode("utf-8")))
         needles.append(("string_wide", pat, pat.encode("utf-16-le")))
     if search_hex:
-        needles.append(("hex", search_hex, bytes.fromhex(search_hex)))
+        try:
+            needles.append(("hex", search_hex, bytes.fromhex(search_hex)))
+        except ValueError as e:
+            return {"error": f"Invalid hex pattern: {e}"}
 
     if not needles:
         return {"error": "No search patterns provided. Use 'search_patterns' (strings) or 'search_hex'."}
@@ -493,6 +504,52 @@ def cmd_search_memory(cmd):
     }
 
 
+def cmd_write_memory(cmd):
+    """Write bytes to emulated memory."""
+    if _se is None or not _emulation_completed:
+        return {"error": "Emulation has not been run yet. Send 'emulate_pe' or 'emulate_shellcode' first."}
+
+    emu = _get_emu(_se)
+    if emu is None:
+        return {"error": "Memory inspection not available — cannot access Speakeasy emulator internals."}
+
+    address = cmd.get("address", "")
+    try:
+        if isinstance(address, str):
+            address = int(address, 16) if address.startswith(("0x", "0X")) else int(address)
+    except (ValueError, AttributeError):
+        return {"error": f"Invalid address format: {address!r}. Expected hex (0x...) or decimal."}
+
+    hex_bytes = cmd.get("hex_bytes", "")
+    if not hex_bytes or len(hex_bytes) > 2_097_152:  # 2MB hex = 1MB data
+        return {"error": "hex_bytes required and must be <= 2MB hex string"}
+    if len(hex_bytes) % 2 != 0:
+        return {"error": "hex_bytes must have even length"}
+
+    try:
+        data = bytes.fromhex(hex_bytes)
+    except ValueError as e:
+        return {"error": f"Invalid hex: {e}"}
+
+    try:
+        if hasattr(emu, 'mem_write'):
+            emu.mem_write(address, data)
+        else:
+            uc = getattr(emu, 'uc', None) or getattr(emu, '_uc', None)
+            if uc and hasattr(uc, 'mem_write'):
+                uc.mem_write(address, data)
+            else:
+                return {"error": "Memory write not available — unsupported Speakeasy version"}
+    except Exception as e:
+        return {"error": f"Failed to write memory at {_hex(address)}: {e}"}
+
+    return {
+        "status": "ok",
+        "address": _hex(address),
+        "bytes_written": len(data),
+    }
+
+
 def cmd_stop(cmd):
     """Clean up and signal exit."""
     global _se, _emulation_completed
@@ -509,6 +566,7 @@ DISPATCH = {
     "emulate_pe": cmd_emulate_pe,
     "emulate_shellcode": cmd_emulate_shellcode,
     "read_memory": cmd_read_memory,
+    "write_memory": cmd_write_memory,
     "memory_map": cmd_memory_map,
     "search_memory": cmd_search_memory,
     "stop": cmd_stop,

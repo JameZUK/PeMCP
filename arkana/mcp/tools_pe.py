@@ -346,6 +346,17 @@ async def open_file(
         state.cancel_all_background_tasks()
         # Cancel any running enrichment from the previous file
         state._enrichment_cancel.set()
+        # Clean up debug and emulation inspect sessions from previous file
+        try:
+            if hasattr(state, '_debug_manager') and state._debug_manager is not None:
+                state._debug_manager.cleanup_all()
+        except Exception:
+            pass
+        try:
+            if hasattr(state, '_emulation_manager') and state._emulation_manager is not None:
+                state._emulation_manager.cleanup_all()
+        except Exception:
+            pass
         state.close_pe()
         state.reset_angr()
         # M-ST1: Batch state reset under pe_lock to prevent dashboard seeing partial state
@@ -844,6 +855,17 @@ async def open_file(
             pass
         try:
             state._enrichment_cancel.set()
+        except Exception:
+            pass
+        # Clean up debug and emulation inspect sessions on failure
+        try:
+            if hasattr(state, '_debug_manager') and state._debug_manager is not None:
+                state._debug_manager.cleanup_all()
+        except Exception:
+            pass
+        try:
+            if hasattr(state, '_emulation_manager') and state._emulation_manager is not None:
+                state._emulation_manager.cleanup_all()
         except Exception:
             pass
         state.close_pe()

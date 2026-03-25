@@ -174,7 +174,8 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `emulate_shellcode_with_speakeasy` | Shellcode with Speakeasy | `shellcode`, `arch` |
 | `emulate_with_watchpoints` | Emulation with memory/register breakpoints (timeout 300s, partial results on timeout: captured events) | `address`, `watchpoints` |
 | `emulate_and_inspect` | Emulate binary/shellcode and keep session alive for post-emulation memory inspection. Supports both Qiling and Speakeasy engines. Returns behavioral report + session_id | `engine` (qiling/speakeasy), `file_path`, `shellcode_hex`, `architecture`, `timeout_seconds` |
-| `emulation_read_memory` | Read memory from a completed emulation session (max 1MB) | `address`, `length`, `session_id` |
+| `emulation_read_memory` | Read memory from a completed emulation session (max 1MB). `format="disasm"` adds Capstone disassembly | `address`, `length`, `format`, `session_id` |
+| `emulation_write_memory` | Write bytes to emulated memory for patching | `address`, `hex_bytes`, `session_id` |
 | `emulation_search_memory` | Search emulated memory for string (UTF-8+UTF-16LE) or hex patterns | `search_patterns`, `search_hex`, `context_bytes`, `limit`, `session_id` |
 | `emulation_memory_map` | Get full memory map of the emulated process (regions, permissions, labels) | `session_id` |
 | `emulation_session_status` | List all active emulation inspect sessions | — |

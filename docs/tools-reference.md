@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **260 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **270 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -380,14 +380,15 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 
 > **Note:** Debug sessions use the same isolated Qiling venv (`/app/qiling-venv`) as the fire-and-forget emulation tools. Sessions time out after 30 minutes of inactivity (`ARKANA_DEBUG_SESSION_TTL`). Each execution command has a 5-minute timeout (`ARKANA_DEBUG_COMMAND_TIMEOUT`). When the timeout fires, the session is **paused, not killed** — the runner calls `emu_stop()` (Unicorn's thread-safe stop) to halt emulation while preserving all CPU state, memory, and hooks. You can inspect the paused session with `debug_read_state`/`debug_read_memory`/`debug_search_memory`, then resume with `debug_continue`. Emulation fidelity limitations apply — complex anti-emulation, threading, and some Windows APIs may not work correctly.
 
-## Post-Emulation Memory Inspection (6 tools)
+## Post-Emulation Memory Inspection (7 tools)
 
 Persistent emulation sessions that keep the Qiling or Speakeasy subprocess alive after `run()` completes. Unlike fire-and-forget emulation tools, these allow unlimited memory queries on the same emulation state without re-running the binary.
 
 | Tool | Description |
 |------|-------------|
 | `emulate_and_inspect` | Emulate a binary or shellcode with Qiling or Speakeasy, keep the session alive. Returns behavioral report + `session_id` for subsequent memory queries. |
-| `emulation_read_memory` | Read raw bytes at a virtual address in the emulated process (max 1MB). |
+| `emulation_read_memory` | Read raw bytes at a virtual address (max 1MB). Supports `format="disasm"` for Capstone disassembly. |
+| `emulation_write_memory` | Write bytes to memory at a virtual address. Useful for patching code or modifying data. |
 | `emulation_search_memory` | Search all mapped memory regions for string (UTF-8 + UTF-16LE) or hex patterns. |
 | `emulation_memory_map` | List all mapped memory regions with addresses, sizes, permissions, and labels. |
 | `emulation_session_status` | List all active emulation inspect sessions with metadata. |

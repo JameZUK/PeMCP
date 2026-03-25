@@ -40,15 +40,22 @@ from qiling import Qiling  # noqa: E402
 from qiling.const import QL_VERBOSE  # noqa: E402
 
 try:
-    from qiling.const import QL_INTERCEPT  # noqa: E402
+    from capstone import (  # noqa: E402
+        Cs, CS_ARCH_X86, CS_ARCH_ARM, CS_ARCH_ARM64, CS_ARCH_MIPS,
+        CS_MODE_32, CS_MODE_64, CS_MODE_ARM, CS_MODE_MIPS32,
+        CS_MODE_LITTLE_ENDIAN,
+    )
+    _CAPSTONE_AVAILABLE = True
 except ImportError:
-    QL_INTERCEPT = None
+    _CAPSTONE_AVAILABLE = False
 
 # ---------------------------------------------------------------------------
 #  Module state — persists across commands
 # ---------------------------------------------------------------------------
 
 _ql = None               # Qiling instance (kept alive after emulation)
+_cs = None               # Capstone disassembler instance
+_arch = ""               # Detected architecture string
 _staged_path = None       # Staged binary path for cleanup
 _emulation_completed = False
 _dll_warning = None
@@ -56,6 +63,24 @@ _dll_warning = None
 _MAX_MEMORY_READ = 1_048_576   # 1MB
 _MAX_SEARCH_MATCHES = 100
 _DEFAULT_CONTEXT_BYTES = 32
+_MAX_DISASM_INSTRUCTIONS = 100
+
+
+def _init_capstone(arch):
+    """Initialize Capstone disassembler for the given architecture."""
+    global _cs
+    if not _CAPSTONE_AVAILABLE:
+        _cs = None
+        return
+    arch_map = {
+        "x86":   (CS_ARCH_X86, CS_MODE_32),
+        "x8664": (CS_ARCH_X86, CS_MODE_64),
+        "arm":   (CS_ARCH_ARM, CS_MODE_ARM),
+        "arm64": (CS_ARCH_ARM64, CS_MODE_LITTLE_ENDIAN),
+        "mips":  (CS_ARCH_MIPS, CS_MODE_MIPS32 | CS_MODE_LITTLE_ENDIAN),
+    }
+    cs_arch, cs_mode = arch_map.get(arch, (CS_ARCH_X86, CS_MODE_32))
+    _cs = Cs(cs_arch, cs_mode)
 
 
 # ---------------------------------------------------------------------------
@@ -64,7 +89,7 @@ _DEFAULT_CONTEXT_BYTES = 32
 
 def cmd_emulate_binary(cmd):
     """Full binary emulation — keeps Qiling alive for post-emulation inspection."""
-    global _ql, _staged_path, _emulation_completed, _dll_warning
+    global _ql, _cs, _arch, _staged_path, _emulation_completed, _dll_warning
 
     if _emulation_completed:
         return {"error": "Emulation already completed. Use memory inspection commands, "
@@ -85,6 +110,8 @@ def cmd_emulate_binary(cmd):
         return init_result
 
     _ql = ql
+    _arch = arch
+    _init_capstone(arch)
     _staged_path = staged_path
     _dll_warning = init_result  # dll_warning is returned as init_result on success
 
@@ -164,7 +191,7 @@ def cmd_emulate_binary(cmd):
 
 def cmd_emulate_shellcode(cmd):
     """Shellcode emulation — keeps Qiling alive for post-emulation inspection."""
-    global _ql, _emulation_completed, _dll_warning
+    global _ql, _cs, _arch, _emulation_completed, _dll_warning
 
     if _emulation_completed:
         return {"error": "Emulation already completed. Use memory inspection commands, "
@@ -210,6 +237,8 @@ def cmd_emulate_shellcode(cmd):
         return {"error": err_msg}
 
     _ql = ql
+    _arch = arch
+    _init_capstone(arch)
     _setup_api_hooks(ql, os_type, api_calls, limit)
 
     emulation_exception = None
@@ -247,27 +276,48 @@ def cmd_read_memory(cmd):
         return {"error": "Emulation has not been run yet. Send 'emulate_binary' or 'emulate_shellcode' first."}
 
     address = cmd.get("address", "")
-    if isinstance(address, str):
-        address = int(address, 16) if address.startswith(("0x", "0X")) else int(address)
+    try:
+        if isinstance(address, str):
+            address = int(address, 16) if address.startswith(("0x", "0X")) else int(address)
+    except (ValueError, AttributeError):
+        return {"error": f"Invalid address format: {address!r}. Expected hex (0x...) or decimal."}
     length = min(max(1, cmd.get("length", 256)), _MAX_MEMORY_READ)
+
+    fmt = cmd.get("format", "hex")
 
     try:
         data = bytes(_ql.mem.read(address, length))
     except Exception as e:
         return {"error": f"Memory read failed at {_hex(address)}: {e}"}
 
-    # Build ASCII representation
-    ascii_repr = ""
-    for b in data:
-        ascii_repr += chr(b) if 32 <= b < 127 else "."
-
-    return {
+    result = {
         "status": "ok",
         "address": _hex(address),
         "length": len(data),
         "hex": data.hex(),
-        "ascii": ascii_repr,
     }
+
+    if fmt == "disasm" and _cs is not None:
+        insns = []
+        for insn in _cs.disasm(data, address):
+            insns.append({
+                "address": _hex(insn.address),
+                "mnemonic": insn.mnemonic,
+                "op_str": insn.op_str,
+                "bytes": insn.bytes.hex(),
+            })
+            if len(insns) >= _MAX_DISASM_INSTRUCTIONS:
+                break
+        result["disassembly"] = insns
+
+    # Build ASCII representation
+    ascii_repr = ""
+    for b in data[:1024]:
+        ascii_repr += chr(b) if 32 <= b < 127 else "."
+    if ascii_repr:
+        result["ascii"] = ascii_repr
+
+    return result
 
 
 def cmd_memory_map(cmd):
@@ -317,7 +367,10 @@ def cmd_search_memory(cmd):
         needles.append(("string", pat, pat.encode("utf-8")))
         needles.append(("string_wide", pat, pat.encode("utf-16-le")))
     if search_hex:
-        needles.append(("hex", search_hex, bytes.fromhex(search_hex)))
+        try:
+            needles.append(("hex", search_hex, bytes.fromhex(search_hex)))
+        except ValueError as e:
+            return {"error": f"Invalid hex pattern: {e}"}
 
     if not needles:
         return {"error": "No search patterns provided. Use 'search_patterns' (strings) or 'search_hex'."}
@@ -372,6 +425,41 @@ def cmd_search_memory(cmd):
     }
 
 
+def cmd_write_memory(cmd):
+    """Write bytes to emulated memory."""
+    if _ql is None or not _emulation_completed:
+        return {"error": "Emulation has not been run yet. Send 'emulate_binary' or 'emulate_shellcode' first."}
+
+    address = cmd.get("address", "")
+    try:
+        if isinstance(address, str):
+            address = int(address, 16) if address.startswith(("0x", "0X")) else int(address)
+    except (ValueError, AttributeError):
+        return {"error": f"Invalid address format: {address!r}. Expected hex (0x...) or decimal."}
+
+    hex_bytes = cmd.get("hex_bytes", "")
+    if not hex_bytes or len(hex_bytes) > 2_097_152:  # 2MB hex = 1MB data
+        return {"error": "hex_bytes required and must be <= 2MB hex string"}
+    if len(hex_bytes) % 2 != 0:
+        return {"error": "hex_bytes must have even length"}
+
+    try:
+        data = bytes.fromhex(hex_bytes)
+    except ValueError as e:
+        return {"error": f"Invalid hex: {e}"}
+
+    try:
+        _ql.mem.write(address, data)
+    except Exception as e:
+        return {"error": f"Failed to write memory at {_hex(address)}: {e}"}
+
+    return {
+        "status": "ok",
+        "address": _hex(address),
+        "bytes_written": len(data),
+    }
+
+
 def cmd_stop(cmd):
     """Clean up and signal exit."""
     global _ql, _staged_path, _emulation_completed
@@ -390,6 +478,7 @@ DISPATCH = {
     "emulate_binary": cmd_emulate_binary,
     "emulate_shellcode": cmd_emulate_shellcode,
     "read_memory": cmd_read_memory,
+    "write_memory": cmd_write_memory,
     "memory_map": cmd_memory_map,
     "search_memory": cmd_search_memory,
     "stop": cmd_stop,

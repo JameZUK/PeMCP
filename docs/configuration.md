@@ -140,12 +140,14 @@ Beyond the cache and API key settings above, Arkana supports several environment
 
 ### Emulation Inspect Sessions
 
-| Variable | Default | Description |
+These are compile-time constants in `arkana/constants.py` (not overridable via environment variables):
+
+| Constant | Default | Description |
 |---|---|---|
-| `ARKANA_MAX_EMULATION_SESSIONS` | `3` | Maximum concurrent emulation inspect sessions. When reached, the oldest session is evicted. |
-| `ARKANA_EMULATION_SESSION_TTL` | `1800` | Idle timeout (seconds) for emulation sessions. Sessions inactive for this long are automatically cleaned up. |
-| `ARKANA_EMULATION_COMMAND_TIMEOUT` | `60` | Timeout (seconds) per memory inspection command (read_memory, search_memory, memory_map). |
-| `ARKANA_EMULATION_RUN_TIMEOUT` | `300` | Timeout (seconds) for the initial emulation run. |
+| `MAX_EMULATION_SESSIONS` | `3` | Maximum concurrent emulation inspect sessions. When reached, the oldest session is evicted. |
+| `EMULATION_SESSION_TTL` | `1800` | Idle timeout (seconds) for emulation sessions. Sessions inactive for this long are automatically cleaned up. |
+| `EMULATION_COMMAND_TIMEOUT` | `60` | Timeout (seconds) per memory inspection command (read_memory, search_memory, memory_map). |
+| `EMULATION_RUN_TIMEOUT` | `300` | Timeout (seconds) for the initial emulation run. |
 
 ### Auto-Enrichment
 

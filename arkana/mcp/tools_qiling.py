@@ -531,6 +531,7 @@ async def qiling_resolve_api_hashes(
     analyzing shellcode and malware that dynamically resolves APIs via hashing.
 
     Supports multiple hash algorithms commonly found in malware:
+    - auto: Try ALL algorithms and return any matches (best when algorithm is unknown)
     - ror13: Rotate-right-13 (most common in shellcode)
     - crc32: CRC32 hash
     - djb2: DJB2 hash (Daniel J. Bernstein)
@@ -542,7 +543,8 @@ async def qiling_resolve_api_hashes(
 
     Args:
         hash_values: List of hash values to resolve (hex strings, e.g. ['0x6A4ABC5B']).
-        hash_algorithm: Hash algorithm to use ('ror13', 'crc32', 'djb2', 'fnv1a').
+        hash_algorithm: Hash algorithm to use ('auto', 'ror13', 'crc32', 'djb2', 'fnv1a').
+            'auto' tries all algorithms and returns the best matches.
         seed: Custom seed/initial value for the hash algorithm. None uses standard
             default (e.g. 5381 for djb2). Use for malware variants with modified seeds.
         case_handling: Transform API names before hashing: 'lower', 'upper', or None.
@@ -577,12 +579,58 @@ async def qiling_resolve_api_hashes(
             logger.debug("qiling_resolve_api_hashes: KB lookup failed for '%s'",
                          family_hint, exc_info=True)
 
+    if not hash_values:
+        return {"error": "No hash values provided. Pass a list of hex hash values to resolve."}
+
+    # --- Auto mode: try all algorithms using bundled DB (no subprocess needed) ---
+    if hash_algorithm == "auto":
+        from arkana.mcp._helpers_api_hashes import (
+            get_all_api_names, build_hash_lookup, HASH_ALGORITHMS, DEFAULT_SEEDS,
+        )
+        await ctx.info(f"Auto-resolving {len(hash_values)} hashes — trying all {len(HASH_ALGORITHMS)} algorithms...")
+        api_names = get_all_api_names(include_extended=True)
+
+        target_hashes = set()
+        for hv in hash_values:
+            target_hashes.add(int(hv, 0) if isinstance(hv, str) else int(hv))
+
+        all_resolved = []
+        resolved_set = set()  # Track which hashes have been resolved
+        for algo_name in HASH_ALGORITHMS:
+            algo_seed = seed if seed is not None else DEFAULT_SEEDS.get(algo_name)
+            for ch in (case_handling, None) if case_handling else (None, "lower"):
+                lookup = build_hash_lookup(api_names, algo_name,
+                                           seed=algo_seed, case_handling=ch)
+                for h in target_hashes:
+                    if h in lookup and h not in resolved_set:
+                        all_resolved.append({
+                            "hash_value": hex(h),
+                            "function": lookup[h],
+                            "algorithm": algo_name,
+                            "seed": algo_seed,
+                            "case_handling": ch,
+                            "source": "bundled_db_auto",
+                        })
+                        resolved_set.add(h)
+
+        unresolved = [hex(h) for h in target_hashes if h not in resolved_set]
+        result = {
+            "status": "completed",
+            "hash_algorithm": "auto",
+            "algorithms_tried": list(HASH_ALGORITHMS.keys()),
+            "total_input": len(target_hashes),
+            "total_resolved": len(all_resolved),
+            "total_unresolved": len(unresolved),
+            "resolved": all_resolved,
+            "unresolved": unresolved,
+        }
+        await ctx.report_progress(100, 100)
+        return await _check_mcp_response_size(ctx, result, "qiling_resolve_api_hashes")
+
+    # --- Single algorithm mode (original flow) ---
     await ctx.info(f"Resolving {len(hash_values)} API hashes ({hash_algorithm}"
                    f"{f', seed={seed}' if seed is not None else ''})")
     _check_qiling("qiling_resolve_api_hashes")
-
-    if not hash_values:
-        return {"error": "No hash values provided. Pass a list of hex hash values to resolve."}
 
     # Build the IPC command with optional seed/case
     ipc_cmd = {

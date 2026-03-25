@@ -264,10 +264,10 @@ MAX_DEBUG_STUB_WRITE_SIZE = 1024     # Max bytes per stub write operation
 MAX_DEBUG_STUB_WRITES = 8            # Max write operations per stub
 
 # --- Emulation Inspect Session Constants ---
-MAX_EMULATION_SESSIONS = 3              # Max concurrent emulation inspect sessions (env: ARKANA_MAX_EMULATION_SESSIONS)
-EMULATION_SESSION_TTL = 1800            # 30-minute idle timeout (env: ARKANA_EMULATION_SESSION_TTL)
-EMULATION_COMMAND_TIMEOUT = 60          # Per-command timeout for memory ops (env: ARKANA_EMULATION_COMMAND_TIMEOUT)
-EMULATION_RUN_TIMEOUT = 300             # Timeout for the emulation run itself (env: ARKANA_EMULATION_RUN_TIMEOUT)
+MAX_EMULATION_SESSIONS = 3              # Max concurrent emulation inspect sessions
+EMULATION_SESSION_TTL = 1800            # 30-minute idle timeout
+EMULATION_COMMAND_TIMEOUT = 60          # Per-command timeout for memory ops
+EMULATION_RUN_TIMEOUT = 300             # Timeout for the emulation run itself
 MAX_EMULATION_MEMORY_READ = 1_048_576   # 1MB max memory read per call
 MAX_EMULATION_SEARCH_MATCHES = 100      # Max memory search matches returned
 EMULATION_SEARCH_CONTEXT_BYTES = 32     # Context bytes around search matches
