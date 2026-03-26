@@ -967,6 +967,8 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
         if progress_callback:
             try:
                 progress_callback(step, total, message)
+            except RuntimeError:
+                raise  # Allow cancellation to propagate
             except Exception as e:
                 logger.debug("Progress reporting failed: %s", e)
                 pass  # Never let progress reporting break the analysis
@@ -1128,6 +1130,8 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                 pool.submit(_timed_safe_parse, key, func, *args): key
                 for key, func, args in _parallel_tasks
             }
+            _completed_count = 0
+            _total_parallel = len(futures)
             for future in concurrent.futures.as_completed(futures):
                 key = futures[future]
                 timeout = _task_timeouts.get(key)
@@ -1146,6 +1150,10 @@ def _parse_pe_to_dict(pe: pefile.PE, filepath: str,
                     }
                     _timing[key] = float(timeout) if timeout else 0.0
                     _abandoned_futures.append((future, key))
+                _completed_count += 1
+                # Report intermediate progress (40-85% range) for stall detection
+                _report(40 + int(45 * _completed_count / _total_parallel), 100,
+                        f"Scan {_completed_count}/{_total_parallel} complete ({key})...")
         finally:
             pool.shutdown(wait=False, cancel_futures=True)
 

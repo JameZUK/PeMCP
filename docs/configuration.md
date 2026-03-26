@@ -109,6 +109,8 @@ Beyond the cache and API key settings above, Arkana supports several environment
 | `ARKANA_OVERTIME_CHECK_INTERVAL` | `60` | How often (seconds) to check progress during overtime. |
 | `ARKANA_OVERTIME_STALL_KILL` | `300` | Kill the task after this many seconds (5 min) of zero progress during overtime. |
 | `ARKANA_OVERTIME_MAX_RUNTIME` | `21600` | Absolute ceiling (6 hours) — tasks are killed regardless of progress after this. |
+| `ARKANA_PE_ANALYSIS_SOFT_TIMEOUT` | `300` | Soft timeout (5 min) for PE analysis in `open_file`. After this, the task enters OVERTIME status but keeps running if making progress. Set to `0` to disable and use hard timeout instead. |
+| `ARKANA_PE_ANALYSIS_MAX_RUNTIME` | `3600` | Absolute ceiling (1 hour) for PE analysis — killed regardless of progress after this. |
 
 ### Concurrency
 

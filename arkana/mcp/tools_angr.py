@@ -581,7 +581,16 @@ async def decompile_function_with_angr(
                     result["note"] = " | ".join(notes)
                 return result
             except Exception as e:
-                return {"error": f"Decompilation failed: {e}"}
+                err_msg = str(e)
+                result = {"error": f"Decompilation failed: {err_msg}"}
+                if "pickle" in err_msg or "CData" in err_msg:
+                    result["suggested_tool"] = "get_annotated_disassembly"
+                    result["hint"] = (
+                        "This function triggers an angr cffi pickle error that cannot "
+                        "be worked around. Use get_annotated_disassembly(address=...) "
+                        "to view the assembly instead."
+                    )
+                return result
         finally:
             state._decompile_on_demand_count = max(0, state._decompile_on_demand_count - 1)
             state._decompile_lock.release()
@@ -2309,7 +2318,15 @@ async def batch_decompile(
                         result["note"] = DECOMPILE_FALLBACK_NOTE
                     return result
                 except Exception as e:
-                    return {"error": f"Decompilation failed for {hex(t_addr)}: {e}"}
+                    err_msg = str(e)
+                    r = {"error": f"Decompilation failed for {hex(t_addr)}: {err_msg}"}
+                    if "pickle" in err_msg or "CData" in err_msg:
+                        r["suggested_tool"] = "get_annotated_disassembly"
+                        r["hint"] = (
+                            "This function triggers an angr cffi pickle error. "
+                            "Use get_annotated_disassembly(address=...) instead."
+                        )
+                    return r
             finally:
                 state._decompile_on_demand_count = max(0, state._decompile_on_demand_count - 1)
                 state._decompile_lock.release()

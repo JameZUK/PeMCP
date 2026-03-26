@@ -255,6 +255,17 @@ def _safe_decompile(project, func, cfg_model):
             try:
                 return project.analyses.Decompiler(func, cfg=None), True
             except Exception as fallback_err:
+                fallback_str = str(fallback_err)
+                if "pickle" in fallback_str or "CData" in fallback_str:
+                    logger.warning(
+                        "Decompiler cfg=None fallback also hit pickle error for %s: %s",
+                        func.name, fallback_str,
+                    )
+                    raise RuntimeError(
+                        f"Decompiler cffi pickle error on both attempts for {func.name}. "
+                        "This function contains VEX IR data that angr cannot copy internally. "
+                        "Use get_annotated_disassembly() instead for this function."
+                    ) from e
                 raise RuntimeError(
                     f"Decompiler failed (original: pickle error, "
                     f"fallback: {fallback_err})"

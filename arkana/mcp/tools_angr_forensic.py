@@ -464,11 +464,15 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
     or analyze_entropy_by_offset() for region-level entropy detail.
     """
     await ctx.info("Detecting packing/obfuscation")
-    _check_angr_ready("detect_packing")
+    _check_angr_ready("detect_packing", require_cfg=False)
     _bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
+    # Cap per-section entropy load to avoid OOM on large sections
+    _MAX_ENTROPY_SECTION_BYTES = 10 * 1024 * 1024  # 10 MB
+
     def _detect():
-        _ensure_project_and_cfg()
+        if state.angr_project is None:
+            return {"error": "No angr project loaded. Open a file first."}
         loader = state.angr_project.loader
 
         indicators = []
@@ -479,7 +483,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
         # 1. Section entropy analysis
         for section in getattr(loader.main_object, 'sections', []):
             try:
-                data = loader.memory.load(section.min_addr, section.memsize)
+                load_size = min(section.memsize, _MAX_ENTROPY_SECTION_BYTES)
+                data = loader.memory.load(section.min_addr, load_size)
                 if len(data) > 0:
                     entropy = shannon_entropy(data)
 

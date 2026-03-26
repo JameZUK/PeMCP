@@ -4,6 +4,8 @@ import json
 import asyncio
 import datetime
 import hashlib
+import time
+import threading
 from collections import deque
 from dataclasses import dataclass, field
 
@@ -23,9 +25,14 @@ from arkana.mcp._format_helpers import detect_format_from_magic, detect_format_e
 from arkana.parsers.pe import _parse_pe_to_dict, _parse_file_hashes
 from arkana.parsers.strings import _extract_strings_from_data, _perform_unified_string_sifting
 
-from arkana.constants import MAX_TOOL_LIMIT as _MAX_LIMIT, INTEGRITY_FLAGGED_TIMEOUT_FACTOR, MAX_ARTIFACT_FILE_SIZE, DEFAULT_MAX_FILE_SIZE_MB
+from arkana.constants import (
+    MAX_TOOL_LIMIT as _MAX_LIMIT, INTEGRITY_FLAGGED_TIMEOUT_FACTOR,
+    MAX_ARTIFACT_FILE_SIZE, DEFAULT_MAX_FILE_SIZE_MB,
+    PE_ANALYSIS_SOFT_TIMEOUT, PE_ANALYSIS_MAX_RUNTIME,
+    OVERTIME_CHECK_INTERVAL, OVERTIME_STALL_KILL,
+)
 from arkana.integrity import check_file_integrity as _check_integrity_fn
-from arkana.state import MAX_TOOL_HISTORY
+from arkana.state import MAX_TOOL_HISTORY, TASK_RUNNING, TASK_OVERTIME, TASK_COMPLETED, TASK_FAILED
 from arkana.parsers.floss import _parse_floss_analysis
 from arkana.background import _console_heartbeat_loop, _update_progress, start_angr_background as start_angr_background_fn
 from arkana.mcp._progress_bridge import ProgressBridge
@@ -417,6 +424,7 @@ async def open_file(
         state._enrichment_cancel.clear()
 
     _loaded_from_cache = False
+    _pe_task_registered = False
 
     acquired = False
     try:
@@ -715,6 +723,33 @@ async def open_file(
                 _open_bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
                 _progress_cb = _open_bridge.make_callback(base_pct=15, range_pct=80)
 
+                # --- Register PE analysis as a tracked task with overtime support ---
+                _pe_task_id = "pe-analysis"
+                _pe_cancel = threading.Event()
+                _pe_task_start = time.time()
+                _pe_task_registered = True
+                _captured_gen = state._analysis_generation
+                state.register_task_infra(_pe_task_id, _pe_cancel)
+                state.set_task(_pe_task_id, {
+                    "status": TASK_RUNNING,
+                    "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "created_at_epoch": _pe_task_start,
+                    "progress_percent": 15,
+                    "progress_message": "PE analysis starting...",
+                    "last_progress_epoch": _pe_task_start,
+                })
+
+                # Compound callback: pushes MCP progress + updates task registry
+                # for stall detection, and checks cancel event for responsive cancellation.
+                def _pe_progress_cb(step, total, message):
+                    if _pe_cancel.is_set():
+                        raise RuntimeError("PE analysis cancelled.")
+                    _progress_cb(step, total, message)
+                    mapped = 15 + int(step * 80 / max(total, 1))
+                    state.update_task(_pe_task_id, progress_percent=mapped,
+                                      progress_message=message,
+                                      last_progress_epoch=time.time())
+
                 # Auto-resolve default YARA rules so initial open_file includes them
                 from arkana.resources import get_default_yara_rules_path
                 _default_yara = get_default_yara_rules_path()
@@ -733,29 +768,88 @@ async def open_file(
                         floss_functions_to_analyze_arg=[],
                         floss_quiet_mode_arg=True,
                         analyses_to_skip=skip_list,
-                        progress_callback=_progress_cb,
+                        progress_callback=_pe_progress_cb,
                     )
 
+                # --- Soft/overtime timeout for PE analysis ---
                 _base_timeout = _safe_env_int("ARKANA_ANALYSIS_TIMEOUT", _safe_env_int("PEMCP_ANALYSIS_TIMEOUT", 600))
+                _soft_timeout = _safe_env_int("ARKANA_PE_ANALYSIS_SOFT_TIMEOUT", PE_ANALYSIS_SOFT_TIMEOUT)
                 if _integrity["status"] in ("corrupt", "partial"):
-                    _PE_ANALYSIS_TIMEOUT = max(60, int(_base_timeout * INTEGRITY_FLAGGED_TIMEOUT_FACTOR))
-                    await ctx.warning(f"Using reduced timeout ({_PE_ANALYSIS_TIMEOUT}s) for flagged file.")
+                    _soft_timeout = max(30, int(_soft_timeout * INTEGRITY_FLAGGED_TIMEOUT_FACTOR))
+                    _base_timeout = max(60, int(_base_timeout * INTEGRITY_FLAGGED_TIMEOUT_FACTOR))
+                    await ctx.warning(f"Using reduced timeouts (soft: {_soft_timeout}s) for flagged file.")
+
+                if _soft_timeout <= 0:
+                    # Backward compat: soft_timeout disabled → old single hard timeout
+                    try:
+                        _pe_result = await asyncio.wait_for(
+                            asyncio.to_thread(_run_analysis),
+                            timeout=_base_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        raise RuntimeError(
+                            f"[open_file] PE analysis timed out after {_base_timeout}s. "
+                            "The file may be malformed or excessively complex. "
+                            "Set ARKANA_PE_ANALYSIS_SOFT_TIMEOUT to enable progress-adaptive "
+                            "overtime, or ARKANA_ANALYSIS_TIMEOUT to increase the hard limit."
+                        )
                 else:
-                    _PE_ANALYSIS_TIMEOUT = _base_timeout
-                try:
-                    _pe_result = await asyncio.wait_for(
-                        asyncio.to_thread(_run_analysis),
-                        timeout=_PE_ANALYSIS_TIMEOUT,
-                    )
-                    with state._pe_lock:
-                        state.pe_data = _pe_result
-                        state._pe_data_shared = False
-                except asyncio.TimeoutError:
-                    raise RuntimeError(
-                        f"[open_file] PE analysis timed out after {_PE_ANALYSIS_TIMEOUT}s. "
-                        "The file may be malformed or excessively complex. "
-                        "Set ARKANA_ANALYSIS_TIMEOUT env var to increase the limit."
-                    )
+                    _task_future = asyncio.ensure_future(asyncio.to_thread(_run_analysis))
+
+                    # Phase 1: wait for soft timeout
+                    _done, _ = await asyncio.wait({_task_future}, timeout=_soft_timeout)
+                    if _done:
+                        _pe_result = _task_future.result()
+                    else:
+                        # Phase 2: overtime loop
+                        state.update_task(_pe_task_id, status=TASK_OVERTIME,
+                                          overtime_since_epoch=time.time(),
+                                          progress_message=f"Overtime — soft timeout ({_soft_timeout}s) exceeded, still running...")
+                        await ctx.warning(f"PE analysis exceeded {_soft_timeout}s soft timeout. Still running (making progress)...")
+
+                        _check_interval = _safe_env_int("ARKANA_OVERTIME_CHECK_INTERVAL", OVERTIME_CHECK_INTERVAL, min_val=5)
+                        _stall_kill = _safe_env_int("ARKANA_OVERTIME_STALL_KILL", OVERTIME_STALL_KILL, min_val=10)
+                        _max_runtime = _safe_env_int("ARKANA_PE_ANALYSIS_MAX_RUNTIME", PE_ANALYSIS_MAX_RUNTIME, min_val=60)
+
+                        while True:
+                            _done, _ = await asyncio.wait({_task_future}, timeout=_check_interval)
+                            if _done:
+                                _pe_result = _task_future.result()
+                                break
+
+                            if _pe_cancel.is_set():
+                                raise RuntimeError("[open_file] PE analysis was cancelled.")
+                            if state._analysis_generation != _captured_gen:
+                                raise RuntimeError("[open_file] File was switched during PE analysis.")
+
+                            _total_elapsed = time.time() - _pe_task_start
+                            if _total_elapsed >= _max_runtime:
+                                raise RuntimeError(
+                                    f"[open_file] PE analysis exceeded absolute max runtime ({int(_max_runtime)}s). "
+                                    "Set ARKANA_PE_ANALYSIS_MAX_RUNTIME to increase."
+                                )
+
+                            # Stall detection
+                            _task_info = state.get_task(_pe_task_id)
+                            _last_prog = _task_info.get("last_progress_epoch", _pe_task_start) if _task_info else _pe_task_start
+                            _stalled_for = time.time() - _last_prog
+                            if _stalled_for >= _stall_kill:
+                                raise RuntimeError(
+                                    f"[open_file] PE analysis stalled for {int(_stalled_for)}s with no progress. "
+                                    f"Total runtime: {int(_total_elapsed)}s. "
+                                    "Set ARKANA_PE_ANALYSIS_SOFT_TIMEOUT or ARKANA_PE_ANALYSIS_MAX_RUNTIME to adjust."
+                                )
+
+                            state.update_task(_pe_task_id,
+                                              progress_message=f"Overtime ({int(_total_elapsed)}s elapsed, progressing...)")
+
+                with state._pe_lock:
+                    state.pe_data = _pe_result
+                    state._pe_data_shared = False
+                state.update_task(_pe_task_id, status=TASK_COMPLETED,
+                                  progress_percent=100, progress_message="PE analysis complete.")
+                state.unregister_task_infra(_pe_task_id)
+                _pe_task_registered = False
 
                 # Rank strings with StringSifter (PE mode)
                 await asyncio.to_thread(_perform_unified_string_sifting, state.pe_data)
@@ -859,6 +953,18 @@ async def open_file(
         # Clean up on failure — close any PE object that was created to
         # prevent resource leaks, then preserve an error record so clients
         # can distinguish "no file ever loaded" from "last open attempt failed".
+        # Clean up PE analysis task if it was registered
+        if _pe_task_registered:
+            try:
+                # Don't overwrite "Aborted by user" if abort_background_task was called
+                _pe_task_info = state.get_task("pe-analysis")
+                if not (_pe_task_info and _pe_task_info.get("aborted")):
+                    state.update_task("pe-analysis", status=TASK_FAILED,
+                                      error=str(e)[:200],
+                                      progress_message=f"Failed: {str(e)[:200]}")
+                state.unregister_task_infra("pe-analysis")
+            except Exception:
+                pass
         # Cancel ALL background tasks (enrichment, FLOSS, angr, etc.) on failure
         try:
             state.cancel_all_background_tasks()
