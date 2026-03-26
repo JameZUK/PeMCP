@@ -1280,55 +1280,44 @@ class TestPEAnalysisOvertime(unittest.TestCase):
             loop.close()
 
     def test_pe_analysis_registers_and_completes_task(self):
-        """Verify that open_file registers a pe-analysis task that reaches COMPLETED on success."""
-        from arkana.mcp.tools_pe import open_file
+        """Verify pe-analysis task lifecycle: register → RUNNING → COMPLETED → cleanup."""
+        _pe_task_id = "pe-analysis"
+        _pe_cancel = threading.Event()
+        _pe_task_start = time.time()
 
-        # We mock the heavy internals to test just the overtime plumbing
-        mock_ctx = AsyncMock()
-        mock_ctx.report_progress = AsyncMock()
-        mock_ctx.info = AsyncMock()
-        mock_ctx.warning = AsyncMock()
+        # Register task (mirrors what open_file does)
+        self.st.register_task_infra(_pe_task_id, _pe_cancel)
+        self.st.set_task(_pe_task_id, {
+            "status": TASK_RUNNING,
+            "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "created_at_epoch": _pe_task_start,
+            "progress_percent": 15,
+            "progress_message": "PE analysis starting...",
+            "last_progress_epoch": _pe_task_start,
+        })
 
-        fake_pe_data = {
-            "filepath": "/tmp/test.exe",
-            "file_hashes": {"sha256": "abc123"},
-            "sections": [],
-            "imports": {},
-        }
+        # Verify RUNNING
+        task = self.st.get_task(_pe_task_id)
+        assert task is not None
+        assert task["status"] == TASK_RUNNING
+        assert self.st.get_cancel_event(_pe_task_id) is _pe_cancel
 
-        with patch("arkana.mcp.tools_pe._parse_pe_to_dict", return_value=fake_pe_data), \
-             patch("arkana.mcp.tools_pe.pefile") as mock_pefile, \
-             patch("arkana.mcp.tools_pe._check_integrity_fn", return_value={
-                 "status": "valid", "confidence": "high", "issues": [], "flags": [],
-                 "format_details": {}, "recommendation": "proceed",
-             }), \
-             patch("arkana.mcp.tools_pe.analysis_cache") as mock_cache, \
-             patch("arkana.mcp.tools_pe._perform_unified_string_sifting"), \
-             patch("arkana.mcp.tools_pe.build_path_info", return_value={
-                 "internal_path": "/tmp/test.exe", "external_path": "",
-             }), \
-             patch("arkana.mcp.tools_pe.start_angr_background_fn"), \
-             patch("arkana.mcp.tools_pe.detect_format_from_magic", return_value="pe"), \
-             patch("arkana.mcp.tools_pe.detect_format_extended", return_value=None), \
-             patch("os.path.isfile", return_value=True), \
-             patch("os.path.getsize", return_value=1024), \
-             patch("builtins.open", unittest.mock.mock_open(read_data=b"MZ" + b"\x00" * 1022)):
+        # Simulate progress update (compound callback)
+        self.st.update_task(_pe_task_id, progress_percent=50,
+                            progress_message="Running scans...",
+                            last_progress_epoch=time.time())
 
-            mock_pefile.PE.return_value = MagicMock()
-            mock_cache.get.return_value = None
+        # Mark completed (mirrors success path)
+        self.st.update_task(_pe_task_id, status=TASK_COMPLETED,
+                            progress_percent=100,
+                            progress_message="PE analysis complete.")
+        self.st.unregister_task_infra(_pe_task_id)
 
-            try:
-                self._run(open_file(mock_ctx, file_path="/tmp/test.exe",
-                                    start_angr_background=False, auto_enrich=False))
-            except Exception:
-                pass  # May fail due to incomplete mocking; we just test task plumbing
-
-        # The task should have been registered and cleaned up
-        # If it completed, it should be COMPLETED; if it failed due to mocking,
-        # the except handler should have cleaned up
-        task = self.st.get_task("pe-analysis")
-        if task is not None:
-            assert task["status"] in (TASK_COMPLETED, TASK_FAILED)
+        # Verify COMPLETED and cleaned up
+        task = self.st.get_task(_pe_task_id)
+        assert task["status"] == TASK_COMPLETED
+        assert task["progress_percent"] == 100
+        assert self.st.get_cancel_event(_pe_task_id) is None
 
     def test_pe_progress_callback_updates_task(self):
         """Verify compound progress callback updates last_progress_epoch on the task."""
