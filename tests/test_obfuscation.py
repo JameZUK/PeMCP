@@ -330,12 +330,12 @@ class TestDetectVmProtection:
     def test_no_vm_protection_clean_binary(self, mock_ctx, clean_state):
         """A binary with standard sections and no VM indicators."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".text", "entropy": 6.2, "virtual_size": 4096, "raw_size": 4096},
                 {"name": ".rdata", "entropy": 5.0, "virtual_size": 2048, "raw_size": 2048},
                 {"name": ".data", "entropy": 3.0, "virtual_size": 1024, "raw_size": 1024},
-            ]},
-            "imports": {"import_count": 50},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is False
@@ -347,11 +347,11 @@ class TestDetectVmProtection:
     def test_vmprotect_section_detected(self, mock_ctx, clean_state):
         """VMProtect section name triggers detection."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".text", "entropy": 6.0, "virtual_size": 4096, "raw_size": 4096},
                 {"name": ".vmp0", "entropy": 7.5, "virtual_size": 65536, "raw_size": 65536},
-            ]},
-            "imports": {"import_count": 5},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(5)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -365,10 +365,10 @@ class TestDetectVmProtection:
     def test_themida_section_detected(self, mock_ctx, clean_state):
         """Themida section name triggers detection."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".themida", "entropy": 7.8, "virtual_size": 131072, "raw_size": 131072},
-            ]},
-            "imports": {"import_count": 3},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(3)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -378,10 +378,10 @@ class TestDetectVmProtection:
     def test_enigma_section_detected(self, mock_ctx, clean_state):
         """Enigma Protector section name triggers detection."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".enigma1", "entropy": 7.2, "virtual_size": 32768, "raw_size": 32768},
-            ]},
-            "imports": {"import_count": 20},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(20)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -391,11 +391,11 @@ class TestDetectVmProtection:
     def test_high_entropy_nonstandard_section_small_skipped(self, mock_ctx, clean_state):
         """High-entropy non-standard section with small size is skipped."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".text", "entropy": 6.0, "virtual_size": 4096, "raw_size": 4096},
                 {"name": ".custom", "entropy": 7.5, "virtual_size": 2048, "raw_size": 2048},
-            ]},
-            "imports": {"import_count": 50},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         entropy_indicators = [i for i in result["indicators"] if i["type"] == "high_entropy_section"]
@@ -404,11 +404,11 @@ class TestDetectVmProtection:
     def test_high_entropy_nonstandard_large_section(self, mock_ctx, clean_state):
         """High-entropy non-standard section over 4096 bytes triggers indicator."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".text", "entropy": 6.0, "virtual_size": 4096, "raw_size": 4096},
                 {"name": ".obfusc", "entropy": 7.9, "virtual_size": 65536, "raw_size": 65536},
-            ]},
-            "imports": {"import_count": 50},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         entropy_indicators = [i for i in result["indicators"] if i["type"] == "high_entropy_section"]
@@ -418,10 +418,10 @@ class TestDetectVmProtection:
     def test_minimal_imports_with_vm_section(self, mock_ctx, clean_state):
         """Few imports combined with VM sections boosts confidence."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".vmp1", "entropy": 7.0, "virtual_size": 32768, "raw_size": 32768},
-            ]},
-            "imports": {"import_count": 3},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(3)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -431,10 +431,10 @@ class TestDetectVmProtection:
     def test_minimal_imports_without_vm_section_no_indicator(self, mock_ctx, clean_state):
         """Few imports without VM sections does NOT produce minimal_imports indicator."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".text", "entropy": 6.0, "virtual_size": 4096, "raw_size": 4096},
-            ]},
-            "imports": {"import_count": 3},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(3)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         minimal_indicators = [i for i in result["indicators"] if i["type"] == "minimal_imports"]
@@ -453,10 +453,10 @@ class TestDetectVmProtection:
             sections = []
 
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".text", "entropy": 6.0, "virtual_size": 4096, "raw_size": 4096},
-            ]},
-            "imports": {"import_count": 50},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data, pe_obj=MockPeObj())
         assert result["vm_protection_detected"] is True
@@ -477,8 +477,8 @@ class TestDetectVmProtection:
             sections = []
 
         pe_data = {
-            "sections": {"details": []},
-            "imports": {"import_count": 50},
+            "sections": [],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data, pe_obj=MockPeObj())
         assert result["vm_protection_detected"] is True
@@ -507,8 +507,8 @@ class TestDetectVmProtection:
             sections = [MockSection()]
 
         pe_data = {
-            "sections": {"details": []},
-            "imports": {"import_count": 50},
+            "sections": [],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data, pe_obj=MockPeObj())
         assert result["vm_protection_detected"] is True
@@ -520,10 +520,10 @@ class TestDetectVmProtection:
     def test_no_pe_object_still_works(self, mock_ctx, clean_state):
         """Tool works with pe_data only (no pe_object)."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".vmp0", "entropy": 7.5, "virtual_size": 65536, "raw_size": 65536},
-            ]},
-            "imports": {"import_count": 50},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data, pe_obj=None)
         assert result["vm_protection_detected"] is True
@@ -534,8 +534,8 @@ class TestDetectVmProtection:
     def test_result_structure(self, mock_ctx, clean_state):
         """Result always contains expected top-level keys."""
         pe_data = {
-            "sections": {"details": []},
-            "imports": {"import_count": 50},
+            "sections": [],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert "vm_protection_detected" in result
@@ -552,10 +552,10 @@ class TestDetectVmProtection:
     def test_recommendation_text_on_detection(self, mock_ctx, clean_state):
         """When VM protection is detected, recommendation includes protector name."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".vmp0", "entropy": 7.0, "virtual_size": 32768, "raw_size": 32768},
-            ]},
-            "imports": {"import_count": 5},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(5)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -565,11 +565,11 @@ class TestDetectVmProtection:
     def test_indicator_count_matches(self, mock_ctx, clean_state):
         """indicator_count field matches len(indicators)."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".vmp0", "entropy": 7.5, "virtual_size": 65536, "raw_size": 65536},
                 {"name": ".vmp1", "entropy": 7.8, "virtual_size": 32768, "raw_size": 32768},
-            ]},
-            "imports": {"import_count": 2},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(2)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["indicator_count"] == len(result["indicators"])
@@ -577,10 +577,10 @@ class TestDetectVmProtection:
     def test_case_insensitive_section_matching(self, mock_ctx, clean_state):
         """Section name matching is case-insensitive."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".VMP0", "entropy": 7.0, "virtual_size": 32768, "raw_size": 32768},
-            ]},
-            "imports": {"import_count": 50},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -589,11 +589,11 @@ class TestDetectVmProtection:
     def test_multiple_protector_highest_confidence_wins(self, mock_ctx, clean_state):
         """When multiple protectors are found, highest confidence sets the protector."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".vm", "entropy": 6.5, "virtual_size": 4096, "raw_size": 4096},
                 {"name": ".VMProtect", "entropy": 7.5, "virtual_size": 65536, "raw_size": 65536},
-            ]},
-            "imports": {"import_count": 50},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["protector"] == "VMProtect"
@@ -602,10 +602,10 @@ class TestDetectVmProtection:
     def test_obsidium_detected(self, mock_ctx, clean_state):
         """Obsidium section triggers detection."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".obsidium", "entropy": 7.0, "virtual_size": 65536, "raw_size": 65536},
-            ]},
-            "imports": {"import_count": 20},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(20)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -614,10 +614,10 @@ class TestDetectVmProtection:
     def test_aspack_detected(self, mock_ctx, clean_state):
         """ASProtect section triggers detection."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".aspack", "entropy": 7.0, "virtual_size": 32768, "raw_size": 32768},
-            ]},
-            "imports": {"import_count": 50},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -626,10 +626,10 @@ class TestDetectVmProtection:
     def test_angr_not_available_still_works(self, mock_ctx, clean_state):
         """Without angr_project/angr_cfg, tool skips dispatcher detection gracefully."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".vmp0", "entropy": 7.5, "virtual_size": 65536, "raw_size": 65536},
-            ]},
-            "imports": {"import_count": 5},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(5)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data,
                             angr_project=None, angr_cfg=None)
@@ -639,8 +639,8 @@ class TestDetectVmProtection:
     def test_empty_sections_no_crash(self, mock_ctx, clean_state):
         """Empty section list produces clean no-detection result."""
         pe_data = {
-            "sections": {"details": []},
-            "imports": {"import_count": 50},
+            "sections": [],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is False
@@ -677,8 +677,8 @@ class TestDetectVmProtection:
 
         # pe_data has empty section details — forces fallback to pe_object
         pe_data = {
-            "sections": {"details": []},
-            "imports": {"import_count": 50},
+            "sections": [],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(50)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data, pe_obj=MockPeObj())
         assert result["vm_protection_detected"] is True
@@ -688,10 +688,10 @@ class TestDetectVmProtection:
     def test_winlicense_section_detected(self, mock_ctx, clean_state):
         """WinLicense section triggers detection."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".winlice", "entropy": 7.5, "virtual_size": 65536, "raw_size": 65536},
-            ]},
-            "imports": {"import_count": 20},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(20)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True
@@ -700,10 +700,10 @@ class TestDetectVmProtection:
     def test_code_virtualizer_section_detected(self, mock_ctx, clean_state):
         """Code Virtualizer section triggers detection."""
         pe_data = {
-            "sections": {"details": [
+            "sections": [
                 {"name": ".cvirt", "entropy": 7.0, "virtual_size": 32768, "raw_size": 32768},
-            ]},
-            "imports": {"import_count": 20},
+            ],
+            "imports": [{"dll_name": "kernel32.dll", "symbols": [{"name": f"Func{i}"} for i in range(20)]}],
         }
         result = self._call(mock_ctx, clean_state, pe_data=pe_data)
         assert result["vm_protection_detected"] is True

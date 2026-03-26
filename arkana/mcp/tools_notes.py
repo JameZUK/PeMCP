@@ -26,7 +26,7 @@ async def add_note(
     tool_name: Optional[str] = None,
     confidence: Optional[float] = None,
     status: Optional[str] = None,
-    evidence: Optional[str] = None,
+    evidence: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     [Phase: context] Add a note to the currently loaded file. Notes persist in
@@ -42,7 +42,7 @@ async def add_note(
     For hypothesis notes (category='hypothesis'), additional fields are supported:
     - confidence: Initial confidence score (0.0-1.0, default 0.5)
     - status: Lifecycle status (proposed/investigating/supported/refuted/confirmed, default proposed)
-    - evidence: JSON string containing a list of evidence items, each with
+    - evidence: List of evidence items (or JSON string), each with
       {"tool": str, "finding": str, "supports": bool}
 
     Use update_hypothesis() to evolve hypothesis confidence and status as evidence
@@ -62,8 +62,8 @@ async def add_note(
         status: (Optional[str]) For 'hypothesis' notes: initial lifecycle status.
             One of 'proposed', 'investigating', 'supported', 'refuted', 'confirmed'.
             Ignored for non-hypothesis categories.
-        evidence: (Optional[str]) For 'hypothesis' notes: JSON string with a list of
-            evidence items, e.g. '[{"tool": "get_triage_report", "finding": "High entropy", "supports": true}]'.
+        evidence: For 'hypothesis' notes: list of evidence dicts or JSON string encoding a list.
+            Each item: {"tool": "...", "finding": "...", "supports": true/false}.
             Ignored for non-hypothesis categories.
 
     Returns:
@@ -76,16 +76,21 @@ async def add_note(
     if len(content) > 50_000:
         raise ValueError("Note content exceeds 50KB limit.")
 
-    # Parse hypothesis-specific fields
+    # Parse hypothesis-specific fields — accept list (from MCP JSON) or str
     evidence_list: Optional[List[Dict[str, Any]]] = None
     if category == "hypothesis" and evidence is not None:
-        try:
-            parsed = json.loads(evidence)
-            if not isinstance(parsed, list):
-                raise ValueError("Evidence must be a JSON array.")
-            evidence_list = parsed[:MAX_HYPOTHESIS_EVIDENCE]
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid evidence JSON: {e}") from e
+        if isinstance(evidence, list):
+            evidence_list = evidence[:MAX_HYPOTHESIS_EVIDENCE]
+        elif isinstance(evidence, str):
+            try:
+                parsed = json.loads(evidence)
+                if not isinstance(parsed, list):
+                    raise ValueError("Evidence must be a JSON array.")
+                evidence_list = parsed[:MAX_HYPOTHESIS_EVIDENCE]
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid evidence JSON: {e}") from e
+        else:
+            raise ValueError("Evidence must be a list or JSON string.")
 
     note = state.add_note(
         content=content, category=category, address=address, tool_name=tool_name,
@@ -217,7 +222,7 @@ async def update_hypothesis(
     note_id: str,
     confidence: Optional[float] = None,
     status: Optional[str] = None,
-    add_evidence: Optional[str] = None,
+    add_evidence: Optional[Any] = None,
     superseded_by: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -231,7 +236,7 @@ async def update_hypothesis(
     Typical workflow:
       1. add_note(category='hypothesis', content='Binary is a RAT', confidence=0.3, status='proposed')
       2. After finding C2 indicators: update_hypothesis(note_id, confidence=0.6, status='investigating',
-         add_evidence='{"tool": "match_c2_indicators", "finding": "Found C2 beacon pattern", "supports": true}')
+         add_evidence={"tool": "match_c2_indicators", "finding": "Found C2 beacon pattern", "supports": true})
       3. After confirming: update_hypothesis(note_id, confidence=0.9, status='confirmed')
 
     Args:
@@ -242,8 +247,8 @@ async def update_hypothesis(
             'proposed' (initial), 'investigating' (actively testing),
             'supported' (evidence supports), 'refuted' (evidence contradicts),
             'confirmed' (high confidence conclusion).
-        add_evidence: (Optional[str]) JSON string with a single evidence item to append:
-            '{"tool": "tool_name", "finding": "what was found", "supports": true/false}'.
+        add_evidence: Evidence item to append — a dict with 'tool', 'finding', 'supports'
+            keys, or a JSON string encoding such a dict.
             Evidence is appended to the existing list (max 50 items).
         superseded_by: (Optional[str]) Note ID of a newer hypothesis that replaces this one.
             The target note must exist.
@@ -275,15 +280,20 @@ async def update_hypothesis(
     if status is not None and status not in valid_statuses:
         raise ValueError(f"Invalid status '{status}'. Must be one of: {', '.join(valid_statuses)}.")
 
-    # Parse add_evidence JSON
+    # Parse add_evidence — accept dict (from MCP JSON) or str (JSON string)
     evidence_item: Optional[Dict[str, Any]] = None
     if add_evidence is not None:
-        try:
-            evidence_item = json.loads(add_evidence)
-            if not isinstance(evidence_item, dict):
-                raise ValueError("Evidence must be a JSON object with 'tool', 'finding', and 'supports' keys.")
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid add_evidence JSON: {e}") from e
+        if isinstance(add_evidence, dict):
+            evidence_item = add_evidence
+        elif isinstance(add_evidence, str):
+            try:
+                evidence_item = json.loads(add_evidence)
+                if not isinstance(evidence_item, dict):
+                    raise ValueError("Evidence must be a JSON object with 'tool', 'finding', and 'supports' keys.")
+            except json.JSONDecodeError as e:
+                raise ValueError(f"Invalid add_evidence JSON: {e}") from e
+        else:
+            raise ValueError("add_evidence must be a dict or JSON string.")
 
     # Validate superseded_by target exists
     if superseded_by is not None:
