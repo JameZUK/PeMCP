@@ -159,7 +159,7 @@ def _map_mitre_internal(current_state) -> Dict[str, Any]:
                             "sources": [], "confidence": 0,
                         }
                     techniques[tech_id]["sources"].append({
-                        "type": "import", "function": func_name, "dll": dll_entry.get("dll", ""),
+                        "type": "import", "function": func_name, "dll": dll_entry.get("dll_name", ""),
                     })
                     techniques[tech_id]["confidence"] = max(techniques[tech_id]["confidence"], 50)
 
