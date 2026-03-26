@@ -2386,7 +2386,8 @@ async def detect_vm_protection(
             ".vm": ("Unknown VM Protector", 50),
         }
 
-        sections = pe_data.get("sections", {}).get("details", [])
+        raw_sections = pe_data.get("sections")
+        sections = raw_sections if isinstance(raw_sections, list) else []
         if not sections and pe_obj is not None and hasattr(pe_obj, 'sections'):
             sections = []
             for s in pe_obj.sections:
