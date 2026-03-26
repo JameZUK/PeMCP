@@ -115,6 +115,8 @@ class TestDetectPackingHeuristics(unittest.TestCase):
         try:
             with patch("arkana.mcp.tools_angr_forensic.state", self.st), \
                  patch("arkana.mcp.tools_angr_forensic._check_angr_ready"), \
+                 patch("arkana.mcp.tools_angr_forensic.ProgressBridge"), \
+                 patch("arkana.mcp.tools_angr_forensic.ANGR_ANALYSIS_TIMEOUT", 30), \
                  patch("arkana.mcp.tools_angr_forensic._check_mcp_response_size",
                        new_callable=lambda: (lambda: AsyncMock(side_effect=lambda ctx, r, n: r))()):
                 result = loop.run_until_complete(detect_packing(ctx))
@@ -245,7 +247,9 @@ class TestDetectPackingHeuristics(unittest.TestCase):
         loop = asyncio.new_event_loop()
         try:
             with patch("arkana.mcp.tools_angr_forensic.state", self.st), \
-                 patch("arkana.mcp.tools_angr_forensic._check_angr_ready"):
+                 patch("arkana.mcp.tools_angr_forensic._check_angr_ready"), \
+                 patch("arkana.mcp.tools_angr_forensic.ProgressBridge"), \
+                 patch("arkana.mcp.tools_angr_forensic.ANGR_ANALYSIS_TIMEOUT", 30):
                 with self.assertRaises(RuntimeError):
                     # _raise_on_error_dict should convert error dict to RuntimeError
                     loop.run_until_complete(detect_packing(ctx))
@@ -319,6 +323,8 @@ class TestDetectPackingKnownPackerSections(unittest.TestCase):
         try:
             with patch("arkana.mcp.tools_angr_forensic.state", self.st), \
                  patch("arkana.mcp.tools_angr_forensic._check_angr_ready"), \
+                 patch("arkana.mcp.tools_angr_forensic.ProgressBridge"), \
+                 patch("arkana.mcp.tools_angr_forensic.ANGR_ANALYSIS_TIMEOUT", 30), \
                  patch("arkana.mcp.tools_angr_forensic._check_mcp_response_size",
                        new_callable=lambda: (lambda: AsyncMock(side_effect=lambda ctx, r, n: r))()):
                 return loop.run_until_complete(detect_packing(ctx))
