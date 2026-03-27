@@ -1521,7 +1521,7 @@ async def get_analyzed_file_summary(ctx: Context, limit: int = 20, compact: bool
         "has_nt_headers": nt is not None and "error" not in (nt or {}),
         "section_count": len(state.pe_data.get('sections', [])),
         "import_dll_count": len(state.pe_data.get('imports', [])),
-        "export_symbol_count": len(state.pe_data.get('exports', {}).get('symbols', [])),
+        "export_symbol_count": len((state.pe_data.get('exports') or {}).get('symbols', []) if isinstance(state.pe_data.get('exports'), dict) else []),
         "peid_ep_match_count": len(peid.get('ep_matches', [])),
         "peid_heuristic_match_count": len(peid.get('heuristic_matches', [])),
         "peid_status": peid.get('status', "Not run/Skipped"),
@@ -1584,7 +1584,7 @@ async def get_full_analysis_results(ctx: Context, limit: int, compact: bool = Fa
             "file_size": state.pe_data.get("file_size"),
             "sections": compact_sections,
             "import_count": len(state.pe_data.get("imports", [])),
-            "export_count": len(state.pe_data.get("exports", {}).get("symbols", [])),
+            "export_count": len((state.pe_data.get("exports") or {}).get("symbols", []) if isinstance(state.pe_data.get("exports"), dict) else []),
         }
 
     # Prepare the data according to the client's limit on top-level keys

@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 
 from arkana.config import state, logger, Context, pefile
 from arkana.constants import MAX_TOOL_LIMIT
-from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_pe_object, _check_mcp_response_size
 
 
 # ===================================================================
@@ -55,6 +55,7 @@ async def analyze_relocations(
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Analyzing relocation table")
     _check_pe_loaded("analyze_relocations")
+    _check_pe_object("analyze_relocations", require_headers=True)
 
     pe = state.pe_object
     pe_data = state.pe_data or {}
@@ -253,6 +254,7 @@ async def analyze_seh_handlers(
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Analyzing SEH handlers")
     _check_pe_loaded("analyze_seh_handlers")
+    _check_pe_object("analyze_seh_handlers", require_headers=True)
 
     pe = state.pe_object
     pe_data = state.pe_data or {}
@@ -587,6 +589,7 @@ async def analyze_debug_directory(
     """
     await ctx.info("Analyzing debug directory and build info")
     _check_pe_loaded("analyze_debug_directory")
+    _check_pe_object("analyze_debug_directory", require_headers=True)
 
     pe = state.pe_object
 

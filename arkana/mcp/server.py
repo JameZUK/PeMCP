@@ -405,6 +405,34 @@ def _check_pe_loaded(tool_name: str) -> None:
             "If a file was provided at startup, it may have failed — check the server logs."
         )
 
+def _check_pe_object(tool_name: str, *, require_headers: bool = False) -> None:
+    """Raise a descriptive RuntimeError if pe_object is unavailable.
+
+    Call *after* ``_check_pe_loaded()``.  Many PE-specific tools access
+    ``state.pe_object`` attributes (sections, OPTIONAL_HEADER, __data__).
+    This guard prevents ``AttributeError`` crashes when pe_object is None
+    (e.g. cache-restored sessions, closed files, or parse failures).
+
+    When *require_headers* is True, also validates that OPTIONAL_HEADER and
+    FILE_HEADER are present (i.e. this is a real PE, not an ELF/Mach-O/shellcode
+    loaded via MockPE with stub headers).
+    """
+    pe = state.pe_object
+    if pe is None:
+        raise RuntimeError(
+            f"[{tool_name}] PE object is not available. The file may have been "
+            "loaded from cache without the original binary, or failed to parse. "
+            "Use open_file() to reload the PE binary."
+        )
+    if require_headers:
+        if getattr(pe, 'OPTIONAL_HEADER', None) is None:
+            raise RuntimeError(
+                f"[{tool_name}] This tool requires a PE binary with valid headers. "
+                "The loaded file (ELF, Mach-O, or shellcode) does not have PE structures. "
+                "Use format-specific tools (elf_analyze, macho_analyze) instead."
+            )
+
+
 def _check_angr_ready(tool_name: str, *, require_cfg: bool = True) -> None:
     """
     Raise a descriptive RuntimeError if angr is unavailable or still initializing.

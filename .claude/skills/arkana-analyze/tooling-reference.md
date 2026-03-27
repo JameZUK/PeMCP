@@ -49,7 +49,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `get_config` | **First call** — discover libraries, paths, container mode | — |
 | `get_current_datetime` | Need timestamp for notes or reports | — |
 | `check_task_status` | Checking background task progress/completion. Returns `elapsed_seconds`/`elapsed_human`, `stall_detection` (triggers after 60s without progress), and `timed_out`/`partial_result` for tasks that exceeded their timeout | `task_id` |
-| `set_api_key` | Configuring VT or other API keys | `service`, `key` |
+| `set_api_key` | Configuring VT or other API keys | `key_name`, `key_value` |
 
 ## Triage & Risk Assessment
 

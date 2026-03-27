@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, pefile
 from arkana.constants import MAX_TOOL_LIMIT
-from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_pe_object, _check_mcp_response_size
 from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.utils import shannon_entropy
 
@@ -40,6 +40,7 @@ async def get_section_permissions(ctx: Context, limit: int = 20) -> Dict[str, An
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Mapping section permissions")
     _check_pe_loaded("get_section_permissions")
+    _check_pe_object("get_section_permissions", require_headers=True)
 
     pe = state.pe_object
     sections = []
@@ -101,6 +102,7 @@ async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
     """
     await ctx.info("Extracting extended PE metadata")
     _check_pe_loaded("get_pe_metadata")
+    _check_pe_object("get_pe_metadata", require_headers=True)
 
     pe = state.pe_object
     oh = pe.OPTIONAL_HEADER
@@ -204,9 +206,10 @@ async def extract_resources(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Extracting PE resources")
     _check_pe_loaded("extract_resources")
+    _check_pe_object("extract_resources", require_headers=True)
 
     pe = state.pe_object
-    if not hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
+    if not hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE') or pe.DIRECTORY_ENTRY_RESOURCE is None:
         return {"total_resources": 0, "resources": [], "note": "No resource directory found."}
 
     RESOURCE_TYPES = {
@@ -279,9 +282,10 @@ async def extract_manifest(ctx: Context) -> Dict[str, Any]:
     """
     await ctx.info("Extracting manifest")
     _check_pe_loaded("extract_manifest")
+    _check_pe_object("extract_manifest", require_headers=True)
 
     pe = state.pe_object
-    if not hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
+    if not hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE') or pe.DIRECTORY_ENTRY_RESOURCE is None:
         return {"error": "No resource directory found."}
 
     RT_MANIFEST = 24
@@ -325,9 +329,10 @@ async def get_load_config_details(ctx: Context) -> Dict[str, Any]:
     """
     await ctx.info("Parsing Load Config directory")
     _check_pe_loaded("get_load_config_details")
+    _check_pe_object("get_load_config_details", require_headers=True)
 
     pe = state.pe_object
-    if not hasattr(pe, 'DIRECTORY_ENTRY_LOAD_CONFIG'):
+    if not hasattr(pe, 'DIRECTORY_ENTRY_LOAD_CONFIG') or pe.DIRECTORY_ENTRY_LOAD_CONFIG is None:
         return {"note": "No Load Config directory found."}
 
     lc = pe.DIRECTORY_ENTRY_LOAD_CONFIG.struct
@@ -396,6 +401,7 @@ async def extract_wide_strings(
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Extracting wide (UTF-16LE) strings, min_length={min_length}")
     _check_pe_loaded("extract_wide_strings")
+    _check_pe_object("extract_wide_strings")
     min_length = max(1, min(min_length, 1000))
 
     pe = state.pe_object
@@ -453,6 +459,7 @@ async def detect_format_strings(ctx: Context, limit: int = 20) -> Dict[str, Any]
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for format string patterns")
     _check_pe_loaded("detect_format_strings")
+    _check_pe_object("detect_format_strings")
 
     pe = state.pe_object
     file_data = pe.__data__
@@ -539,6 +546,7 @@ async def detect_compression_headers(ctx: Context, limit: int = 30) -> Dict[str,
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for compression/archive headers")
     _check_pe_loaded("detect_compression_headers")
+    _check_pe_object("detect_compression_headers")
 
     pe = state.pe_object
     file_data = pe.__data__
@@ -738,6 +746,7 @@ async def detect_crypto_constants(ctx: Context, limit: int = 20) -> Dict[str, An
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info("Scanning for cryptographic constants")
     _check_pe_loaded("detect_crypto_constants")
+    _check_pe_object("detect_crypto_constants")
 
     pe = state.pe_object
     file_data = pe.__data__
@@ -829,6 +838,7 @@ async def analyze_entropy_by_offset(
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
     await ctx.info(f"Computing entropy curve (window={window_size}, step={step})")
     _check_pe_loaded("analyze_entropy_by_offset")
+    _check_pe_object("analyze_entropy_by_offset")
 
     pe = state.pe_object
     file_data = pe.__data__
@@ -1025,6 +1035,7 @@ async def scan_for_api_hashes(
                    f"{f', seed={seed}' if seed is not None else ''}"
                    f"{f', case={case_handling}' if case_handling else ''})")
     _check_pe_loaded("scan_for_api_hashes")
+    _check_pe_object("scan_for_api_hashes")
 
     bridge = ProgressBridge(ctx, loop=asyncio.get_running_loop())
 
@@ -1135,6 +1146,7 @@ async def get_import_hash_analysis(ctx: Context, compact: bool = False) -> Dict[
     """
     await ctx.info("Computing import hash analysis")
     _check_pe_loaded("get_import_hash_analysis")
+    _check_pe_object("get_import_hash_analysis", require_headers=True)
 
     pe = state.pe_object
 

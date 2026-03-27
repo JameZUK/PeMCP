@@ -12,7 +12,7 @@ from arkana.config import (
     state, logger, Context, pefile,
     CRYPTOGRAPHY_AVAILABLE, SIGNIFY_AVAILABLE, YARA_AVAILABLE,
 )
-from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
+from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_pe_object, _check_mcp_response_size
 from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
 
 if CRYPTOGRAPHY_AVAILABLE:
@@ -386,6 +386,7 @@ async def parse_authenticode(
     """
     await ctx.info("Parsing authenticode signature")
     _check_pe_loaded("parse_authenticode")
+    _check_pe_object("parse_authenticode", require_headers=True)
 
     pe = state.pe_object
 
@@ -675,15 +676,10 @@ async def unify_artifact_timeline(
     """
     await ctx.info("Building artifact timeline")
     _check_pe_loaded("unify_artifact_timeline")
+    _check_pe_object("unify_artifact_timeline", require_headers=True)
 
     pe = state.pe_object
     pe_data = state.pe_data or {}
-
-    if pe is None or not hasattr(pe, 'FILE_HEADER') or pe.FILE_HEADER is None:
-        raise RuntimeError(
-            "unify_artifact_timeline requires a PE file with valid headers. "
-            "The loaded binary does not have PE metadata."
-        )
 
     def _analyze():
         artifacts: List[Dict[str, Any]] = []
@@ -748,7 +744,7 @@ async def unify_artifact_timeline(
                         pass
 
         # --- 4. Resource timestamps ---
-        if hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE'):
+        if hasattr(pe, 'DIRECTORY_ENTRY_RESOURCE') and pe.DIRECTORY_ENTRY_RESOURCE is not None:
             _collect_resource_timestamps(pe.DIRECTORY_ENTRY_RESOURCE, artifacts)
 
         # --- 5. Digital signature timestamps ---

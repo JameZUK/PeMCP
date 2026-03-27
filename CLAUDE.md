@@ -62,6 +62,7 @@ ruff check arkana/ tests/ \
 
 - **File integrity checks**: `arkana/integrity.py` validates binaries pre-parse using only `struct`. `open_file` runs this automatically. The `force` parameter overrides smart fallback. `open_file`/`close_file` **block when background tasks are active** — they return an error with `active_tasks` and `hint` suggesting `abort_background_task()` or `force_switch=True`. When `open_file` is called on a new file without `close_file()`, it clears all module-level caches to prevent cross-file data contamination. `open_file` PE analysis uses soft/overtime timeouts (task ID `"pe-analysis"`): `PE_ANALYSIS_SOFT_TIMEOUT` (300s) → `TASK_OVERTIME` with stall detection → `PE_ANALYSIS_MAX_RUNTIME` (3600s) ceiling. Set `ARKANA_PE_ANALYSIS_SOFT_TIMEOUT=0` for old hard-timeout behavior.
 - **Optional deps**: Every library is guarded by `*_AVAILABLE` flags in `imports.py`. Tools return actionable error messages when a dep is missing — never crash.
+- **PE object guard**: `_check_pe_object(tool_name, require_headers=False)` in `server.py` validates `state.pe_object` is not `None` before tools access it. Use `require_headers=True` for tools needing `OPTIONAL_HEADER`/`FILE_HEADER` (rejects ELF/Mach-O/shellcode). Call after `_check_pe_loaded()`.
 - **Thread safety**: All shared state uses locks. `StateProxy` + `contextvars` isolates HTTP sessions. `_cached_*` fields on `AnalyzerState` rely on CPython's GIL for atomic reference replacement (never mutated in place after assignment).
 - **Session limits**: `MAX_ACTIVE_SESSIONS` (default 100, env: `ARKANA_MAX_SESSIONS`). Per-session caps: `MAX_NOTES` (10K), `MAX_TOOL_HISTORY` (500), `MAX_ARTIFACTS` (1K), `MAX_RENAMES` (10K), `MAX_COMPLETED_TASKS` (50).
 - **Response truncation**: Dual-limit — soft char limit (8K default) plus hard byte limit (64KB). `tool_decorator` auto-enforces even for tools that don't call `_check_mcp_response_size`. Set `ARKANA_MCP_RESPONSE_LIMIT_CHARS=65536` for non-Claude-Code clients.
@@ -129,7 +130,7 @@ These are inherent limitations from underlying frameworks, not bugs:
 - **Debug sessions**: Fidelity limited by Qiling/Unicorn. **Register writes don't redirect execution** — use code patching instead. **Unresolved MSVCRT imports** need IAT patching. **Threading unsupported** — stub and redirect. **Timeout pauses, not kills** — session preserved for inspection. `DEBUG_COMMAND_TIMEOUT` (300s, env: `ARKANA_DEBUG_COMMAND_TIMEOUT`).
 - **`auto_unpack_pe`**: FSG may fail. Use `qiling_dump_unpacked_binary()` as fallback.
 - **`qiling_dump_unpacked_binary`**: `smart_unpack` hooks VirtualAlloc to track allocations, scans for PE headers. Falls back to largest-region heuristic.
-- **`get_virustotal_report_for_loaded_file`**: Requires API key via `set_api_key(service="virustotal", key="...")`.
+- **`get_virustotal_report_for_loaded_file`**: Requires API key via `set_api_key(key_name="vt_api_key", key_value="...")`.
 - **`analyze_batch`**: 8KB soft limit can truncate. Use 5-10 files max.
 - **`search_decompiled_code`**: Searches pseudocode, not assembly. Use `get_annotated_disassembly(search=...)` for assembly.
 - **DFS symbolic execution**: angr DFS triggers cffi pickle errors. `solve_constraints_for_path` uses BFS by default. `find_path_to_address` has `use_dfs` param.
@@ -137,7 +138,7 @@ These are inherent limitations from underlying frameworks, not bugs:
 - **`get_value_set_analysis`**: Known angr compatibility issues. Prefer `get_reaching_definitions`.
 - **`detect_compression_headers`**: May false-positive on code sections.
 - **`save_patched_binary`**: `bytes_patched` includes loader differences, not just user patches.
-- **`go_analyze`**: GoReSym→pygore→string_scan fallback. GoReSym needs PATH or `~/.arkana/tools/`.
+- **`go_analyze`**: GoReSym→pygore→gopclntab→string_scan fallback. GoReSym needs PATH or `~/.arkana/tools/`. gopclntab parser (`arkana/parsers/go_pclntab.py`) is pure-Python, supports Go 1.2–1.26+, extracts function names/addresses from stripped binaries.
 - **`detect_null_regions`**: May flag legitimate null-initialized data sections.
 - **`release_angr_memory`**: After release, angr tools rebuild from disk.
 - **Speakeasy allocation tracking**: `emulate_pe_with_windows_apis(track_allocations=True)` for VirtualAlloc/Protect anomaly detection.

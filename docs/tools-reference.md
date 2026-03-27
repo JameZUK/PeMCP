@@ -742,7 +742,7 @@ The following limitations have been identified through comprehensive testing. Th
 
 | Tool | Limitation |
 |------|-----------|
-| `get_virustotal_report_for_loaded_file` | Requires a VirusTotal API key. Configure with `set_api_key(service="virustotal", key="...")`. |
+| `get_virustotal_report_for_loaded_file` | Requires a VirusTotal API key. Configure with `set_api_key(key_name="vt_api_key", key_value="...")`. |
 | `scan_for_embedded_files` | Requires binwalk v3+. Uses `--signature --quiet` flags for structured output. |
 
 ### Output & Response Limits

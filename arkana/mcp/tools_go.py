@@ -1,9 +1,9 @@
-"""MCP tools for Go binary analysis with GoReSym/pygore/string-scan fallback."""
+"""MCP tools for Go binary analysis with GoReSym/pygore/gopclntab/string-scan fallback."""
 import asyncio
 import json
 import os
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from arkana.config import (
     state, logger, Context,
     PYGORE_AVAILABLE, GORESYM_AVAILABLE, _GORESYM_PATH,
@@ -11,6 +11,11 @@ from arkana.config import (
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._format_helpers import _get_filepath
 from arkana.constants import MAX_TOOL_LIMIT
+from arkana.parsers.go_pclntab import (
+    parse_gopclntab,
+    _parse_elf_section_headers,
+    _parse_macho_section_headers,
+)
 
 if PYGORE_AVAILABLE:
     import pygore
@@ -74,6 +79,123 @@ def _go_string_scan(filepath: str, scan_limit: int = 2 * 1024 * 1024) -> Dict[st
         "marker_count": len(markers_found),
         "go_version": go_version,
     }
+
+
+def _run_gopclntab(filepath: str, limit: int, func_cap: int) -> Optional[Dict[str, Any]]:
+    """Parse gopclntab from a Go binary file.
+
+    Returns a dict in go_analyze format, or None if not a Go binary.
+    """
+    with open(filepath, "rb") as f:
+        file_data = f.read()
+
+    # Build sections list from the binary format
+    sections: List[Dict[str, Any]] = []
+    text_vaddr = 0
+
+    # Try PE sections first (if a PE is loaded)
+    try:
+        pe_obj = state.pe_object
+        if pe_obj is not None and hasattr(pe_obj, "sections"):
+            for sec in pe_obj.sections:
+                try:
+                    name = sec.Name.decode("utf-8", errors="replace").rstrip("\x00")
+                    sections.append({
+                        "name": name,
+                        "offset": sec.PointerToRawData,
+                        "size": sec.SizeOfRawData,
+                        "vaddr": sec.VirtualAddress + (pe_obj.OPTIONAL_HEADER.ImageBase if hasattr(pe_obj, "OPTIONAL_HEADER") else 0),
+                    })
+                    if name.lower() == ".text":
+                        text_vaddr = sections[-1]["vaddr"]
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    # Try ELF/Mach-O section headers if no PE sections found
+    if not sections:
+        sections = _parse_elf_section_headers(file_data)
+        if not sections:
+            sections = _parse_macho_section_headers(file_data)
+        # Find .text vaddr
+        for sec in sections:
+            name_lower = sec.get("name", "").lower()
+            if name_lower in (".text", "__text"):
+                text_vaddr = sec.get("vaddr", 0)
+                break
+
+    parsed = parse_gopclntab(file_data, sections, text_vaddr)
+    if parsed is None:
+        return None
+
+    functions = parsed.get("functions", [])
+    if not functions:
+        return None
+
+    # Group functions by package (Go convention: package.Function)
+    packages: Dict[str, List[Dict[str, Any]]] = {}
+    for func in functions:
+        name = func.get("name", "")
+        pkg = _extract_go_package(name)
+        if pkg not in packages:
+            packages[pkg] = []
+        packages[pkg].append({
+            "name": name,
+            "address": hex(func["address"]) if isinstance(func.get("address"), int) else str(func.get("address", "")),
+        })
+
+    # Sort packages, apply limits
+    pkg_list = []
+    sorted_pkgs = sorted(packages.keys())
+    for pkg_name in sorted_pkgs[:limit]:
+        funcs = packages[pkg_name][:func_cap]
+        pkg_list.append({
+            "name": pkg_name,
+            "functions": funcs,
+            "function_count": len(packages[pkg_name]),
+        })
+
+    result: Dict[str, Any] = {
+        "is_go_binary": True,
+        "analysis_method": "gopclntab",
+        "go_version": parsed.get("go_version_hint", ""),
+        "function_count": parsed["function_count"],
+        "packages": pkg_list,
+        "package_count": len(packages),
+    }
+
+    source_files = parsed.get("source_files", [])
+    if source_files:
+        result["source_files"] = source_files[:200]
+        result["source_file_count"] = len(source_files)
+
+    parse_errors = parsed.get("parse_errors", [])
+    if parse_errors:
+        result["parse_errors"] = parse_errors[:20]
+
+    return result
+
+
+def _extract_go_package(func_name: str) -> str:
+    """Extract package name from a Go function name.
+
+    Go naming: ``package.Function``, ``package.(*Type).Method``,
+    ``crypto/tls.(*Conn).Read``.
+    """
+    if not func_name:
+        return "unknown"
+
+    # Remove method receiver: find first '(' and work with prefix
+    paren = func_name.find("(")
+    prefix = func_name[:paren] if paren > 0 else func_name
+
+    # Package is everything before the last '.'
+    dot = prefix.rfind(".")
+    if dot > 0:
+        return prefix[:dot]
+
+    return "unknown"
 
 
 def _safe_str(val, fallback=""):
@@ -377,9 +499,9 @@ async def go_analyze(
     When to use: When detect_binary_format() identifies a Go binary. Go binaries
     have unique structure — this tool extracts Go-specific metadata.
 
-    Uses GoReSym (preferred), pygore, or string-scan fallback to extract
-    Go compiler version, module path, packages, functions, types, and
-    build information from Go binaries.
+    Uses GoReSym (preferred), pygore, gopclntab parser, or string-scan
+    fallback to extract Go compiler version, module path, packages,
+    functions, types, and build information from Go binaries.
 
     Next steps: decompile_function_with_angr() on main/init functions,
     get_triage_report() for risk assessment.
@@ -397,7 +519,7 @@ async def go_analyze(
     func_cap = max(3, min(20, 100 // max(1, limit)))
     method_cap = func_cap
 
-    # ── Fallback chain: GoReSym → pygore → string scan ──
+    # ── Fallback chain: GoReSym → pygore → gopclntab → string scan ──
     result = None
     fallback_reasons = []
 
@@ -424,7 +546,18 @@ async def go_analyze(
             fallback_reasons.append(f"pygore failed: {str(e)[:200]}")
             logger.debug("go_analyze: pygore failed, trying string scan: %s", e)
 
-    # 3. Final fallback: string scan
+    # 3. Try gopclntab parser (pure-Python, no external deps)
+    if result is None:
+        try:
+            result = await asyncio.to_thread(_run_gopclntab, target, limit, func_cap)
+            if result and not result.get("function_count"):
+                fallback_reasons.append("gopclntab: no functions found")
+                result = None
+        except Exception as e:
+            fallback_reasons.append(f"gopclntab: {str(e)[:200]}")
+            logger.debug("go_analyze: gopclntab failed: %s", e)
+
+    # 4. Final fallback: string scan
     if result is None:
         result = await asyncio.to_thread(_go_string_scan, target)
         if not result.get("is_go_binary"):

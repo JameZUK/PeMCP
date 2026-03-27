@@ -3,7 +3,7 @@ name: arkana-learn
 description: >
   Interactive reverse engineering tutor using Arkana. Teaches binary analysis
   concepts from beginner to expert, adapting to the learner's level. Guides
-  users through hands-on analysis or structured lessons using Arkana's 261
+  users through hands-on analysis or structured lessons using Arkana's 281
   tools as the teaching platform.
   Triggers on: teach, learn, tutorial, lesson, explain, guide, how does,
   what is, reverse engineering tutorial, RE tutorial, binary analysis tutorial,
