@@ -236,6 +236,44 @@ The AI identifies the float32-vs-int32 bias bug mid-solve, recognises `0xBF80000
 
 ---
 
+## Scenario 9: Reversing a Go-Compiled Stealer with Zero Static IOCs (ACRStealer)
+
+**The situation:** A threat intelligence analyst pulls a fresh ACRStealer sample from Malware Bazaar — uploaded the same day. It's a Go-compiled PE32 with an invalid code signing certificate, tagged as dropped by RenPyLoader. The analyst needs to extract C2 infrastructure and understand the delivery mechanism. The catch: the sample contains **zero plaintext IOCs** — no URLs, no domains, no browser paths, no C2 strings anywhere in 9,071 extracted strings.
+
+**Traditional workflow:** Load in Ghidra/IDA (30+ minutes for Go binary auto-analysis), manually identify the 1,651 Go functions, try to find `main.main` in the sea of runtime functions, reverse the custom encryption, write a Python decryptor, extract and analyse the decrypted payload. Go binaries are notoriously difficult — position-independent code, goroutine prologues, and interleaved runtime functions make manual analysis a multi-day effort.
+
+**With Arkana:**
+```
+Analyst: "Find a complex malware sample on Malware Bazaar and analyse it"
+```
+Arkana autonomously:
+1. Queries Malware Bazaar API, selects an ACRStealer sample with interesting properties (Go binary, signed, multi-stage)
+2. `open_file` → `get_triage_report` — CRITICAL risk (56), 6 capa crypto detections, PEiD packing flags, signed but invalid cert
+3. `go_analyze` — parses gopclntab: Go 1.20+, 1,651 functions, 193 packages, discovers obfuscated module names (Certain, Brain, Document, Bind, Bleak, Box, Actual)
+4. `parse_authenticode` — certificate from `new-pay.heleket.com`, Let's Encrypt E8, issued 23 days prior
+5. `get_strings_summary` + `search_for_specific_strings` — confirms zero IOCs across all 9,071 strings; identifies statically-linked DLLs (ws2_32, dnsapi, crypt32, etc.)
+6. `get_capa_rule_match_details` — locates AES-NI and RC4 PRGA match addresses, then **disproves** them as Go runtime internals (AES-NI for map hash randomisation, RC4 pattern matched a varint decoder)
+7. `get_entropy_analysis` — reveals 320 KB high-entropy blob (7.4–7.8) in .rdata starting at `0xDB000`
+8. `brute_force_simple_crypto(known_plaintext="https://")` — recovers first 8 XOR bytes, confirming the blob starts with "https://" but isn't simple XOR
+9. `emulate_pe_with_windows_apis` — captures 0 API calls, confirming PEB-walking evasion
+10. `search_hex_pattern("F1 FF FF FF 00 00")` — locates Go pclntab magic at `0x129458`, parses header (1,651 functions, 178 files)
+11. `search_hex_pattern("9A F6 00 00")` — finds the funcdata entry for "main.main" via its nameOff, extracts entryOff `0x80930` → **main.main at VA `0x481930`**
+12. `decompile_function_with_angr("0x481930")` — reveals the orchestration: copies 80,565 bytes from global `g_4db981`, calls `decrypt_payload(0x482980)` with key `0x115C4`, then VirtualAlloc's RWX memory
+13. `decompile_function_with_angr("0x482980")` — **fully reverses the 5-stage custom cipher**:
+    - Stage 1: Modular substitution (even bytes: `-= key%53 + i*17`, odd bytes: `^= (i*31) ^ key%97`)
+    - Stage 2: Full array reversal
+    - Stage 3: Adjacent byte pair swap
+    - Stage 4: Subtract `key>>8` from each byte
+    - Stage 5: XOR each byte with `key&0xFF ^ index`
+14. Identifies compiler magic-number optimisations (`1296593901 * x >> 36` = `x / 53`, `1416896428 * x >> 37` = `x / 97`)
+15. `generate_yara_rule` + `generate_cti_report` + `get_iocs_structured` + `map_mitre_attack` — produces detection rule, CTI report, structured IOCs, and ATT&CK Navigator layer
+
+The AI concludes: *"This Go binary is a multi-stage loader, not the stealer itself. The actual ACRStealer capabilities — browser credential theft, Dead Drop Resolver C2 via Steam/Google Docs, data exfiltration — reside in the encrypted payload executed from RWX memory. The C2 IP 77.238.236.29 (from Malware Bazaar intelligence) is in the second-stage payload, not the Go loader."*
+
+**Full report:** [ACRStealer Go Loader](example-report-acrstealer.md)
+
+---
+
 ## Arkana vs Traditional Tools
 
 ### Comparison Matrix

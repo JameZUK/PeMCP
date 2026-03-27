@@ -125,6 +125,7 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 | [Brute Ratel C4 Badger](docs/examples/example-report-bruteratel.md) | Commercial C2 implant | PIC shellcode tracing, RC4 unpacking, C2 config extraction, 17 ATT&CK techniques |
 | [CrackMeZ3S CTF Challenge](docs/examples/example-report-crackme-z3s.md) | PELock 6-key crackme | Interactive debugger with IAT patching, code-cave shellcode injection, encrypted blob decryption, manual XOR cipher reversal, MD5 hash cracking |
 | [Ternary Trap Neural Crackme](docs/examples/example-report-ternary-trap.md) | Neural network password lock | Custom NLI2 format reversal, ternary MLP reconstruction, SIMD assembly type discovery (cvtdq2pd), autoregressive inference, DFS password search |
+| [ACRStealer Go Loader](docs/examples/example-report-acrstealer.md) | Go-compiled info stealer | Same-day Malware Bazaar sample, Go pclntab parsing, custom 5-stage cipher reversal, PEB-walking API evasion, zero static IOCs, encrypted payload extraction |
 
 ---
 
