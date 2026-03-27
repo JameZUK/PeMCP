@@ -207,6 +207,35 @@ The AI maps the full execution chain: *"BRc4 badger with 5 C2 domains (2 via Tyk
 
 ---
 
+## Scenario 8: Cracking a Neural Network Password Lock (Ternary Trap)
+
+**The situation:** A reverse engineer is presented with a CTF crackme (difficulty 4.0/6.0) that encodes its password inside the weights of a neural network. The binary loads a companion `model.nli` file containing a custom-format encrypted model. There is no string comparison, no hash comparison, and no flag string in the binary — the password exists only as the deterministic output of the network.
+
+**Traditional workflow:** Load in Ghidra/IDA, reverse the file format, write a custom parser in Python, implement the neural network forward pass, then brute-force or mathematically solve for the password. Requires deep understanding of both reverse engineering and machine learning. Easily a multi-day effort.
+
+**With Arkana:**
+```
+Analyst: "Find a new tricky crackme and go ahead and crack it"
+```
+Arkana autonomously:
+1. Searches crackmes.one, downloads "Ternary Trap" (difficulty 4.0)
+2. `open_file("PolyMLP.exe")` — identifies as MSVC C++ x64 console app
+3. `get_triage_report` + `search_floss_strings` — discovers "Neural Password Lock", NLI2 format, "password is encoded in neural weights"
+4. `get_function_map` → identifies model loader, inference engine, main loop
+5. `decompile_function_with_angr` (4 pages, 449 lines) — maps the complete validation flow: load model → evaluate probability → generate chars → check sum
+6. `get_annotated_disassembly(search="movsx.*byte|cvtsi2")` — discovers the critical `cvtdq2pd` instruction hidden by the decompiler, revealing that byte weights are converted to float64
+7. Switches to `model.nli` via `open_file(mode='shellcode')` → `get_hex_dump` reads first bytes `90 E1 F7 DD`
+8. Derives XOR key: `0x90⊕0x4E = 0xDE`, `0xE1⊕0x4C = 0xAD`, `0xF7⊕0x49 = 0xBE`, `0xDD⊕0x32 = 0xEF` → key is `0xDEADBEEF`
+9. `refinery_xor` decrypts header and footer — extracts V=28, K=5, H=512, ternary weights, character map, checksums
+10. Builds a Python solver implementing the 2-layer MLP with DFS search
+11. Solver finds password `3ig3nv4lu3` ("eigenvalue" in leet) → generates `VALID` (sum 368 ✓) → flag `NLI{w31ghts_4r3_th3_k3y}` (sum 2184 ✓)
+
+The AI identifies the float32-vs-int32 bias bug mid-solve, recognises `0xBF800000` as IEEE 754 -1.0, and corrects the model parser — a debugging step that would stump many analysts unfamiliar with floating-point representations.
+
+**Full report:** [Ternary Trap Neural Crackme](example-report-ternary-trap.md)
+
+---
+
 ## Arkana vs Traditional Tools
 
 ### Comparison Matrix
