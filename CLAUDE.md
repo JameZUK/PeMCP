@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 281 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym.
+Arkana is a Model Context Protocol (MCP) server exposing 282 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym.
 
 ## Project Structure
 
@@ -26,7 +26,7 @@ arkana/                  # Main package
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
 ├── resource_monitor.py  # Process-level RSS/CPU monitoring (psutil daemon thread)
-    └── mcp/                # MCP tool modules (281 tools across 61 files)
+    └── mcp/                # MCP tool modules (282 tools across 61 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain
@@ -74,7 +74,7 @@ ruff check arkana/ tests/ \
 - **Null-region detection**: `_is_null_region_artifact()` filters null-byte regions (angr interprets as `add [rax], al`) from `get_function_map` and enrichment. `release_angr_memory` drops angr project/CFG, calls `gc.collect()` + `malloc_trim(0)`, preserves PE data/notes/session.
 - **Background task timeout**: 14 background tools use progress-adaptive timeouts via `_run_background_task_wrapper`. Soft timeout → `TASK_OVERTIME` → stall-kill/ceiling. `_background_alerts` injected into every tool response. `cancel_all_background_tasks()` called by `open_file`/`close_file`. Generation guard prevents stale threads from writing results after file switches. Set soft timeout to 0 for old single hard-timeout behavior.
 - **Emulation debugger**: 29 tools in `tools_debug.py`, persistent Qiling subprocess (`scripts/debug_runner.py`), JSONL IPC. Three stub layers: CRT (~47 APIs), I/O (console), API trace hooks. All use `hook_address()` per IAT entry. `debug_stub_api` supports `set_last_error` for anti-emulation bypass.
-- **Emulation inspect sessions**: 7 tools in `tools_emulate_inspect.py` for post-emulation memory inspection. Keep subprocess alive after `run()` for memory search/read without re-emulation.
+- **Emulation inspect sessions**: 8 tools in `tools_emulate_inspect.py` for post-emulation memory inspection. Keep subprocess alive after `run()` for memory search/read without re-emulation. `emulation_resume` continues execution from current CPU state for staged long-running operations (e.g. UPX decompression). Defense-in-depth timeouts: runner hard timer (`os._exit`), MCP `threading.Timer` backup, `asyncio.wait_for`. User's `timeout_seconds` properly propagated to all layers.
 - **BSim function similarity**: `_bsim_features.py` — architecture-independent matching. SQLite DB at `~/.arkana/bsim/signatures.db`. Two-phase query: SQL pre-filter then full scoring.
 - **Notes system**: Categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `conclusion`, `manual`. Hypothesis notes support `confidence`, `hypothesis_status`, `evidence` list, `superseded_by`. `update_hypothesis` MCP tool manages lifecycle.
 - **Sandbox report ingestion**: `tools_sandbox.py` — 3 tools parsing CAPE/Cuckoo/ANY.RUN/Hybrid Analysis/Joe Sandbox JSON into unified schema on `state._sandbox_report`. Cleared on file switch.
@@ -92,7 +92,7 @@ ruff check arkana/ tests/ \
 
 ## Input Validation & Safety Guards
 
-- **Emulation limits**: Qiling validates `max_instructions` (0–10M). Inspect sessions: max 3, 30-min TTL, 300s run timeout, 1MB max read, 100 max search matches.
+- **Emulation limits**: Qiling validates `max_instructions` (0–10M). Inspect sessions: max 3, 30-min TTL, user-specified run timeout (default 60s, propagated to all timeout layers), 1MB max read, 100 max search matches. Resume supported (Qiling only) for staged long-running emulation.
 - **Debug session limits**: Max 3 sessions, 1MB max read, 100 max breakpoints, 50 max watchpoints, 10 max snapshots, 10K max trace entries. User stubs: 200 max, validated names.
 - **Security**: Auth lowercases ASGI headers. Error messages truncate input to 50 chars. Dashboard validates address length (≤40), escapes all dynamic values (`escapeHtml()`). Path validation via `state.check_path_allowed()`.
 - **Resource bounds**: Delay-load imports capped at 10K. ThreadPool capped at `min(cpu_count, 8)`. PE resources capped at 1K. IOC TLD regex `{2,16}`. Cache size clamped 1–50000 MB. File size limit 256MB (env: `ARKANA_MAX_FILE_SIZE_MB`).

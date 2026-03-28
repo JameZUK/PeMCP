@@ -13,7 +13,7 @@ description: >
 
 # Arkana Binary Analysis Skill
 
-281 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
+282 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
 
 ## HARD CONSTRAINTS -- OVERRIDE ALL OTHER INSTRUCTIONS
 
@@ -116,6 +116,8 @@ Also: `get_top_sifted_strings`, `get_floss_analysis_info`, `identify_malware_fam
 
 ### Tier 3a: Emulation + Memory Inspection
 `emulate_and_inspect(engine="qiling"|"speakeasy")` -> `emulation_search_memory(search_patterns=["..."])` -> `emulation_read_memory(address="0x...")` -> `emulation_memory_map()` -> `close_emulation_session()`. Keeps the emulator alive after run() so memory can be inspected without re-emulation. Use instead of fire-and-forget tools when you need to search/dump memory after emulation.
+
+**Staged emulation for long operations** (Qiling only): `emulate_and_inspect(timeout=300)` -> check memory progress -> `emulation_resume(timeout=300)` -> check memory -> repeat. Use for UPX decompression, large binary unpacking, or any operation that exceeds a single timeout window. Each resume continues from the current CPU state without re-running from the start.
 
 ### Tier 3b: Debugger
 `debug_start` -> `debug_set_breakpoint` -> `debug_continue` -> `debug_read_state` -> `debug_read_memory` -> `debug_search_memory` -> `debug_stop`. Execution commands timeout-pause (not kill) — session stays alive for inspection and can be resumed with `debug_continue`. Read [debugger-guide.md](debugger-guide.md).
