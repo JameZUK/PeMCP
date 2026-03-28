@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import sys
+import threading
 import traceback
 
 # --- Reuse helpers from qiling_runner.py (same venv) ---
@@ -48,6 +49,42 @@ try:
     _CAPSTONE_AVAILABLE = True
 except ImportError:
     _CAPSTONE_AVAILABLE = False
+
+# ---------------------------------------------------------------------------
+#  Hard timeout safety net
+# ---------------------------------------------------------------------------
+# asyncio.wait_for() on the MCP side may fail to cancel subprocess pipe reads
+# (observed on Python 3.12+).  This timer guarantees the subprocess dies even
+# if the parent's timeout mechanism is broken.
+
+_emulation_timer = None          # threading.Timer for hard self-destruct
+
+
+def _start_hard_timeout(seconds):
+    """Start a hard timeout that kills this process after *seconds*."""
+    global _emulation_timer
+    _cancel_hard_timeout()
+
+    def _die():
+        sys.stderr.write(
+            f"[qiling_emulate_runner] Hard timeout ({seconds}s) reached — "
+            f"forcing exit.\n"
+        )
+        sys.stderr.flush()
+        os._exit(99)
+
+    _emulation_timer = threading.Timer(seconds, _die)
+    _emulation_timer.daemon = True
+    _emulation_timer.start()
+
+
+def _cancel_hard_timeout():
+    """Cancel the hard timeout if it's running."""
+    global _emulation_timer
+    if _emulation_timer is not None:
+        _emulation_timer.cancel()
+        _emulation_timer = None
+
 
 # ---------------------------------------------------------------------------
 #  Module state — persists across commands
@@ -127,6 +164,9 @@ def cmd_emulate_binary(cmd):
     else:
         _setup_api_hooks(ql, os_type, api_calls, limit)
 
+    # Hard safety net: kill this process if emulation hangs.
+    _start_hard_timeout(timeout_seconds + 15)
+
     emulation_exception = None
     try:
         if max_instructions > 0:
@@ -136,6 +176,7 @@ def cmd_emulate_binary(cmd):
     except Exception as e:
         emulation_exception = f"{type(e).__name__}: {e}"
 
+    _cancel_hard_timeout()
     _emulation_completed = True
 
     # Post-hoc activity classification
@@ -241,6 +282,9 @@ def cmd_emulate_shellcode(cmd):
     _init_capstone(arch)
     _setup_api_hooks(ql, os_type, api_calls, limit)
 
+    # Hard safety net: kill this process if emulation hangs.
+    _start_hard_timeout(timeout_seconds + 15)
+
     emulation_exception = None
     try:
         if max_instructions > 0:
@@ -250,6 +294,7 @@ def cmd_emulate_shellcode(cmd):
     except Exception as e:
         emulation_exception = f"{type(e).__name__}: {e}"
 
+    _cancel_hard_timeout()
     _emulation_completed = True
 
     result = {

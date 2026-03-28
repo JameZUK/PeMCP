@@ -17,12 +17,50 @@ Protocol:
     <- {"status": "ok"}
 """
 import json
+import os
 import struct
 import sys
+import threading
 import traceback
 
 import speakeasy
 import speakeasy.winenv.arch as _arch
+
+
+# ---------------------------------------------------------------------------
+#  Hard timeout safety net
+# ---------------------------------------------------------------------------
+# asyncio.wait_for() on the MCP side may fail to cancel subprocess pipe reads
+# (observed on Python 3.12+).  This timer guarantees the subprocess dies even
+# if the parent's timeout mechanism is broken.
+
+_emulation_timer = None          # threading.Timer for hard self-destruct
+
+
+def _start_hard_timeout(seconds):
+    """Start a hard timeout that kills this process after *seconds*."""
+    global _emulation_timer
+    _cancel_hard_timeout()
+
+    def _die():
+        sys.stderr.write(
+            f"[speakeasy_emulate_runner] Hard timeout ({seconds}s) reached — "
+            f"forcing exit.\n"
+        )
+        sys.stderr.flush()
+        os._exit(99)
+
+    _emulation_timer = threading.Timer(seconds, _die)
+    _emulation_timer.daemon = True
+    _emulation_timer.start()
+
+
+def _cancel_hard_timeout():
+    """Cancel the hard timeout if it's running."""
+    global _emulation_timer
+    if _emulation_timer is not None:
+        _emulation_timer.cancel()
+        _emulation_timer = None
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +259,13 @@ def cmd_emulate_pe(cmd):
     try:
         module = se.load_module(filepath)
     except Exception as e:
+        _cancel_hard_timeout()
         return {"error": f"Failed to load module: {e}"}
+
+    # Hard safety net: kill this process if emulation hangs.
+    # Adds 15s buffer beyond the user-requested timeout so the normal
+    # timeout path has a chance to fire first.
+    _start_hard_timeout(timeout_seconds + 15)
 
     emulation_exception = None
     try:
@@ -232,10 +276,12 @@ def cmd_emulate_pe(cmd):
         except TypeError:
             se.run_module(module)
     except (SystemExit, KeyboardInterrupt):
+        _cancel_hard_timeout()
         raise
     except Exception as e:
         emulation_exception = f"{type(e).__name__}: {e}"
 
+    _cancel_hard_timeout()
     _se = se
     _emulation_completed = True
 
@@ -299,7 +345,11 @@ def cmd_emulate_shellcode(cmd):
             data=sc_data,
         )
     except Exception as e:
+        _cancel_hard_timeout()
         return {"error": f"Failed to load shellcode: {e}"}
+
+    # Hard safety net: kill this process if emulation hangs.
+    _start_hard_timeout(timeout_seconds + 15)
 
     emulation_exception = None
     try:
@@ -310,10 +360,12 @@ def cmd_emulate_shellcode(cmd):
         except TypeError:
             se.run_shellcode(addr)
     except (SystemExit, KeyboardInterrupt):
+        _cancel_hard_timeout()
         raise
     except Exception as e:
         emulation_exception = f"{type(e).__name__}: {e}"
 
+    _cancel_hard_timeout()
     _se = se
     _emulation_completed = True
 

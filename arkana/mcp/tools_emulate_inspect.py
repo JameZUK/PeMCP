@@ -154,7 +154,8 @@ class _EmulationSessionManager:
         self._counter = 0
 
     async def create_session(self, engine: str, filepath: str,
-                             emulate_cmd: dict) -> _EmulationSession:
+                             emulate_cmd: dict,
+                             timeout_seconds: int = 0) -> _EmulationSession:
         """Spawn a persistent runner subprocess and run emulation."""
         # Determine the runner script and Python interpreter
         if engine == "qiling":
@@ -189,12 +190,40 @@ class _EmulationSessionManager:
 
         session = _EmulationSession(session_id, proc, engine, filepath)
 
+        # Use user-supplied timeout (+ 30s buffer) for the MCP-side timeout.
+        # Falls back to EMULATION_RUN_TIMEOUT + 30 if no timeout was specified.
+        mcp_timeout = max(timeout_seconds + 30, EMULATION_RUN_TIMEOUT + 30) if timeout_seconds > 0 else EMULATION_RUN_TIMEOUT + 30
+
+        # Backup safety net: a threading.Timer that force-kills the subprocess
+        # if asyncio.wait_for fails to cancel the readline (observed on Python 3.12+).
+        kill_timer = None
+        hard_kill_deadline = mcp_timeout + 15
+
+        def _hard_kill():
+            logger.warning(
+                "Emulation subprocess hard-kill timer fired after %ds — "
+                "asyncio.wait_for likely failed to cancel readline(). "
+                "Killing subprocess pid=%s.",
+                hard_kill_deadline, proc.pid,
+            )
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+        kill_timer = threading.Timer(hard_kill_deadline, _hard_kill)
+        kill_timer.daemon = True
+        kill_timer.start()
+
         # Send the emulation command — this runs the binary and returns the behavioral report
         try:
-            result = await session.send_command(emulate_cmd, timeout=EMULATION_RUN_TIMEOUT + 30)
+            result = await session.send_command(emulate_cmd, timeout=mcp_timeout)
         except Exception:
             await session.kill()
             raise
+        finally:
+            if kill_timer is not None:
+                kill_timer.cancel()
 
         if "error" in result:
             await session.kill()
@@ -389,7 +418,10 @@ async def emulate_and_inspect(
     await ctx.info(f"Starting {engine} emulation (timeout: {timeout_seconds}s)...")
 
     try:
-        session = await mgr.create_session(engine, file_path or "shellcode", emulate_cmd)
+        session = await mgr.create_session(
+            engine, file_path or "shellcode", emulate_cmd,
+            timeout_seconds=timeout_seconds,
+        )
     except RuntimeError as e:
         return {"error": str(e)}
 
