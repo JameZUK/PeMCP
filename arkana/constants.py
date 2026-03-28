@@ -112,6 +112,7 @@ PE_ANALYSIS_MAX_RUNTIME = 3600      # 1 hour ceiling — env: ARKANA_PE_ANALYSIS
 
 CAPA_ANALYSIS_TIMEOUT = 300    # capa analysis during open_file (env: ARKANA_CAPA_ANALYSIS_TIMEOUT)
 FLOSS_ANALYSIS_TIMEOUT = 300   # FLOSS analysis during open_file (env: ARKANA_FLOSS_ANALYSIS_TIMEOUT)
+STRING_TOOL_TIMEOUT = 30       # Per-call timeout for string search/summary tools (env: ARKANA_STRING_TOOL_TIMEOUT)
 HTTP_DOWNLOAD_TIMEOUT = 60     # downloading resources (YARA rules, capa rules)
 HTTP_API_TIMEOUT = 20          # external API calls (e.g. VirusTotal)
 HTTP_QUICK_TIMEOUT = 15        # quick HTTP requests (e.g. PEiD DB download)

@@ -215,23 +215,54 @@ async def search_floss_strings(
 
     all_strings_with_context = _get_cached_flat_strings(include_basic_ascii=False, deduplicate=False)
 
-    matches = []
-    for item in all_strings_with_context:
-        # Cheap checks first: length, then score, then expensive regex
-        string_to_search = item.get("string", "")
-        if len(string_to_search) < min_length:
-            continue
+    # Optimisation: for patterns that are plain substrings (no regex metacharacters),
+    # use str.__contains__ which is ~5-10x faster than re.search().
+    _RE_META = set(r'\.^$*+?{}[]|()')
+    plain_needles = []  # (original_pattern, lowered_needle_or_None)
+    for pat_str, _compiled in zip(regex_patterns, compiled_patterns):
+        if not any(c in pat_str for c in _RE_META):
+            plain_needles.append(pat_str if case_sensitive else pat_str.lower())
+        else:
+            plain_needles.append(None)  # must use regex
 
-        score = item.get('sifter_score', -999.0)
-        min_ok = (min_sifter_score is None) or (score >= min_sifter_score)
-        if not min_ok:
-            continue
-        max_ok = (max_sifter_score is None) or (score <= max_sifter_score)
-        if not max_ok:
-            continue
+    def _do_search():
+        results = []
+        for item in all_strings_with_context:
+            string_to_search = item.get("string", "")
+            if len(string_to_search) < min_length:
+                continue
+            score = item.get('sifter_score', -999.0)
+            if (min_sifter_score is not None) and score < min_sifter_score:
+                continue
+            if (max_sifter_score is not None) and score > max_sifter_score:
+                continue
+            # Fast path for plain substring, fallback to regex
+            search_target = string_to_search if case_sensitive else string_to_search.lower()
+            matched = False
+            for j, needle in enumerate(plain_needles):
+                if needle is not None:
+                    if needle in search_target:
+                        matched = True
+                        break
+                else:
+                    if _safe_regex_search(compiled_patterns[j], string_to_search):
+                        matched = True
+                        break
+            if matched:
+                results.append(item)
+        return results
 
-        if any(_safe_regex_search(p, string_to_search) for p in compiled_patterns):
-            matches.append(item)
+    from arkana.constants import STRING_TOOL_TIMEOUT
+    from arkana.utils import _safe_env_int
+    _timeout = _safe_env_int("ARKANA_STRING_TOOL_TIMEOUT", STRING_TOOL_TIMEOUT)
+    try:
+        matches = await asyncio.wait_for(asyncio.to_thread(_do_search), timeout=_timeout)
+    except asyncio.TimeoutError:
+        matches = []
+        await ctx.warning(
+            f"String search timed out after {_timeout}s ({len(all_strings_with_context)} strings). "
+            f"Try fewer/simpler patterns or increase ARKANA_STRING_TOOL_TIMEOUT."
+        )
 
     # --- Sorting Logic ---
     if sort_order:
@@ -1302,29 +1333,60 @@ async def get_strings_summary(
 
     total_strings = len(all_strings)
 
-    # Categorize using patterns
-    categorized: Dict[str, list] = {cat: [] for cat in STRING_CATEGORY_PATTERNS}
-    categorized["high_value"] = []
+    def _do_categorize():
+        # Categorize using patterns — single pass over all strings
+        cat: Dict[str, list] = {c: [] for c in STRING_CATEGORY_PATTERNS}
+        cat["high_value"] = []
 
-    for s_obj in all_strings:
-        s = s_obj.get("string", "") if isinstance(s_obj, dict) else str(s_obj)
-        if not s:
-            continue
+        # Score distribution computed in same pass (avoids second iteration)
+        s_dist: Dict[str, int] = {"9-10": 0, "7-9": 0, "5-7": 0, "0-5": 0}
 
-        for cat_name, pattern in STRING_CATEGORY_PATTERNS.items():
-            m = pattern.search(s)
-            if m:
-                # IP validation: skip private/benign IPs
-                if cat_name == "ip_addresses":
-                    ip = m.group()
-                    if is_benign_ip(ip):
-                        continue
-                categorized[cat_name].append(s)
+        for s_obj in all_strings:
+            s = s_obj.get("string", "") if isinstance(s_obj, dict) else str(s_obj)
+            score = s_obj.get("sifter_score", 0.0) if isinstance(s_obj, dict) else 0.0
 
-        # High-value strings (ML-scored)
-        score = s_obj.get("sifter_score", 0.0) if isinstance(s_obj, dict) else 0.0
-        if isinstance(score, (int, float)) and score >= max(min_sifter_score, 7.0):
-            categorized["high_value"].append(s)
+            # Score distribution (folded into single pass)
+            if isinstance(score, (int, float)):
+                if score >= 9.0:
+                    s_dist["9-10"] += 1
+                elif score >= 7.0:
+                    s_dist["7-9"] += 1
+                elif score >= 5.0:
+                    s_dist["5-7"] += 1
+                else:
+                    s_dist["0-5"] += 1
+
+            if not s:
+                continue
+
+            for cat_name, pattern in STRING_CATEGORY_PATTERNS.items():
+                m = pattern.search(s)
+                if m:
+                    if cat_name == "ip_addresses":
+                        if is_benign_ip(m.group()):
+                            continue
+                    cat[cat_name].append(s)
+
+            if isinstance(score, (int, float)) and score >= max(min_sifter_score, 7.0):
+                cat["high_value"].append(s)
+
+        return cat, s_dist
+
+    from arkana.constants import STRING_TOOL_TIMEOUT
+    from arkana.utils import _safe_env_int
+    _timeout = _safe_env_int("ARKANA_STRING_TOOL_TIMEOUT", STRING_TOOL_TIMEOUT)
+    try:
+        categorized, score_dist = await asyncio.wait_for(
+            asyncio.to_thread(_do_categorize), timeout=_timeout,
+        )
+    except asyncio.TimeoutError:
+        categorized = {c: [] for c in STRING_CATEGORY_PATTERNS}
+        categorized["high_value"] = []
+        score_dist = {"9-10": 0, "7-9": 0, "5-7": 0, "0-5": 0}
+        await ctx.warning(
+            f"String summary timed out after {_timeout}s ({total_strings} strings). "
+            f"Increase ARKANA_STRING_TOOL_TIMEOUT or use search_hex_pattern for targeted searches."
+        )
 
     # Build result
     result_categories: Dict[str, Any] = {}
@@ -1334,27 +1396,12 @@ async def get_strings_summary(
         if cat_name not in categorized:
             continue
         items = categorized[cat_name]
-        # Deduplicate
         unique = list(dict.fromkeys(items))
         if unique:
             result_categories[cat_name] = {
                 "count": len(unique),
                 "examples": unique[:top_per_category],
             }
-
-    # Sifter score distribution
-    score_dist: Dict[str, int] = {"9-10": 0, "7-9": 0, "5-7": 0, "0-5": 0}
-    for s_obj in all_strings:
-        score = s_obj.get("sifter_score", 0.0) if isinstance(s_obj, dict) else 0.0
-        if isinstance(score, (int, float)):
-            if score >= 9.0:
-                score_dist["9-10"] += 1
-            elif score >= 7.0:
-                score_dist["7-9"] += 1
-            elif score >= 5.0:
-                score_dist["5-7"] += 1
-            else:
-                score_dist["0-5"] += 1
 
     result: Dict[str, Any] = {
         "total_strings": total_strings,
@@ -1757,33 +1804,63 @@ async def search_hex_pattern(
 
     await ctx.info(f"Searching {len(search_data)} bytes for pattern: {pattern}")
 
+    # Optimisation: use bytes.find() for literal patterns (no wildcards) — ~10x
+    # faster than regex on large binaries.
+    has_wildcards = "?" in pattern
+
     def _do_search():
-        compiled = re.compile(regex_pattern, re.DOTALL)
         matches = []
-        for m in compiled.finditer(search_data):
-            file_offset = search_offset_base + m.start()
-            # Get a small context window around the match
-            ctx_start = max(0, m.start() - 8)
-            ctx_end = min(len(search_data), m.end() + 8)
-            context_hex = search_data[ctx_start:ctx_end].hex()
-
-            match_entry = {
-                "offset": hex(file_offset),
-                "offset_decimal": file_offset,
-                "matched_bytes": search_data[m.start():m.end()].hex(),
-                "context": context_hex,
-            }
-            # Try to identify containing section
-            sec_name = _find_section_for_offset(state.pe_object, file_offset)
-            if sec_name:
-                match_entry["section"] = sec_name
-
-            matches.append(match_entry)
-            if len(matches) >= effective_limit:
-                break
+        if not has_wildcards:
+            # Fast path: literal byte search with bytes.find()
+            needle = bytes.fromhex(pattern.replace(" ", ""))
+            pos = 0
+            while pos < len(search_data) and len(matches) < effective_limit:
+                idx = search_data.find(needle, pos)
+                if idx == -1:
+                    break
+                file_offset = search_offset_base + idx
+                ctx_start = max(0, idx - 8)
+                ctx_end = min(len(search_data), idx + len(needle) + 8)
+                match_entry = {
+                    "offset": hex(file_offset),
+                    "offset_decimal": file_offset,
+                    "matched_bytes": search_data[idx:idx + len(needle)].hex(),
+                    "context": search_data[ctx_start:ctx_end].hex(),
+                }
+                sec_name = _find_section_for_offset(state.pe_object, file_offset)
+                if sec_name:
+                    match_entry["section"] = sec_name
+                matches.append(match_entry)
+                pos = idx + 1
+        else:
+            # Wildcard path: regex
+            compiled = re.compile(regex_pattern, re.DOTALL)
+            for m in compiled.finditer(search_data):
+                file_offset = search_offset_base + m.start()
+                ctx_start = max(0, m.start() - 8)
+                ctx_end = min(len(search_data), m.end() + 8)
+                match_entry = {
+                    "offset": hex(file_offset),
+                    "offset_decimal": file_offset,
+                    "matched_bytes": search_data[m.start():m.end()].hex(),
+                    "context": search_data[ctx_start:ctx_end].hex(),
+                }
+                sec_name = _find_section_for_offset(state.pe_object, file_offset)
+                if sec_name:
+                    match_entry["section"] = sec_name
+                matches.append(match_entry)
+                if len(matches) >= effective_limit:
+                    break
         return matches
 
-    matches = await asyncio.to_thread(_do_search)
+    from arkana.constants import STRING_TOOL_TIMEOUT
+    from arkana.utils import _safe_env_int
+    _timeout = _safe_env_int("ARKANA_STRING_TOOL_TIMEOUT", STRING_TOOL_TIMEOUT)
+    try:
+        matches = await asyncio.wait_for(asyncio.to_thread(_do_search), timeout=_timeout)
+    except asyncio.TimeoutError:
+        matches = []
+        await ctx.warning(f"Hex pattern search timed out after {_timeout}s on {len(search_data)} bytes.")
 
     result = {
         "pattern": pattern,
