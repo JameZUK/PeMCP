@@ -38,9 +38,11 @@ from qiling_runner import (
 from qiling import Qiling
 from qiling.const import QL_VERBOSE
 
-# Note: QL_INTERCEPT and set_api() are intentionally NOT used.
-# We use hook_address() per IAT entry to avoid Qiling's forwarded-API
-# double-hook issue on x86 STDCALL.
+# Note: On x86, QL_INTERCEPT and set_api() are NOT used to avoid the
+# forwarded-API double-hook issue with STDCALL stack cleanup.
+# On x8664, set_api() IS used as a FALLBACK to catch DLL-internal
+# forwarded calls (e.g. kernel32→kernelbase) that bypass the IAT.
+# The hook_address() per-IAT-entry approach remains primary for both.
 
 # --- Capstone imports (bundled with Qiling) ---
 try:
@@ -462,6 +464,109 @@ def _build_api_address_map():
         api_name = name.decode() if isinstance(name, bytes) else str(name)
         _api_address_map.setdefault(api_name, []).append(addr)
 
+    # Resolve forwarded exports (x64 only — critical for real DLL rootfs)
+    if _arch == "x8664":
+        _resolve_forwarded_exports()
+
+
+def _resolve_forwarded_exports():
+    """Fix Qiling's unresolved forwarded DLL exports.
+
+    Problem: Windows DLLs use export forwarding (e.g. kernel32!HeapAlloc →
+    NTDLL.RtlAllocateHeap). Qiling's PE loader doesn't resolve these chains,
+    leaving IAT entries pointing at the forwarding STRING data instead of
+    actual function code. When executed, this crashes immediately.
+
+    Solution: Scan all import symbols. For each one, read the bytes at the
+    target address. If they look like a forwarding string ("DLLNAME.FuncName"),
+    resolve the target by looking up the function in the forwarded DLL's
+    export table, then patch the IAT entry to point to the real code.
+    """
+    if _ql is None or not hasattr(_ql, 'loader'):
+        return
+
+    resolved = 0
+    failed = 0
+
+    # Build DLL export lookup: dll_name_lower → {func_name → address}
+    dll_exports = {}
+    if hasattr(_ql.loader, 'import_address_table'):
+        for dll_name, iat in _ql.loader.import_address_table.items():
+            dll_exports[dll_name.lower()] = {
+                (k.decode() if isinstance(k, bytes) else str(k)): v
+                for k, v in iat.items()
+                if isinstance(k, (str, bytes))  # skip ordinal entries
+            }
+
+    if not dll_exports:
+        return
+
+    # Scan all import symbols for forwarding strings
+    for addr, entry in list(_ql.loader.import_symbols.items()):
+        try:
+            # Read bytes at the import target address
+            target_bytes = _ql.mem.read(addr, 64)
+        except Exception:
+            continue
+
+        # Check if this looks like a forwarding string: "DLLNAME.FunctionName\0"
+        # Forwarding strings are ASCII, contain exactly one '.', and are null-terminated
+        try:
+            null_idx = target_bytes.index(0)
+            if null_idx < 5 or null_idx > 60:
+                continue
+            fwd_str = target_bytes[:null_idx].decode('ascii')
+        except (ValueError, UnicodeDecodeError):
+            continue
+
+        if '.' not in fwd_str or fwd_str.count('.') != 1:
+            continue
+
+        # Validate: must look like "DLLNAME.FuncName" (alphanumeric + underscore)
+        dll_part, func_part = fwd_str.split('.', 1)
+        if not dll_part or not func_part:
+            continue
+        if not all(c.isalnum() or c == '_' for c in dll_part):
+            continue
+        if not all(c.isalnum() or c == '_' for c in func_part):
+            continue
+
+        # Look up the target function in the forwarded DLL
+        target_dll = dll_part.lower() + '.dll'
+        target_addr = None
+
+        if target_dll in dll_exports:
+            target_addr = dll_exports[target_dll].get(func_part)
+
+        if target_addr is None:
+            # Try without .dll suffix
+            if dll_part.lower() in dll_exports:
+                target_addr = dll_exports[dll_part.lower()].get(func_part)
+
+        if target_addr is not None:
+            # Check if the resolved address is ALSO a forwarding string (chain)
+            try:
+                check_bytes = _ql.mem.read(target_addr, 64)
+                check_null = check_bytes.index(0)
+                check_str = check_bytes[:check_null].decode('ascii')
+                if '.' in check_str and check_str.count('.') == 1:
+                    # It's a chain — skip for now (would need recursive resolution)
+                    failed += 1
+                    continue
+            except Exception:
+                pass
+
+            # Patch: write a JMP to the real target at the forwarding string address.
+            # On x64: mov rax, imm64; jmp rax = 48 B8 <8 bytes> FF E0 (12 bytes)
+            try:
+                jmp_code = b'\x48\xB8' + target_addr.to_bytes(8, 'little') + b'\xFF\xE0'
+                _ql.mem.write(addr, jmp_code)
+                resolved += 1
+            except Exception:
+                failed += 1
+        else:
+            failed += 1
+
 
 def _wrap_for_hook_address(hook_fn, api_name):
     """Adapt a (ql, address, api_name) stub for hook_address's (ql) signature."""
@@ -631,9 +736,15 @@ def _install_crt_stubs():
     _fls_counter = 0
     _tls_counter = 0
 
-    # Map a 4KB page for string data (command line, environment)
+    # Map pages for string data (command line, environment) and heap stubs.
+    # 4KB for CRT string data, 1MB for stub heap allocations.
     _stub_alloc_base = None
     _stub_alloc_offset = 0
+    global _stub_heap_base, _stub_heap_offset, _STUB_HEAP_SIZE
+    _stub_heap_base = None
+    _stub_heap_offset = 0
+    _STUB_HEAP_SIZE = 0x100000  # 1MB for stub heap
+
     try:
         alloc_addr = 0x7FFE0000
         _ql.mem.map(alloc_addr, 4096, info="[crt_stub_data]")
@@ -646,6 +757,19 @@ def _install_crt_stubs():
             _stub_alloc_base = alloc_addr
         except Exception:
             pass  # No string data stubs
+
+    # Map a 1MB stub heap region for HeapAlloc/VirtualAlloc returns
+    try:
+        heap_addr = 0x50000
+        _ql.mem.map(heap_addr, _STUB_HEAP_SIZE, info="[stub_heap]")
+        _stub_heap_base = heap_addr
+    except Exception:
+        try:
+            heap_addr = 0x10100000
+            _ql.mem.map(heap_addr, _STUB_HEAP_SIZE, info="[stub_heap]")
+            _stub_heap_base = heap_addr
+        except Exception:
+            pass
 
     # Pre-allocate string data for command-line / environment stubs
     _cmdline_a_addr = 0
@@ -804,6 +928,297 @@ def _install_crt_stubs():
             pass
 
     _stub_crt = len(_crt_stub_names) > 0
+
+    # --- x64 fallback: also register stubs via set_api() ---
+    # On x64, there's no STDCALL stack cleanup issue, so set_api() is safe.
+    # This catches DLL-internal forwarded calls (e.g. kernel32→kernelbase)
+    # that bypass the main binary's IAT and therefore bypass hook_address().
+    if _arch == "x8664" and _ql is not None:
+        _install_set_api_fallbacks()
+
+
+def _make_set_api_wrapper(stub_fn, api_name):
+    """Wrap a hook_address-style stub for use with ql.os.set_api().
+
+    set_api callbacks receive (ql, pc, params) but our stubs use
+    (ql, address, _api_name). This adapter bridges the two.
+    """
+    def _wrapper(ql, pc, params):
+        stub_fn(ql, pc, api_name)
+    return _wrapper
+
+
+def _install_set_api_fallbacks():
+    """Register stubs via set_api() AND patch DLL export entry points for x64.
+
+    Three-layer approach for maximum compatibility:
+    1. set_api() — catches Qiling-dispatched API calls
+    2. DLL export patching — writes `xor eax,eax; ret` (or trampoline) at the
+       actual function address in loaded DLLs (ntdll, kernel32, kernelbase, etc.)
+       This prevents native DLL code from executing when set_api dispatch fails.
+    3. Bump allocator — HeapAlloc/VirtualAlloc return unique addresses from a
+       pre-mapped 1MB heap region instead of fixed values.
+
+    Only called on x64 where the STDCALL double-hook issue doesn't apply.
+    """
+    if _ql is None:
+        return
+
+    # --- Collect all stub definitions: name → return_value ---
+    _all_stub_defs = {}
+
+    for spec in _CRT_SIMPLE_STUBS:
+        _all_stub_defs[spec["name"]] = spec["return_value"]
+
+    for spec in _CRT_WRITE_STUBS:
+        _all_stub_defs[spec["name"]] = spec["return_value"]
+
+    # Extra x64 stubs for DLL-forwarded APIs
+    _extra_x64_stubs = [
+        ("GetFileType", 0x2),
+        ("SetHandleCount", 0x20),
+        ("SetStdHandle", 1),
+        ("GetModuleFileNameA", 0),
+        ("GetModuleFileNameW", 0),
+        ("RtlCaptureContext", None),
+        ("RtlLookupFunctionEntry", 0),
+        ("RtlVirtualUnwind", 0),
+        ("RtlUnwindEx", None),
+        ("HeapFree", 1),
+        ("RtlFreeHeap", 1),
+        ("HeapSize", 0x1000),
+        ("RtlSizeHeap", 0x1000),
+        ("HeapCreate", 0x20000),
+        ("GetVersionExW", 1),
+        ("GetVersionExA", 1),
+        ("GetVersion", 0x0A280105),
+        ("GetProcAddress", 0),
+        ("LdrGetProcedureAddress", 0xC0000139),
+        ("LdrLoadDll", 0xC0000135),
+        ("LdrGetDllHandle", 0xC0000135),
+        ("LoadLibraryA", 0),
+        ("LoadLibraryW", 0),
+        ("LoadLibraryExA", 0),
+        ("LoadLibraryExW", 0),
+        ("FreeLibrary", 1),
+        ("VirtualQuery", 0),
+        ("VirtualQueryEx", 0),
+        ("VirtualProtect", 1),
+        ("NtProtectVirtualMemory", 0),
+        ("CloseHandle", 1),
+        ("NtClose", 0),
+        ("DuplicateHandle", 1),
+        ("CreateFileA", 0xFFFFFFFFFFFFFFFF),
+        ("CreateFileW", 0xFFFFFFFFFFFFFFFF),
+        ("NtCreateFile", 0xC0000034),
+        ("NtOpenFile", 0xC0000034),
+        ("ReadFile", 0),
+        ("NtReadFile", 0xC0000008),
+        ("WriteFile", 1),
+        ("GetConsoleMode", 1),
+        ("SetConsoleMode", 1),
+        ("GetConsoleCP", 65001),
+        ("GetConsoleOutputCP", 65001),
+        ("MultiByteToWideChar", 0),
+        ("WideCharToMultiByte", 0),
+        ("RtlMultiByteToUnicodeN", 0),
+        ("RtlUnicodeToMultiByteN", 0),
+        ("IsValidLocale", 1),
+        ("GetLocaleInfoEx", 0),
+        ("CompareStringEx", 0),
+        ("GetTimeZoneInformation", 0),
+        ("GetDynamicTimeZoneInformation", 0),
+        ("SystemTimeToTzSpecificLocalTime", 1),
+        ("FileTimeToSystemTime", 1),
+        ("GetNativeSystemInfo", None),
+        ("GetSystemInfo", None),
+        ("InitOnceExecuteOnce", 1),
+        ("RtlInitUnicodeString", None),
+        ("RtlInitUnicodeStringEx", 0),
+        ("RtlInitAnsiString", None),
+        ("NtAllocateVirtualMemory", 0),
+        ("NtFreeVirtualMemory", 0),
+        ("NtQueryVirtualMemory", 0xC0000004),
+        ("RtlInitializeCriticalSection", 0),
+        ("RtlEnterCriticalSection", 0),
+        ("RtlLeaveCriticalSection", 0),
+        ("RtlDeleteCriticalSection", 0),
+    ]
+    for name, retval in _extra_x64_stubs:
+        _all_stub_defs[name] = retval
+
+    # --- Step 1: Register all stubs via set_api() ---
+    registered = 0
+    for name, retval in _all_stub_defs.items():
+        try:
+            stub = _make_generic_stub(name, retval)
+            wrapper = _make_set_api_wrapper(stub, name)
+            _ql.os.set_api(name, wrapper)
+            registered += 1
+        except Exception:
+            pass
+
+    # Also register write stubs with their write specs
+    for spec in _CRT_WRITE_STUBS:
+        try:
+            stub = _make_generic_stub(spec["name"], spec["return_value"], spec["writes"])
+            wrapper = _make_set_api_wrapper(stub, spec["name"])
+            _ql.os.set_api(spec["name"], wrapper)
+        except Exception:
+            pass
+
+    # --- Step 2: Bump-allocator stubs for heap APIs ---
+    def _stub_heap_alloc(ql, address, _api_name):
+        global _stub_heap_offset
+        size = _stub_read_param(2) & 0xFFFFF
+        if size == 0:
+            size = 16
+        size = (size + 15) & ~15
+        if _stub_heap_base and _stub_heap_offset + size <= _STUB_HEAP_SIZE:
+            addr = _stub_heap_base + _stub_heap_offset
+            _stub_heap_offset += size
+        else:
+            addr = 0
+        _add_trace_entry(_api_name, address, {"size": _hex(size)}, addr)
+        _stub_set_retval(addr)
+
+    def _stub_heap_realloc(ql, address, _api_name):
+        global _stub_heap_offset
+        size = _stub_read_param(3) & 0xFFFFF
+        if size == 0:
+            size = 16
+        size = (size + 15) & ~15
+        if _stub_heap_base and _stub_heap_offset + size <= _STUB_HEAP_SIZE:
+            addr = _stub_heap_base + _stub_heap_offset
+            _stub_heap_offset += size
+        else:
+            addr = 0
+        _add_trace_entry(_api_name, address, {"size": _hex(size)}, addr)
+        _stub_set_retval(addr)
+
+    def _stub_virtual_alloc(ql, address, _api_name):
+        global _stub_heap_offset
+        size = _stub_read_param(1) & 0xFFFFF
+        if size == 0:
+            size = 0x1000
+        size = (size + 0xFFF) & ~0xFFF
+        if _stub_heap_base and _stub_heap_offset + size <= _STUB_HEAP_SIZE:
+            addr = _stub_heap_base + _stub_heap_offset
+            _stub_heap_offset += size
+        else:
+            addr = 0
+        _add_trace_entry(_api_name, address, {"size": _hex(size)}, addr)
+        _stub_set_retval(addr)
+
+    _heap_api_map = {
+        "HeapAlloc": _stub_heap_alloc,
+        "RtlAllocateHeap": _stub_heap_alloc,
+        "HeapReAlloc": _stub_heap_realloc,
+        "RtlReAllocateHeap": _stub_heap_realloc,
+        "VirtualAlloc": _stub_virtual_alloc,
+        "NtAllocateVirtualMemory": _stub_virtual_alloc,
+    }
+    for _heap_name, _heap_fn in _heap_api_map.items():
+        try:
+            wrapper = _make_set_api_wrapper(_heap_fn, _heap_name)
+            _ql.os.set_api(_heap_name, wrapper)
+        except Exception:
+            pass
+
+    # --- Step 3: Patch DLL export entry points directly ---
+    # This is the critical fix: even when set_api doesn't prevent native code
+    # execution, patching the actual function bytes ensures the native code
+    # immediately returns instead of running (and crashing on missing structures).
+    _patch_dll_exports(_all_stub_defs, _heap_api_map)
+
+
+def _patch_dll_exports(stub_defs, heap_api_map):
+    """Patch actual DLL export function addresses with `xor eax,eax; ret`.
+
+    Iterates all loaded DLL images, finds exported function names that match
+    our stub definitions, and overwrites the first bytes of the function with
+    a short return sequence. This prevents native DLL code from executing
+    when Qiling's set_api dispatch doesn't fully intercept the call.
+
+    For heap allocator APIs, patches with a sequence that returns the bump
+    allocator's current address (updated via the set_api hook that fires first).
+    """
+    if _ql is None or not hasattr(_ql, 'loader'):
+        return
+
+    # Merge all API names we want to patch
+    all_names = set(stub_defs.keys()) | set(heap_api_map.keys())
+
+    # Build name → return_value for non-heap APIs
+    ret_map = {}
+    for name in all_names:
+        if name in heap_api_map:
+            ret_map[name] = None  # Heap APIs use bump allocator, patched differently
+        elif name in stub_defs:
+            ret_map[name] = stub_defs[name]
+
+    # x64 ret sequence: xor eax, eax; ret (returns 0) = 31 C0 C3
+    _RET_ZERO = b'\x31\xc0\xc3'
+    # x64 ret sequence: mov eax, 1; ret (returns 1) = B8 01 00 00 00 C3
+    _RET_ONE = b'\xb8\x01\x00\x00\x00\xc3'
+    # x64 just ret (for void functions) = C3
+    _RET_VOID = b'\xc3'
+
+    patched_count = 0
+    # Iterate all loaded images (DLLs)
+    if not hasattr(_ql.loader, 'images'):
+        return
+
+    for image in _ql.loader.images:
+        dll_name = image.path.split('/')[-1].split('\\')[-1].lower()
+        # Only patch system DLLs, not the target binary
+        if not any(dll_name.startswith(d) for d in (
+            'ntdll', 'kernel32', 'kernelbase', 'ucrtbase', 'msvcrt',
+            'advapi32', 'user32', 'gdi32', 'ws2_32', 'ole32',
+            'combase', 'rpcrt4', 'sechost', 'bcrypt', 'crypt32',
+        )):
+            continue
+
+        # Read the DLL's export table from Qiling's export_symbols
+        if not hasattr(_ql.loader, 'export_symbols'):
+            continue
+
+        for ea, entry in _ql.loader.export_symbols.items():
+            # Only patch exports within this DLL's address range
+            if not (image.base <= ea < image.end):
+                continue
+
+            name = entry.get('name')
+            if not name:
+                continue
+            api_name = name.decode() if isinstance(name, bytes) else str(name)
+
+            if api_name not in all_names:
+                continue
+
+            # Determine patch bytes based on return value
+            retval = ret_map.get(api_name)
+            if api_name in heap_api_map:
+                # For heap APIs: patch with ret that returns a value from
+                # the stub_heap region. The set_api hook updates RAX before
+                # the native code runs; but if it doesn't, this ensures we
+                # at least return 0 instead of crashing.
+                patch = _RET_ZERO
+            elif retval is None:
+                patch = _RET_VOID
+            elif retval == 0:
+                patch = _RET_ZERO
+            elif retval == 1:
+                patch = _RET_ONE
+            else:
+                # mov eax, imm32; ret
+                patch = b'\xb8' + (retval & 0xFFFFFFFF).to_bytes(4, 'little') + b'\xc3'
+
+            try:
+                _ql.mem.write(ea, patch)
+                patched_count += 1
+            except Exception:
+                pass
 
 
 def _install_io_stubs():
@@ -1160,6 +1575,38 @@ def _uninstall_mem_hooks():
         _mem_read_hook = None
 
 
+def _extend_stack(ql):
+    """Extend the Qiling stack for x64 Windows binaries.
+
+    Qiling's default stack (~128KB) is insufficient for complex binaries
+    like interpreters (AutoIt3, Python, etc.) that have deep call chains
+    during CRT initialization. Windows default is 1MB reserved.
+
+    This function maps additional memory below the current stack to provide
+    ~1MB total stack space.
+    """
+    try:
+        rsp = ql.arch.regs.read("rsp")
+        # Find the stack base by checking the current mapping
+        stack_base = None
+        for start, end, perm, label, *_ in ql.mem.get_mapinfo():
+            if start <= rsp <= end:
+                stack_base = start
+                break
+        if stack_base is None:
+            return
+
+        # Map 896KB below the current stack base (giving ~1MB total)
+        extension_size = 0xE0000  # 896KB
+        extension_base = stack_base - extension_size
+        if extension_base < 0x10000:
+            return  # Not enough address space
+
+        ql.mem.map(extension_base, extension_size, info="[stack_extension]")
+    except Exception:
+        pass  # Non-critical — emulation continues with original stack
+
+
 # ---------------------------------------------------------------------------
 #  Command handlers
 # ---------------------------------------------------------------------------
@@ -1192,6 +1639,11 @@ def cmd_init(cmd):
     _staged_path = staged_path
     _dll_warning = init_result if isinstance(init_result, str) else None
     _insn_count = 0
+
+    # Extend the stack for x64 Windows binaries — Qiling defaults to ~128KB
+    # but MSVC CRT and complex binaries like interpreters need 1MB+.
+    if arch == "x8664" and os_type == "windows":
+        _extend_stack(ql)
     _breakpoints = {}
     _watchpoints = {}
     _snapshots = {}
@@ -1273,6 +1725,79 @@ def cmd_init(cmd):
     return result
 
 
+_auto_recover_count = 0
+_AUTO_RECOVER_MAX = 500  # Max auto-recoveries before giving up
+
+
+def _auto_recover_unmapped(err_str):
+    """Auto-recover from unmapped/exception errors on x64 by unwinding to caller.
+
+    When a DLL function crashes on unmapped memory or an unhandled CPU exception
+    (common with forwarded exports, unimplemented APIs, or null function pointers),
+    this function:
+    1. Scans the stack for the first valid return address
+    2. Sets RAX=0 (generic failure return)
+    3. Adjusts RSP past the found return address
+    4. Redirects RIP to the return address
+
+    Stack scanning: if [RSP] is not a valid code address (< 0x10000 or > max),
+    scans up to 8 QWORD slots deeper in the stack looking for a valid address
+    in the main binary (0x140000000-0x140200000) or loaded DLLs (0x180000000+).
+
+    Limited to _AUTO_RECOVER_MAX recoveries to prevent infinite loops.
+
+    Returns True if recovery was successful and emulation should retry.
+    """
+    global _auto_recover_count
+    if _ql is None:
+        return False
+
+    _auto_recover_count += 1
+    if _auto_recover_count > _AUTO_RECOVER_MAX:
+        return False
+
+    try:
+        pc = _get_pc()
+        rsp = _ql.arch.regs.read("rsp")
+
+        # Scan the stack for a valid return address (up to 8 slots deep)
+        ret_addr = 0
+        ret_rsp = rsp
+        for slot in range(8):
+            addr = rsp + slot * 8
+            try:
+                val_bytes = _ql.mem.read(addr, 8)
+                val = int.from_bytes(val_bytes, 'little')
+            except Exception:
+                continue
+            # Valid return address: in binary or DLL address space
+            if 0x140000000 <= val <= 0x1401FFFFF:  # Main binary
+                ret_addr = val
+                ret_rsp = addr + 8  # Pop past this slot
+                break
+            if 0x180000000 <= val <= 0x181FFFFFF:  # Loaded DLLs
+                ret_addr = val
+                ret_rsp = addr + 8
+                break
+
+        if ret_addr == 0:
+            return False  # No valid return address found
+
+        # Log the recovery
+        _add_trace_entry(f"_auto_recover@{_hex(pc)}", pc,
+                         {"error": err_str[:80], "ret_to": _hex(ret_addr)},
+                         0)
+
+        # Set RAX=0 (default failure return), adjust RSP past the found slot, redirect RIP
+        _ql.arch.regs.write("rax", 0)
+        _ql.arch.regs.write("rsp", ret_rsp)  # Pop past the return address slot
+        _ql.arch.regs.write("rip", ret_addr)
+
+        return True
+    except Exception:
+        return False
+
+
 def _run_with_reentry(max_insns, timeout_seconds=None):
     """Run emulation with re-entry loop for API hook processing.
 
@@ -1345,7 +1870,11 @@ def _run_with_reentry(max_insns, timeout_seconds=None):
             if run_result[0] is not None:
                 e = run_result[0]
                 err_str = str(e)
-                if "unmapped" in err_str.lower() or "exit" in err_str.lower():
+                if "unmapped" in err_str.lower() or "exception" in err_str.lower():
+                    if _arch == "x8664" and _auto_recover_unmapped(err_str):
+                        continue  # Retry after recovery
+                    return {"stop_reason": "exited", "exit_reason": err_str[:500]}
+                if "exit" in err_str.lower():
                     return {"stop_reason": "exited", "exit_reason": err_str[:500]}
                 return {"stop_reason": "exception", "error_detail": err_str[:500]}
         else:
@@ -1354,7 +1883,12 @@ def _run_with_reentry(max_insns, timeout_seconds=None):
                 _ql.run(count=remaining)
             except Exception as e:
                 err_str = str(e)
-                if "unmapped" in err_str.lower() or "exit" in err_str.lower():
+                if "unmapped" in err_str.lower() or "exception" in err_str.lower():
+                    # --- Auto-recovery for x64: unwind to caller ---
+                    if _arch == "x8664" and _auto_recover_unmapped(err_str):
+                        continue  # Retry the loop after recovery
+                    return {"stop_reason": "exited", "exit_reason": err_str[:500]}
+                if "exit" in err_str.lower():
                     return {"stop_reason": "exited", "exit_reason": err_str[:500]}
                 return {"stop_reason": "exception", "error_detail": err_str[:500]}
 
@@ -2466,11 +3000,22 @@ def cmd_stub_api(cmd):
     hooks, patched = _hook_api_by_address(api_name, wrapped, num_params)
     _stub_hooks[api_name] = hooks
 
+    # On x64, also register via set_api() to catch DLL-internal forwarded calls
+    set_api_registered = False
+    if _arch == "x8664" and _ql is not None:
+        try:
+            sa_wrapper = _make_set_api_wrapper(stub_fn, api_name)
+            _ql.os.set_api(api_name, sa_wrapper)
+            set_api_registered = True
+        except Exception:
+            pass
+
     _user_stubs[api_name] = {
         "return_value": return_value,
         "num_params": num_params,
         "writes": writes,
         "patched": patched,
+        "set_api_registered": set_api_registered,
         "set_last_error": set_last_error_val,
     }
 
