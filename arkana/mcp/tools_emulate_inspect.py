@@ -434,6 +434,78 @@ async def emulate_and_inspect(
 
 
 @tool_decorator
+async def emulation_resume(
+    ctx: Context,
+    timeout_seconds: int = 300,
+    max_instructions: int = 0,
+    session_id: str = "",
+) -> Dict[str, Any]:
+    """[Phase: dynamic] Resume emulation from where it left off.
+
+    After emulate_and_inspect() completes (either by finishing or timing out),
+    this tool continues execution from the current CPU state. Useful for
+    long-running operations like UPX decompression that need more time than
+    a single timeout allows.
+
+    Workflow: emulate_and_inspect(timeout=300) → check memory → emulation_resume(timeout=300)
+    → check memory → repeat until decompression/unpacking is complete.
+
+    Only supported with Qiling engine. Speakeasy does not support resume.
+
+    Args:
+        timeout_seconds: How long to continue emulation (default 300s).
+        max_instructions: Max instructions (0 = unlimited).
+        session_id: Session to resume (uses most recent if empty).
+    """
+    mgr = _get_emulation_manager()
+    session = await mgr.get_session(session_id or None)
+
+    if session.engine != "qiling":
+        return {"error": "Resume is only supported with the Qiling engine. "
+                "Speakeasy does not support resumable emulation."}
+
+    resume_cmd = {
+        "action": "resume",
+        "timeout_seconds": timeout_seconds,
+        "max_instructions": max_instructions,
+    }
+
+    mcp_timeout = timeout_seconds + 30
+
+    # Backup safety net
+    kill_timer = None
+    hard_kill_deadline = mcp_timeout + 15
+
+    def _hard_kill():
+        logger.warning(
+            "Emulation resume hard-kill timer fired after %ds — killing pid=%s.",
+            hard_kill_deadline, session.proc.pid,
+        )
+        try:
+            session.proc.kill()
+        except Exception:
+            pass
+
+    kill_timer = threading.Timer(hard_kill_deadline, _hard_kill)
+    kill_timer.daemon = True
+    kill_timer.start()
+
+    await ctx.info(f"Resuming emulation (timeout: {timeout_seconds}s)...")
+
+    try:
+        result = await session.send_command(resume_cmd, timeout=mcp_timeout)
+    finally:
+        if kill_timer is not None:
+            kill_timer.cancel()
+
+    if "error" in result:
+        return result
+
+    result["session_id"] = session.session_id
+    return await _check_mcp_response_size(ctx, result, "emulation_resume")
+
+
+@tool_decorator
 async def emulation_session_status(
     ctx: Context,
 ) -> Dict[str, Any]:

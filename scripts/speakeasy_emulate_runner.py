@@ -602,6 +602,22 @@ def cmd_write_memory(cmd):
     }
 
 
+def cmd_resume(cmd):
+    """Resume emulation from where it left off (e.g. after a timeout).
+
+    Speakeasy doesn't natively support resume, so this is a no-op that
+    reports the current state. Use Qiling for resumable emulation.
+    """
+    if _se is None or not _emulation_completed:
+        return {"error": "No completed emulation session to resume. "
+                "Note: Speakeasy does not support resumable emulation. Use Qiling engine instead."}
+    return {
+        "status": "ok",
+        "message": "Speakeasy does not support resume. Memory is available for inspection. "
+                   "Use Qiling engine for resumable emulation.",
+    }
+
+
 def cmd_stop(cmd):
     """Clean up and signal exit."""
     global _se, _emulation_completed
@@ -617,6 +633,7 @@ def cmd_stop(cmd):
 DISPATCH = {
     "emulate_pe": cmd_emulate_pe,
     "emulate_shellcode": cmd_emulate_shellcode,
+    "resume": cmd_resume,
     "read_memory": cmd_read_memory,
     "write_memory": cmd_write_memory,
     "memory_map": cmd_memory_map,

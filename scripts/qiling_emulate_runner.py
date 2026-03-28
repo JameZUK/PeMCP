@@ -505,6 +505,50 @@ def cmd_write_memory(cmd):
     }
 
 
+def cmd_resume(cmd):
+    """Resume emulation from where it left off (e.g. after a timeout).
+
+    Continues executing from the current CPU state.  Useful for long-running
+    operations (like UPX decompression) that need more time than a single
+    timeout window allows.
+    """
+    if _ql is None:
+        return {"error": "No Qiling instance. Run emulate_binary or emulate_shellcode first."}
+    if not _emulation_completed:
+        return {"error": "Emulation has not completed its first run yet."}
+
+    timeout_seconds = cmd.get("timeout_seconds", 300)
+    max_instructions = cmd.get("max_instructions", 0)
+
+    _start_hard_timeout(timeout_seconds + 15)
+
+    emulation_exception = None
+    try:
+        if max_instructions > 0:
+            _ql.run(count=max_instructions, timeout=timeout_seconds * 1000000)
+        else:
+            _ql.run(timeout=timeout_seconds * 1000000)
+    except Exception as e:
+        emulation_exception = f"{type(e).__name__}: {e}"
+
+    _cancel_hard_timeout()
+
+    # Read the current program counter to report progress
+    try:
+        pc = _ql.arch.regs.arch_pc
+    except Exception:
+        pc = None
+
+    result = {
+        "status": "resumed_ok",
+        "timeout_seconds": timeout_seconds,
+        "program_counter": _hex(pc) if pc else None,
+    }
+    if emulation_exception:
+        result["emulation_exception"] = emulation_exception
+    return result
+
+
 def cmd_stop(cmd):
     """Clean up and signal exit."""
     global _ql, _staged_path, _emulation_completed
@@ -522,6 +566,7 @@ def cmd_stop(cmd):
 DISPATCH = {
     "emulate_binary": cmd_emulate_binary,
     "emulate_shellcode": cmd_emulate_shellcode,
+    "resume": cmd_resume,
     "read_memory": cmd_read_memory,
     "write_memory": cmd_write_memory,
     "memory_map": cmd_memory_map,
