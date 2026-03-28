@@ -30,6 +30,7 @@ from arkana.constants import (
     MAX_ARTIFACT_FILE_SIZE, DEFAULT_MAX_FILE_SIZE_MB,
     PE_ANALYSIS_SOFT_TIMEOUT, PE_ANALYSIS_MAX_RUNTIME,
     OVERTIME_CHECK_INTERVAL, OVERTIME_STALL_KILL,
+    FLOSS_ANALYSIS_TIMEOUT,
 )
 from arkana.integrity import check_file_integrity as _check_integrity_fn
 from arkana.state import MAX_TOOL_HISTORY, TASK_RUNNING, TASK_OVERTIME, TASK_COMPLETED, TASK_FAILED
@@ -631,7 +632,10 @@ async def open_file(
                 await ctx.report_progress(30, 100)
 
                 if "floss" not in skip_list and FLOSS_AVAILABLE:
-                    await ctx.info("Running FLOSS analysis on shellcode...")
+                    _floss_timeout = _safe_env_int(
+                        "ARKANA_FLOSS_ANALYSIS_TIMEOUT", FLOSS_ANALYSIS_TIMEOUT,
+                    )
+                    await ctx.info(f"Running FLOSS analysis on shellcode (timeout: {_floss_timeout}s)...")
 
                     def _run_floss():
                         # Build an updated copy and assign atomically to
@@ -648,7 +652,17 @@ async def open_file(
                             state.pe_data = updated
                             state._pe_data_shared = False
 
-                    await asyncio.to_thread(_run_floss)
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.to_thread(_run_floss),
+                            timeout=_floss_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        await ctx.warning(
+                            f"FLOSS analysis timed out after {_floss_timeout}s — "
+                            f"skipping deep string analysis. Static strings are still available. "
+                            f"Set ARKANA_FLOSS_ANALYSIS_TIMEOUT to increase the limit."
+                        )
 
                 await ctx.report_progress(95, 100)
 
