@@ -274,13 +274,44 @@ The AI concludes: *"This Go binary is a multi-stage loader, not the stealer itse
 
 ---
 
+## Scenario 10: Peeling a 3-Layer Stealer — AES + UPX + Go (SalatStealer)
+
+**The situation:** A threat intelligence analyst pulls a fresh SalatStealer sample from Malware Bazaar — uploaded the same day, tagged UNIQ (never seen before). It's a 4.8 MB PE32+ console application with a 4.6 MB `.data` section at entropy 8.0 (maximum). The analyst needs to determine what the binary does and extract IOCs, but all the interesting functionality is buried behind multiple protection layers.
+
+**Traditional workflow:** Load in IDA/Ghidra (minutes to analyse the x64 loader), reverse the AES decryption manually, write a Python script to decrypt, discover UPX packing, install UPX tool to decompress, load the 12.9 MB Go binary in a new IDA session (30+ minutes for Go analysis), manually identify stealer targets across thousands of Go functions. Realistically a **multi-day effort** requiring expertise in x64 RE, cryptography, PE packing, and Go binary analysis.
+
+**With Arkana:**
+```
+Analyst: "Find a new malware sample on MalwareBazaar and analyse it"
+```
+Arkana autonomously:
+1. Queries Malware Bazaar API, selects a same-day SalatStealer sample (GCleaner dropper, UNIQ tag)
+2. `open_file` → `get_triage_report` — CRITICAL risk (70), entropy 8.0, AES S-box + inverse S-box detected, 6x CPUID VM detection
+3. `get_function_map` → identifies `sub_140001000` (dropper: VirtualAlloc, CreateProcessA, Sleep) and `sub_140002020` (admin check)
+4. `decompile_function_with_angr` on 9 key functions — fully maps the loader: admin check → UAC bypass → dual-method Defender exclusion → AES decrypt → drop → execute → self-clean
+5. `get_hex_dump` at `.data` offsets → extracts AES-256 key (`efd1...86f7`), IV (`480e...dc14`), and payload boundaries
+6. `refinery_pipeline(steps=["aes:KEY:CBC:IV:padding=pkcs7"])` → **decrypts the 3.6 MB payload in one call** — result starts with `MZ...PE...UPX0, UPX1, UPX2`
+7. Opens the decrypted PE → identifies UPX 5.02 with LZMA (method byte 0x0E from pack header)
+8. Disassembles UPX stub → extracts LZMA params (lc=3, lp=0, pb=2, dict=2^24, sz_unc=12,911,501)
+9. Manually reconstructs LZMA header and decompresses → 12.9 MB Go binary with `Go build ID` at offset 0x72
+10. `search_hex_pattern` on the 12.9 MB dump → finds `Login Data`, `cookies.sqlite`, `key4.db`, `DiscordTokens.txt`, `TelegramDesktop`, 23+ wallet names, `salat/screenshot.Capture`, `salat/main.go`, `taskkill /F /PID`, `SELECT a11, a102 FROM nssPrivate`
+11. Maps the full Go module structure: `salat/main.go`, `salat/funcs.go`, `salat/sets.go`, `salat/task.go`, `salat/screenshot/`
+12. Discovers advanced techniques: LSASS dump attempt, Task Scheduler persistence (capnspacehook/taskmaster), DoH C2 resolution, PBKDF2 Chrome decryption
+13. `generate_cti_report` + `generate_yara_rule` — produces shareable report with 15 MITRE ATT&CK techniques and detection rule
+
+The AI concludes: *"This is a 3-layer matryoshka: MSVC x64 loader → UPX 5.02 LZMA → Go stealer (package 'salat/'). The loader disables Defender via dual methods (registry + PowerShell), then AES-256-CBC decrypts and executes the stealer. The Go payload targets 16 browsers, 23+ crypto wallets, Telegram, Discord, Steam, attempts LSASS credential dump, captures screenshots, and uses DNS-over-HTTPS for stealthy C2 resolution."*
+
+**Full report:** [SalatStealer 3-Layer Info Stealer](example-report-salatstealer.md)
+
+---
+
 ## Arkana vs Traditional Tools
 
 ### Comparison Matrix
 
 | Capability | Arkana | Ghidra | IDA Pro | pestudio | CyberChef | Binary Refinery CLI |
 |---|---|---|---|---|---|---|
-| **PE/ELF/Mach-O parsing** | 281 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
+| **PE/ELF/Mach-O parsing** | 282 tools, auto-detect | Plugin-based | Plugin-based | PE only | No | No |
 | **Decompilation** | Angr (auto, all archs) | Ghidra Decompiler | Hex-Rays ($$$) | No | No | No |
 | **Symbolic execution** | Angr (automated) | Limited (Ghidra scripts) | No | No | No | No |
 | **Data transforms** | 200+ via Binary Refinery | Manual scripting | Manual scripting | No | 300+ (manual) | 200+ (CLI) |
