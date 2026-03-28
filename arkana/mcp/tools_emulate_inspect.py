@@ -32,8 +32,8 @@ from arkana.config import (
 )
 from arkana.constants import (
     MAX_EMULATION_SESSIONS, EMULATION_SESSION_TTL, EMULATION_COMMAND_TIMEOUT,
-    EMULATION_RUN_TIMEOUT, MAX_EMULATION_MEMORY_READ, MAX_EMULATION_SEARCH_MATCHES,
-    EMULATION_SEARCH_CONTEXT_BYTES,
+    EMULATION_RUN_TIMEOUT, EMULATION_MAX_TIMEOUT, MAX_EMULATION_MEMORY_READ,
+    MAX_EMULATION_SEARCH_MATCHES, EMULATION_SEARCH_CONTEXT_BYTES,
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
@@ -353,7 +353,8 @@ async def emulate_and_inspect(
         architecture: "x86" or "x8664" (default "x86"). Used for shellcode.
         os_type: "windows" or "linux" (default "windows"). Qiling only.
         rootfs_path: Custom rootfs path for Qiling (uses default if empty).
-        timeout_seconds: Emulation timeout (default 60).
+        timeout_seconds: Emulation timeout (default 60, max 300s per call).
+            For longer operations use emulation_resume() to continue in stages.
         max_instructions: Max instructions (0 = unlimited).
         limit: Max API calls to return (default 200).
 
@@ -366,6 +367,13 @@ async def emulate_and_inspect(
         _check_speakeasy_available()
     else:
         return {"error": f"Unknown engine: {engine}. Use 'qiling' or 'speakeasy'."}
+
+    # Clamp timeout to prevent indefinite blocking (consistent with debug tools).
+    # Use emulation_resume() for operations that need more time.
+    clamped = False
+    if timeout_seconds > EMULATION_MAX_TIMEOUT:
+        timeout_seconds = EMULATION_MAX_TIMEOUT
+        clamped = True
 
     mgr = _get_emulation_manager()
 
@@ -428,6 +436,14 @@ async def emulate_and_inspect(
     result = session.emulation_result or {}
     result["session_id"] = session.session_id
     result["engine"] = engine
+    if clamped:
+        result["timeout_clamped"] = True
+        result["timeout_used"] = EMULATION_MAX_TIMEOUT
+        result["hint"] = (
+            f"Timeout was clamped to {EMULATION_MAX_TIMEOUT}s (max per call). "
+            f"Use emulation_resume(timeout_seconds=N) to continue execution "
+            f"from the current CPU state — repeat as needed for long operations."
+        )
 
     await ctx.report_progress(100, 100)
     return await _check_mcp_response_size(ctx, result, "emulate_and_inspect")
@@ -453,7 +469,8 @@ async def emulation_resume(
     Only supported with Qiling engine. Speakeasy does not support resume.
 
     Args:
-        timeout_seconds: How long to continue emulation (default 300s).
+        timeout_seconds: How long to continue emulation (default 300s, max 300s per call).
+            Call emulation_resume() again for additional stages.
         max_instructions: Max instructions (0 = unlimited).
         session_id: Session to resume (uses most recent if empty).
     """
@@ -463,6 +480,10 @@ async def emulation_resume(
     if session.engine != "qiling":
         return {"error": "Resume is only supported with the Qiling engine. "
                 "Speakeasy does not support resumable emulation."}
+
+    # Clamp timeout — same cap as emulate_and_inspect
+    if timeout_seconds > EMULATION_MAX_TIMEOUT:
+        timeout_seconds = EMULATION_MAX_TIMEOUT
 
     resume_cmd = {
         "action": "resume",

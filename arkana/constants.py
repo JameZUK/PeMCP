@@ -273,6 +273,7 @@ MAX_EMULATION_SESSIONS = 3              # Max concurrent emulation inspect sessi
 EMULATION_SESSION_TTL = 1800            # 30-minute idle timeout
 EMULATION_COMMAND_TIMEOUT = 60          # Per-command timeout for memory ops
 EMULATION_RUN_TIMEOUT = 300             # Timeout for the emulation run itself
+EMULATION_MAX_TIMEOUT = 300             # Hard cap per call — use emulation_resume() for longer ops
 MAX_EMULATION_MEMORY_READ = 1_048_576   # 1MB max memory read per call
 MAX_EMULATION_SEARCH_MATCHES = 100      # Max memory search matches returned
 EMULATION_SEARCH_CONTEXT_BYTES = 32     # Context bytes around search matches
