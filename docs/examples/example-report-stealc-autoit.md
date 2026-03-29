@@ -249,6 +249,7 @@ Function and variable names are random English word concatenations: `DIVSETTINGS
 - All memory operations use **ntdll direct syscalls** (`NtRead/WriteVirtualMemory`, `NtProtect`, `NtFree`, `NtResume`) to bypass user-mode API hooks deployed by EDR products
 - **RtlDecompressFragment** used to decompress the embedded PE payload in-memory
 - No C2 communication in the AutoIt script — the C2 address (83.142.209.192) is embedded in the injected StealC PE
+- **Embedded PE payload** (477,527 bytes) assembled from 933 hex chunks stored across the script in variable `$UPDXINRLZZ`, encrypted with inline x86/x64 RC4 shellcode stubs (148 + 136 bytes), then compressed with NTLM/LZNT1. The payload is decrypted at runtime via `CallWindowProc` callback execution before injection.
 
 ---
 
@@ -300,6 +301,18 @@ Function and variable names are random English word concatenations: `DIVSETTINGS
 | SFX Title | `DAYS FAMILY PK REPRESENT BROS REMAINS CRUZ YR` |
 | Command | `at.exe hdhf84843isljdfj89234jkjs` |
 | Imphash | `4cea7ae85c87ddc7295d39ff9cda31d1` |
+| Script variable | `$UPDXINRLZZ` (933 hex chunks, 477,527 bytes encrypted PE payload) |
+
+### Embedded Payload
+
+| Property | Value |
+|----------|-------|
+| Size (encrypted) | 477,527 bytes |
+| Chunks | 933 hex string concatenations |
+| Encryption | RC4 via inline x86/x64 shellcode stubs (148 + 136 bytes) |
+| Compression | NTLM/LZNT1 (decompressed via `RtlDecompressFragment`) |
+| Execution | Decrypted → decompressed → injected via process hollowing |
+| C2 | `83.142.209.192` (inside the decrypted PE, not in the AutoIt script) |
 
 ### Cryptographic Materials
 
