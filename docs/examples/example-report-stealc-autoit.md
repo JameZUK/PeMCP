@@ -304,13 +304,24 @@ The PE contains the **builder debug path** `C:\builder_v2\stealc\json.h`, confir
 
 The PE's `.rdata` section contains **12+ Base64-encoded blobs** at offsets `0x81610`–`0x82c80`. These are the encrypted C2 configuration — StealC v2 decrypts them at runtime using a key derived from the binary. The C2 IP `83.142.209.192` (tagged by MalwareBazaar) resides inside these blobs.
 
-Example encrypted config entries:
+All extracted encrypted config entries:
 
-```
-0x81610: WqmHAc5hQZSAnjti4fD9w2+VCtXgTqGx...  (72 bytes)
-0x82340: WISqM+5Vco+9phlAy+3X8Eu1MPXMXJO...  (88 bytes)
-0x82c80: arWPGYE/VqiaijtrqNX8xjajCsD1ZaOB...  (124 bytes)
-```
+| Offset | Length | Base64 Blob |
+|--------|--------|-------------|
+| `0x81610` | 72 | `WqmHAc5hQZSAnjti4fD9w2+VCtXgTqGxkFa+nB4GlKeI/fLqUfSYLz7+56Md3+2ILnqd6A==` |
+| `0x81bd8` | 44 | `XqOdO8R0XKSVgAJ+6cD902mIEej3bKuwnkWjhQUHo4s=` |
+| `0x81ef0` | 48 | `WqmHA859QeqglSJpvIP50GqLCsL4fq2tnQu9nwUHuoG7wA==` |
+| `0x82340` | 88 | `WISqM+5Vco+9phlAy+3X8Eu1MPXMXJOaqn62jgkNg5WAxv7jT+qcNSjK86IN2fGOLW2W0yMvf5I9RmvmXRyg0g==` |
+| `0x823a0` | 84 | `eKSKE851Uq+dhjlg68330GuVENXsfLO6il6Wrikto7Wg5t7Db8q8FQjq04It+dGuDU228yMvf5I9RmvmXRw=` |
+| `0x82420` | 64 | `UYe7M/xSZ4KoqBdfxfHR8E6uLO/FWb2xh0G6sCkMiIeVz/vZVumSPjTJ7aIinQ==` |
+| `0x824a0` | 68 | `SomvI/xSZ4KooTtv9Mzrz3yTP/bwZKCthFeLrx8blJaJ2sHsVvWYNCnm174Xw/eMO3mD` |
+| `0x827c0` | 48 | `EOvJNMRmW7OGlWgsz/DXn0aJP8/Kc7e2lkn3vx8Ei5KV160=` |
+| `0x82b30` | 76 | `Wvy1IMJ9UaiDnw5f/9DP703RV/3OY6qmnFOkvAUeg4G0xvLlSNqHammK3qAR2uGKKX2KxX8wKNls` |
+| `0x82b90` | 64 | `cKORX+V2Quq7jjhp5de47n+TTfb8aIeumkG5mENHopyQwPvmReKiLzXT7LdWig==` |
+| `0x82bf8` | 44 | `Wvy1IMJ9UaiDnw5//9DsxXfUUf30ea2ni0G0wg8Rgw==` |
+| `0x82c80` | 124 | `arWPGYE/VqiaijtrqNX8xjajCsD1ZaOBnEqxhQ1HkJeBgtPgReqePATV7LYXysuOP2eDyGo0Y9dtFXG9DEf5nIqvGQlcahbyedidGxiilj9HNaQMzR+pP2YBY80=` |
+
+These blobs are decrypted at runtime using a key derived from the binary. StealC v2 typically uses RC4 or XOR with a hardcoded key from `.rdata` to decrypt the C2 URL, stealer configuration (browser paths, wallet extensions, file grab rules), and exfiltration parameters. The C2 IP `83.142.209.192` is inside one of these blobs.
 
 ---
 
