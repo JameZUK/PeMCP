@@ -35,7 +35,7 @@ Arkana eliminates this by putting **260 specialised analysis tools behind a sing
 
 **What makes it different:**
 
-- **Breadth** -- 282 tools spanning PE/ELF/Mach-O parsing, angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, .NET deobfuscation and C# decompilation, Frida script generation, vulnerability pattern detection, cross-binary function similarity search, and VirusTotal integration.
+- **Breadth** -- 283 tools spanning PE/ELF/Mach-O parsing, angr-powered decompilation and symbolic execution, Binary Refinery's 200+ composable data transforms, YARA/capa/FLOSS/PEiD signature engines, Qiling/Speakeasy emulation, .NET/Go/Rust specialised analysis, .NET deobfuscation and C# decompilation, Frida script generation, vulnerability pattern detection, cross-binary function similarity search, and VirusTotal integration.
 - **AI reasoning over results** -- Unlike tools that just produce output, Arkana feeds results back to an AI that can reason about them. When it decompiles a function and sees `VirtualAlloc` followed by `memcpy` and an indirect call, it recognises the shellcode injection pattern, renames the function to `inject_shellcode`, and suggests investigating the source buffer.
 - **Zero-config auto-enrichment** -- Open a file and Arkana immediately begins background classification, risk scoring, MITRE ATT&CK mapping, IOC extraction, library identification, and a decompilation sweep. By the time you ask your first question, the answers are already cached.
 - **Interactive debugging** -- Step through binaries instruction-by-instruction with breakpoints, watchpoints, memory inspection, execution snapshots, API call tracing, I/O capture, and custom API stubs. Explore alternative execution paths by snapshotting state, modifying registers or memory, and comparing outcomes.
@@ -133,7 +133,7 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 
 ## How Analysis Works
 
-Arkana follows a structured, evidence-first methodology -- the same phased workflow a professional malware analyst uses, orchestrated automatically across 282 tools. Every claim cites specific tool output, indicators are treated as leads (not conclusions), and the AI cannot attempt decryption without first decompiling the function that performs it.
+Arkana follows a structured, evidence-first methodology -- the same phased workflow a professional malware analyst uses, orchestrated automatically across 283 tools. Every claim cites specific tool output, indicators are treated as leads (not conclusions), and the AI cannot attempt decryption without first decompiling the function that performs it.
 
 **[Read the full methodology with annotated AsyncRAT walkthrough →](docs/methodology.md)**
 

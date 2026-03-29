@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **281 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **283 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -448,6 +448,7 @@ All tools accept data as hex input or operate on the currently loaded file. All 
 | `refinery_string_operations` | Binary string operations: snip (byte slicing), trim, replace, case conversion. Useful for extracting sub-sections of decoded data. |
 | `refinery_pretty_print` | Pretty-print structured data (JSON, XML, JavaScript) for readability. Useful after decoding config files or protocol data. |
 | `refinery_decompile` | Decompile compiled scripts: Python bytecode (`.pyc` files) to source code, and AutoIt scripts (`.a3x` compiled scripts). Both are common vectors for malware distribution. |
+| `autoit_decrypt` | Decrypt and decompile AutoIt3 compiled scripts with dual-PRNG support: standard Mersenne Twister (MT19937) and modified RanRot PRNG (used by DarkGate, StealC, AsgardProtector). Auto-detects algorithm from loaded PE, supports custom keys, EA05/EA06 formats, LZSS decompression, and bytecode deassembly. |
 | `refinery_extract_domains` | Extract DNS domain names using wire-format parsing (more accurate than regex for DNS data). |
 
 ### .NET Analysis (1 dispatched tool, 10 operations)
