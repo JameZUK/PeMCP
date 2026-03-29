@@ -2,7 +2,7 @@
 
 Proposed enhancements and feature ideas for Arkana. Items are grouped by domain and prioritised within each section. Each proposal includes a value assessment to help determine whether the added complexity justifies the benefit over manual analysis.
 
-**Current state:** 281 MCP tools across 61 files, supporting PE/ELF/Mach-O with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy integrations.
+**Current state:** 284 MCP tools across 62 files, supporting PE/ELF/Mach-O with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, and Speakeasy integrations.
 
 **Evaluation criteria for each proposal:**
 - **Value** — Does this enable analysis that's currently impossible, or just faster?
@@ -139,13 +139,13 @@ Arkana exposes `find_path_to_address` and `find_path_with_custom_input`, but the
 
 ---
 
-## 3. Taint Analysis ⚡ PARTIALLY IMPLEMENTED
+## 3. Taint Analysis ✅ IMPLEMENTED
 
-**Status**: Partially implemented via `find_dangerous_data_flows` in `arkana/mcp/tools_vuln.py` (1 tool). Full angr RDA-based taint tracking (Tools B and C) remains unimplemented.
+**Status**: Implemented. Tool A (`find_dangerous_data_flows`, intra-procedural) and Tool B (`trace_taint_flows`, inter-procedural) are complete. Tool C (`get_def_use_chains`) remains optional/unimplemented.
 **Priority**: High
 **Complexity**: Medium-High
-**New dependencies**: None (built on angr's RDA)
-**New tools**: ~~2-3~~ 1 implemented, 2 remaining
+**New dependencies**: None (built on angr's CFG and RDA)
+**New tools**: 2 implemented (Tools A & B), 1 remaining (Tool C, optional)
 
 ### Problem
 
@@ -154,43 +154,29 @@ Arkana has `get_reaching_definitions` and `get_data_dependencies` but these retu
 ### Proposal
 
 **Tool A: `find_dangerous_data_flows`** ✅ IMPLEMENTED
-- Traces data flow from known input sources (recv, read, scanf, argv, etc.) to dangerous sinks (system, strcpy, sprintf, memcpy, WinExec, etc.) across decompiled functions
+- Traces data flow from known input sources to dangerous sinks within individual functions
 - Returns ranked source-sink pairs with propagation paths and confidence scores
-- Pattern-based approach using decompiled code (not full angr RDA)
+- Uses RDA with structural fallback
 
-**Tool B: `find_tainted_sinks`**
-- Automatic mode: identify common source-sink pairs without manual source specification
-- Use angr's RDA + known API signatures from `_category_maps.py`
-- Return ranked list of potential vulnerabilities with source→sink paths
+**Tool B: `trace_taint_flows`** ✅ IMPLEMENTED
+- Inter-procedural taint tracking across function call-chain boundaries
+- Three-phase analysis: (1) structural BFS through call graph, (2) decompile-based argument flow validation, (3) optional per-function RDA for high confidence
+- 5 source categories (network, file, user_input, environment, registry) covering 60+ APIs
+- 4 sink categories (memory, execution, format, exfiltration) covering 50+ APIs
+- Auto-reverse mode: when target function is a sink, traces backward through callers
+- Implemented in `arkana/mcp/tools_taint.py`
 
-**Tool C: `get_def_use_chains`** (optional)
+**Tool C: `get_def_use_chains`** (optional, unimplemented)
 - Present reaching definition data as actionable use-def and def-use chains
 - Structured, navigable format rather than raw RD analysis output
 
-### Value assessment
+### Known limitations
 
-| Dimension | Assessment |
-|-----------|-----------|
-| **Enables new analysis?** | Partially — possible manually by reading decompiled code, but automated taint tracking catches paths humans miss |
-| **Uniqueness** | High — no competing MCP server offers taint analysis |
-| **Complexity cost** | Medium-High — angr's RDA can be slow/incomplete on complex binaries |
-| **Frequency of use** | Medium — vulnerability hunting, understanding data flow in malware |
-| **Alternative** | Manually trace data flow through decompiled code (error-prone, slow) |
-
-### Risks
-
-- angr's RDA may not complete on large or complex functions
-- False positives: not all paths are actually reachable at runtime
-- Taint tracking through memory (heap, global variables) is inherently imprecise
-- Performance: may need to be a background task with timeout
-
-### Implementation
-
-- `find_dangerous_data_flows` provides pattern-based source-to-sink tracing via decompiled code
-- Full RDA-based taint tracking (Tools B and C) would build on existing `get_reaching_definitions` infrastructure in `tools_angr_dataflow.py`
-- Known source/sink API lists already partially exist in `_category_maps.py` (CATEGORIZED_IMPORTS_DB)
-- Background task pattern with progress reporting
-- Cache results per function (taint sources don't change for a given binary)
+- Call graph completeness depends on angr's CFGFast — indirect calls, vtables, and dynamic API resolution (GetProcAddress) create gaps
+- Packed/obfuscated binaries typically have disconnected call graphs, reducing taint chain coverage
+- Decompile-based validation (Phase 2) is heuristic — checks variable assignment patterns in pseudocode
+- RDA validation (Phase 3) may timeout on complex functions
+- No alias analysis — taint through heap/global pointers not tracked
 
 ---
 

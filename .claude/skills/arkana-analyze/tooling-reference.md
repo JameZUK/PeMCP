@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 281 MCP tools organized by use case.
+Complete catalog of all 284 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -27,6 +27,7 @@ Source files: `arkana/mcp/tools_*.py`
 | Decompiling many functions looking for a pattern | `batch_decompile(addresses, search="pattern")` | Grep across up to 20 functions; only functions with matches are returned |
 | `get_hex_dump()` + manual byte matching | `search_hex_pattern(pattern)` | Direct hex pattern search with `??` wildcards, section filter support |
 | Manually checking each function for buffer overflows | `find_dangerous_data_flows()` | Automated source->sink tracing with RDA; covers all functions at once |
+| Checking taint flows across multiple function calls | `trace_taint_flows()` | Inter-procedural taint tracking through entire call graph with 3-phase validation |
 | Calling `decompile_function_with_angr` + `get_function_xrefs` + `get_strings_for_function` + `get_notes` + triage check separately | `get_analysis_context_for_function(address)` | Single-call aggregator returns decompilation, xrefs, strings, notes, complexity, and triage status; use individual tools only for deeper data (full paginated decompilation, CFG, data flow) |
 
 ---
@@ -156,7 +157,8 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `get_forward_slice` | Trace data propagation forward | `address`, `variable` |
 | `get_dominators` | Dominator tree for CFG analysis (diagnostic note when empty) | `address` |
 | `analyze_binary_loops` | Loop detection and analysis (background, timeout 300s) | — |
-| `find_dangerous_data_flows` | Trace untrusted input→dangerous sink flows. Use for vuln audit after `get_function_map`. High-confidence RDA + structural fallback. | `function_address` (optional — scan all if omitted), `limit` (default 30) |
+| `find_dangerous_data_flows` | Trace untrusted input→dangerous sink flows within single functions. Use for vuln audit after `get_function_map`. High-confidence RDA + structural fallback. | `function_address` (optional — scan all if omitted), `limit` (default 30) |
+| `trace_taint_flows` | Inter-procedural taint analysis — trace data from source APIs (recv, read, getenv, etc.) to sink APIs (strcpy, system, send, etc.) across function call-chain boundaries. 3-phase: structural BFS, decompile validation, optional RDA. Auto-reverses when target is a sink. | `source_category` (network/file/user_input/environment/registry/all), `sink_category` (memory/execution/format/exfiltration/all), `max_depth` (1-20), `validate`, `deep_validate`, `target_function` |
 
 ## Emulation
 

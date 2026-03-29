@@ -26,7 +26,7 @@ arkana/                  # Main package
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
 ├── resource_monitor.py  # Process-level RSS/CPU monitoring (psutil daemon thread)
-    └── mcp/                # MCP tool modules (282 tools across 61 files)
+    └── mcp/                # MCP tool modules (284 tools across 62 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain

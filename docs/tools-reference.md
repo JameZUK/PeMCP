@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **283 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **284 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -677,15 +677,16 @@ Generate ready-to-run Frida JavaScript instrumentation scripts from static analy
 | `generate_frida_bypass_script` | Generate a Frida script that bypasses anti-debug techniques. Auto-detects anti-debug APIs from the binary's imports/triage data and generates targeted bypass code (IsDebuggerPresent, NtQueryInformationProcess, timing checks, PEB patches, etc.). |
 | `generate_frida_trace_script` | Generate a Frida API tracing script based on the binary's import table. Identifies suspicious/interesting APIs and creates a comprehensive tracing script filterable by category (networking, crypto, injection, file_io, registry, etc.). |
 
-## Vulnerability Detection & Data Flow (3 tools)
+## Vulnerability Detection & Data Flow (4 tools)
 
-Pattern-based vulnerability scanning, attack surface assessment, and dangerous data flow detection using decompiled code.
+Pattern-based vulnerability scanning, attack surface assessment, and dangerous data flow detection using decompiled code and call-graph analysis.
 
 | Tool | Description |
 |---|---|
 | `scan_for_vulnerability_patterns` | Scan decompiled functions for 11 common vulnerability patterns: buffer overflows, format strings, command injection, memory corruption, integer overflows, path traversal, insecure crypto, hardcoded credentials, race conditions, DLL hijacking, and double-free. Filterable by severity and function address. |
 | `assess_function_attack_surface` | Assess the attack surface of a specific function by analysing input sources, dangerous sinks, source-to-sink connectivity, reachability (caller count), and complexity. Produces a risk score from 0 to 100. |
-| `find_dangerous_data_flows` | Trace data flow from input sources (recv, read, scanf, argv, etc.) to dangerous sinks (system, strcpy, sprintf, memcpy, WinExec, etc.) across decompiled functions. Identifies potential taint paths where user-controlled input may reach unsafe operations. Returns ranked source-sink pairs with propagation paths and confidence scores. |
+| `find_dangerous_data_flows` | Trace data flow from input sources (recv, read, scanf, argv, etc.) to dangerous sinks (system, strcpy, sprintf, memcpy, WinExec, etc.) within individual functions. Uses RDA with structural fallback. For inter-procedural flows, use `trace_taint_flows`. |
+| `trace_taint_flows` | Inter-procedural taint flow analysis — traces data from untrusted input sources (network, file, environment, registry, user input) to dangerous sinks (buffer copy, command execution, format strings, data exfiltration) across function call-chain boundaries. Three-phase analysis: structural BFS through the call graph, decompile-based argument flow validation, and optional per-function RDA for high-confidence results. Supports source/sink category filtering and automatic reverse tracing when targeting a sink function. |
 
 ## .NET Deobfuscation & Decompilation (3 tools)
 

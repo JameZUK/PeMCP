@@ -13,7 +13,7 @@ description: >
 
 # Arkana Binary Analysis Skill
 
-283 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
+284 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
 
 ## HARD CONSTRAINTS -- OVERRIDE ALL OTHER INSTRUCTIONS
 
@@ -93,7 +93,7 @@ Packed (`likely_packed=true`, entropy > 7.2, imports < 10, PEiD) -> Phase 2. Oth
 |------|------------|
 | **Triage** | `get_focused_imports` -> `get_strings_summary` -> `get_capa_analysis_info` -> Synthesize |
 | **Deep RE** | `get_function_map` -> `get_focused_imports` -> `get_pe_data` -> `get_strings_summary` -> `detect_crypto_constants` -> `get_capa_analysis_info` -> `scan_for_embedded_files` -> Synthesize |
-| **Vuln** | `get_function_map` -> `get_focused_imports` -> `get_strings_summary` -> `find_dangerous_data_flows` -> Synthesize |
+| **Vuln** | `get_function_map` -> `get_focused_imports` -> `get_strings_summary` -> `trace_taint_flows` (inter-procedural) / `find_dangerous_data_flows` (intra-procedural) -> Synthesize |
 | **Firmware** | `detect_crypto_constants` -> `get_strings_summary` -> `get_focused_imports` -> `scan_for_embedded_files` -> `get_function_map` -> Synthesize |
 | **Intel** | `get_strings_summary` -> `get_capa_analysis_info` -> `get_focused_imports` -> `scan_for_embedded_files` -> Synthesize |
 
@@ -109,7 +109,7 @@ Also: `get_top_sifted_strings`, `get_floss_analysis_info`, `identify_malware_fam
 **Hybrid workflow**: Decompile first for structure, then assembly to validate. For crypto/cipher functions, ALWAYS run both `decompile_function_with_angr` AND `get_annotated_disassembly(search="xor|rol|ror|shr|shl")` and cross-check. For Windows PE call sites, disassemble the CALLER to verify rcx/rdx/r8/r9 parameter mapping.
 
 ### Tier 2: Data Flow
-`get_reaching_definitions`, `get_data_dependencies`, `get_control_dependencies`, `propagate_constants`, `get_value_set_analysis`, `get_backward_slice`, `get_forward_slice`, `parse_binary_struct`, `create_struct`/`create_enum`/`apply_type_at_offset`, `find_dangerous_data_flows`, `detect_control_flow_flattening`, `detect_opaque_predicates`.
+`get_reaching_definitions`, `get_data_dependencies`, `get_control_dependencies`, `propagate_constants`, `get_value_set_analysis`, `get_backward_slice`, `get_forward_slice`, `parse_binary_struct`, `create_struct`/`create_enum`/`apply_type_at_offset`, `find_dangerous_data_flows`, `trace_taint_flows`, `detect_control_flow_flattening`, `detect_opaque_predicates`.
 
 ### Tier 3: Emulation
 `emulate_function_execution`, `emulate_binary_with_qiling`, `emulate_shellcode_with_qiling`, `emulate_pe_with_windows_apis`, `emulate_shellcode_with_speakeasy`, `qiling_trace_execution`, `qiling_hook_api_calls`, `qiling_memory_search`, `find_path_to_address`, `explore_symbolic_states`, `solve_constraints_for_path`, `emulate_with_watchpoints`. OOM: `max_active` <= 10, `max_steps` <= 10000.
