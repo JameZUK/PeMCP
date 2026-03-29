@@ -321,7 +321,9 @@ All extracted encrypted config entries:
 | `0x82bf8` | 44 | `Wvy1IMJ9UaiDnw5//9DsxXfUUf30ea2ni0G0wg8Rgw==` |
 | `0x82c80` | 124 | `arWPGYE/VqiaijtrqNX8xjajCsD1ZaOBnEqxhQ1HkJeBgtPgReqePATV7LYXysuOP2eDyGo0Y9dtFXG9DEf5nIqvGQlcahbyedidGxiilj9HNaQMzR+pP2YBY80=` |
 
-These blobs are decrypted at runtime using a key derived from the binary. StealC v2 typically uses RC4 or XOR with a hardcoded key from `.rdata` to decrypt the C2 URL, stealer configuration (browser paths, wallet extensions, file grab rules), and exfiltration parameters. The C2 IP `83.142.209.192` is inside one of these blobs.
+Base64 decoding reveals **encrypted binary data** — StealC v2 applies a second encryption layer (typically RC4 or XOR with a hardcoded key from `.rdata`) on top of Base64 encoding. For example, the blob at `0x81610` decodes to 52 bytes starting with `5aa98701ce6141...` — high-entropy encrypted content, not plaintext.
+
+At runtime, StealC v2 Base64-decodes these blobs then decrypts them with a key derived from the binary to recover the C2 URL, stealer configuration (browser paths, wallet extensions, file grab rules), and exfiltration parameters. The C2 IP `83.142.209.192` (confirmed by MalwareBazaar) is inside one of these blobs after runtime decryption. Extracting the runtime decryption key would require decompiling the StealC v2 PE's config initialization function — a task for `extract_config_for_family(family="stealc")` on the extracted payload.
 
 ---
 
