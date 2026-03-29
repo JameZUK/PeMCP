@@ -35,6 +35,7 @@ __all__ = [
     "RUSTBININFO_AVAILABLE", "RUST_DEMANGLER_AVAILABLE",
     "REFINERY_AVAILABLE",
     "OLETOOLS_AVAILABLE",
+    "AUTOIT_RIPPER_AVAILABLE",
     "PSUTIL_AVAILABLE",
     "DE4DOT_AVAILABLE", "DE4DOT_IMPORT_ERROR",
     "NETREACTORSLAYER_AVAILABLE", "NETREACTORSLAYER_IMPORT_ERROR",
@@ -607,6 +608,13 @@ try:
     import oletools.olevba  # noqa: F401
     import oletools.oleid  # noqa: F401
     OLETOOLS_AVAILABLE = True
+except ImportError:
+    pass
+
+AUTOIT_RIPPER_AVAILABLE = False
+try:
+    import autoit_ripper  # noqa: F401
+    AUTOIT_RIPPER_AVAILABLE = True
 except ImportError:
     pass
 
