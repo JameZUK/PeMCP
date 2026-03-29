@@ -321,9 +321,17 @@ All extracted encrypted config entries:
 | `0x82bf8` | 44 | `Wvy1IMJ9UaiDnw5//9DsxXfUUf30ea2ni0G0wg8Rgw==` |
 | `0x82c80` | 124 | `arWPGYE/VqiaijtrqNX8xjajCsD1ZaOBnEqxhQ1HkJeBgtPgReqePATV7LYXysuOP2eDyGo0Y9dtFXG9DEf5nIqvGQlcahbyedidGxiilj9HNaQMzR+pP2YBY80=` |
 
-Base64 decoding reveals **encrypted binary data** — StealC v2 applies a second encryption layer (typically RC4 or XOR with a hardcoded key from `.rdata`) on top of Base64 encoding. For example, the blob at `0x81610` decodes to 52 bytes starting with `5aa98701ce6141...` — high-entropy encrypted content, not plaintext.
+Base64 decoding reveals **RC4-encrypted binary data**. For example, the blob at `0x81610` decodes to 52 raw bytes (`5aa98701ce6141...`) — high-entropy content, not plaintext. StealC v2 applies a second RC4 encryption layer on top of Base64 encoding, using a build-specific key derived from the binary.
 
-At runtime, StealC v2 Base64-decodes these blobs then decrypts them with a key derived from the binary to recover the C2 URL, stealer configuration (browser paths, wallet extensions, file grab rules), and exfiltration parameters. The C2 IP `83.142.209.192` (confirmed by MalwareBazaar) is inside one of these blobs after runtime decryption. Extracting the runtime decryption key would require decompiling the StealC v2 PE's config initialization function — a task for `extract_config_for_family(family="stealc")` on the extracted payload.
+The RC4 config key is stored near the config blobs in `.rdata` — candidate key strings starting with `S6OO` are visible at offsets `0x815a8`–`0x81600`. However, decrypting the blobs requires identifying which string is the key and how it's processed by the StealC v2 config initialization routine. This is a focused task for a follow-up analysis pass on the extracted PE using `decompile_function_with_angr` on the config init function.
+
+**What is confirmed without config decryption:**
+- C2 IP: `83.142.209.192` (MalwareBazaar tag, corroborated by HTTP client capability and geolocation check in PE)
+- Family: **StealC v2** (builder path `C:\builder_v2\stealc\json.h`)
+- Credential targets: Outlook 13.0–16.0, Foxmail, WinSCP, Brave Browser (registry paths in PE strings)
+- Capabilities: geolocation, Base64 encoding, HTTP client, anti-debug (CPUID, RDTSC, IsDebuggerPresent)
+- Drop path: `C:\ProgramData\`
+- The extracted PE (SHA256: `5aebae88...37cc`) is ready for a dedicated StealC v2 config extraction pass
 
 ---
 
