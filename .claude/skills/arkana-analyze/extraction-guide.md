@@ -140,6 +140,72 @@ Several tools support batch mode to avoid repeated single-item calls:
 Batch results include per-item error isolation — individual failures don't fail
 the batch. Each response includes `total`, `succeeded`, and `failed` counts.
 
+## Multi-Layer Delivery Chain Techniques
+
+### IExpress SFX Resource Decoding
+IExpress self-extracting archives store execution commands in RCDATA resources.
+Extract and decode these to understand the full attack chain:
+
+```
+1. extract_resources()  → find RCDATA entries (RUNPROGRAM, POSTRUNPROGRAM, TITLE, etc.)
+2. Read resource values — they're plain ASCII strings:
+   - RUNPROGRAM: primary command executed after extraction
+   - POSTRUNPROGRAM: secondary command (often the real payload trigger)
+   - ADMQCMD/USRQCMD: admin/user-mode commands
+   - TITLE: SFX window title (often random words in malware)
+3. The cabinet (MSCF magic) is in RT_RCDATA/CABINET
+   search_hex_pattern("4D 53 43 46 00 00 00 00")  → find cabinet offset
+   refinery_pipeline(file_offset, length, steps=["nop"], output_path=...)  → extract cabinet
+   refinery_extract(operation='archive', sub_operation='cab')  → extract contents
+```
+
+### Batch Script `type | %comspec%` Piping
+Fileless batch execution: `type malicious.flv | %comspec%` pipes a file's contents
+through cmd.exe as commands. The file doesn't need a .bat extension. Common in
+IExpress-based malware with `POSTRUNPROGRAM` set to this pattern.
+
+To deobfuscate variable-substitution batch scripts:
+```
+1. Extract the batch file from the cabinet
+2. Identify Set commands (they define single characters: Set Folk=/)
+3. Lines NOT starting with "Set" and NOT containing only junk words are the real commands
+4. Substitute all %VarName% patterns with their values
+5. The decoded commands reveal the actual execution chain
+```
+
+### PE Fragment Reassembly
+Malware splits a PE across multiple files to evade AV scanning:
+```
+cmd /c set /p ="MZ" > target.exe <nul        ← Write 2-byte MZ header
+cmd /c findstr /V "marker" Fragment1 >> target.exe  ← Append fragment (skip marker line)
+cmd /c copy /b /y target.exe + Fragment2 + Fragment3 target.exe  ← Binary concatenate
+```
+
+To reconstruct: replicate the exact commands. The fragments are typically in a
+cabinet or dropped files. The reassembled PE often has a valid Authenticode
+signature (in the overlay) despite being fragmented.
+
+### LZNT1 Compressed Payloads
+Malware using `RtlDecompressFragment` stores payloads in LZNT1 format.
+
+**Detection**: First 2 bytes are a chunk header. Signature nibble = `0xB` (bits 15-12):
+```
+get_hex_dump(offset, length=4)  → check if (header >> 12) & 0xF == 0xB
+refinery_decompress(algorithm='lznt1', output_path=...)  → decompress
+```
+
+Common pattern: RC4 decrypt → LZNT1 decompress → valid PE.
+
+### AutoIt3 Post-Decryption Workflow
+After `autoit_decrypt()` recovers the script source:
+
+1. **Decode REVEALS() strings**: `REVEALS("85R118R...", offset)` — subtract offset from each R-separated number to get ASCII
+2. **Extract DllCall targets**: Search for `DllCall(REVEALS(...)` patterns — decode DLL name, return type, and function name
+3. **Find embedded payloads**: Search for large hex assignments (`$VAR = "0x..."` + `$VAR = $VAR & "..."` concatenation chains). Assemble all chunks.
+4. **Recover RC4 keys**: Look for `Binary(REVEALS(...))` adjacent to the payload variable — this is typically the RC4 decryption key
+5. **Decrypt and decompress**: `refinery_xor(key_hex=...)` for RC4, then `refinery_decompress(algorithm='lznt1')` for the inner PE
+6. **Open the extracted PE**: `open_file()` on the result for full triage + analysis
+
 ## .NET-Specific Extraction
 
 - `refinery_dotnet(data, operation)` — .NET resource/metadata extraction

@@ -200,6 +200,38 @@ Strategy:
 5. Continue until no packing indicators remain
 ```
 
+### Deep Multi-Layer Delivery Chains (5+ layers)
+Complex malware (StealC, DarkGate, ValleyRAT loaders) may have 5-7+ layers
+combining multiple techniques: SFX archives, batch scripts, PE fragment
+reassembly, PRNG encryption, script interpreters, process hollowing, and
+compressed payloads.
+
+**Workflow for deep chains:**
+```
+1. At EACH layer transition:
+   - add_note(category='tool_result', content='Layer N: description + key findings')
+   - Save the extracted payload: output_path="/output/layer_N_payload.bin"
+   - Record cryptographic materials (keys, algorithms, offsets)
+
+2. When you extract a NEW binary (PE, script, shellcode):
+   - open_file() on the extracted payload to start a fresh analysis pass
+   - get_triage_report(compact=True) to quickly assess the next layer
+   - Do NOT attempt to analyze an extracted payload without loading it first
+
+3. When you encounter an encrypted/encoded blob inside a script:
+   - Trace the variable assignment chain to find ALL chunks (search_hex_pattern)
+   - Identify the encryption key from adjacent code (often in the same function)
+   - Decrypt with refinery tools, then check for compression headers:
+     * LZNT1: first 2 bytes, (header >> 12) & 0xF == 0xB
+     * LZSS/AutoIt: first 4 bytes == "EA05" or "EA06"
+     * Zlib: first byte == 0x78
+   - Decompress, then open_file() on the result
+
+4. The C2 address is typically in the INNERMOST layer (the final payload PE),
+   NOT in intermediate loaders/scripts. Keep peeling layers until you reach
+   a PE with imports for networking (WinHTTP, WinInet, ws2_32).
+```
+
 ### Encrypted Overlay / Appended Data
 Payload stored after the PE boundary, decrypted at runtime.
 
