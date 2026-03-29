@@ -127,6 +127,7 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 | [Ternary Trap Neural Crackme](docs/examples/example-report-ternary-trap.md) | Neural network password lock | Custom NLI2 format reversal, ternary MLP reconstruction, SIMD assembly type discovery (cvtdq2pd), autoregressive inference, DFS password search |
 | [ACRStealer Go Loader](docs/examples/example-report-acrstealer.md) | Go-compiled info stealer | Same-day Malware Bazaar sample, Go pclntab parsing, custom 5-stage cipher reversal, PEB-walking API evasion, zero static IOCs, encrypted payload extraction |
 | [SalatStealer 3-Layer Stealer](docs/examples/example-report-salatstealer.md) | 3-layer Go stealer | AES-256-CBC payload decryption, UPX 5.02 LZMA manual decompression, Go module mapping, 16 browsers + 23 wallets + LSASS dump, dual Defender evasion, DoH C2 |
+| [StealC 6-Layer AutoIt3 Loader](docs/examples/example-report-stealc-autoit.md) | 6-layer process hollowing loader | IExpress SFX unpacking, batch deobfuscation, PE fragment reassembly, RanRot PRNG decryption (not MT19937!), 41-API process hollowing chain, NUMA sandbox evasion, ntdll direct syscalls |
 
 ---
 
