@@ -323,15 +323,29 @@ All extracted encrypted config entries:
 
 Base64 decoding reveals **RC4-encrypted binary data**. For example, the blob at `0x81610` decodes to 52 raw bytes (`5aa98701ce6141...`) — high-entropy content, not plaintext. StealC v2 applies a second RC4 encryption layer on top of Base64 encoding, using a build-specific key derived from the binary.
 
-The RC4 config key is stored near the config blobs in `.rdata` — candidate key strings starting with `S6OO` are visible at offsets `0x815a8`–`0x81600`. However, decrypting the blobs requires identifying which string is the key and how it's processed by the StealC v2 config initialization routine. This is a focused task for a follow-up analysis pass on the extracted PE using `decompile_function_with_angr` on the config init function.
+The RC4 config key was found at file offset `0x81208` in `.rdata`: **`HfgEeHkZaL01UaoI1t`** (18 bytes ASCII). This is the first non-Base64 string at the start of the config block. Using this key to RC4-decrypt all 249 Base64-encoded config strings yields 100% readable plaintext:
 
-**What is confirmed without config decryption:**
-- C2 IP: `83.142.209.192` (MalwareBazaar tag, corroborated by HTTP client capability and geolocation check in PE)
-- Family: **StealC v2** (builder path `C:\builder_v2\stealc\json.h`)
-- Credential targets: Outlook 13.0–16.0, Foxmail, WinSCP, Brave Browser (registry paths in PE strings)
-- Capabilities: geolocation, Base64 encoding, HTTP client, anti-debug (CPUID, RDTSC, IsDebuggerPresent)
-- Drop path: `C:\ProgramData\`
-- The extracted PE (SHA256: `5aebae88...37cc`) is ready for a dedicated StealC v2 config extraction pass
+**Full C2**: `http://83.142.209.192/f384580958df4b058f6f.php`
+
+| Config Entry | Decrypted Value |
+|-------------|-----------------|
+| C2 URL | `http://83.142.209.192` |
+| C2 Path | `/f384580958df4b058f6f.php` |
+| Build ID | `a91689ecea9642f9874d` |
+| RC4 Key | `HfgEeHkZaL01UaoI1t` |
+| Drop path | `C:\ProgramData\` |
+| Browser targets | Cookies, Login Data, Web Data, History, logins.json, cookies.sqlite |
+| Password format | `passwords.txt` (browser: / profile: / url: / login: / password:) |
+| Firefox NSS | nss3.dll → PK11SDR_Decrypt |
+| Chrome extensions | Local Extension Settings, Sync Extension Settings |
+| Screenshot | `screenshot.jpg` |
+| Steam theft | `Software\Valve\Steam\config\` (ssfn*, config.vdf, libraryfolders.vdf) |
+| Outlook theft | `steal_outlook` flag |
+| PowerShell downloader | `iex(New-Object Net.WebClient).DownloadString('` |
+| Self-delete | `self_delete` flag |
+| Admin escalation | `run_as_admin` / `runas` via SysWOW64 PowerShell |
+| System info | HWID, OS, CPU, RAM, GPU, display resolution, timezone, keyboards, installed apps |
+| Process injection | WriteProcessMemory → QueueUserAPC → ResumeThread (APC injection variant) |
 
 ---
 
@@ -375,7 +389,9 @@ The RC4 config key is stored near the config blobs in `.rdata` — candidate key
 
 | Type | Value | Context |
 |------|-------|---------|
-| IPv4 | `83.142.209.192` | C2 (MalwareBazaar tag, encrypted in PE .rdata Base64 blobs) |
+| URL | `http://83.142.209.192/f384580958df4b058f6f.php` | **Full C2 URL** (decrypted from RC4-encrypted config) |
+| IPv4 | `83.142.209.192` | C2 server IP |
+| URI Path | `/f384580958df4b058f6f.php` | C2 endpoint |
 
 ### Host
 
@@ -403,6 +419,8 @@ The RC4 config key is stored near the config blobs in `.rdata` — candidate key
 | RanRot content key | `0x2477` (au3_ResContent) |
 | RanRot LCG multiplier | `0x53A9B4FB` |
 | RanRot rotation constants | 9, 13 |
+| RC4 key (StealC v2 config) | `HfgEeHkZaL01UaoI1t` (18 bytes ASCII, at .rdata offset `0x81208`) |
+| StealC v2 build ID | `a91689ecea9642f9874d` |
 | RC4 key (PE payload) | `66933969610221600118417580318758` (32 bytes ASCII) |
 
 ---
