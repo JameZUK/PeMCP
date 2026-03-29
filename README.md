@@ -128,6 +128,7 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 | [ACRStealer Go Loader](docs/examples/example-report-acrstealer.md) | Go-compiled info stealer | Same-day Malware Bazaar sample, Go pclntab parsing, custom 5-stage cipher reversal, PEB-walking API evasion, zero static IOCs, encrypted payload extraction |
 | [SalatStealer 3-Layer Stealer](docs/examples/example-report-salatstealer.md) | 3-layer Go stealer | AES-256-CBC payload decryption, UPX 5.02 LZMA manual decompression, Go module mapping, 16 browsers + 23 wallets + LSASS dump, dual Defender evasion, DoH C2 |
 | [StealC v2 7-Layer AutoIt3 Loader](docs/examples/example-report-stealc-autoit.md) | 7-layer process hollowing loader | IExpress SFX → batch deobfuscation → PE fragment reassembly → RanRot PRNG decryption → 41-API process hollowing → RC4 + LZNT1 payload extraction → StealC v2 PE with encrypted C2 config, builder path, and credential targets |
+| [Elysium RAT (SheetRAT)](docs/examples/example-report-elysium-rat.md) | .NET plugin-based RAT | Same-day MalwareBazaar sample, custom 2-alphabet substitution cipher, 313 C# files recovered, AMSI/ETW patch bytes extracted, plugin-framework architecture with registry DLL storage, dual C2 with Dead Drop Resolver |
 
 ---
 
