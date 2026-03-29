@@ -257,7 +257,9 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir dotnetfile; \
     if [ $? -ne 0 ]; then echo "WARNING: dotnetfile install failed — dotnet_analyze() will use dnfile only"; fi && \
     pip install --no-cache-dir pygore; \
-    if [ $? -ne 0 ]; then echo "WARNING: pygore install failed — go_analyze() will use fallback string scan"; fi
+    if [ $? -ne 0 ]; then echo "WARNING: pygore install failed — go_analyze() will use fallback string scan"; fi && \
+    pip install --no-cache-dir autoit-ripper; \
+    if [ $? -ne 0 ]; then echo "WARNING: autoit-ripper install failed — autoit_decrypt() LZSS decompression and bytecode deassembly will be unavailable (core RanRot/MT decryption still works)"; fi
 
 # --- Patch oscrypto for OpenSSL 3.x compatibility (bookworm ships OpenSSL 3) ---
 RUN pip install --no-cache-dir --force-reinstall \

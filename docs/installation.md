@@ -137,6 +137,7 @@ Optional packages can be added individually:
 - `pip install ppdeep py-tlsh`  - Fuzzy hashing (ssdeep/TLSH)
 - `pip install dnfile dncil`  - .NET assembly analysis
 - `pip install pygore`  - Go binary analysis
+- `pip install autoit-ripper`  - AutoIt3 LZSS decompression and bytecode deassembly (core MT/RanRot decryption is built-in)
 - `pip install rustbininfo rust-demangler`  - Rust binary analysis
 - `pip install pyelftools`  - ELF/DWARF analysis
 - `pip install binwalk`  - Embedded file detection

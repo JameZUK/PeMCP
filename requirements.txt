@@ -86,6 +86,12 @@ dncil>=1.0
 # Go binary reverse engineering (compiler version, packages, symbols)
 pygore>=0.5
 
+# --- AutoIt3 Script Decryption (Optional) ---
+# AutoIt compiled script decompression and bytecode deassembly
+# Core decryption (MT19937 + RanRot PRNG) is built into arkana/parsers/autoit.py
+# autoit-ripper provides LZSS decompression and bytecode→source conversion
+autoit-ripper>=1.2
+
 # --- Rust Binary Analysis (Optional) ---
 # Rust binary metadata extraction (compiler, crates, toolchain)
 rustbininfo>=0.5
