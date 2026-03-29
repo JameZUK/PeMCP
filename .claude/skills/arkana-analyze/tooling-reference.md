@@ -287,6 +287,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 |------|----------|----------------|
 | `refinery_deobfuscate_script` | Deobfuscate batch/PowerShell/VBS scripts | `data`, `script_type` |
 | `refinery_decompile` | Decompile code/scripts via refinery | `data` |
+| `autoit_decrypt` | Decrypt AutoIt3 compiled scripts (.a3x / PE-embedded). Supports **MT19937** (standard) and **RanRot PRNG** (modified builds). Auto-detects algorithm by scanning PE for RanRot multiplier (0x53A9B4FB). | `data_hex`, `file_offset`, `file_path`, `prng_type` (auto/mt/ranrot), `custom_key`, `output_path` |
 
 ## Binary Refinery — Utilities
 

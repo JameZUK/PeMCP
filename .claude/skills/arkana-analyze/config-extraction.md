@@ -109,6 +109,42 @@ Extraction: extract_steganography() → extract data after image EOF
 
 ## Family-Specific Extraction
 
+### AutoIt3-Based Loaders (DarkGate, StealC, CyberGate, RedLine loaders)
+**Storage**: C2 and payload data inside encrypted AutoIt3 compiled script (.a3x).
+The script is typically delivered via IExpress SFX, batch scripts, or PE fragment
+reassembly. The actual C2 is often NOT in the AutoIt script — it's in an embedded
+PE that the script injects via process hollowing.
+
+**Encryption**: Two possible PRNGs:
+- **Standard**: Mersenne Twister (MT19937) with custom tempering (0xFF3A58AD, 0xFFFFDF8C)
+- **Modified**: RanRot PRNG (rotl32 with constants 9/13, LCG multiplier 0x53A9B4FB)
+
+**How to identify RanRot**: Search the AutoIt3 binary for `FB B4 A9 53` (LE bytes of
+0x53A9B4FB). If found, the binary uses RanRot. If only `65 89 07 6C` (0x6C078965)
+is present, it uses standard MT.
+
+```
+Detection:  search_floss_strings(regex_patterns=["AU3!EA0"])
+            search_hex_pattern("A3 48 4B BE 98 6C 4A A9")  → EA05 magic
+Extraction: autoit_decrypt(prng_type="auto")                → auto-detect and decrypt
+            autoit_decrypt(prng_type="ranrot", custom_key=0x18EE)  → explicit RanRot
+```
+
+**Modified keys**: If standard key (0x18EE for EA06, 0x16FA for EA05) fails, the key
+was changed. To find the modified key:
+1. Search the binary's .text section for `EE 18` (standard EA06 key in little-endian)
+2. If not found, compare the .text section with an original AutoIt3 stub of the same version
+3. The changed bytes at the same offset are the new key
+4. Pass via `autoit_decrypt(custom_key=0x1234)`
+
+**Obfuscated script strings**: AutoIt3 malware scripts typically encode all strings
+using a `REVEALS()` function with numeric R-separated encoding (e.g., `"85R118R116R107"`
+with a subtraction offset). After decrypting the script, decode strings:
+```python
+parts = encoded.split('R')
+decoded = ''.join(chr(int(p) - offset) for p in parts)
+```
+
 ### Agent Tesla / Snake Keylogger (.NET)
 **Storage**: Static string fields in config class, Base64 + AES-256 encrypted.
 SMTP/FTP/Telegram credentials stored separately.

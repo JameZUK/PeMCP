@@ -13,7 +13,7 @@ description: >
 
 # Arkana Binary Analysis Skill
 
-282 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
+283 MCP tools for PE/ELF/Mach-O static analysis, dynamic emulation, data-flow analysis, deobfuscation, unpacking, and reporting.
 
 ## HARD CONSTRAINTS -- OVERRIDE ALL OTHER INSTRUCTIONS
 
@@ -142,7 +142,7 @@ Also: `get_top_sifted_strings`, `get_floss_analysis_info`, `identify_malware_fam
 
 **Gate**: Before ANY manual decryption you MUST have from code: (1) the algorithm, (2) the key/IV source, (3) the data location/size, (4) the decryption function decompiled. Cannot -> Phase 4. Automated tools exempt.
 
-Automated: `extract_config_automated`, `get_iocs_structured`, `find_and_decode_encoded_strings`, `auto_extract_crypto_keys`, `extract_config_for_family` (after `verify_malware_attribution()`). Read [extraction-guide.md](extraction-guide.md). Family-specific: [config-extraction.md](config-extraction.md).
+Automated: `extract_config_automated`, `get_iocs_structured`, `find_and_decode_encoded_strings`, `auto_extract_crypto_keys`, `extract_config_for_family` (after `verify_malware_attribution()`), `autoit_decrypt` (for AutoIt3 .a3x scripts — supports MT19937 and RanRot PRNG, auto-detects algorithm). Read [extraction-guide.md](extraction-guide.md). Family-specific: [config-extraction.md](config-extraction.md).
 
 ## Phase 6: Research
 

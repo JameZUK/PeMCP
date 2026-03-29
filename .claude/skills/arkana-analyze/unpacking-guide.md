@@ -253,6 +253,42 @@ Malware that unpacks into another process's memory space.
 5. The payload is the real malware — analyze it separately
 ```
 
+### AutoIt3 Compiled Scripts (.a3x)
+AutoIt3 compiled scripts are protected by PRNG-based stream encryption.
+Modified AutoIt3 builds (DarkGate, StealC, AsgardProtector, CyberGate) may use
+**RanRot PRNG** instead of the standard Mersenne Twister. Standard decompilers
+(autoit-ripper, Exe2Aut, refinery) fail on RanRot-encrypted scripts.
+
+**Detection**: Search for `AU3!EA06` or `AU3!EA05` magic in strings/hex. Also
+search for EA05_MAGIC bytes: `A3 48 4B BE 98 6C 4A A9 99 4C 53 0A 86 D6 48 7D`.
+
+```
+1. autoit_decrypt(prng_type="auto")          → auto-detect MT vs RanRot, decrypt
+2. If auto fails, check the binary:
+   search_hex_pattern("FB B4 A9 53")         → RanRot LCG multiplier 0x53A9B4FB
+   If found: autoit_decrypt(prng_type="ranrot")
+   If not:   autoit_decrypt(prng_type="mt")
+3. If standard key fails, find modified key:
+   search_hex_pattern("EE 18 00 00")         → standard EA06 key (0x18EE)
+   If NOT found, the key was changed. Compare .text section with original
+   AutoIt3 stub to find the modified value:
+   autoit_decrypt(custom_key=0x1234)
+```
+
+**How RanRot differs from MT**: RanRot uses `rotl32(state[p1], 9) + rotl32(state[p2], 13)`
+with a 17-element circular buffer. Seeded via LCG: `state[i] = 1 - prev * 0x53A9B4FB`.
+The binary can contain BOTH RanRot (for decrypt) and MT (for AutoIt3's `Random()`
+function). Auto-detection scans for the RanRot multiplier; if found, uses RanRot.
+
+**Multi-layer AutoIt3 delivery** (common in malware):
+```
+IExpress SFX → obfuscated batch script → PE fragment reassembly → AutoIt3.exe
+→ 8-byte XOR outer encryption → RanRot/MT inner encryption → LZSS compression
+```
+The outer XOR key can be derived from the `AU3!EA06` known plaintext (first 8 bytes).
+The inner encryption uses the au3_ResType key (0x18EE for EA06, 0x16FA for EA05).
+`autoit_decrypt()` handles the inner layer; use `refinery_xor` for the outer if needed.
+
 ---
 
 ## Post-Unpacking Checklist

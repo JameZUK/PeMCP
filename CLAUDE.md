@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 282 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym.
+Arkana is a Model Context Protocol (MCP) server exposing 283 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym.
 
 ## Project Structure
 
