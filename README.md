@@ -1,5 +1,7 @@
 # Arkana - Your Entire Malware Analysis Lab, Behind One AI Prompt
 
+[![SafeSkill NaN/100](https://img.shields.io/badge/SafeSkill-NaN%2F100_Blocked-red)](https://safeskill.dev/scan/jamezuk-arkana)
+
 ![Arkana Logo](docs/assets/logo_banner.svg)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
