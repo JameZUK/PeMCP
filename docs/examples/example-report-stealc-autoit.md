@@ -1,28 +1,29 @@
-# Malware Analysis Report: StealC 6-Layer AutoIt3 Process Hollowing Loader
+# Malware Analysis Report: StealC v2 — 7-Layer AutoIt3 Process Hollowing Loader
 
 **Analyst:** Arkana Automated Analysis (multi-session)
 **Date:** 2026-03-29
 **Classification:** Information Stealer / Loader / Process Hollowing Injector
-**Risk Level:** CRITICAL (70/100 outer shell, 180/100 inner AutoIt3)
+**Risk Level:** CRITICAL (68–180/100 across layers)
 **Source:** Malware Bazaar (uploaded 2026-03-28, same day as analysis)
-**Attribution:** StealC family, AsgardProtector, dropped by OffLoader campaign
+**Attribution:** StealC v2 family (builder path: `C:\builder_v2\stealc\json.h`), AsgardProtector, dropped by OffLoader campaign
 
 ---
 
 ## 1. Executive Summary
 
-This report documents the **complete 6-layer reverse engineering of a StealC dropper** — a sophisticated multi-stage delivery chain that weaponizes Microsoft's own `wextract.exe`, reconstructs AutoIt3 from PE fragments, and uses a custom-encrypted AutoIt3 script to inject the final StealC payload via process hollowing. The analysis required cracking the AutoIt3 **RanRot PRNG** encryption, which standard decompilers (autoit-ripper, Exe2Aut, refinery) all failed to handle.
+This report documents the **complete 7-layer reverse engineering of a StealC v2 dropper** — from the outer IExpress SFX through RanRot PRNG decryption of a custom-encrypted AutoIt3 script to the final extraction of a 780 KB StealC v2 PE payload. The analysis cracked every protection layer using only Arkana's MCP tools, culminating in the identification of the builder path (`C:\builder_v2\stealc\json.h`), encrypted C2 configuration, and credential harvesting targets.
 
-The outer sample is a **PE32+ (x64) IExpress self-extracting archive** (3 MB) containing a Microsoft Cabinet with 6 files using decoy names (Accessories, Satisfaction.flv, Sugar, etc.). An obfuscated batch script (`Satisfaction.flv`) is piped through `cmd.exe` — it reassembles **AutoIt3.exe from 4 PE fragments** and executes a 2.2 MB encrypted AutoIt3 script. The script itself is a **process hollowing loader** that injects a compressed StealC PE into a legitimate Windows process using NUMA-aware memory allocation and ntdll direct syscalls to evade EDR hooks.
+The outer sample is a **PE32+ (x64) IExpress self-extracting archive** (3 MB) containing a Microsoft Cabinet with 6 files using decoy names. An obfuscated batch script reassembles **AutoIt3.exe from 4 PE fragments** and executes a 2.2 MB encrypted AutoIt3 script. The script is a **process hollowing loader** with 41 DllCall APIs that decrypts and decompresses an embedded 477 KB payload (RC4 + LZNT1), then injects the resulting **780 KB StealC v2 PE** into a legitimate Windows process using NUMA-aware allocation and ntdll direct syscalls.
 
 **Key findings:**
-- **6-layer matryoshka architecture**: IExpress SFX → obfuscated batch → PE fragment reassembly → 8-byte XOR → RanRot PRNG encryption → process hollowing loader
+- **7-layer matryoshka architecture**: IExpress SFX → obfuscated batch → PE fragment reassembly → 8-byte XOR → RanRot PRNG encryption → process hollowing loader → RC4 + LZNT1 encrypted PE payload
 - **AutoIt3 RanRot PRNG decryption cracked**: Modified AutoIt3 uses RanRot (rotate-and-add, NOT Mersenne Twister) for script encryption; key `0x18EE`, seeded via LCG with multiplier `0x53A9B4FB`
+- **StealC v2 PE extracted**: 477 KB encrypted blob (933 hex chunks, RC4 key `66933969610221600118417580318758`) → LZNT1 decompressed → 780 KB PE with builder path `C:\builder_v2\stealc\json.h`
 - **Batch script injection via `type | %comspec%`**: Satisfaction.flv (disguised as video) piped through cmd.exe for fileless execution
-- **PE fragment reassembly**: AutoIt3.exe reconstructed from 4 cabinet files (Accessories + Revision + Assignments + Sugar) with "MZ" header written separately
+- **PE fragment reassembly**: AutoIt3.exe reconstructed from 4 cabinet files with "MZ" header written separately
 - **41 DllCall APIs for process hollowing**: `VirtualAllocExNuma` (NUMA sandbox evasion) + `NtWriteVirtualMemory` + `NtSetContextThread` + `NtResumeThread`
-- **Anti-analysis**: `DriveGetSerial()` (VM detection), `GetActiveProcessorCount` (core count check), `NtQueryInformationProcess` (debugger detection), `CallWindowProc` (callback shellcode trigger)
-- **C2 at 83.142.209.192** (from MalwareBazaar tags; not present in AutoIt script — embedded in injected PE)
+- **Credential targets**: Outlook (13.0–16.0), Foxmail, WinSCP, Brave Browser; encrypted C2 config in 12+ Base64 blobs
+- **C2 at 83.142.209.192** (MalwareBazaar tag; C2 config encrypted inside extracted PE)
 
 ---
 
@@ -70,6 +71,21 @@ The outer sample is a **PE32+ (x64) IExpress self-extracting archive** (3 MB) co
 | **RanRot Key** | `0x18EE` (standard EA06 au3_ResType) |
 | **Decompressed Script** | 7,233,821 bytes → 3,921,096 chars, 15,299 lines |
 
+### Extracted StealC v2 PE Payload
+
+| Property | Value |
+|----------|-------|
+| **SHA-256** | `5aebae888004e19113d25f18eb71c265909668389b59a08e49cc485c61d537cc` |
+| **MD5** | `ef03dac20af380dfc3b712ef7b9b38a0` |
+| **File Size** | 779,776 bytes (780 KB) |
+| **Format** | PE32+ (x64), 6 sections (`.text`, `.rdata`, `.data`, `.pdata`, `.fptable`, `.reloc`) |
+| **Imports** | 3 DLLs, 99 functions |
+| **Builder Path** | `C:\builder_v2\stealc\json.h` |
+| **Encrypted in script as** | 933 hex chunks in `$UPDXINRLZZ` (477,527 bytes) |
+| **Encryption** | RC4 (key: `66933969610221600118417580318758`, 32 bytes) |
+| **Compression** | LZNT1 (477 KB → 780 KB) |
+| **Risk Score** | CRITICAL (68/100) |
+
 ---
 
 ## 3. Architecture Overview
@@ -103,8 +119,18 @@ Layer 5: RanRot PRNG Encryption (key: 0x18EE)
 
 Layer 6: Process Hollowing Loader (3.9M char AutoIt3 source)
   └─ 41 DllCall APIs for injection
-  └─ VirtualAllocExNuma + NtWriteVirtualMemory
-  └─ Injects compressed StealC PE → credential theft
+  └─ $UPDXINRLZZ: 933 hex chunks → 477,527 bytes encrypted blob
+  └─ Inline RC4 shellcode (148 + 136 bytes, x86 + x64)
+  └─ Key: "66933969610221600118417580318758" (32 bytes)
+
+Layer 7: StealC v2 PE Payload (779,776 bytes)
+  └─ RC4 decrypted → LZNT1 decompressed (477 KB ��� 780 KB)
+  └─ Builder: C:\builder_v2\stealc\json.h
+  └─ 6 sections, 99 imports, 3 DLLs
+  └─ Credential targets: Outlook 13-16, Foxmail, WinSCP, Brave
+  └─ C2 config: 12+ Base64-encrypted blobs at .rdata offsets 0x81610–0x82c80
+  └─ Anti-debug: CPUID, RDTSC, IsDebuggerPresent
+  └─ Geolocation check + HTTP client capabilities
 ```
 
 ---
@@ -253,7 +279,42 @@ Function and variable names are random English word concatenations: `DIVSETTINGS
 
 ---
 
-## 9. MITRE ATT&CK Mapping
+## 9. Layer 7: StealC v2 PE Payload
+
+The 477,527-byte encrypted blob was extracted by tracing variable `$UPDXINRLZZ` through 933 hex-chunk concatenations in the deobfuscated AutoIt3 source. The RC4 decryption key (`66933969610221600118417580318758`) was recovered from a `REVEALS()` call adjacent to the final `$UPDXINRLZZ` reference — passed as `Binary(REVEALS(...))` to the inline shellcode via `CallWindowProc`.
+
+After RC4 decryption, the first two bytes of the result are `10 B5` — an LZNT1 chunk header with signature nibble `0xB`. Decompression via `refinery_decompress(algorithm='lznt1')` yielded a valid 779,776-byte PE32+ executable.
+
+### Identification
+
+The PE contains the **builder debug path** `C:\builder_v2\stealc\json.h`, confirming **StealC v2**. Triage detected geolocation capabilities, Base64 encoding, HTTP client functionality, and anti-debug instructions (CPUID, RDTSC).
+
+### Credential Targets
+
+| Target | Evidence |
+|--------|----------|
+| **Outlook** (Office 13.0–16.0) | Registry paths: `Software\Microsoft\Office\{version}\Outlook\Profiles\...` |
+| **Windows Mail** | Registry: `Software\Microsoft\Windows Messaging Subsystem\Profiles\...` |
+| **Foxmail** | Registry: `Software\Aerofox\FoxmailPreview` |
+| **WinSCP** | Registry: `Software\Martin Prikryl\WinSCP 2\Sessions` |
+| **Brave Browser** | Path: `BraveSoftware\Brave-Browser\User Data\Local State` |
+| **System commands** | `C:\Windows\system32\cmd.exe` for post-exfiltration cleanup |
+
+### Encrypted C2 Configuration
+
+The PE's `.rdata` section contains **12+ Base64-encoded blobs** at offsets `0x81610`–`0x82c80`. These are the encrypted C2 configuration — StealC v2 decrypts them at runtime using a key derived from the binary. The C2 IP `83.142.209.192` (tagged by MalwareBazaar) resides inside these blobs.
+
+Example encrypted config entries:
+
+```
+0x81610: WqmHAc5hQZSAnjti4fD9w2+VCtXgTqGx...  (72 bytes)
+0x82340: WISqM+5Vco+9phlAy+3X8Eu1MPXMXJO...  (88 bytes)
+0x82c80: arWPGYE/VqiaijtrqNX8xjajCsD1ZaOB...  (124 bytes)
+```
+
+---
+
+## 10. MITRE ATT&CK Mapping
 
 | ID | Technique | Tactic | Evidence |
 |----|-----------|--------|----------|
@@ -270,65 +331,64 @@ Function and variable names are random English word concatenations: `DIVSETTINGS
 | T1547.001 | Registry Run Keys | Persistence | RunOnce `wextract_cleanup%d` |
 | T1218.011 | Rundll32 | Defense Evasion | `rundll32.exe advpack.dll,DelNodeRunDLL32` for cleanup |
 
-*12 techniques across 4 tactics (Execution, Defense Evasion, Persistence, Privilege Escalation)*
+| T1005 | Data from Local System | Collection | Registry credential harvesting (Outlook, WinSCP, Foxmail) |
+| T1555.003 | Credentials from Web Browsers | Credential Access | Brave Browser Local State access |
+| T1614.001 | System Language Discovery | Discovery | Geolocation check (capa: "get geographical location") |
+
+*15 techniques across 6 tactics (Execution, Defense Evasion, Persistence, Privilege Escalation, Collection, Credential Access)*
 
 ---
 
-## 10. Indicators of Compromise
+## 11. Indicators of Compromise
 
 ### File Hashes
 
 | Stage | SHA-256 | Description |
 |-------|---------|-------------|
-| Outer dropper | `de6aa3a1...09b` | wextract.exe IExpress SFX |
-| Cabinet | `0256f124...1ee` | MSCF cabinet from RCDATA |
-| AutoIt3.exe | `881619a4...7fb` | Reconstructed from 4 fragments |
-| Encrypted script | `19fa2b7f...cd3` | Yukon.flv (8-byte XOR decrypted) |
+| Outer dropper | `de6aa3a1a821b8a321bcbebf0a467166f5433ca2e3c1e50a7d11bcf9663aa09b` | wextract.exe IExpress SFX |
+| Cabinet | `0256f12415de3ec2ffb316c93c541239235987925fbec28303f2ef53559721ee` | MSCF cabinet from RCDATA |
+| AutoIt3.exe | `881619a47b62b52305d92640cc4d4845a279c23a5a749413785fc8fcb0fdf7fb` | Reconstructed from 4 fragments |
+| StealC v2 PE | `5aebae888004e19113d25f18eb71c265909668389b59a08e49cc485c61d537cc` | Final extracted payload (Layer 7) |
 
 ### Network
 
 | Type | Value | Context |
 |------|-------|---------|
-| IPv4 | `83.142.209.192` | C2 (MalwareBazaar tag, in injected PE) |
+| IPv4 | `83.142.209.192` | C2 (MalwareBazaar tag, encrypted in PE .rdata Base64 blobs) |
 
 ### Host
 
 | Type | Value |
 |------|-------|
 | Registry | `HKLM\Software\Microsoft\Windows\CurrentVersion\RunOnce\wextract_cleanup*` |
+| Registry | `Software\Microsoft\Office\{13-16}.0\Outlook\Profiles\Outlook\...` |
+| Registry | `Software\Aerofox\FoxmailPreview` |
+| Registry | `Software\Martin Prikryl\WinSCP 2\Sessions` |
 | Path | `%WINDIR%\msdownld.tmp\464419\Cardiovascular.exe` |
+| Path | `C:\ProgramData\` (StealC drop path) |
+| Path | `BraveSoftware\Brave-Browser\User Data\Local State` |
+| Builder | `C:\builder_v2\stealc\json.h` |
 | Filename | `Satisfaction.flv`, `Yukon.flv`, `Cardiovascular.exe` |
 | SFX Title | `DAYS FAMILY PK REPRESENT BROS REMAINS CRUZ YR` |
 | Command | `at.exe hdhf84843isljdfj89234jkjs` |
-| Imphash | `4cea7ae85c87ddc7295d39ff9cda31d1` |
-| Script variable | `$UPDXINRLZZ` (933 hex chunks, 477,527 bytes encrypted PE payload) |
-
-### Embedded Payload
-
-| Property | Value |
-|----------|-------|
-| Size (encrypted) | 477,527 bytes |
-| Chunks | 933 hex string concatenations |
-| Encryption | RC4 via inline x86/x64 shellcode stubs (148 + 136 bytes) |
-| Compression | NTLM/LZNT1 (decompressed via `RtlDecompressFragment`) |
-| Execution | Decrypted → decompressed → injected via process hollowing |
-| C2 | `83.142.209.192` (inside the decrypted PE, not in the AutoIt script) |
+| Imphash (dropper) | `4cea7ae85c87ddc7295d39ff9cda31d1` |
 
 ### Cryptographic Materials
 
 | Material | Value |
 |----------|-------|
-| XOR key (outer) | `47a9c5aa5b3f8a50` (8 bytes) |
-| RanRot key | `0x18EE` (au3_ResType) |
+| XOR key (outer script) | `47a9c5aa5b3f8a50` (8 bytes) |
+| RanRot key (script decrypt) | `0x18EE` (au3_ResType) |
 | RanRot content key | `0x2477` (au3_ResContent) |
 | RanRot LCG multiplier | `0x53A9B4FB` |
 | RanRot rotation constants | 9, 13 |
+| RC4 key (PE payload) | `66933969610221600118417580318758` (32 bytes ASCII) |
 
 ---
 
-## 11. Why This Example
+## 12. Why This Example
 
-This sample demonstrates Arkana's capability to **peel through 6 distinct layers of protection** — from a legitimate Windows utility through obfuscated batch scripts, fragmented PE reconstruction, dual-layer custom encryption, to a fully deobfuscated process hollowing loader. The analysis required:
+This sample demonstrates Arkana's capability to **peel through 7 distinct layers of protection** — from a legitimate Windows utility through obfuscated batch scripts, fragmented PE reconstruction, dual-layer custom encryption, a fully deobfuscated process hollowing loader, and finally the extraction of the StealC v2 PE payload with its encrypted C2 configuration. The analysis required:
 
 - **Cabinet extraction** from PE resources via hex pattern search and Binary Refinery
 - **Batch script deobfuscation** by decoding variable substitution with junk-word noise
@@ -337,5 +397,8 @@ This sample demonstrates Arkana's capability to **peel through 6 distinct layers
 - **Algorithm identification** discovering the binary uses RanRot PRNG (not MT19937) through static analysis of the AutoIt3 interpreter, tracing from the script parser through the type dispatcher to the actual PRNG implementation
 - **Full script decompression** using autoit-ripper's LZSS decompressor on the RanRot-decrypted data
 - **API extraction** decoding 21,734 obfuscated strings to reveal the 41-API process hollowing toolkit
+- **RC4 key recovery** from a `REVEALS()` call adjacent to the encrypted payload variable, decoded and used to decrypt the 477 KB embedded blob
+- **LZNT1 decompression** of the RC4-decrypted data to recover the final 780 KB StealC v2 PE
+- **Payload triage** identifying the builder path, credential targets (Outlook, Foxmail, WinSCP, Brave), encrypted C2 configuration, and anti-debug techniques
 
-The RanRot discovery is particularly significant: all existing open-source AutoIt3 decompilers assume Mersenne Twister for script encryption. Modified AutoIt3 binaries using RanRot (as documented in the myAut2Exe/myaut_contrib projects) require algorithm-aware decryption that standard tools cannot provide.
+The RanRot discovery is particularly significant: all existing open-source AutoIt3 decompilers assume Mersenne Twister for script encryption. This analysis led to the development of Arkana's `autoit_decrypt` tool — a new MCP tool supporting both MT19937 and RanRot PRNG with auto-detection, making future AutoIt3 malware analysis significantly faster.
