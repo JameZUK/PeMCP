@@ -82,6 +82,7 @@ import arkana.mcp.tools_context
 import arkana.mcp.tools_dashboard_exposed
 import arkana.mcp.tools_frida
 import arkana.mcp.tools_vuln
+import arkana.mcp.tools_taint
 import arkana.mcp.tools_dotnet_deobfuscate
 import arkana.mcp.tools_vb6
 import arkana.mcp.tools_macro

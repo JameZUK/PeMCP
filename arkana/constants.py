@@ -55,6 +55,10 @@ __all__ = [
     # Data flow analysis
     "MAX_DATA_FLOW_FUNCTIONS", "MAX_DATA_FLOW_FINDINGS",
     "DATA_FLOW_PER_FUNC_TIMEOUT", "DATA_FLOW_AGGREGATE_TIMEOUT",
+    # Taint tracking
+    "MAX_TAINT_CHAIN_DEPTH", "MAX_TAINT_CHAINS",
+    "TAINT_RDA_PER_FUNC_TIMEOUT",
+    "TAINT_MAX_SOURCE_FUNCTIONS", "TAINT_MAX_SINK_FUNCTIONS",
     # CFG null-artifact filtering
     "CFG_NULL_REGION_MIN_SIZE",
     # Obfuscation detection
@@ -234,6 +238,13 @@ MAX_DATA_FLOW_FUNCTIONS = 50       # max functions to analyse for source→sink 
 MAX_DATA_FLOW_FINDINGS = 100       # max flow findings to return
 DATA_FLOW_PER_FUNC_TIMEOUT = 30    # per-function RDA timeout (seconds)
 DATA_FLOW_AGGREGATE_TIMEOUT = 120  # overall tool timeout (seconds)
+
+# --- Taint Tracking ---
+MAX_TAINT_CHAIN_DEPTH = 20         # deepest call chain to explore
+MAX_TAINT_CHAINS = 200             # hard cap on returned chains
+TAINT_RDA_PER_FUNC_TIMEOUT = 30    # per-function RDA timeout (seconds)
+TAINT_MAX_SOURCE_FUNCTIONS = 200   # max source functions to start BFS from
+TAINT_MAX_SINK_FUNCTIONS = 500     # max sink functions to check against
 
 # --- CFG Null-Artifact Filtering ---
 CFG_NULL_REGION_MIN_SIZE = 512  # minimum null-byte run for detection (env: ARKANA_CFG_NULL_MIN_SIZE)
