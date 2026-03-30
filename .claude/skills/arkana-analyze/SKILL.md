@@ -179,6 +179,8 @@ Additional tools available for specific scenarios:
 
 If the server runs with `--tool-profile lazy` (or `ARKANA_TOOL_PROFILE=lazy`), only ~45 core tools are registered at startup. After `open_file` detects the binary format, format-specific analysis tools are registered dynamically — reducing initial context window usage by ~85%. In `minimal` profile, no auto-expansion occurs — use `list_tools_by_phase()` to discover available tools. In `full` profile (default), all 284 tools are available immediately.
 
+`--brief-descriptions` (or `ARKANA_BRIEF_DESCRIPTIONS=1`) trims tool descriptions to first-paragraph summaries (~60% smaller tool listing). Independent of tool profiles — combine with `--tool-profile lazy` for maximum savings. Parameter schemas remain available via MCP `inputSchema`.
+
 **Known limitation (Claude Code)**: Dynamically registered tools become available on the **next conversation turn**, not within the same turn that called `open_file`. This is because Claude Code's MCP client processes `notifications/tools/list_changed` between turns, not mid-turn ([anthropics/claude-code#4118](https://github.com/anthropics/claude-code/issues/4118)). When `open_file` returns `_tools_expanded: true` in lazy mode:
 1. Inform the user that analysis tools have been loaded and will be available momentarily
 2. In the **next message**, all format-specific tools will be callable

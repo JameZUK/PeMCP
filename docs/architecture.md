@@ -143,6 +143,10 @@ Tool registration is managed by `arkana/tool_registry.py`. Three profiles contro
 
 Set via `--tool-profile` CLI argument or `ARKANA_TOOL_PROFILE` environment variable. Use `lazy` or `minimal` to reduce context window usage when `ENABLE_TOOL_SEARCH` is disabled in the MCP client.
 
+### Brief Descriptions
+
+`--brief-descriptions` (or `ARKANA_BRIEF_DESCRIPTIONS=1`) trims tool descriptions to the first paragraph of each docstring — the phase label and summary sentence. This drops "When to use", "Next steps", Args, and Returns documentation, reducing the tool listing size by ~60%. Parameter schemas are still conveyed via the MCP `inputSchema` field. Applied at tool registration time via `_extract_brief_description()` in `server.py`. Independent of tool profiles — combine with `--tool-profile lazy` for maximum context savings.
+
 > **Client compatibility**: `notifications/tools/list_changed` is part of the MCP spec but client support varies. Claude Code has partial support (cross-turn only). Claude Desktop, MCP Inspector, and OpenAI Codex do not reliably process it. Cursor and VS Code Copilot reportedly handle it correctly. If your client does not support dynamic tool updates, use `full` profile.
 
 ---

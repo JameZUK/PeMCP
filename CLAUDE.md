@@ -71,6 +71,7 @@ ruff check arkana/ tests/ \
 - **Search/grep in decompilation**: `decompile_function_with_angr`, `batch_decompile`, `get_annotated_disassembly` accept `search` (regex), `context_lines`, `case_sensitive`. Search is a view/filter on cached results. `_search_helpers.py` validates via `validate_regex_pattern()` for ReDoS safety.
 - **`tool_decorator`**: Wraps every MCP tool — handles session activation, heartbeat, history recording, error enrichment, and sets `_current_tool_var` contextvar for warning attribution.
 - **Tool profiles**: `--tool-profile` CLI arg / `ARKANA_TOOL_PROFILE` env var controls tool registration. `full` (default) registers all tools at startup. `lazy` registers ~45 core tools, then dynamically adds format-specific tools after `open_file` detects the format — sends `notifications/tools/list_changed` to the MCP client. `minimal` registers core tools only. Module groups defined in `arkana/tool_registry.py`. Use `lazy`/`minimal` when `ENABLE_TOOL_SEARCH` is disabled. **Known limitation**: Claude Code processes `list_changed` between turns, not mid-turn — dynamically added tools appear on the next conversation turn after `open_file`, not within the same turn. The `open_file` response includes `_tools_expanded` / `_tools_expanded_hint` to signal this to the model.
+- **Brief descriptions**: `--brief-descriptions` CLI flag / `ARKANA_BRIEF_DESCRIPTIONS=1` env var. Trims tool docstrings to the first paragraph only (phase label + summary sentence), dropping "When to use", "Next steps", Args, and Returns sections. Reduces tool listing size by ~60%. Independent of `--tool-profile`. Applied at tool registration time via `_extract_brief_description()` in `server.py`. Combine with `--tool-profile lazy` for maximum context savings when tool search is unavailable.
 - **Warning capture**: `arkana/warning_handler.py` captures WARNING+ from library loggers into `state.analysis_warnings`, deduplicated, attributed via `_current_tool_var`/`_current_task_var`. Session-scoped (not persisted to cache).
 - **Resource monitor**: `arkana/resource_monitor.py` — psutil daemon thread. Alerts injected into `_collect_background_alerts()`. Returns `None` when psutil unavailable.
 - **Null-region detection**: `_is_null_region_artifact()` filters null-byte regions (angr interprets as `add [rax], al`) from `get_function_map` and enrichment. `release_angr_memory` drops angr project/CFG, calls `gc.collect()` + `malloc_trim(0)`, preserves PE data/notes/session.
@@ -119,6 +120,8 @@ Global status bar shows active tool + background tasks, 3s htmx refresh, collaps
 ./run.sh                  # HTTP mode (port 8082)
 ./run.sh --samples ~/dir  # Mount samples directory
 ./run.sh --tool-profile lazy  # Reduced context (core tools only at startup)
+./run.sh --brief-descriptions  # Short tool descriptions (~60% smaller listing)
+./run.sh --tool-profile lazy --brief-descriptions  # Maximum context savings
 ```
 
 4 venvs isolate incompatible unicorn versions (angr v2, Speakeasy/Unipacker/Qiling v1). .NET tools via subprocess (de4dot-cex/mono, NETReactorSlayer, ilspycmd/dotnet).

@@ -160,6 +160,12 @@ def _parse_arguments() -> argparse.Namespace:
                                 "Use 'lazy' or 'minimal' to reduce context window usage when "
                                 "ENABLE_TOOL_SEARCH is disabled. "
                                 "Falls back to ARKANA_TOOL_PROFILE env var.")
+    mcp_group.add_argument("--brief-descriptions", action="store_true", default=None,
+                           help="Use brief tool descriptions (first paragraph only) to reduce "
+                                "context window usage. Full descriptions include 'When to use', "
+                                "'Next steps', Args, and Returns sections; brief mode keeps only "
+                                "the phase label and summary sentence. "
+                                "Falls back to ARKANA_BRIEF_DESCRIPTIONS=1 env var.")
 
     args = None
     try:
@@ -454,6 +460,15 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
     if not MCP_SDK_AVAILABLE:
         logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.")
         sys.exit(1)
+
+    # Resolve brief descriptions: CLI flag > env var > default off
+    # Must be set BEFORE tool registration so docstrings are trimmed at
+    # decoration time when tool modules are imported.
+    brief = args.brief_descriptions or os.environ.get("ARKANA_BRIEF_DESCRIPTIONS", "0") == "1"
+    if brief:
+        from arkana.mcp.server import set_brief_descriptions
+        set_brief_descriptions(True)
+        logger.info("Brief tool descriptions enabled — tool listing will use first-paragraph summaries only")
 
     # Resolve tool profile: CLI arg > env var > default "full"
     tool_profile = (

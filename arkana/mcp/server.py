@@ -27,6 +27,49 @@ _SOFT_LIMIT = _safe_env_int("ARKANA_MCP_RESPONSE_LIMIT_CHARS", MCP_SOFT_RESPONSE
 mcp_server = FastMCP("Arkana")
 _raw_tool_decorator = mcp_server.tool()
 
+# --- Brief descriptions mode ---
+# When enabled, tool docstrings are trimmed to the first paragraph only
+# (everything before the first blank line).  This dramatically reduces the
+# size of the tool listing sent to AI clients that don't support tool search.
+# Set via --brief-descriptions CLI flag or ARKANA_BRIEF_DESCRIPTIONS=1 env var.
+_brief_descriptions: bool = False
+
+
+def set_brief_descriptions(enabled: bool) -> None:
+    """Enable or disable brief tool descriptions. Must be called before tool registration."""
+    global _brief_descriptions
+    _brief_descriptions = enabled
+
+
+def _extract_brief_description(docstring: str) -> str:
+    """Extract the first paragraph from a docstring (up to first blank line).
+
+    Tool docstrings follow a consistent structure:
+        [Phase: ...] One or two sentence description.
+
+        When to use: ...
+        Next steps: ...
+
+        Args: ...
+        Returns: ...
+
+    In brief mode we keep only the opening paragraph — the phase label and
+    description — which gives the model enough context to decide when to
+    invoke the tool.  Parameter schemas are already conveyed by the MCP
+    tool listing's inputSchema field.
+    """
+    # Normalise leading whitespace (docstrings are often indented)
+    stripped = docstring.strip()
+    if not stripped:
+        return stripped
+    # Split on blank line (double newline after stripping indentation).
+    # textwrap.dedent would be heavier than needed — just split on \n\n.
+    idx = stripped.find("\n\n")
+    if idx == -1:
+        return stripped  # single paragraph — return as-is
+    return stripped[:idx].strip()
+
+
 # Tools excluded from automatic history recording to avoid noise / recursion.
 _SKIP_HISTORY_TOOLS = frozenset({
     "get_tool_history", "clear_tool_history", "get_session_summary",
@@ -385,6 +428,13 @@ def tool_decorator(func):
                 result["_background_alerts"] = alerts
 
         return result
+    # In brief mode, trim the docstring to the first paragraph before
+    # FastMCP reads it for the tool listing.  This is a registration-time
+    # transformation — the full docstring is still available on the original
+    # function object via func.__doc__.
+    if _brief_descriptions and _with_session.__doc__:
+        _with_session.__doc__ = _extract_brief_description(_with_session.__doc__)
+
     return _raw_tool_decorator(_with_session)
 
 # --- MCP Feedback Helpers ---

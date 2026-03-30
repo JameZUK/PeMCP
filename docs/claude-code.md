@@ -26,13 +26,13 @@ claude mcp add --scope project -e VT_API_KEY=your-key-here arkana -- python /pat
 claude mcp add --scope user arkana -- python /path/to/Arkana/arkana.py --mcp-server
 ```
 
-**Add with `--tool-profile lazy` to reduce context window usage:**
+**Add with `--tool-profile lazy` and `--brief-descriptions` to reduce context window usage:**
 
 ```bash
-claude mcp add --scope project arkana -- python /path/to/Arkana/arkana.py --mcp-server --tool-profile lazy --samples-path /path/to/samples
+claude mcp add --scope project arkana -- python /path/to/Arkana/arkana.py --mcp-server --tool-profile lazy --brief-descriptions --samples-path /path/to/samples
 ```
 
-In `lazy` mode, only ~45 core tools are registered at startup (~85% context reduction). After `open_file` detects the binary format, format-specific tools are added dynamically. **Note:** Due to a Claude Code limitation, dynamically added tools become available on the **next conversation turn** after `open_file`, not within the same turn. The `open_file` response includes a hint explaining this. This is useful when `ENABLE_TOOL_SEARCH` is disabled.
+In `lazy` mode, only ~45 core tools are registered at startup (~85% context reduction). After `open_file` detects the binary format, format-specific tools are added dynamically. `--brief-descriptions` further reduces context by trimming tool descriptions to first-paragraph summaries (~60% smaller tool listing). The two flags are independent and can be used separately or together. **Note:** Due to a Claude Code limitation, dynamically added tools become available on the **next conversation turn** after `open_file`, not within the same turn. The `open_file` response includes a hint explaining this. These options are useful when `ENABLE_TOOL_SEARCH` is disabled.
 
 **Add using Docker (via `run.sh` helper):**
 

@@ -163,6 +163,7 @@ These are compile-time constants in `arkana/constants.py` (not overridable via e
 | Variable | Default | Description |
 |---|---|---|
 | `ARKANA_TOOL_PROFILE` | `full` | Tool registration profile. `full` registers all 284 tools at startup (default). `lazy` registers only ~45 core tools at startup and dynamically adds format-specific tools when `open_file` detects the binary format — reduces context window usage by ~85% initially. `minimal` registers core tools only with no auto-expansion. Use `lazy` or `minimal` when `ENABLE_TOOL_SEARCH` is disabled. Can also be set via `--tool-profile` CLI argument (takes precedence). **Note:** In `lazy` mode, dynamically registered tools become available on the next conversation turn, not within the same turn that called `open_file`. This is a known MCP client limitation. |
+| `ARKANA_BRIEF_DESCRIPTIONS` | `0` | When set to `1`, trims tool descriptions to the first paragraph only (phase label + summary sentence). Drops "When to use", "Next steps", Args, and Returns documentation from the tool listing. Reduces tool listing size by ~60%. Independent of `ARKANA_TOOL_PROFILE` — can be combined with `lazy` for maximum context savings. Can also be set via `--brief-descriptions` CLI flag (takes precedence). |
 
 ---
 
@@ -180,6 +181,7 @@ These are compile-time constants in `arkana/constants.py` (not overridable via e
 | `--allowed-paths PATH [PATH ...]` | Restrict `open_file` to these directories (security sandbox for HTTP mode) |
 | `--samples-path PATH` | Path to the samples directory. Enables the `list_samples` tool for AI clients to discover available files. Falls back to the `ARKANA_SAMPLES` environment variable if not set. |
 | `--tool-profile {full,lazy,minimal}` | Tool registration profile (default: full). `lazy` defers analysis tools until file open for ~85% context reduction. `minimal` registers core tools only. Falls back to `ARKANA_TOOL_PROFILE` env var. |
+| `--brief-descriptions` | Use brief tool descriptions (first paragraph only) to reduce context window usage by ~60%. Falls back to `ARKANA_BRIEF_DESCRIPTIONS=1` env var. Combine with `--tool-profile lazy` for maximum savings. |
 | `--skip-capa` | Skip capa capability analysis |
 | `--skip-floss` | Skip FLOSS string analysis |
 | `--skip-peid` | Skip PEiD signature scanning |
