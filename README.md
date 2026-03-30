@@ -66,6 +66,7 @@ Arkana eliminates this by putting **284 specialised analysis tools behind a sing
 - **Auto-enrichment** -- Opening a file automatically triggers background classification, triage, MITRE mapping, IOC collection, library identification, and a decompilation sweep -- results are ready before you ask
 - **AI-optimised workflow** -- Compact triage, smart function ranking, batch decompilation, digest summaries, and guided next steps
 - **Robust architecture** -- Docker-first, thread-safe state, background tasks, pagination, smart truncation, graceful degradation
+- **Tool profiles** -- `--tool-profile lazy` reduces context window usage by ~85% by deferring analysis tools until file open; `minimal` keeps only core tools for constrained environments
 - **Web dashboard** -- Real-time CRT-themed web interface on port 8082 with binary summary, function triage with XREF analysis panel, dagre-layout call graph with tabbed sidebar, analysis timeline, strings explorer, and notes browser -- analyst flags feed back into AI tool suggestions
 
 ### How It Compares
@@ -152,6 +153,8 @@ cd Arkana
 
 # 2. Add Arkana to Claude Code
 claude mcp add --scope project arkana -- ./run.sh --samples ~/your-samples --stdio
+# Optional: reduce context window usage with tool profiles
+claude mcp add --scope project arkana -- ./run.sh --samples ~/your-samples --stdio --tool-profile lazy
 
 # 3. Start Claude Code and analyse a binary
 claude

@@ -26,6 +26,14 @@ claude mcp add --scope project -e VT_API_KEY=your-key-here arkana -- python /pat
 claude mcp add --scope user arkana -- python /path/to/Arkana/arkana.py --mcp-server
 ```
 
+**Add with `--tool-profile lazy` to reduce context window usage:**
+
+```bash
+claude mcp add --scope project arkana -- python /path/to/Arkana/arkana.py --mcp-server --tool-profile lazy --samples-path /path/to/samples
+```
+
+In `lazy` mode, only ~45 core tools are registered at startup. After `open_file` detects the binary format, format-specific tools are added dynamically and Claude Code's tool list refreshes automatically. This is useful when `ENABLE_TOOL_SEARCH` is disabled, as it reduces the number of tool descriptions in the context window.
+
 **Add using Docker (via `run.sh` helper):**
 
 ```bash

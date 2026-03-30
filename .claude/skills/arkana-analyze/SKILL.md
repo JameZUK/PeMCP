@@ -68,7 +68,7 @@ If ambiguous, ask ONE question: "Goal: malware triage, deep RE, vuln audit, firm
 
 ## Phase 0: Environment Discovery
 
-`get_config()` first. If `session_context` returned -> `get_analysis_digest()`. No file -> `list_samples()`. Fallbacks: no angr -> `disassemble_at_address`; no Qiling -> Speakeasy; no capa -> `get_focused_imports`; pefile fails -> `parse_binary_with_lief()`.
+`get_config()` first. If `session_context` returned -> `get_analysis_digest()`. No file -> `list_samples()`. Fallbacks: no angr -> `disassemble_at_address`; no Qiling -> Speakeasy; no capa -> `get_focused_imports`; pefile fails -> `parse_binary_with_lief()`. If the server is running with `--tool-profile lazy`, format-specific tools are registered dynamically after `open_file` detects the binary type — the client's tool list refreshes automatically.
 
 ## Phase 1: Identify
 
@@ -172,6 +172,29 @@ Additional tools available for specific scenarios:
 - **Hypothesis tracking**: `update_hypothesis(note_id, confidence=, status=, add_evidence=)` — structured hypothesis lifecycle management
 
 ## Context Management
+
+### Tool Profiles and Lazy Mode
+
+If the server runs with `--tool-profile lazy` (or `ARKANA_TOOL_PROFILE=lazy`), only ~45 core tools are registered at startup. After `open_file` detects the binary format, format-specific analysis tools are registered dynamically and the client's tool list refreshes automatically. This reduces initial context window usage by ~85%. In `minimal` profile, no auto-expansion occurs — use `list_tools_by_phase()` to discover available tools. In `full` profile (default), all 284 tools are available immediately.
+
+### Phase Transition Protocol
+
+Between analysis phases, follow this protocol to manage context efficiently:
+
+1. **Save findings to notes** — `add_note(category="tool_result", content="...")` for key findings from the phase. Notes survive compaction and are retrievable via `get_analysis_digest()`.
+2. **Update hypothesis** — `update_note()` or `add_note(category="hypothesis")` with current assessment.
+3. **Compact the session** — use `/compact` to summarize the conversation and free context for the next phase. Each phase generates verbose tool output (triage reports, function maps, decompilation) that can be safely condensed once findings are captured in notes.
+4. **Re-orient after compaction** — call `get_session_summary(compact=True)` to restore awareness of session state, then `get_analysis_digest()` for the analytical picture.
+
+**When to compact:**
+- After Phase 1 (Identify) → before mapping/deep-dive
+- After Phase 3 (Map) → before deep-dive (this is the biggest context savings — function maps and string dumps are very verbose)
+- After Phase 4 (Deep Dive) → before extraction/reporting
+- Any time context feels constrained or responses are being truncated
+
+**What survives compaction:** Notes, tool history, triage data, hypothesis chain, session state — all persisted server-side. Only the raw conversation (tool output verbatim) is condensed.
+
+### General Context Tips
 
 `get_analysis_digest()` between phases (not mid-phase). Note categories: `tool_result` (findings), `ioc` (indicators), `hypothesis` (conclusion), `conclusion` (write-up), `manual` (observations). Session persists via `~/.arkana`. `get_tool_history()`, `suggest_next_action()`. After patching: `reanalyze_loaded_pe_file()`.
 

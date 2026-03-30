@@ -158,6 +158,12 @@ These are compile-time constants in `arkana/constants.py` (not overridable via e
 | `ARKANA_AUTO_ENRICHMENT` | `1` | Set to `0` to disable automatic background enrichment after `open_file`. When enabled, Arkana automatically runs classification, triage, similarity hashing, MITRE mapping, IOC collection, library identification, and a decompilation sweep. |
 | `ARKANA_ENRICHMENT_MAX_DECOMPILE` | `50` | Maximum number of functions to decompile during the auto-enrichment background sweep. Higher values provide more coverage but take longer. |
 
+### Tool Registration
+
+| Variable | Default | Description |
+|---|---|---|
+| `ARKANA_TOOL_PROFILE` | `full` | Tool registration profile. `full` registers all 284 tools at startup (default). `lazy` registers only ~45 core tools at startup and dynamically adds format-specific tools when `open_file` detects the binary format — reduces context window usage by ~85% initially. `minimal` registers core tools only with no auto-expansion. Use `lazy` or `minimal` when `ENABLE_TOOL_SEARCH` is disabled. Can also be set via `--tool-profile` CLI argument (takes precedence). |
+
 ---
 
 ## Command-Line Options
@@ -170,8 +176,10 @@ These are compile-time constants in `arkana/constants.py` (not overridable via e
 | `--mcp-transport {stdio,streamable-http,sse}` | Transport protocol (default: stdio) |
 | `--mcp-host HOST` | Server host for HTTP transports (default: 127.0.0.1) |
 | `--mcp-port PORT` | Server port for HTTP transports (default: 8082) |
+| `--no-dashboard` | Disable the web dashboard entirely. Can also be set via `ARKANA_NO_DASHBOARD=1` env var. |
 | `--allowed-paths PATH [PATH ...]` | Restrict `open_file` to these directories (security sandbox for HTTP mode) |
 | `--samples-path PATH` | Path to the samples directory. Enables the `list_samples` tool for AI clients to discover available files. Falls back to the `ARKANA_SAMPLES` environment variable if not set. |
+| `--tool-profile {full,lazy,minimal}` | Tool registration profile (default: full). `lazy` defers analysis tools until file open for ~85% context reduction. `minimal` registers core tools only. Falls back to `ARKANA_TOOL_PROFILE` env var. |
 | `--skip-capa` | Skip capa capability analysis |
 | `--skip-floss` | Skip FLOSS string analysis |
 | `--skip-peid` | Skip PEiD signature scanning |

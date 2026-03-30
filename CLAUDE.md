@@ -17,6 +17,7 @@ arkana/                  # Main package
 ├── auth.py             # Bearer token ASGI middleware
 ├── integrity.py        # Pre-parse file integrity checks (PE/ELF/Mach-O)
 ├── utils.py            # ReDoS-safe regex, safe_slice, safe_env_int
+├── tool_registry.py    # Lazy tool registration (--tool-profile full|lazy|minimal)
 ├── parsers/            # PE/FLOSS/capa/YARA/strings parsers
 ├── dashboard/          # Web dashboard (Starlette + htmx + Jinja2)
 │   ├── app.py          # ASGI app factory, routes, auth, SSE events
@@ -69,6 +70,7 @@ ruff check arkana/ tests/ \
 - **Pagination**: Two patterns: (1) **Response-level** (`_paginated_response`) for large-output tools using `line_offset`/`line_limit`, cached via `_ToolResultCache`. (2) **Field-level** (`_paginate_field`) for dict tools with multiple list fields, adding `{field}_pagination` metadata. Pagination params listed in `_SKIP` so they don't affect cache keys.
 - **Search/grep in decompilation**: `decompile_function_with_angr`, `batch_decompile`, `get_annotated_disassembly` accept `search` (regex), `context_lines`, `case_sensitive`. Search is a view/filter on cached results. `_search_helpers.py` validates via `validate_regex_pattern()` for ReDoS safety.
 - **`tool_decorator`**: Wraps every MCP tool — handles session activation, heartbeat, history recording, error enrichment, and sets `_current_tool_var` contextvar for warning attribution.
+- **Tool profiles**: `--tool-profile` CLI arg / `ARKANA_TOOL_PROFILE` env var controls tool registration. `full` (default) registers all tools at startup. `lazy` registers ~45 core tools, then dynamically adds format-specific tools after `open_file` detects the format — sends `notifications/tools/list_changed` to the MCP client. `minimal` registers core tools only. Module groups defined in `arkana/tool_registry.py`. Use `lazy`/`minimal` when `ENABLE_TOOL_SEARCH` is disabled.
 - **Warning capture**: `arkana/warning_handler.py` captures WARNING+ from library loggers into `state.analysis_warnings`, deduplicated, attributed via `_current_tool_var`/`_current_task_var`. Session-scoped (not persisted to cache).
 - **Resource monitor**: `arkana/resource_monitor.py` — psutil daemon thread. Alerts injected into `_collect_background_alerts()`. Returns `None` when psutil unavailable.
 - **Null-region detection**: `_is_null_region_artifact()` filters null-byte regions (angr interprets as `add [rax], al`) from `get_function_map` and enrichment. `release_angr_memory` drops angr project/CFG, calls `gc.collect()` + `malloc_trim(0)`, preserves PE data/notes/session.
@@ -89,6 +91,7 @@ ruff check arkana/ tests/ \
 - **Extended enrichment pipeline**: After IOC collection, runs 5 additional phases (family ID, API hash scan, C2 indicators, DGA detection, crypto constants). All cached and persisted via `_save_enrichment_cache()`.
 - **Incremental enrichment saves**: Saves at 3 points: after Phase 2g, every 60s during decompile sweep, and async after on-demand decompiles (throttled 30s).
 - **Decompile meta cache**: `_decompile_meta` — `OrderedDict` with LRU eviction (cap 2000). Dashboard functions build keys using `_get_state()._state_uuid` directly (not `_make_decompile_key()`) since dashboard threads lack MCP session contextvar.
+- **`_ToolResultCache` GC safety**: `_ToolResultCache` uses a `WeakSet` for instance tracking. Fixed: `weakref.finalize` removed from `_ToolResultCache.__init__` — periodic `sweep_all_expired()` handles recount instead. The finalizer caused single-thread deadlocks on Python 3.10 when GC fired during `_commit_removals` while `_global_lock` was held.
 
 ## Input Validation & Safety Guards
 
@@ -115,6 +118,7 @@ Global status bar shows active tool + background tasks, 3s htmx refresh, collaps
 ./run.sh --stdio          # stdio mode (for Claude Code)
 ./run.sh                  # HTTP mode (port 8082)
 ./run.sh --samples ~/dir  # Mount samples directory
+./run.sh --tool-profile lazy  # Reduced context (core tools only at startup)
 ```
 
 4 venvs isolate incompatible unicorn versions (angr v2, Speakeasy/Unipacker/Qiling v1). .NET tools via subprocess (de4dot-cex/mono, NETReactorSlayer, ilspycmd/dotnet).
@@ -145,4 +149,4 @@ These are inherent limitations from underlying frameworks, not bugs:
 
 ## CI
 
-GitHub Actions runs on every push/PR: unit tests (Python 3.10-3.12), ruff lint, smoke tests. Coverage floor 65% with branch coverage. Dependabot weekly pip updates.
+GitHub Actions runs on every push/PR: unit tests (Python 3.10-3.12), ruff lint, smoke tests. Coverage floor 65% with branch coverage. CI timeout 10 minutes. Dependabot weekly pip updates.

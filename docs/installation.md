@@ -176,6 +176,18 @@ python arkana.py --mcp-server --input-file malware.exe
 python arkana.py --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0 --mcp-port 8082 --samples-path ./samples
 ```
 
+**Reducing context window usage:**
+
+```bash
+# Register only core tools at startup (~85% reduction in context tokens)
+python arkana.py --mcp-server --tool-profile lazy
+
+# Or via environment variable
+ARKANA_TOOL_PROFILE=lazy python arkana.py --mcp-server
+```
+
+When using `--tool-profile lazy`, only ~45 essential tools (file management, notes, session) are registered at startup. Analysis tools are dynamically added after `open_file` detects the binary format. This is useful when `ENABLE_TOOL_SEARCH` is disabled in Claude Code.
+
 ### Transport Options
 
 | Transport | Flag | Use Case |

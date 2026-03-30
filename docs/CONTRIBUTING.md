@@ -99,4 +99,4 @@ Integration tests exercise all 284 MCP tools against a running Arkana server.
 
 - **Per-session isolation:** In HTTP mode, each MCP session gets its own `AnalyzerState` via `contextvars`. The `StateProxy` in `config.py` transparently delegates to the correct session.
 - **Subprocess venvs:** Speakeasy, Unipacker, and Qiling each run in isolated virtualenvs (`/app/*-venv/`) to resolve incompatible unicorn engine versions. Communication uses JSON over stdin/stdout.
-- **Conditional tool registration:** Refinery tools are only registered when `binary-refinery` is installed, keeping the MCP tool catalog lean for environments without it.
+- **Tool registration:** Managed by `arkana/tool_registry.py`. The `--tool-profile` flag (`full`/`lazy`/`minimal`) controls how many tools are registered at startup. In `lazy` mode, only core tools load initially; format-specific tools are registered dynamically after `open_file` detects the binary type. Refinery tools are only registered when `binary-refinery` is installed, keeping the MCP tool catalog lean for environments without it.

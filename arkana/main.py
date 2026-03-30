@@ -30,76 +30,36 @@ from arkana.cli.printers import _cli_analyze_and_print_pe
 from arkana.mcp.server import mcp_server
 from arkana.mcp._format_helpers import detect_format_from_magic
 
-# Import all MCP tool modules to register them with the server
-import arkana.mcp.tools_pe
-import arkana.mcp.tools_strings
-import arkana.mcp.tools_angr
-import arkana.mcp.tools_angr_disasm
-import arkana.mcp.tools_angr_dataflow
-import arkana.mcp.tools_angr_hooks
-import arkana.mcp.tools_angr_forensic
-import arkana.mcp.tools_pe_extended
-import arkana.mcp.tools_new_libs
-import arkana.mcp.tools_dotnet
-import arkana.mcp.tools_go
-import arkana.mcp.tools_rust
-import arkana.mcp.tools_elf
-import arkana.mcp.tools_macho
-import arkana.mcp.tools_format_detect
-import arkana.mcp.tools_virustotal
-import arkana.mcp.tools_deobfuscation
-import arkana.mcp.tools_triage
-import arkana.mcp.tools_cache
-import arkana.mcp.tools_config
-import arkana.mcp.tools_classification
-import arkana.mcp.tools_samples
-import arkana.mcp.tools_qiling
-import arkana.mcp.tools_debug
-import arkana.mcp.tools_emulate_inspect
-import arkana.mcp.tools_notes
-import arkana.mcp.tools_history
-import arkana.mcp.tools_session
-import arkana.mcp.tools_export
-import arkana.mcp.tools_crypto
-import arkana.mcp.tools_payload
-import arkana.mcp.tools_ioc
-import arkana.mcp.tools_unpack
-import arkana.mcp.tools_diff
-import arkana.mcp.tools_workflow
-import arkana.mcp.tools_learning
-import arkana.mcp.tools_malware_identify
-import arkana.mcp.tools_malware_detect
-import arkana.mcp.tools_pe_structure
-import arkana.mcp.tools_pe_forensic
-import arkana.mcp.tools_threat_intel
-import arkana.mcp.tools_batch
-import arkana.mcp.tools_struct
-import arkana.mcp.tools_rename
-import arkana.mcp.tools_types
-import arkana.mcp.tools_bsim
-import arkana.mcp.tools_warnings
-import arkana.mcp.tools_context
-import arkana.mcp.tools_dashboard_exposed
-import arkana.mcp.tools_frida
-import arkana.mcp.tools_vuln
-import arkana.mcp.tools_taint
-import arkana.mcp.tools_dotnet_deobfuscate
-import arkana.mcp.tools_vb6
-import arkana.mcp.tools_macro
-import arkana.mcp.tools_sandbox
-import arkana.mcp.tools_autoit
-# Only register refinery tools when binary-refinery is installed.
-# When absent this saves ~20 tool definitions from the MCP catalog,
-# avoiding wasted context tokens for tools that would fail at runtime.
-if REFINERY_AVAILABLE:
-    import arkana.mcp.tools_refinery
-    import arkana.mcp.tools_refinery_extract
-    import arkana.mcp.tools_refinery_forensic
-    import arkana.mcp.tools_refinery_dotnet
-    import arkana.mcp.tools_refinery_executable
-    import arkana.mcp.tools_refinery_advanced
-else:
-    logger.info("binary-refinery not installed — skipping refinery tool registration")
+# Tool registration is managed by the tool_registry module.
+# Profile-aware registration happens in _register_tools_for_profile()
+# after argument parsing.  See --tool-profile / ARKANA_TOOL_PROFILE.
+from arkana.tool_registry import (
+    set_profile as _set_tool_profile,
+    register_core_tools as _register_core_tools,
+    register_all_tools as _register_all_tools,
+)
+
+
+def _register_tools_for_profile(profile: str) -> None:
+    """Register MCP tools based on the selected profile.
+
+    Called once during startup after argument parsing.
+
+    Profiles:
+      full    — all tools (default, backward compatible)
+      lazy    — core tools only; analysis tools added on file open
+      minimal — core tools only; no auto-expansion
+    """
+    _set_tool_profile(profile)
+
+    if profile == "full":
+        count = _register_all_tools(refinery_available=REFINERY_AVAILABLE)
+        logger.info("Tool profile 'full': %d modules registered", count)
+        if not REFINERY_AVAILABLE:
+            logger.info("binary-refinery not installed — skipping refinery tool registration")
+    else:
+        count = _register_core_tools()
+        logger.info("Tool profile %r: %d core modules registered (analysis tools deferred)", profile, count)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +153,13 @@ def _parse_arguments() -> argparse.Namespace:
     mcp_group.add_argument("--api-key", type=str, default=None, help="Bearer token for HTTP mode authentication. Clients must send 'Authorization: Bearer <key>' header. Can also be set via ARKANA_API_KEY env var.")
     mcp_group.add_argument("--samples-path", type=str, default=None, help="Path to the directory containing sample files for analysis. Exposed via the list_samples tool. Falls back to ARKANA_SAMPLES env var if not set.")
     mcp_group.add_argument("--no-dashboard", action="store_true", help="Disable the web dashboard entirely. Can also be set via ARKANA_NO_DASHBOARD=1 env var.")
+    mcp_group.add_argument("--tool-profile", choices=["full", "lazy", "minimal"], default=None,
+                           help="Tool registration profile: 'full' (all tools at startup, default), "
+                                "'lazy' (core tools at startup, analysis tools added on file open), "
+                                "'minimal' (core tools only, no auto-expansion). "
+                                "Use 'lazy' or 'minimal' to reduce context window usage when "
+                                "ENABLE_TOOL_SEARCH is disabled. "
+                                "Falls back to ARKANA_TOOL_PROFILE env var.")
 
     args = None
     try:
@@ -487,6 +454,16 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
     if not MCP_SDK_AVAILABLE:
         logger.critical("MCP SDK ('modelcontextprotocol') not available. Cannot start MCP server. Please install it (e.g., 'pip install \"mcp[cli]\"') and re-run.")
         sys.exit(1)
+
+    # Resolve tool profile: CLI arg > env var > default "full"
+    tool_profile = (
+        args.tool_profile
+        or os.environ.get("ARKANA_TOOL_PROFILE", "full")
+    ).lower().strip()
+    if tool_profile not in ("full", "lazy", "minimal"):
+        logger.warning("Unknown tool profile %r, falling back to 'full'", tool_profile)
+        tool_profile = "full"
+    _register_tools_for_profile(tool_profile)
 
     # Configure path sandboxing — mandatory for HTTP transports
     if args.allowed_paths:

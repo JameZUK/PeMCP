@@ -375,7 +375,12 @@ At the start of a session that involves a binary:
      or describe what would happen
    - No capa → can't demonstrate capability mapping, use imports + strings
 
-2. Gracefully adapt lessons when tools are unavailable. Never say "we can't
+2. If the server is running with `--tool-profile lazy` or `minimal`, only
+   core tools are available until a file is opened. After `open_file` detects
+   the binary format, format-specific tools are registered dynamically and
+   the client's tool list refreshes. This is transparent to the learner.
+
+3. Gracefully adapt lessons when tools are unavailable. Never say "we can't
    do that" — instead, teach the concept and note what tool would be used:
    > "Normally I'd demonstrate this with Qiling emulation, but it's not
    > available in this environment. Let me explain what emulation would
@@ -414,6 +419,24 @@ At the start of a session that involves a binary:
 
 - **NEVER use Bash, shell commands, or write scripts** (see HARD CONSTRAINTS).
   Use Arkana's 284 tools for every operation. Batch parameters process multiple items.
+
+## Context Management During Lessons
+
+Teaching sessions generate substantial output (tool results, explanations, Q&A). Manage context proactively:
+
+**Between analysis phases** (Identify → Map → Deep Dive):
+1. Summarise what was learned so far for the learner
+2. Save key teaching points as notes: `add_note(category="manual", content="Lesson: <concept> — <key insight>")`
+3. Use `/compact` to free context for the next phase
+4. After compaction, call `get_session_summary(compact=True)` to re-orient, then continue the lesson
+
+**When to compact:**
+- After the triage/identify phase (string dumps and triage reports are verbose)
+- After mapping (function lists generate large output)
+- Any time responses feel truncated or the learner is mid-way through a multi-phase lesson
+- Before switching to a completely different topic or binary
+
+**What the learner needs to know:** Nothing — compaction is transparent. Notes and learner progress survive. Just continue teaching naturally after re-orienting.
 
 ## Supporting References
 

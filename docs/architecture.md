@@ -133,6 +133,18 @@ arkana/
 
 ---
 
+## Tool Registration Profiles
+
+Tool registration is managed by `arkana/tool_registry.py`. Three profiles control how many tools are registered with the MCP server at startup:
+
+- **`full`** (default) — All tools registered at startup. Backward compatible.
+- **`lazy`** — Only ~45 core tools (file management, notes, session, config) registered at startup. After `open_file` detects the binary format, format-specific tools are dynamically imported and registered. The server sends a `notifications/tools/list_changed` MCP notification so clients refresh their tool list.
+- **`minimal`** — Core tools only with no automatic expansion.
+
+Set via `--tool-profile` CLI argument or `ARKANA_TOOL_PROFILE` environment variable. Use `lazy` or `minimal` to reduce context window usage when `ENABLE_TOOL_SEARCH` is disabled in the MCP client.
+
+---
+
 ## Pagination & Result Limits
 
 Most tools that return lists of results support **pagination** via `limit` and `offset` parameters. This prevents response truncation and gives AI clients control over how much data they receive per call.

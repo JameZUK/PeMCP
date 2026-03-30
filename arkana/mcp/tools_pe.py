@@ -885,6 +885,18 @@ async def open_file(
             )
             await ctx.info("Background Angr analysis started. Use check_task_status('startup-angr') to monitor.")
 
+        # Lazy tool registration — register format-specific tools if profile is "lazy"
+        try:
+            from arkana.tool_registry import register_tools_for_format
+            from arkana.imports import REFINERY_AVAILABLE as _refinery_ok
+            await register_tools_for_format(
+                mode, ctx,
+                pe_data=state.pe_data,
+                refinery_available=_refinery_ok,
+            )
+        except Exception:
+            logger.debug("Lazy tool registration skipped", exc_info=True)
+
         # Launch background auto-enrichment
         # Run enrichment if: not cached at all, OR cached but enrichment data
         # wasn't present (old cache written before enrichment persistence).

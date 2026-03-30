@@ -756,6 +756,15 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
     config = get_masked_config()
 
     # Add server capability info
+    # Tool profile info
+    try:
+        from arkana.tool_registry import get_profile, get_registered_module_count
+        _tool_profile = get_profile()
+        _tool_modules = get_registered_module_count()
+    except Exception:
+        _tool_profile = "full"
+        _tool_modules = None
+
     config["_server_info"] = {
         "angr_available": ANGR_AVAILABLE,
         "capa_available": CAPA_AVAILABLE,
@@ -768,6 +777,8 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
         "samples_path": state.samples_path,
         "state_id": getattr(state, '_state_uuid', 'unknown'),
         "pid": os.getpid(),
+        "tool_profile": _tool_profile,
+        "tool_modules_registered": _tool_modules,
     }
 
     # Add environment/path information

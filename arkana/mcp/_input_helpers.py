@@ -73,8 +73,10 @@ class _ToolResultCache:
         # here — WeakSet.add() can trigger GC which runs _on_instance_gc finalizer,
         # and that also acquires _global_lock → deadlock on non-reentrant Lock.
         _ToolResultCache._all_instances.add(self)
-        # Register weak-ref finalizer to adjust global count on GC
-        weakref.finalize(self, _ToolResultCache._on_instance_gc, id(self))
+        # No weakref.finalize — periodic sweep_all_expired() handles recount.
+        # GC-triggered finalizers deadlock _global_lock on Python 3.10: GC fires
+        # during WeakSet._commit_removals (inside _cleanup_expired holding
+        # _global_lock) and the finalizer re-acquires the non-reentrant Lock.
 
     def _entry_count(self) -> int:
         """Return total entries across all tool buckets (caller must hold self._lock)."""
@@ -151,9 +153,14 @@ class _ToolResultCache:
 
     @classmethod
     def _on_instance_gc(cls, instance_id: int) -> None:
-        """Weakref finalizer — recount global entries when an instance is collected."""
-        with cls._global_lock:
-            cls._cleanup_expired()
+        """No-op — periodic sweep_all_expired() handles recount.
+
+        Previously acquired _global_lock here, but GC can invoke this
+        finalizer while _global_lock is already held by the same thread
+        (during WeakSet._commit_removals in _cleanup_expired), causing
+        a single-thread deadlock on Python 3.10's non-reentrant Lock.
+        """
+        pass
 
     @classmethod
     def _cleanup_expired(cls) -> None:
