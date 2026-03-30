@@ -377,8 +377,12 @@ At the start of a session that involves a binary:
 
 2. If the server is running with `--tool-profile lazy` or `minimal`, only
    core tools are available until a file is opened. After `open_file` detects
-   the binary format, format-specific tools are registered dynamically and
-   the client's tool list refreshes. This is transparent to the learner.
+   the binary format, format-specific tools are registered dynamically.
+   **Known limitation**: new tools appear on the **next conversation turn**,
+   not the current one. When `open_file` returns `_tools_expanded: true`,
+   tell the learner: "I've loaded the file and registered the analysis tools.
+   Let me continue in my next response." Then proceed normally — the learner
+   won't notice the one-turn gap.
 
 3. Gracefully adapt lessons when tools are unavailable. Never say "we can't
    do that" — instead, teach the concept and note what tool would be used:

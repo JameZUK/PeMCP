@@ -886,10 +886,11 @@ async def open_file(
             await ctx.info("Background Angr analysis started. Use check_task_status('startup-angr') to monitor.")
 
         # Lazy tool registration — register format-specific tools if profile is "lazy"
+        _lazy_added = 0
         try:
             from arkana.tool_registry import register_tools_for_format
             from arkana.imports import REFINERY_AVAILABLE as _refinery_ok
-            await register_tools_for_format(
+            _lazy_added = await register_tools_for_format(
                 mode, ctx,
                 pe_data=state.pe_data,
                 refinery_available=_refinery_ok,
@@ -928,6 +929,17 @@ async def open_file(
             ),
             "file_integrity": _integrity,
         }
+
+        # Signal lazy tool expansion to the model
+        if _lazy_added > 0:
+            result["_tools_expanded"] = True
+            result["_tools_expanded_count"] = _lazy_added
+            result["_tools_expanded_hint"] = (
+                "Analysis tools have been dynamically registered for this format. "
+                "They should be available in your next response. If tools appear "
+                "unavailable, send another message to refresh the tool list."
+            )
+
         if mode in ("elf", "macho"):
             format_label = "ELF" if mode == "elf" else "Mach-O"
             result["suggested_tools"] = (

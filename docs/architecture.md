@@ -138,10 +138,12 @@ arkana/
 Tool registration is managed by `arkana/tool_registry.py`. Three profiles control how many tools are registered with the MCP server at startup:
 
 - **`full`** (default) — All tools registered at startup. Backward compatible.
-- **`lazy`** — Only ~45 core tools (file management, notes, session, config) registered at startup. After `open_file` detects the binary format, format-specific tools are dynamically imported and registered. The server sends a `notifications/tools/list_changed` MCP notification so clients refresh their tool list.
+- **`lazy`** — Only ~45 core tools (file management, notes, session, config) registered at startup. After `open_file` detects the binary format, format-specific tools are dynamically imported and registered. The server sends a `notifications/tools/list_changed` MCP notification so clients refresh their tool list. **Known limitation**: most MCP clients (including Claude Code as of March 2026) process the notification between conversation turns, not mid-turn — dynamically added tools become available on the next turn after `open_file`, not within the same turn. The `open_file` response includes `_tools_expanded` and `_tools_expanded_hint` fields to signal this.
 - **`minimal`** — Core tools only with no automatic expansion.
 
 Set via `--tool-profile` CLI argument or `ARKANA_TOOL_PROFILE` environment variable. Use `lazy` or `minimal` to reduce context window usage when `ENABLE_TOOL_SEARCH` is disabled in the MCP client.
+
+> **Client compatibility**: `notifications/tools/list_changed` is part of the MCP spec but client support varies. Claude Code has partial support (cross-turn only). Claude Desktop, MCP Inspector, and OpenAI Codex do not reliably process it. Cursor and VS Code Copilot reportedly handle it correctly. If your client does not support dynamic tool updates, use `full` profile.
 
 ---
 

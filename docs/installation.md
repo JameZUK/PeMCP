@@ -188,6 +188,8 @@ ARKANA_TOOL_PROFILE=lazy python arkana.py --mcp-server
 
 When using `--tool-profile lazy`, only ~45 essential tools (file management, notes, session) are registered at startup. Analysis tools are dynamically added after `open_file` detects the binary format. This is useful when `ENABLE_TOOL_SEARCH` is disabled in Claude Code.
 
+> **Note:** Due to a known MCP client limitation, dynamically registered tools become available on the **next conversation turn** after `open_file`, not within the same turn. The `open_file` response includes a `_tools_expanded_hint` to communicate this. This does not affect `--tool-profile full` (the default).
+
 ### Transport Options
 
 | Transport | Flag | Use Case |

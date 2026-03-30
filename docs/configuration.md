@@ -162,7 +162,7 @@ These are compile-time constants in `arkana/constants.py` (not overridable via e
 
 | Variable | Default | Description |
 |---|---|---|
-| `ARKANA_TOOL_PROFILE` | `full` | Tool registration profile. `full` registers all 284 tools at startup (default). `lazy` registers only ~45 core tools at startup and dynamically adds format-specific tools when `open_file` detects the binary format — reduces context window usage by ~85% initially. `minimal` registers core tools only with no auto-expansion. Use `lazy` or `minimal` when `ENABLE_TOOL_SEARCH` is disabled. Can also be set via `--tool-profile` CLI argument (takes precedence). |
+| `ARKANA_TOOL_PROFILE` | `full` | Tool registration profile. `full` registers all 284 tools at startup (default). `lazy` registers only ~45 core tools at startup and dynamically adds format-specific tools when `open_file` detects the binary format — reduces context window usage by ~85% initially. `minimal` registers core tools only with no auto-expansion. Use `lazy` or `minimal` when `ENABLE_TOOL_SEARCH` is disabled. Can also be set via `--tool-profile` CLI argument (takes precedence). **Note:** In `lazy` mode, dynamically registered tools become available on the next conversation turn, not within the same turn that called `open_file`. This is a known MCP client limitation. |
 
 ---
 

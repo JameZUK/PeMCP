@@ -32,7 +32,7 @@ claude mcp add --scope user arkana -- python /path/to/Arkana/arkana.py --mcp-ser
 claude mcp add --scope project arkana -- python /path/to/Arkana/arkana.py --mcp-server --tool-profile lazy --samples-path /path/to/samples
 ```
 
-In `lazy` mode, only ~45 core tools are registered at startup. After `open_file` detects the binary format, format-specific tools are added dynamically and Claude Code's tool list refreshes automatically. This is useful when `ENABLE_TOOL_SEARCH` is disabled, as it reduces the number of tool descriptions in the context window.
+In `lazy` mode, only ~45 core tools are registered at startup (~85% context reduction). After `open_file` detects the binary format, format-specific tools are added dynamically. **Note:** Due to a Claude Code limitation, dynamically added tools become available on the **next conversation turn** after `open_file`, not within the same turn. The `open_file` response includes a hint explaining this. This is useful when `ENABLE_TOOL_SEARCH` is disabled.
 
 **Add using Docker (via `run.sh` helper):**
 

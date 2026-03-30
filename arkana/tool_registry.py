@@ -9,6 +9,7 @@ Profiles:
             dynamically after ``open_file`` detects the binary format.
   minimal — Core tools only; no automatic expansion on file open.
 """
+import asyncio
 import importlib
 import logging
 import threading
@@ -290,19 +291,32 @@ async def register_tools_for_format(
         # Shellcode doesn't need PE/ELF/Mach-O tools but may need angr
         pass
 
-    # Notify client that tool list changed
+    # Notify client that tool list changed.
+    # Schedule as a delayed background task so the notification arrives AFTER
+    # the open_file response.  If sent synchronously (await) inside the tool
+    # handler, the notification reaches the client before the response and
+    # may be ignored (observed with Claude Code stdio transport).
     if added > 0 and ctx is not None:
         try:
             session = ctx.request_context.session
-            await session.send_tool_list_changed()
+
+            async def _delayed_notify(sess):
+                await asyncio.sleep(0.2)
+                try:
+                    await sess.send_tool_list_changed()
+                    logger.info("Sent delayed tools/list_changed notification")
+                except Exception:
+                    logger.debug("Delayed tool_list_changed failed", exc_info=True)
+
+            asyncio.create_task(_delayed_notify(session))
             logger.info(
                 "Lazy tool registration: %d modules added for format=%s, "
-                "client notified via list_changed",
+                "notification scheduled (200 ms delay)",
                 added, fmt,
             )
         except Exception:
             logger.debug(
-                "Could not send tool_list_changed notification",
+                "Could not schedule tool_list_changed notification",
                 exc_info=True,
             )
 
