@@ -1397,18 +1397,24 @@ async def manage_signature_db(
     ctx: Context,
     action: str,
     binary_sha256: str = "",
+    confirm: bool = False,
 ) -> Dict[str, Any]:
     """Manage the BSim signature database — remove entries or clear data.
-    ---compact: remove binary entries or clear BSim signature DB
+    ---compact: remove binary entries or clear BSim signature DB | confirm required
 
     Actions:
       remove_binary — Remove a specific binary and all its functions from the DB.
       clear_user    — Remove all user-indexed entries, keep library entries.
       clear_all     — Delete the entire DB (irreversible).
 
+    Destructive actions (clear_user, clear_all) require confirm=True to execute.
+    Without it, they return a preview of what would be deleted.
+
     Args:
         action: One of 'remove_binary', 'clear_user', 'clear_all'.
         binary_sha256: Required for 'remove_binary'. SHA256 of the binary to remove.
+        confirm: Must be True for clear_user and clear_all to execute.
+            Without confirm, these actions return a preview instead.
 
     Returns:
         dict with action result and updated DB stats.
@@ -1447,15 +1453,30 @@ async def manage_signature_db(
                 conn.close()
 
     elif action == "clear_user":
+        conn = _get_connection(db)
+        try:
+            user_count = conn.execute(
+                "SELECT COUNT(*) FROM binaries WHERE source != 'library'"
+            ).fetchone()[0]
+            func_count = conn.execute(
+                "SELECT COALESCE(SUM(function_count), 0) FROM binaries WHERE source != 'library'"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+
+        if not confirm:
+            return {
+                "status": "preview",
+                "action": "clear_user",
+                "would_remove_binaries": user_count,
+                "would_remove_functions": func_count,
+                "library_entries_preserved": True,
+                "hint": "Set confirm=True to execute this action.",
+            }
+
         with _db_write_lock:
             conn = _get_connection(db)
             try:
-                user_count = conn.execute(
-                    "SELECT COUNT(*) FROM binaries WHERE source != 'library'"
-                ).fetchone()[0]
-                func_count = conn.execute(
-                    "SELECT COALESCE(SUM(function_count), 0) FROM binaries WHERE source != 'library'"
-                ).fetchone()[0]
                 conn.execute("DELETE FROM binaries WHERE source != 'library'")
                 conn.commit()
                 return {
@@ -1469,12 +1490,31 @@ async def manage_signature_db(
                 conn.close()
 
     elif action == "clear_all":
+        conn = _get_connection(db)
+        try:
+            total_binaries = conn.execute("SELECT COUNT(*) FROM binaries").fetchone()[0]
+            total_functions = conn.execute("SELECT COUNT(*) FROM functions").fetchone()[0]
+        finally:
+            conn.close()
+
+        if not confirm:
+            return {
+                "status": "preview",
+                "action": "clear_all",
+                "would_remove_binaries": total_binaries,
+                "would_remove_functions": total_functions,
+                "warning": "This will delete the ENTIRE signature DB including all library entries. Irreversible.",
+                "hint": "Set confirm=True to execute this action.",
+            }
+
         import os
         try:
             os.remove(str(db))
             return {
                 "status": "success",
                 "action": "clear_all",
+                "removed_binaries": total_binaries,
+                "removed_functions": total_functions,
                 "message": "Signature DB deleted. A new empty DB will be created on next use.",
             }
         except OSError as e:
