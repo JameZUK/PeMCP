@@ -74,7 +74,7 @@ If ambiguous, ask ONE question: "Goal: malware triage, deep RE, vuln audit, firm
 
 1. `open_file(file_path)` -- format, hashes, `file_integrity`. Unknown -> raw mode; `force=True` overrides. `session_context` -> `get_analyzed_file_summary()`.
 2. `get_triage_report(compact=True)` -- packing, sig, imports, capa, IOCs, risk.
-3. `triage_binary_similarity()` -- check BSim DB for related samples. High overlap with user-indexed sample → `transfer_annotations(sha256, preview=True)` to inherit renames from prior analysis. High overlap with library entries → note which libraries the sample uses. No matches → novel sample, proceed with full analysis.
+3. **BSim variant check** (skip if first analysis or DB empty): `triage_binary_similarity()` -- check BSim DB for related samples. High overlap with user-indexed sample → `transfer_annotations(sha256, preview=True)` to inherit renames from prior analysis. No matches or only library matches → novel sample, proceed. BSim auto-indexes every sample during enrichment, so the DB grows as you work. This step becomes valuable after analyzing several samples from the same campaign.
 4. `classify_binary_purpose()`
 5. Format-specific: `elf_analyze`, `macho_analyze`, `dotnet_analyze`, `vb6_analyze`, `go_analyze`, `rust_analyze`, `detect_binary_format`.
 6. **API hash detection**: `scan_for_api_hashes()` -- detects dynamic API resolution (ror13, djb2, crc32, fnv1a). Essential when imports < 10 or shellcode mode, since the real import table is constructed at runtime. If hashes found, follow up with `qiling_resolve_api_hashes()` to map hash constants to API names. Feed resolved APIs into `identify_malware_family(hash_algorithm=..., hash_seed=...)`.
