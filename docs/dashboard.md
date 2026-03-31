@@ -87,9 +87,9 @@ Custom struct and enum type editor for defining binary data structures. Create s
 
 ---
 
-## Diff
+## Similarity
 
-Binary diff powered by angr BinDiff. File browser (BROWSE tab) to select a comparison binary from the samples directory, or manual path entry (MANUAL PATH tab). Shows identical, differing, and unmatched functions.
+BSim triage (whole-binary similarity against signature DB), BinDiff function-level comparison, and signature database management. Three tabs: SIMILARITY (BSim triage with sortable results, expandable function matches, overlap bars), DIFF (angr BinDiff with file browser), DATABASE (indexed binaries, validate, clear).
 
 ![Dashboard Binary Diff](screenshots/Arkana%20%E2%80%94%20Binary%20Diff.png)
 

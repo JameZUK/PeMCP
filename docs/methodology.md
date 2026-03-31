@@ -386,6 +386,6 @@ Tool: generate_report()
 ## Further Reading
 
 - [Scenarios & Comparisons](examples/scenarios.md) -- Seven detailed real-world walkthroughs
-- [Tools Reference](tools-reference.md) -- Complete catalog of all 284 tools
+- [Tools Reference](tools-reference.md) -- Complete catalog of all 289 tools
 - [Example Reports](../README.md#example-reports) -- Full reports generated from single prompts
 - [Claude Code Integration](claude-code.md) -- Setup and configuration guide
