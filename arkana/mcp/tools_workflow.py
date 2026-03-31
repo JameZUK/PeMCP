@@ -108,6 +108,8 @@ async def generate_analysis_report(
     findings: file info, triage results, explored functions, IOCs, notes, and
     tool history.
 
+    ---compact: generate markdown/text analysis report from accumulated findings | needs: file
+
     When to use: When finishing an analysis session and need to document findings,
     or when sharing results with colleagues.
 
@@ -303,6 +305,8 @@ async def auto_name_sample(
     """
     [Phase: utility] Suggests a descriptive filename for the loaded binary based
     on its capabilities, classification, C2 indicators, and file type.
+
+    ---compact: auto-generate descriptive sample filename from capabilities/C2/type | needs: file
 
     Example output: 'service_keylogger_c2_192.168.105.250.dll'
 
@@ -1007,6 +1011,8 @@ async def generate_cti_report(
     output_path: str = "",
 ) -> Dict[str, Any]:
     """Generate a structured Cyber Threat Intelligence (CTI) report.
+
+    ---compact: generate CTI report — IOCs, MITRE, capabilities, family ID | markdown/JSON | needs: file
 
     Phase: 7 — Report
 

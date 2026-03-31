@@ -27,6 +27,8 @@ async def macho_analyze(
     [Phase: triage] Analyses a Mach-O binary: header, load commands, segments,
     sections, symbols, dynamic libraries, and code signature info.
 
+    ---compact: analyze Mach-O header, segments, symbols, dylibs, code signature | needs: file
+
     When to use: When detect_binary_format() or open_file() identifies a Mach-O
     binary. This is the primary Mach-O analysis tool.
 

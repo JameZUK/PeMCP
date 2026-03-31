@@ -22,6 +22,8 @@ async def import_sandbox_report(
 ) -> Dict[str, Any]:
     """Import a sandbox analysis report for correlation with static findings.
 
+    ---compact: import CAPE/Cuckoo/ANY.RUN/Hybrid/Joe sandbox JSON report
+
     Phase: 6 -- Intel
 
     Parses JSON reports from CAPE, Cuckoo, ANY.RUN, Hybrid Analysis, or
@@ -85,6 +87,8 @@ async def correlate_static_dynamic(
     ctx: Context,
 ) -> Dict[str, Any]:
     """Correlate sandbox dynamic analysis with Arkana's static analysis findings.
+
+    ---compact: correlate sandbox IOCs/MITRE with static analysis | needs: import_sandbox_report
 
     Phase: 6 -- Intel
 
@@ -217,6 +221,8 @@ async def get_sandbox_summary(
     ctx: Context,
 ) -> Dict[str, Any]:
     """Get a summary of the imported sandbox report.
+
+    ---compact: summarize imported sandbox report — verdict, indicators, process counts
 
     Phase: 6 -- Intel
 

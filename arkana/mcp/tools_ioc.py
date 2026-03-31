@@ -257,6 +257,8 @@ async def get_iocs_structured(
     [Phase: utility] Aggregates IOCs from triage, string analysis, config extraction,
     and analysis notes into a structured export format.
 
+    ---compact: aggregate IOCs from all analyses | export JSON/CSV/STIX | needs: file
+
     Sources: triage network_iocs, notes content, file hashes.
 
     When to use: When preparing a report or exporting IOCs for threat intelligence

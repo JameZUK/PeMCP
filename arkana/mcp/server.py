@@ -32,6 +32,12 @@ _raw_tool_decorator = mcp_server.tool()
 # (everything before the first blank line).  This dramatically reduces the
 # size of the tool listing sent to AI clients that don't support tool search.
 # Set via --brief-descriptions CLI flag or ARKANA_BRIEF_DESCRIPTIONS=1 env var.
+#
+# IMPORTANT: Every tool decorated with @tool_decorator MUST include a
+# ---compact: line in its docstring for --brief-descriptions mode.
+# Place it after the first paragraph, before the blank line that precedes
+# "When to use:".  Run tests/test_compact_descriptions.py to verify.
+# Grammar:  ---compact: <action> [| <details>] [| needs: <prereqs>]
 _brief_descriptions: bool = False
 
 
@@ -42,31 +48,30 @@ def set_brief_descriptions(enabled: bool) -> None:
 
 
 def _extract_brief_description(docstring: str) -> str:
-    """Extract the first paragraph from a docstring (up to first blank line).
+    """Extract the compact shorthand from a ``---compact:`` line in the docstring.
 
-    Tool docstrings follow a consistent structure:
-        [Phase: ...] One or two sentence description.
+    Every tool docstring should contain a line like::
 
-        When to use: ...
-        Next steps: ...
+        ---compact: decompile function to pseudocode | search, digest modes | needs: angr
 
-        Args: ...
-        Returns: ...
+    This is used by ``--brief-descriptions`` to replace the full docstring
+    in the MCP tool listing, reducing context window usage by ~90%.
 
-    In brief mode we keep only the opening paragraph — the phase label and
-    description — which gives the model enough context to decide when to
-    invoke the tool.  Parameter schemas are already conveyed by the MCP
-    tool listing's inputSchema field.
+    Falls back to the first paragraph if no ``---compact:`` line is found
+    (backward compatibility during migration).
     """
-    # Normalise leading whitespace (docstrings are often indented)
     stripped = docstring.strip()
     if not stripped:
         return stripped
-    # Split on blank line (double newline after stripping indentation).
-    # textwrap.dedent would be heavier than needed — just split on \n\n.
+    # Look for ---compact: line
+    for line in stripped.splitlines():
+        trimmed = line.strip()
+        if trimmed.startswith("---compact:"):
+            return trimmed[len("---compact:"):].strip()
+    # Fallback: first paragraph (pre-compact docstrings)
     idx = stripped.find("\n\n")
     if idx == -1:
-        return stripped  # single paragraph — return as-is
+        return stripped
     return stripped[:idx].strip()
 
 

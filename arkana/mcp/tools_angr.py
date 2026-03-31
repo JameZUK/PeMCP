@@ -122,6 +122,8 @@ async def list_angr_analyses(ctx: Context, category: str = "all") -> Dict[str, A
     [Phase: context] Discovery tool: lists all available angr-based analysis capabilities with descriptions.
     Use this to understand what angr analyses are available before calling specific tools.
 
+    ---compact: list all angr analysis capabilities | filter by category
+
     When to use: At the start of analysis to discover available tools, or when unsure which tool to call next.
     Next steps: get_function_map() to find interesting functions, get_function_complexity_list() to rank by complexity,
     or decompile_function_with_angr() if you already have a target address.
@@ -261,6 +263,8 @@ async def get_angr_partial_functions(
     while CFG is still building or has timed out. Useful to see what angr has
     found so far on packed/slow binaries.
 
+    ---compact: list partially discovered functions | works during/after CFG timeout | needs: angr
+
     When to use: When check_task_status('startup-angr') shows CFG is stalled or
     timed out, use this to see which functions were discovered before it stopped.
 
@@ -340,6 +344,8 @@ async def decompile_function_with_angr(
     """
     [Phase: deep-dive] Decompiles a function into C-like pseudocode using Angr.
     Automatically attempts to handle RVA (offsets) if the exact VA is not found.
+
+    ---compact: decompile function to pseudocode | search, digest, rename modes | needs: angr
 
     Output is paginated by line. The first call decompiles and caches the full
     result; subsequent calls with different ``line_offset`` values serve from
@@ -709,6 +715,8 @@ async def get_function_cfg(
     [Phase: deep-dive] Retrieves the Control Flow Graph (CFG) for a function (Nodes/Blocks and Edges/Jumps).
     Automatically attempts to handle RVA (offsets) if the exact VA is not found.
 
+    ---compact: get control flow graph for function | nodes and edges | needs: angr+CFG
+
     When to use: After decompilation shows complex control flow (many branches, loops, or obfuscation).
     Next steps: get_annotated_disassembly() for instruction-level detail, get_dominators() for dominator tree,
     or analyze_binary_loops() to identify loop structures.
@@ -778,6 +786,8 @@ async def find_path_to_address(
 ) -> Dict[str, Any]:
     """
     [Phase: advanced] Uses Symbolic Execution to find an input (stdin) that causes execution to reach 'target_address'.
+
+    ---compact: find input reaching target address via symbolic execution | needs: angr+CFG
 
     When to use: When you need to find concrete input that triggers a specific code path (e.g., reaching a vulnerability or a hidden branch).
     Next steps: emulate_function_execution() to test with found input, add_note() to record the solution,
@@ -952,6 +962,8 @@ async def emulate_function_execution(
     """
     [Phase: advanced] Emulates a function with specific concrete arguments.
 
+    ---compact: emulate function with concrete args | return value, stdout capture | needs: angr+CFG
+
     When to use: When you want to observe a function's runtime behavior (return value, stdout) with known inputs.
     Next steps: auto_note_function(address) to save a behavioral summary, emulate_with_watchpoints() to trace
     memory/register access, or hook_function() to stub out problematic callees before re-emulating.
@@ -1097,6 +1109,8 @@ async def analyze_binary_loops(
     """
     [Phase: deep-dive] Scans the binary for loops. Uses existing analysis if available to save time.
 
+    ---compact: detect and analyze loops across binary | find crypto/encoding routines | needs: angr+CFG
+
     When to use: After CFG analysis reveals complex functions, or to find crypto/encoding routines that rely on loops.
     Next steps: decompile_function_with_angr() on functions with many loops, get_function_cfg() for loop structure,
     or extract_function_constants() to find crypto constants in loop bodies.
@@ -1235,6 +1249,8 @@ async def get_function_xrefs(
 ) -> Dict[str, Any]:
     """
     Retrieves Cross-References (Callers/Callees) for a function.
+
+    ---compact: get callers and callees for function | needs: angr+CFG
     """
 
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
@@ -1287,6 +1303,8 @@ async def get_backward_slice(
 ) -> Dict[str, Any]:
     """
     Finds all code (Basic Blocks) that can reach the target address (Control Flow Ancestors).
+
+    ---compact: backward CFG reachability slice to target | needs: angr+CFG
     """
 
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
@@ -1351,6 +1369,8 @@ async def get_forward_slice(
 ) -> Dict[str, Any]:
     """
     Finds all code (Basic Blocks) reachable FROM the source address (Control Flow Descendants).
+
+    ---compact: forward CFG reachability slice from source | needs: angr+CFG
     """
 
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
@@ -1409,6 +1429,8 @@ async def get_forward_slice(
 async def get_dominators(ctx: Context, target_address: str) -> Dict[str, Any]:
     """
     Finds 'Dominator' blocks for a specific target (blocks that MUST execute to reach the target).
+
+    ---compact: find dominator blocks that must execute before target | needs: angr+CFG
     """
 
     await ctx.info(f"Calculating dominators for: {target_address}")
@@ -1523,6 +1545,8 @@ async def get_function_complexity_list(
     Lists functions ranked by complexity (block count or edge count).
     Useful for identifying main logic or obfuscated routines.
 
+    ---compact: rank functions by complexity | sort by blocks or edges | needs: angr+CFG
+
     Args:
         limit: Max number of functions to return.
         sort_by: Criterion to sort by: 'blocks' (default) or 'edges'.
@@ -1623,6 +1647,8 @@ async def extract_function_constants(
     """
     Scans a specific function for hardcoded constants (integers) and string references.
     Useful for extracting potential IOCs, keys, or config data from a target function.
+
+    ---compact: extract hardcoded constants and string refs from function | needs: angr+CFG
     """
 
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
@@ -1705,6 +1731,8 @@ async def get_global_data_refs(
     """
     Identifies global memory addresses read from or written to by the target function.
     Useful for understanding what global state (flags, config, strings) a function interacts with.
+
+    ---compact: find global memory reads/writes by function | needs: angr+CFG
     """
 
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
@@ -1780,6 +1808,8 @@ async def scan_for_indirect_jumps(
     """
     Scans a function for indirect jumps or calls (dynamic control flow).
     This helps detect switch tables, virtual function calls, or obfuscated control flow.
+
+    ---compact: find indirect jumps/calls in function | vtables, switch tables | needs: angr+CFG
     """
 
     limit = max(1, min(limit, MAX_TOOL_LIMIT))
@@ -1852,6 +1882,8 @@ async def scan_for_indirect_jumps(
 async def patch_binary_memory(ctx: Context, address: str, patch_bytes_hex: str) -> Dict[str, Any]:
     """
     Patches the loaded binary IN MEMORY with new bytes (affects future analysis).
+
+    ---compact: patch binary bytes in memory | invalidates CFG cache | needs: angr
     """
 
     await ctx.info(f"Patching memory at {address}")
@@ -1914,6 +1946,8 @@ async def get_cross_reference_map(
     Returns a unified cross-reference view for one or more functions — connecting
     API calls, string references, callers, callees, suspicious imports, and
     complexity in a single compact response.
+
+    ---compact: unified xref map for functions | APIs, strings, callers, callees | needs: angr+CFG
 
     Eliminates the need to call 3-4 separate tools (decompile, xrefs, strings,
     imports) to understand what a function does and how it connects.
@@ -2170,6 +2204,8 @@ async def batch_decompile(
     """
     [Phase: deep-dive] Decompile multiple functions in a single call. Results
     are cached per-function so subsequent single-function requests hit cache.
+
+    ---compact: batch decompile multiple functions | search, digest, summary modes | needs: angr
 
     When ``search`` is provided, only functions containing matches are returned,
     with matched lines and context.  Useful for finding a pattern across many
@@ -2441,6 +2477,8 @@ async def solve_constraints_for_path(
     for stdin, argv, and symbolic registers that cause execution to reach the target.
     Similar to find_path_to_address but returns detailed constraint solutions.
 
+    ---compact: solve constraints for path to target | detailed solutions for stdin/argv/regs | needs: angr+CFG
+
     When to use: When you need to find specific input values to trigger a code path,
     e.g. for CTF challenges, reaching a vulnerability, or understanding branch conditions.
     Next steps: emulate_function_execution() with solved input, add_note() to record solution.
@@ -2638,6 +2676,8 @@ async def explore_symbolic_states(
     Explores multiple target addresses simultaneously with selectable exploration strategy
     (DFS, BFS, or directed). Reports all found states with their constraint summaries
     and solved input values.
+
+    ---compact: explore multiple targets via symbolic execution | DFS/BFS/directed | needs: angr+CFG
 
     When to use: When you need to explore multiple code paths simultaneously, e.g.
     finding inputs that reach any of several interesting locations, or when DFS alone

@@ -444,6 +444,8 @@ async def scan_for_vulnerability_patterns(
     """
     [Phase: analysis] Scan decompiled functions for common vulnerability patterns.
 
+    ---compact: scan for buffer overflow, format string, injection, crypto vulns | needs: angr
+
     Detects buffer overflows, format strings, command injection, memory corruption,
     integer overflows, path traversal, insecure crypto, hardcoded credentials,
     race conditions, DLL hijacking, and double-free patterns.
@@ -611,6 +613,8 @@ async def assess_function_attack_surface(
 ) -> Dict[str, Any]:
     """
     [Phase: analysis] Assess the attack surface of a specific function.
+
+    ---compact: score function attack surface — inputs, sinks, reachability, complexity | needs: angr
 
     Analyses input sources, dangerous sinks, source-to-sink connectivity,
     reachability (number of callers), and complexity to produce a risk score (0-100).
@@ -906,6 +910,8 @@ async def find_dangerous_data_flows(
     """
     [Phase: analysis] Trace data flows from untrusted input sources (recv, fread,
     ReadFile, getenv) to dangerous sinks (strcpy, sprintf, system, memcpy).
+
+    ---compact: trace source-to-sink data flows within functions | RDA + structural | needs: angr
 
     Uses reaching-definition analysis (RDA) when available for high-confidence
     results, with a structural fallback that confirms both APIs exist in the

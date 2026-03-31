@@ -59,6 +59,8 @@ async def detect_binary_format(
     [Phase: load] Auto-detects binary format from magic bytes: PE, ELF, Mach-O,
     .NET, Go, Rust. Returns the format and suggested analysis tools.
 
+    ---compact: detect binary format (PE/ELF/Mach-O/.NET/Go/Rust) with suggested tools
+
     When to use: Before open_file() when you're unsure of the binary format, or
     to determine which format-specific tools to use.
 

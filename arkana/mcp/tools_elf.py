@@ -22,6 +22,8 @@ async def elf_analyze(
     [Phase: triage] Comprehensive ELF binary analysis: file header, program
     headers, sections, symbols, dynamic dependencies, and notes.
 
+    ---compact: analyze ELF header, sections, symbols, dynamic deps | needs: file
+
     When to use: When detect_binary_format() or open_file() identifies an ELF
     binary. This is the primary ELF analysis tool.
 
@@ -159,6 +161,8 @@ async def elf_dwarf_info(
     """
     [Phase: explore] Extracts DWARF debug information from an ELF binary:
     compilation units, function names, source files, and line number mappings.
+
+    ---compact: extract DWARF debug info — functions, source files, line mappings | needs: ELF
 
     When to use: After elf_analyze() when the binary is not stripped. Debug info
     provides function names and source mappings for much richer analysis.

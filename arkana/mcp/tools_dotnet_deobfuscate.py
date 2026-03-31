@@ -499,6 +499,8 @@ async def detect_dotnet_obfuscation(
     obfuscator signatures (custom attributes, resource patterns) and
     calculating name entropy indicators.
 
+    ---compact: detect ConfuserEx/.NET Reactor/SmartAssembly/etc via metadata signatures | needs: file
+
     Supports detection of: ConfuserEx, .NET Reactor, SmartAssembly,
     Dotfuscator, Babel .NET, Crypto Obfuscator, Agile.NET, Eazfuscator,
     Goliath.NET, Phoenix Protector, and generic obfuscation via entropy.
@@ -534,6 +536,8 @@ async def dotnet_deobfuscate(
     """
     [Phase: deep-dive] Deobfuscate a .NET binary using de4dot-cex or
     NETReactorSlayer. Outputs a cleaned binary registered as an artifact.
+
+    ---compact: deobfuscate .NET binary via de4dot-cex or NETReactorSlayer | needs: file
 
     Methods:
     - "auto": Detect obfuscator first, choose best tool automatically.
@@ -771,6 +775,8 @@ async def dotnet_decompile(
     [Phase: deep-dive] Decompile a .NET assembly to C# source code using
     ilspycmd (ILSpy CLI). Returns paginated C# source or writes a full
     project to output_dir.
+
+    ---compact: decompile .NET to C# source via ILSpy | paginated or project output | needs: file
 
     Two modes:
     - stdout mode (no output_dir): Returns paginated C# source lines.

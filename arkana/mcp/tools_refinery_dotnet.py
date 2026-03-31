@@ -75,6 +75,8 @@ async def refinery_dotnet(
     - 'sfx': Extract files from .NET single-file application bundles.
     - 'deserialize': Deserialize BinaryFormatter data to JSON.
 
+    ---compact: .NET analysis | headers, resources, strings, CIL disasm, fields, arrays | needs: refinery, PE
+
     Args:
         ctx: MCP Context.
         operation: (str) One of the operations listed above.

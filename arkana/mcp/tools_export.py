@@ -54,6 +54,8 @@ async def export_project(
     (.arkana_project.tar.gz). Includes analysis data, notes, tool history,
     and optionally the original binary.
 
+    ---compact: export session as portable .tar.gz archive | includes notes/history/binary | needs: file
+
     When to use: When sharing analysis with others or preserving a checkpoint
     of your work. The archive can be imported with import_project().
 
@@ -207,6 +209,8 @@ async def import_project(
     """
     [Phase: load] Import a previously exported project archive
     (.arkana_project.tar.gz). Restores analysis data, notes, and tool history.
+
+    ---compact: import project archive | restores notes, history, optionally loads binary
 
     When to use: When resuming analysis from a shared archive or a previous
     checkpoint. Optionally extracts and loads the embedded binary.
@@ -1143,6 +1147,8 @@ async def export_ghidra_script(
     """
     [Phase: 7 — Report] Export analysis results as a Ghidra Python script.
 
+    ---compact: export renames/notes/types as Ghidra Python script | needs: file
+
     Generates a Python script that can be run in Ghidra's Script Manager
     to apply Arkana's function renames, variable renames, address labels,
     function comments (from notes), custom type definitions, and bookmarks
@@ -1244,6 +1250,8 @@ async def export_ida_script(
 ) -> Dict[str, Any]:
     """
     [Phase: 7 — Report] Export analysis results as an IDAPython script.
+
+    ---compact: export renames/notes/types as IDAPython script | needs: file
 
     Generates a Python script that can be run in IDA Pro's Script Command
     (File -> Script Command... -> Python) to apply Arkana's function renames,

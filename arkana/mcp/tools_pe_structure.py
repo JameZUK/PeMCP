@@ -41,6 +41,8 @@ async def analyze_relocations(
     types, and anomalies. Detects ASLR bypass indicators, relocations pointing
     outside sections, unusual type distributions, and empty/malformed blocks.
 
+    ---compact: parse relocation table | ASLR bypass, OOB entries, type anomalies | needs: PE
+
     When to use: When investigating packed binaries, position-independent shellcode,
     ASLR bypass techniques, or when triage flags missing or suspicious relocations.
 
@@ -239,6 +241,8 @@ async def analyze_seh_handlers(
     parses x64 RUNTIME_FUNCTION entries from the exception directory, enumerates
     SafeSEH table (x86), detects SEH-based anti-debug patterns, and flags
     suspicious handler addresses (outside image, in writable sections).
+
+    ---compact: analyze SEH/exception handlers | x86 SafeSEH + x64 RUNTIME_FUNCTION | needs: PE
 
     When to use: When investigating anti-analysis techniques, exploit payloads
     that abuse SEH, or when triage flags unusual exception handling.
@@ -576,6 +580,8 @@ async def analyze_debug_directory(
     GUIDs (CodeView NB10/RSDS), parses POGO sections, decodes Rich header build
     tool info, detects debug info anomalies (mismatched timestamps, suspicious PDB
     paths, timestamp tampering, compilation environment indicators).
+
+    ---compact: debug directory + Rich header analysis | PDB, GUID, build tools, timestamps | needs: PE
 
     When to use: When investigating binary provenance, build environment, timestamp
     tampering, or when correlating samples via PDB paths / Rich header hashes.

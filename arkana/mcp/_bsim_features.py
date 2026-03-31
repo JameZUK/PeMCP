@@ -3,6 +3,9 @@
 Extracts 6 feature groups from angr CFG/VEX IR for architecture-independent
 function similarity matching.  No new heavy dependencies — uses angr (already
 required for binary analysis tools), sqlite3 (stdlib), and math (stdlib).
+
+Confidence scoring uses TF-IDF-style weighting: shared rare features (e.g.
+a specific crypto API) contribute more than common ones (e.g. malloc).
 """
 
 import datetime
@@ -15,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from arkana.config import logger
-from arkana.constants import BSIM_DB_DIR, BSIM_DEFAULT_THRESHOLD
+from arkana.constants import BSIM_DB_DIR, BSIM_DEFAULT_THRESHOLD, BSIM_MIN_BLOCKS_FOR_MATCH
 from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB
 
 # ---------------------------------------------------------------------------
@@ -27,13 +30,29 @@ _db_write_lock = threading.Lock()
 #  Feature weight configuration
 # ---------------------------------------------------------------------------
 FEATURE_WEIGHTS = {
-    "cfg_structural": 0.20,
-    "api_calls": 0.25,
-    "vex_profile": 0.25,
+    "cfg_structural": 0.15,
+    "api_calls": 0.20,
+    "vex_profile": 0.10,      # Reduced — research shows histograms are low-discriminative
     "string_refs": 0.15,
     "constants": 0.10,
     "size_metrics": 0.05,
+    "block_hashes": 0.15,     # New — mnemonic sequences per block, much more discriminative
+    "call_context": 0.10,     # New — imported API caller/callee context
 }
+
+# angr pseudo-APIs that appear whenever indirect calls/jumps can't be resolved.
+# These pollute similarity scoring, confidence calculation, and API overlap
+# checks — two completely unrelated functions both calling through a vtable
+# will both show "UnresolvableCallTarget" as a shared API, producing false
+# positive matches.  Filtered from all API-based comparisons.
+ANGR_PSEUDO_APIS = frozenset({
+    "UnresolvableCallTarget",
+    "UnresolvableJumpTarget",
+    "PathTerminator",
+    "ReturnUnconstrained",
+    "Unconstrained",
+    "SimProcedure",
+})
 
 
 # ===================================================================
@@ -142,12 +161,17 @@ def extract_function_features(
                         api_calls.append(callee.name)
                         api_categories.add(_get_api_category(callee.name))
 
-        # Also check direct function callees from the KB
+        # Also check direct function callees from the KB.
+        # Filter out internal sub_* names — they're meaningless for cross-binary
+        # matching and dilute the Jaccard similarity score.
         for callee_addr in func.functions_called():
             callee_func = cfg.functions.get(callee_addr) if cfg else None
             if callee_func:
                 name = callee_func.name
-                if name and name not in api_calls:
+                if (name
+                        and name not in api_calls
+                        and not name.startswith("sub_")
+                        and name not in ANGR_PSEUDO_APIS):
                     api_calls.append(name)
                     api_categories.add(_get_api_category(name))
     except Exception:
@@ -170,19 +194,34 @@ def extract_function_features(
     except Exception:
         pass
 
-    # --- Single-pass VEX IR extraction (features 3, 4, 5) ---
-    # Lifts VEX once per block and extracts histogram, string refs, and
-    # constants in a single traversal — previously 3 separate loops.
+    # --- Single-pass VEX IR + block hash extraction (features 3, 4, 5, 7) ---
+    # Lifts VEX once per block and extracts histogram, string refs, constants,
+    # and block mnemonic hashes in a single traversal.
     vex_histogram: Dict[str, int] = {}
     string_hashes: List[int] = []
     constants: List[int] = []
+    block_hashes: List[int] = []
     total_instructions = 0
     total_byte_size = 0
 
     for block in blocks:
         total_byte_size += block.size
         try:
-            irsb = project.factory.block(block.addr, size=block.size).vex
+            blk = project.factory.block(block.addr, size=block.size)
+
+            # Block hash: CRC32 of ordered mnemonic sequence (no operands).
+            # Two blocks with the same instruction types in the same order
+            # produce the same hash regardless of register allocation or
+            # constant values — more discriminative than VEX histogram.
+            try:
+                mnemonics = [insn.mnemonic for insn in blk.capstone.insns]
+                if mnemonics:
+                    mnem_str = ",".join(mnemonics)
+                    block_hashes.append(zlib.crc32(mnem_str.encode()) & 0xFFFFFFFF)
+            except Exception:
+                pass
+
+            irsb = blk.vex
             total_instructions += irsb.instructions
             for stmt in irsb.statements:
                 tag = stmt.tag
@@ -238,6 +277,41 @@ def extract_function_features(
         "byte_size": total_byte_size,
         "instruction_count": total_instructions,
         "block_count": block_count,
+    }
+
+    # --- 7. Block hashes (mnemonic sequences per basic block) ---
+    features["block_hashes"] = {
+        "hashes": sorted(set(block_hashes)),
+        "count": len(set(block_hashes)),
+    }
+
+    # --- 8. Call context (imported API callees/callers) ---
+    import_callees: set = set()
+    import_callers: set = set()
+    try:
+        # Callees: which imported APIs does this function call?
+        for callee_addr in func.functions_called():
+            callee_func = cfg.functions.get(callee_addr) if cfg else None
+            if callee_func and callee_func.is_simprocedure:
+                cname = callee_func.name
+                if cname and cname not in ANGR_PSEUDO_APIS:
+                    import_callees.add(cname)
+        # Callers: which imported APIs are among this function's callers?
+        if cfg is not None:
+            for caller_addr in cfg.functions.callgraph.predecessors(func.addr):
+                caller_func = cfg.functions.get(caller_addr)
+                if caller_func and caller_func.is_simprocedure:
+                    cname = caller_func.name
+                    if cname and cname not in ANGR_PSEUDO_APIS:
+                        import_callers.add(cname)
+    except Exception:
+        pass
+
+    features["call_context"] = {
+        "import_callees": sorted(import_callees),
+        "import_callers": sorted(import_callers),
+        "callee_count": len(import_callees),
+        "caller_count": len(import_callers),
     }
 
     return features
@@ -343,9 +417,9 @@ def compute_similarity(
         {k: float(v) for k, v in cfg_b.items()},
     )
 
-    # 2. API calls
-    api_a = set(features_a.get("api_calls", {}).get("names", []))
-    api_b = set(features_b.get("api_calls", {}).get("names", []))
+    # 2. API calls (exclude angr pseudo-APIs that pollute similarity)
+    api_a = set(features_a.get("api_calls", {}).get("names", [])) - ANGR_PSEUDO_APIS
+    api_b = set(features_b.get("api_calls", {}).get("names", [])) - ANGR_PSEUDO_APIS
     scores["api_calls"] = _jaccard_similarity(api_a, api_b)
 
     # 3. VEX profile
@@ -371,6 +445,16 @@ def compute_similarity(
         {k: float(v) for k, v in size_b.items()},
     )
 
+    # 7. Block hashes (mnemonic sequence hashes per basic block)
+    bh_a = set(features_a.get("block_hashes", {}).get("hashes", []))
+    bh_b = set(features_b.get("block_hashes", {}).get("hashes", []))
+    scores["block_hashes"] = _jaccard_similarity(bh_a, bh_b)
+
+    # 8. Call context (imported API callees/callers)
+    cc_a = set(features_a.get("call_context", {}).get("import_callees", []))
+    cc_b = set(features_b.get("call_context", {}).get("import_callees", []))
+    scores["call_context"] = _jaccard_similarity(cc_a, cc_b)
+
     # Combined weighted score
     combined = sum(
         scores.get(group, 0.0) * weight
@@ -387,6 +471,115 @@ def compute_similarity(
 
 
 # ===================================================================
+#  2b. Confidence scoring (TF-IDF-style significance)
+# ===================================================================
+
+def compute_feature_idf(db_path: Optional[Path] = None) -> Dict[str, float]:
+    """Compute inverse document frequency for API calls across the DB.
+
+    Returns a dict mapping API name → IDF weight.  Rare APIs get higher
+    weights.  Used by ``compute_confidence()`` to distinguish meaningful
+    matches from trivial ones.
+
+    IDF = log(N / (1 + df))  where N = total functions, df = functions containing this API.
+    """
+    db = db_path or get_db_path()
+    if not db.exists():
+        return {}
+
+    conn = _get_connection(db)
+    try:
+        total_row = conn.execute("SELECT COUNT(*) FROM functions").fetchone()
+        total_functions = total_row[0] if total_row else 0
+        if total_functions == 0:
+            return {}
+
+        # Count document frequency per API name
+        api_df: Dict[str, int] = {}
+        rows = conn.execute("SELECT api_calls_json FROM functions").fetchall()
+        for row in rows:
+            api_data = _safe_json_loads(row[0], {})
+            names = api_data.get("names", []) if isinstance(api_data, dict) else []
+            for name in set(names):  # deduplicate per-function
+                api_df[name] = api_df.get(name, 0) + 1
+
+        # Compute IDF
+        idf: Dict[str, float] = {}
+        for name, df in api_df.items():
+            idf[name] = math.log(total_functions / (1 + df))
+
+        return idf
+    finally:
+        conn.close()
+
+
+def compute_confidence(
+    features_a: Dict[str, Any],
+    features_b: Dict[str, Any],
+    similarity_scores: Dict[str, float],
+    idf_weights: Optional[Dict[str, float]] = None,
+) -> float:
+    """Compute a confidence/significance score for a similarity match.
+
+    Higher confidence means the match is more meaningful — shared rare
+    features contribute more than common ones.  A trivial ``return 0``
+    function may have similarity=1.0 but near-zero confidence.
+
+    Components:
+    1. **Shared API significance**: Sum of IDF weights for shared API calls
+    2. **Feature richness**: How many non-empty feature groups both functions have
+    3. **Size factor**: Larger functions are more significant matches
+    4. **Similarity boost**: Weighted by the combined similarity score
+
+    Returns a float ≥ 0.  Typical range: 0-50 for meaningful matches.
+    """
+    confidence = 0.0
+
+    # 1. Shared API significance (IDF-weighted)
+    # Filter out angr pseudo-APIs that inflate confidence without meaning
+    api_a = set(features_a.get("api_calls", {}).get("names", [])) - ANGR_PSEUDO_APIS
+    api_b = set(features_b.get("api_calls", {}).get("names", [])) - ANGR_PSEUDO_APIS
+    shared_apis = api_a & api_b
+    if idf_weights and shared_apis:
+        # Default IDF of 1.0 for APIs not in the DB (novel = significant)
+        api_significance = sum(idf_weights.get(name, 1.0) for name in shared_apis)
+        confidence += api_significance
+    elif shared_apis:
+        # No IDF available — use count as rough proxy
+        confidence += len(shared_apis) * 0.5
+
+    # 2. Feature richness (0-6 points)
+    richness = 0
+    for key in ("api_calls", "string_refs", "constants"):
+        a_items = features_a.get(key, {})
+        b_items = features_b.get(key, {})
+        a_count = a_items.get("count", 0) if isinstance(a_items, dict) else 0
+        b_count = b_items.get("count", 0) if isinstance(b_items, dict) else 0
+        if a_count > 0 and b_count > 0:
+            richness += 1
+    # VEX and CFG are almost always present
+    a_blocks = features_a.get("cfg_structural", {}).get("block_count", 0)
+    b_blocks = features_b.get("cfg_structural", {}).get("block_count", 0)
+    if a_blocks > BSIM_MIN_BLOCKS_FOR_MATCH and b_blocks > BSIM_MIN_BLOCKS_FOR_MATCH:
+        richness += 1
+    confidence += richness
+
+    # 3. Size factor — larger functions are more significant
+    a_instr = features_a.get("size_metrics", {}).get("instruction_count", 0)
+    b_instr = features_b.get("size_metrics", {}).get("instruction_count", 0)
+    min_instr = min(a_instr, b_instr)
+    # Log scale: 10 instr → 1.0, 100 → 2.0, 1000 → 3.0
+    if min_instr > 0:
+        confidence += math.log10(max(min_instr, 1))
+
+    # 4. Multiply by similarity to penalize low-similarity matches
+    combined_sim = similarity_scores.get("combined", 0.0)
+    confidence *= max(combined_sim, 0.01)  # Avoid zeroing out entirely
+
+    return round(confidence, 2)
+
+
+# ===================================================================
 #  3. SQLite database management
 # ===================================================================
 
@@ -398,7 +591,9 @@ CREATE TABLE IF NOT EXISTS binaries (
     architecture TEXT,
     function_count INTEGER,
     indexed_at TEXT,
-    file_size INTEGER
+    file_size INTEGER,
+    source TEXT DEFAULT 'user',
+    library_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS functions (
@@ -420,6 +615,8 @@ CREATE TABLE IF NOT EXISTS functions (
     vex_op_histogram_json TEXT,
     cfg_structural_json TEXT,
     size_metrics_json TEXT,
+    block_hashes_json TEXT,
+    call_context_json TEXT,
     UNIQUE(binary_id, address)
 );
 
@@ -428,6 +625,9 @@ CREATE INDEX IF NOT EXISTS idx_functions_structural
 
 CREATE INDEX IF NOT EXISTS idx_functions_arch
     ON binaries(architecture);
+
+CREATE INDEX IF NOT EXISTS idx_binaries_source
+    ON binaries(source);
 """
 
 
@@ -456,8 +656,6 @@ def init_db(db_path: Optional[Path] = None) -> None:
     """Initialise the schema (idempotent).
 
     Uses CREATE TABLE/INDEX IF NOT EXISTS, so safe to call on existing DBs.
-    New indexes (e.g. idx_functions_arch) are created automatically on
-    databases created before the index was added.
     """
     conn = _get_connection(db_path)
     try:
@@ -484,8 +682,9 @@ def _insert_function_row(conn, binary_id: int, feat: Dict[str, Any]) -> None:
         "INSERT OR REPLACE INTO functions "
         "(binary_id, address, name, block_count, edge_count, cyclomatic_complexity, "
         "instruction_count, byte_size, loop_count, api_calls_json, string_hashes_json, "
-        "constants_json, vex_op_histogram_json, cfg_structural_json, size_metrics_json) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "constants_json, vex_op_histogram_json, cfg_structural_json, size_metrics_json, "
+        "block_hashes_json, call_context_json) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             binary_id,
             feat.get("address", 0),
@@ -502,6 +701,8 @@ def _insert_function_row(conn, binary_id: int, feat: Dict[str, Any]) -> None:
             _safe_json_dumps(feat.get("_vex_histogram", {})),
             _safe_json_dumps(cfg_s),
             _safe_json_dumps(size_s),
+            _safe_json_dumps(feat.get("block_hashes", {}).get("hashes", []), "[]"),
+            _safe_json_dumps(feat.get("call_context", {})),
         ),
     )
 
@@ -513,21 +714,32 @@ def register_binary(
     file_size: int,
     function_count: int = 0,
     db_path: Optional[Path] = None,
+    source: str = "user",
+    library_name: Optional[str] = None,
 ) -> Tuple[int, sqlite3.Connection]:
     """Register a binary in the DB and return (binary_id, open connection).
 
     The caller is responsible for committing and closing the connection.
     Must be called while holding ``_db_write_lock``.
+
+    Parameters
+    ----------
+    source : str
+        'user' for analyst-indexed binaries, 'library' for starter DB entries.
+    library_name : str, optional
+        Human-readable library name (e.g. 'OpenSSL 1.1.1').
     """
     conn = _get_connection(db_path)
     try:
         conn.executescript(_SCHEMA_SQL)
         conn.execute("DELETE FROM binaries WHERE sha256 = ?", (sha256,))
         cursor = conn.execute(
-            "INSERT INTO binaries (sha256, filename, architecture, function_count, indexed_at, file_size) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO binaries (sha256, filename, architecture, function_count, "
+            "indexed_at, file_size, source, library_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (sha256, filename, architecture, function_count,
-             datetime.datetime.now(datetime.timezone.utc).isoformat(), file_size),
+             datetime.datetime.now(datetime.timezone.utc).isoformat(), file_size,
+             source, library_name),
         )
         return cursor.lastrowid, conn
     except BaseException:
@@ -593,12 +805,16 @@ def query_similar_functions(
     limit: int = 10,
     db_path: Optional[Path] = None,
     source_architecture: Optional[str] = None,
+    min_blocks: int = BSIM_MIN_BLOCKS_FOR_MATCH,
+    idf_weights: Optional[Dict[str, float]] = None,
 ) -> List[Dict[str, Any]]:
-    """Two-phase query: SQL pre-filter then full similarity scoring.
+    """Two-phase query: SQL pre-filter then full similarity + confidence scoring.
 
     Phase 1: SQL filters candidates by block_count and instruction_count
              within 3x range, plus optional architecture exact match.
-    Phase 2: Full feature vector scoring on remaining candidates.
+    Phase 2: Full feature vector scoring + confidence on remaining candidates.
+
+    Results are sorted by ``confidence * similarity`` (significance) by default.
 
     Parameters
     ----------
@@ -613,9 +829,12 @@ def query_similar_functions(
     db_path : Path, optional
         Override signature DB path.
     source_architecture : str, optional
-        Architecture of the source binary (e.g. 'AMD64', 'X86').
-        When provided, only candidates from the same architecture are
-        considered.  Skipped when None or empty.
+        Architecture filter (e.g. 'AMD64', 'X86').
+    min_blocks : int
+        Suppress trivial matches below this block count (default 3).
+    idf_weights : dict, optional
+        Pre-computed IDF weights from compute_feature_idf().  If None,
+        confidence is computed without IDF weighting.
     """
     db = db_path or get_db_path()
     if not db.exists():
@@ -627,10 +846,10 @@ def query_similar_functions(
         target_instruction_count = target_features.get("size_metrics", {}).get("instruction_count", 0)
 
         # Build dynamic pre-filter query
+        block_lo = max(min_blocks, target_blocks // 3)
+        block_hi = max(target_blocks * 3, min_blocks)
         conditions: List[str] = ["f.block_count BETWEEN ? AND ?"]
-        min_blocks = max(1, target_blocks // 3)
-        max_blocks = max(target_blocks * 3, 3)
-        params: List[Any] = [min_blocks, max_blocks]
+        params: List[Any] = [block_lo, block_hi]
 
         # Instruction count filter (skip if unknown/zero)
         if target_instruction_count > 0:
@@ -646,7 +865,8 @@ def query_similar_functions(
 
         where_clause = " AND ".join(conditions)
         query = (
-            "SELECT f.*, b.sha256, b.filename, b.architecture "
+            "SELECT f.*, b.sha256, b.filename, b.architecture, "
+            "b.source, b.library_name "
             "FROM functions f JOIN binaries b ON f.binary_id = b.id "
             f"WHERE {where_clause} "
             "LIMIT 10000"
@@ -654,37 +874,146 @@ def query_similar_functions(
 
         cursor = conn.execute(query, params)
 
-        # Log pre-filter candidate count for diagnostics
         results = []
         candidate_count = 0
         for row in cursor:
             candidate_count += 1
             candidate = _row_to_features(row)
             scores = compute_similarity(target_features, candidate, metrics)
-            score_key = metrics if metrics != "combined" else "combined"
-            if scores.get(score_key, scores.get("combined", 0)) >= threshold:
-                results.append({
+            score_key = metrics if metrics in scores else "combined"
+            sim_score = scores.get(score_key, scores.get("combined", 0))
+            if sim_score >= threshold:
+                confidence = compute_confidence(
+                    target_features, candidate, scores, idf_weights
+                )
+                result_entry = {
                     "address": hex(row["address"]),
                     "name": row["name"],
                     "binary_sha256": row["sha256"],
                     "binary_filename": row["filename"],
                     "architecture": row["architecture"],
                     "scores": {k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
-                })
+                    "confidence": confidence,
+                }
+                # Include source info if available
+                try:
+                    if row["source"]:
+                        result_entry["source"] = row["source"]
+                    if row["library_name"]:
+                        result_entry["library_name"] = row["library_name"]
+                except (IndexError, KeyError):
+                    pass
+                results.append(result_entry)
 
         logger.debug(
             "BSim pre-filter: %d candidates (blocks=%d-%d, instr=%s, arch=%s)",
-            candidate_count, min_blocks, max_blocks,
+            candidate_count, block_lo, block_hi,
             f"{max(1, target_instruction_count // 3)}-{target_instruction_count * 3}"
             if target_instruction_count > 0 else "any",
             source_architecture or "any",
         )
 
-        # Sort by combined score descending
-        results.sort(key=lambda r: r["scores"].get("combined", 0), reverse=True)
+        # Sort by significance (confidence × similarity) descending
+        results.sort(
+            key=lambda r: r.get("confidence", 0) * r["scores"].get("combined", 0),
+            reverse=True,
+        )
         return results[:limit]
     finally:
         conn.close()
+
+
+def is_binary_indexed(sha256: str, db_path: Optional[Path] = None) -> bool:
+    """Check if a binary with the given SHA256 is already in the signature DB."""
+    db = db_path or get_db_path()
+    if not db.exists():
+        return False
+    conn = _get_connection(db)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM binaries WHERE sha256 = ? LIMIT 1", (sha256,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def update_function_name(
+    sha256: str,
+    address: int,
+    new_name: str,
+    db_path: Optional[Path] = None,
+) -> bool:
+    """Update a function's name in the BSim DB.
+
+    Called when the user renames a function so the name is available for
+    ``transfer_annotations`` to carry over to variants.  No-op if the
+    binary is not indexed or the DB doesn't exist.
+
+    Returns True if a row was updated, False otherwise.
+    """
+    db = db_path or get_db_path()
+    if not db.exists():
+        return False
+    with _db_write_lock:
+        conn = _get_connection(db)
+        try:
+            cursor = conn.execute(
+                "UPDATE functions SET name = ? "
+                "WHERE binary_id = (SELECT id FROM binaries WHERE sha256 = ?) "
+                "AND address = ?",
+                (new_name, sha256, address),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
+
+
+def sync_all_renames(
+    sha256: str,
+    renames: Dict[str, str],
+    db_path: Optional[Path] = None,
+) -> int:
+    """Bulk-sync all function renames to the BSim DB.
+
+    Parameters
+    ----------
+    sha256 : str
+        SHA256 of the binary.
+    renames : dict
+        Mapping of hex address string → new name (from state.renames["functions"]).
+
+    Returns the number of rows updated.
+    """
+    db = db_path or get_db_path()
+    if not db.exists() or not renames:
+        return 0
+    updated = 0
+    with _db_write_lock:
+        conn = _get_connection(db)
+        try:
+            binary_row = conn.execute(
+                "SELECT id FROM binaries WHERE sha256 = ?", (sha256,)
+            ).fetchone()
+            if not binary_row:
+                return 0
+            binary_id = binary_row[0]
+            for addr_str, name in renames.items():
+                try:
+                    addr_int = int(addr_str, 16)
+                    cursor = conn.execute(
+                        "UPDATE functions SET name = ? "
+                        "WHERE binary_id = ? AND address = ?",
+                        (name, binary_id, addr_int),
+                    )
+                    updated += cursor.rowcount
+                except (ValueError, TypeError):
+                    continue
+            conn.commit()
+            return updated
+        finally:
+            conn.close()
 
 
 def list_indexed_binaries(db_path: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -696,7 +1025,8 @@ def list_indexed_binaries(db_path: Optional[Path] = None) -> List[Dict[str, Any]
     conn = _get_connection(db)
     try:
         rows = conn.execute(
-            "SELECT sha256, filename, architecture, function_count, indexed_at, file_size "
+            "SELECT sha256, filename, architecture, function_count, indexed_at, "
+            "file_size, source, library_name "
             "FROM binaries ORDER BY indexed_at DESC"
         ).fetchall()
         return [dict(row) for row in rows]
@@ -724,6 +1054,16 @@ def _row_to_features(row: sqlite3.Row) -> Dict[str, Any]:
     constants = _safe_json_loads(row["constants_json"], [])
     vex_histogram = _safe_json_loads(row["vex_op_histogram_json"], {})
 
+    # New feature groups — gracefully handle old DB rows that lack these columns
+    try:
+        block_hashes = _safe_json_loads(row["block_hashes_json"], [])
+    except (IndexError, KeyError):
+        block_hashes = []
+    try:
+        call_context = _safe_json_loads(row["call_context_json"], {})
+    except (IndexError, KeyError):
+        call_context = {}
+
     return {
         "address": row["address"],
         "name": row["name"],
@@ -733,4 +1073,6 @@ def _row_to_features(row: sqlite3.Row) -> Dict[str, Any]:
         "constants": {"values": constants, "count": len(constants)},
         "_vex_histogram": vex_histogram,
         "size_metrics": size_metrics,
+        "block_hashes": {"hashes": block_hashes, "count": len(block_hashes)} if isinstance(block_hashes, list) else block_hashes,
+        "call_context": call_context if isinstance(call_context, dict) else {"import_callees": [], "import_callers": [], "callee_count": 0, "caller_count": 0},
     }

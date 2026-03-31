@@ -88,6 +88,8 @@ async def get_reaching_definitions(
     [Phase: advanced] Computes reaching definitions for a function — which register
     and memory definitions reach each program point.
 
+    ---compact: compute reaching definitions for function | taint tracking foundation | needs: angr+CFG
+
     When to use: For taint tracking, vulnerability hunting, or understanding how
     values propagate through a function. Foundation for data-flow analysis.
 
@@ -241,6 +243,8 @@ async def get_data_dependencies(
     """
     [Phase: advanced] Analyses data dependencies — how values flow between
     instructions via definition-use chains and dependency graphs.
+
+    ---compact: trace data dependencies via def-use chains | backward/forward | needs: angr+CFG
 
     When to use: When you need to trace where a value comes from (backward) or
     what consumes it (forward). More precise than control-flow slicing.
@@ -426,6 +430,8 @@ async def get_control_dependencies(
     [Phase: advanced] Builds the Control Dependence Graph (CDG) — shows which
     conditional branches control whether each block executes.
 
+    ---compact: build control dependence graph | which branches guard each block | needs: angr+CFG
+
     When to use: When investigating conditional logic, anti-analysis checks,
     or understanding which branches guard specific behavior.
 
@@ -545,6 +551,8 @@ async def propagate_constants(
     [Phase: advanced] Resolves computed values via constant propagation — simplifies
     expressions and de-obfuscates indirect call targets.
 
+    ---compact: resolve computed values via constant propagation | de-obfuscate indirects | needs: angr+CFG
+
     When to use: When decompilation shows computed/opaque values, indirect calls,
     or obfuscated expressions that need simplification.
 
@@ -637,6 +645,8 @@ async def get_value_set_analysis(
     """
     [Phase: advanced] Computes possible value ranges for registers and memory at
     each program point via Value-Set Analysis (VFG).
+
+    ---compact: value-set analysis for pointer/buffer bounds | expensive, try RDA first | needs: angr+CFG
 
     When to use: When you need precise pointer aliasing or buffer bounds analysis.
     WARNING: Computationally expensive. Try get_reaching_definitions() or

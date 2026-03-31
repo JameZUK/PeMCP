@@ -180,6 +180,8 @@ async def emulate_binary_with_qiling(
     with full OS emulation.  Returns a behavioral report: API/syscall calls,
     file activity, registry activity, and network activity.
 
+    ---compact: full OS emulation with syscall/API tracing | PE/ELF/Mach-O | needs: qiling, file
+
     This is a cross-platform emulator — unlike Speakeasy (Windows-only), Qiling
     can emulate Linux ELF and macOS Mach-O binaries as well.
 
@@ -263,6 +265,8 @@ async def emulate_shellcode_with_qiling(
     Supports x86, x86_64, ARM, ARM64, and MIPS — far broader than Speakeasy's
     x86/x64-only shellcode emulation.
 
+    ---compact: emulate shellcode multi-arch | x86/x64/ARM/MIPS | needs: qiling
+
     If no shellcode_hex is provided, uses the loaded file as raw shellcode.
 
     Rootfs requirements:
@@ -337,6 +341,8 @@ async def qiling_trace_execution(
     executed instruction.  Complements angr's static CFG with actual dynamic
     execution paths.
 
+    ---compact: instruction-level execution trace | dynamic path coverage | needs: qiling, file
+
     Rootfs requirements: Same as emulate_binary_with_qiling.  Linux ELF works
     out of the box.  Windows PE requires real DLLs in the rootfs — copy them
     from a Windows installation into qiling-rootfs/<arch>_windows/Windows/System32/.
@@ -393,6 +399,8 @@ async def qiling_hook_api_calls(
     Runs the loaded binary under Qiling and hooks specific API/syscall calls
     to capture arguments and return values.  More targeted than full emulation
     — specify exactly which APIs you're interested in for faster, less noisy output.
+
+    ---compact: hook specific APIs during emulation | capture args + return values | needs: qiling, file
 
     If no target_apis are specified, hooks ALL API calls (equivalent to
     emulate_binary_with_qiling but with more detailed argument capture).
@@ -456,6 +464,8 @@ async def qiling_dump_unpacked_binary(
     Dynamically unpacks the loaded binary by emulating it with Qiling until it
     self-unpacks, then dumps the process memory.  Handles custom/unknown packers
     that unipacker's YARA-based approach cannot identify.
+
+    ---compact: dynamic unpack via emulation + memory dump | smart VirtualAlloc tracking | needs: qiling, PE
 
     If dump_address is specified, Qiling will stop emulation when that address is
     reached (e.g., the Original Entry Point) and dump from that address.  Otherwise,
@@ -541,6 +551,8 @@ async def qiling_resolve_api_hashes(
     Resolves API hash values by computing hashes of known DLL export function
     names and matching them against the provided hash values.  Commonly used for
     analyzing shellcode and malware that dynamically resolves APIs via hashing.
+
+    ---compact: resolve API hashes to function names | ror13, crc32, djb2, fnv1a, auto | needs: qiling
 
     Supports multiple hash algorithms commonly found in malware:
     - auto: Try ALL algorithms and return any matches (best when algorithm is unknown)
@@ -743,6 +755,8 @@ async def qiling_memory_search(
     Runs the loaded binary under Qiling for a specified number of instructions,
     then searches all process memory for string patterns or hex byte sequences.
 
+    ---compact: emulate then search memory for strings/hex | find decrypted configs | needs: qiling, file
+
     Useful for finding decrypted configuration blobs, C2 URLs, encryption keys,
     or other data that only appears in memory after the binary has run and
     unpacked/decrypted itself.
@@ -809,6 +823,8 @@ async def qiling_setup_check(
     """
     [Phase: utility] Checks the Qiling Framework setup status: venv availability,
     rootfs directory structure, and essential DLLs for each architecture.
+
+    ---compact: verify qiling venv + rootfs + DLL setup | diagnose emulation failures
 
     When to use: When Qiling emulation fails or before first use to verify the
     environment is properly configured. Provides specific copy commands for

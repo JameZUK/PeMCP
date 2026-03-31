@@ -2220,6 +2220,8 @@ async def get_triage_report(
     [Phase: triage] START HERE after opening a file. Comprehensive automated triage
     of the loaded binary with risk scoring and format-aware next-tool recommendations.
 
+    ---compact: START HERE — auto risk score, packing, imports, capa, IOCs | needs: file
+
     Analyses 27+ dimensions including entropy, packing, digital signatures,
     suspicious imports, capa capabilities, network IOCs, section anomalies,
     timestamps, Rich header, overlay data, resources, YARA, header corruption,

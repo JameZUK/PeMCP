@@ -306,7 +306,9 @@ async def analyze_batch(
     """
     [Phase: utility] Batch-analyzes multiple binary files: computes hashes, PE
     metadata, import overlaps, timestamp comparison, and optional similarity
-    clustering (ssdeep/TLSH pairwise). Does NOT modify the currently loaded file.
+    clustering (ssdeep/TLSH pairwise).
+
+    ---compact: batch-compare multiple binaries — hashes, imports, similarity clustering Does NOT modify the currently loaded file.
 
     When to use: When comparing a set of samples (malware family variants,
     dropper artifacts, a samples directory) to identify commonalities, outliers,

@@ -106,7 +106,9 @@ async def identify_crypto_algorithm(
     """
     [Phase: explore] Identifies cryptographic algorithms used in the binary by
     scanning for S-boxes, key schedule patterns, hash constants, CRC tables,
-    and crypto-related imports. Goes beyond detect_crypto_constants() with full
+    and crypto-related imports.
+
+    ---compact: identify AES/RC4/SHA/CRC/MD5 via S-box and constant scanning | needs: file Goes beyond detect_crypto_constants() with full
     S-box validation and confidence scoring.
 
     When to use: After triage shows crypto imports, or when investigating
@@ -277,6 +279,8 @@ async def auto_extract_crypto_keys(
     """
     [Phase: deep-dive] Searches for potential cryptographic keys near identified
     crypto constants, in data sections, and using entropy-based heuristics.
+
+    ---compact: search for crypto keys near constants using entropy heuristics | needs: file
 
     When to use: After identify_crypto_algorithm() finds crypto constants, or
     when you suspect encryption but can't find the key through decompilation.
@@ -456,7 +460,11 @@ async def brute_force_simple_crypto(
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Brute-forces simple cryptographic transforms on the provided
-    data. Tries XOR (single/multi-byte with frequency analysis), RC4, ADD/SUB/ROL/ROR
+    data.
+
+    ---compact: brute-force XOR/RC4/ADD/SUB/ROL/ROR on hex data | known-plaintext support
+
+    Tries XOR (single/multi-byte with frequency analysis), RC4, ADD/SUB/ROL/ROR
     and validates results by checking for PE headers, readable strings, and known
     patterns. Supports known-plaintext attacks for direct XOR key derivation.
 

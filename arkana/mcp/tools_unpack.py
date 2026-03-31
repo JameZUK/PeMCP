@@ -37,7 +37,9 @@ async def try_all_unpackers(
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Orchestrates multiple unpacking methods on the loaded PE
-    file and returns the best result. Tries methods in order of reliability:
+    file and returns the best result.
+
+    ---compact: try Unipacker, Refinery, overlay extraction | returns best unpacked result | needs: PE Tries methods in order of reliability:
     1. Unipacker (generic PE unpacking)
     2. Binary Refinery PE reconstruction (pefix, peoverlay)
     3. PE overlay extraction
@@ -237,7 +239,9 @@ async def reconstruct_pe_from_dump(
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Reconstructs a valid PE from a memory dump by fixing
-    headers using LIEF. Realigns sections, fixes SizeOfImage/SizeOfHeaders,
+    headers using LIEF.
+
+    ---compact: reconstruct PE from memory dump — fix headers/sections via LIEF Realigns sections, fixes SizeOfImage/SizeOfHeaders,
     and optionally adjusts base address.
 
     When to use: After dumping memory from emulation (Qiling, Speakeasy) and
@@ -402,6 +406,8 @@ async def find_oep_heuristic(
     [Phase: deep-dive] Detects the Original Entry Point (OEP) of a packed binary
     using multiple heuristics: tail-jump detection, section-hop analysis, known
     packer patterns, and entropy transition points.
+
+    ---compact: detect OEP via tail-jump, section-hop, packer sigs, entropy heuristics | needs: PE
 
     When to use: After detect_packing() confirms the binary is packed and you
     need to find where the unpacked code starts executing.

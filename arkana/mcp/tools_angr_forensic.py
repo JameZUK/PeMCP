@@ -45,6 +45,8 @@ async def diff_binaries(
     [Phase: advanced] Compares the loaded binary against another to find matching,
     differing, and unmatched functions. For patch diffing and variant analysis.
 
+    ---compact: binary diff two files | match, differ, unmatched functions | needs: angr+CFG
+
     When to use: When comparing malware variants, analyzing patches, or identifying
     code reuse across samples.
 
@@ -237,6 +239,8 @@ async def detect_self_modifying_code(
     [Phase: advanced] Detects instructions that write to executable memory —
     self-modifying code common in packers, crypters, and obfuscated malware.
 
+    ---compact: detect writes to executable memory | packers, crypters | needs: angr+CFG
+
     When to use: When detect_packing() or triage suggests the binary is packed
     or obfuscated, or when section analysis shows W+X permissions.
 
@@ -353,6 +357,8 @@ async def find_code_caves(
     [Phase: advanced] Finds unused/padding regions (code caves) in executable sections.
     Useful for detecting injected code or finding safe patching locations.
 
+    ---compact: find code caves in executable sections | injection sites, patch locations | needs: angr+CFG
+
     When to use: When investigating code injection, looking for places to insert
     patches, or verifying binary integrity.
 
@@ -455,6 +461,8 @@ async def detect_packing(ctx: Context) -> Dict[str, Any]:
     """
     [Phase: explore] Uses angr heuristics to detect packing or obfuscation.
     Complements PEiD/triage with entropy, import count, and section analysis.
+
+    ---compact: detect packing via entropy, imports, section analysis | needs: angr
 
     When to use: After triage packing_assessment for a second opinion, or when
     triage entropy is borderline and you need more detailed analysis.
@@ -609,6 +617,8 @@ async def save_patched_binary(
     [Phase: advanced] Saves the in-memory binary state (including patches from
     patch_binary_memory()) to a new file on disk.
 
+    ---compact: save patched binary to disk | needs: angr
+
     When to use: After applying patches via patch_binary_memory() and you want
     to save the modified binary for further analysis or testing.
 
@@ -720,6 +730,8 @@ async def find_path_with_custom_input(
     """
     [Phase: advanced] Symbolic execution with configurable symbolic inputs —
     registers, memory ranges, and concrete pre-fills. Not limited to stdin.
+
+    ---compact: symbolic execution with custom register/memory inputs | needs: angr+CFG
 
     When to use: When find_path_to_address() (stdin-only) is insufficient and
     you need to control specific registers or memory as symbolic inputs.
@@ -910,6 +922,8 @@ async def emulate_with_watchpoints(
     """
     [Phase: advanced] Emulates a function with watchpoints that log memory
     reads/writes and register accesses at specific addresses.
+
+    ---compact: emulate with memory/register watchpoints | trace data access | needs: angr+CFG
 
     When to use: When you need to trace how specific memory locations or registers
     are accessed during execution — useful for understanding config decryption,
@@ -1126,6 +1140,8 @@ async def identify_cpp_classes(
     [Phase: advanced] Identifies C++ class hierarchies by analysing vtables.
     Returns classes with vtable addresses, virtual methods, and inheritance.
 
+    ---compact: identify C++ classes via vtable analysis | inheritance, virtual methods | needs: angr+CFG
+
     When to use: When analyzing C++ binaries — helps understand object-oriented
     structure, identify polymorphic dispatch, and find virtual function targets.
 
@@ -1320,6 +1336,8 @@ async def get_call_graph(
     [Phase: explore] Exports the full inter-procedural call graph, or a subgraph
     rooted at a specific function with optional depth limiting.
 
+    ---compact: export inter-procedural call graph | optional root + depth limit | needs: angr+CFG
+
     When to use: When you need to understand the global function call structure
     or trace call chains from a specific entry point.
 
@@ -1454,6 +1472,8 @@ async def find_anti_debug_comprehensive(
     anti-debugging, anti-VM, and sandbox evasion. Checks for specific API
     patterns, timing checks, TLS callbacks, PEB access, VM indicator strings,
     and known evasion techniques.
+
+    ---compact: detect anti-debug, anti-VM, sandbox evasion | APIs, strings, instructions | needs: angr+CFG
 
     When to use: After triage when anti-debug/anti-VM imports are flagged and
     you need a detailed inventory of evasion techniques. Also useful for packed
@@ -2079,6 +2099,8 @@ async def detect_control_flow_flattening(
     This tool detects the pattern by analysing dispatcher block in-degree,
     back-edge ratios, state variable comparisons, and block size uniformity.
 
+    ---compact: detect control flow flattening obfuscation | confidence scoring | needs: angr+CFG
+
     Returns a confidence score (0-100) per function. Higher scores indicate
     stronger CFF signals.
 
@@ -2287,6 +2309,8 @@ async def detect_opaque_predicates(
     [Phase: explore] Detect opaque predicates — conditional branches where only
     one path is ever satisfiable, indicating dead code insertion by an obfuscator.
 
+    ---compact: detect opaque predicates via Z3 constraint solving | dead code detection | needs: angr+CFG
+
     Uses angr's symbolic execution with Z3 constraint solving to check each
     conditional branch. When only one branch is feasible, it is flagged as an
     opaque predicate with the dead branch target identified.
@@ -2340,7 +2364,11 @@ async def detect_vm_protection(
 
     Identifies virtual machine-based code protection by analyzing section
     names, entropy patterns, dispatcher structures, and known protector
-    signatures. Does NOT attempt devirtualization — provides characterization
+    signatures.
+
+    ---compact: detect VMProtect/Themida/Code Virtualizer | section + entropy heuristics
+
+    Does NOT attempt devirtualization — provides characterization
     for the analyst to decide on behavioral analysis vs. manual reversing.
 
     When to use: When triage or detect_packing() suggests heavy obfuscation,

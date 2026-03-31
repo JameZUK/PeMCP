@@ -270,6 +270,8 @@ async def get_learner_profile(
     tier, concept mastery counts, module completion percentages, and session
     history. Creates a fresh profile if none exists.
 
+    ---compact: retrieve learner progress — tier, mastery counts, module completion
+
     When to use: At the start of a learning session to understand the learner's
     current level and adapt teaching accordingly. Also useful for reviewing
     overall progress.
@@ -332,7 +334,9 @@ async def update_concept_mastery(
 ) -> Dict[str, Any]:
     """
     [Phase: learning] Update the mastery level for a specific concept. Mastery
-    levels progress: introduced → practiced → mastered. Optionally attach a
+    levels progress: introduced -> practiced -> mastered.
+
+    ---compact: update concept mastery level | introduced -> practiced -> mastered Optionally attach a
     note about the learning context.
 
     When to use: After teaching or practicing a concept during a learning
@@ -447,6 +451,8 @@ async def get_learning_suggestions(
     [Phase: learning] Get personalised learning suggestions based on current
     mastery state. Recommends next concepts to learn, modules to complete, and
     exercises to try.
+
+    ---compact: personalised next-concept and module suggestions based on mastery state
 
     When to use: When the learner asks "what should I learn next?" or at the
     start of a session to plan the learning path.
@@ -602,6 +608,8 @@ async def reset_learner_profile(
     """
     [Phase: learning] Reset the learner profile to start fresh. Requires
     explicit confirmation.
+
+    ---compact: reset all learning progress | requires confirm=True
 
     When to use: When the learner wants to start over from scratch, or when
     the profile data is no longer relevant.

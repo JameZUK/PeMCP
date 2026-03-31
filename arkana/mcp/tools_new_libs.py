@@ -114,6 +114,8 @@ async def parse_binary_with_lief(ctx: Context, file_path: Optional[str] = None) 
     Returns headers, sections, imports, exports, and format-specific metadata.
     Falls back to the currently loaded file if no path is given.
 
+    ---compact: cross-format binary parsing | headers, sections, imports, exports | needs: lief
+
     When to use: When you need cross-format binary parsing or an alternative view to pefile-based get_pe_data().
     Next steps: Compare results with get_pe_data(), use decompile_function_with_angr() on interesting functions, add_note() for findings.
 
@@ -206,6 +208,8 @@ async def modify_pe_section(
     """
     Modifies a PE section's properties (name, characteristics) using LIEF.
 
+    ---compact: modify PE section name/characteristics | save patched binary | needs: lief, PE
+
     Args:
         section_name: Name of the section to modify (e.g. '.text').
         new_name: New name for the section.
@@ -273,6 +277,8 @@ async def disassemble_raw_bytes(
     """
     Disassembles raw bytes (shellcode, buffer contents) without needing a loaded binary.
     Supports x86, x86_64, ARM, ARM64, MIPS.
+
+    ---compact: disassemble raw hex bytes | multi-arch, no file needed | needs: capstone
 
     Args:
         hex_bytes: Hex-encoded bytes to disassemble (e.g. '554889e5...').
@@ -348,6 +354,8 @@ async def assemble_instruction(
     Converts assembly mnemonics to machine code bytes.
     Useful for creating patches in human-readable form.
 
+    ---compact: assemble mnemonics to machine code | multi-arch | needs: keystone
+
     Args:
         assembly: Assembly code string (e.g. 'nop; mov eax, 1; ret').
         architecture: Target architecture ('x86', 'x86_64', 'arm', 'arm64', 'mips').
@@ -394,6 +402,8 @@ async def patch_with_assembly(
     """
     Assembles instructions and patches them into the loaded binary at the given address.
     Combines Keystone (assembly) with angr (memory patching).
+
+    ---compact: assemble + patch at address | clears CFG cache | needs: keystone, angr, file
 
     Args:
         address: Hex address to patch at.
@@ -507,6 +517,8 @@ async def compute_similarity_hashes(ctx: Context, file_path: Optional[str] = Non
     Computes fuzzy/locality-sensitive hashes for sample similarity analysis:
     ssdeep (context-triggered piecewise hash) and TLSH (Trend Micro Locality Sensitive Hash).
 
+    ---compact: compute ssdeep + TLSH + imphash for loaded file | needs: file
+
     Args:
         file_path: Optional path to a file. If None, uses the loaded file.
     """
@@ -568,6 +580,8 @@ async def compare_file_similarity(
     """
     Compares the loaded file against another file using fuzzy hashes
     to determine similarity (useful for malware family clustering).
+
+    ---compact: compare two files via ssdeep + TLSH distance | needs: file
 
     Args:
         file_path_b: Path to the second file to compare.
@@ -669,6 +683,8 @@ async def emulate_pe_with_windows_apis(
     Emulates the loaded PE in Speakeasy's Windows environment with full API emulation.
     Returns the API call log (DLL function calls, arguments, return values).
 
+    ---compact: emulate PE with Windows API simulation | track allocs | needs: speakeasy, PE
+
     Args:
         timeout_seconds: Max emulation time in seconds.
         limit: Max API calls to return.
@@ -754,6 +770,8 @@ async def emulate_shellcode_with_speakeasy(
     """
     Emulates shellcode with full Windows API emulation via Speakeasy.
     If no shellcode_hex is provided, uses the loaded file as raw shellcode.
+
+    ---compact: emulate shellcode with Windows API hooks | x86/x64 | needs: speakeasy
 
     Args:
         shellcode_hex: Hex-encoded shellcode bytes. If None, uses loaded file data.
@@ -860,6 +878,8 @@ async def auto_unpack_pe(
     Supports UPX, ASPack, PEtite, FSG, and generic packing via section-hopping heuristics.
     The packer type is auto-detected via YARA signatures.
 
+    ---compact: auto-unpack PE via YARA-detected packer | UPX, ASPack, PEtite, FSG | needs: unipacker, PE
+
     Args:
         output_path: Where to save the unpacked binary. Default: <original>_unpacked.exe.
         timeout_seconds: Max time for unpacking in seconds. Default 120.
@@ -919,6 +939,8 @@ async def scan_for_embedded_files(
     """
     Scans the binary for embedded files, archives, and file system images
     using Binwalk signature scanning.
+
+    ---compact: scan binary for embedded files/archives/firmware | needs: binwalk, file
 
     Args:
         limit: Max findings to return.
@@ -1011,6 +1033,8 @@ async def get_extended_capabilities(ctx: Context) -> Dict[str, Any]:
     """
     Reports which extended libraries are available on this server instance.
     Helps the AI understand what tools it can use.
+
+    ---compact: list available extended libraries | lief, capstone, keystone, speakeasy, qiling, etc.
     """
     await ctx.info("Checking extended library availability")
     return {

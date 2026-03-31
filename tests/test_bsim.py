@@ -41,6 +41,9 @@ def _make_features(
     constants=None,
     byte_size=200,
     instruction_count=50,
+    block_hashes=None,
+    import_callees=None,
+    import_callers=None,
 ):
     """Build a synthetic feature dict matching extract_function_features() output."""
     return {
@@ -75,6 +78,16 @@ def _make_features(
             "byte_size": byte_size,
             "instruction_count": instruction_count,
             "block_count": block_count,
+        },
+        "block_hashes": {
+            "hashes": block_hashes or [],
+            "count": len(block_hashes) if block_hashes else 0,
+        },
+        "call_context": {
+            "import_callees": import_callees or [],
+            "import_callers": import_callers or [],
+            "callee_count": len(import_callees) if import_callees else 0,
+            "caller_count": len(import_callers) if import_callers else 0,
         },
     }
 
@@ -196,6 +209,8 @@ class TestComputeSimilarity:
             string_hashes=[111, 222],
             constants=[0x12345678],
             byte_size=5000, instruction_count=1000,
+            block_hashes=[1111, 2222, 3333],
+            import_callees=["CreateRemoteThread", "WriteProcessMemory"],
         )
         f2 = _make_features(
             block_count=2, edge_count=1, cyclomatic=1,
@@ -203,6 +218,8 @@ class TestComputeSimilarity:
             string_hashes=[333, 444],
             constants=[0xDEADBEEF],
             byte_size=50, instruction_count=10,
+            block_hashes=[4444, 5555],
+            import_callees=["printf", "malloc"],
         )
         scores = compute_similarity(f1, f2)
         assert scores["combined"] < 0.4

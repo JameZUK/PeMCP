@@ -81,6 +81,8 @@ async def refinery_extract(
     - 'pdf': Extract objects and streams from PDFs (optional password param).
     - 'embedded': Auto-detect and extract all embedded files (PE, ZIP, ELF, PDF, etc.).
 
+    ---compact: extract from archives/installers/office/PDF/embedded | 7 operations | needs: refinery
+
     Args:
         ctx: MCP Context.
         operation: (str) One of the operations listed above.

@@ -213,7 +213,9 @@ async def map_mitre_attack(
     """
     [Phase: utility] Aggregates all MITRE ATT&CK-relevant findings from the
     current analysis: capa results, import classification, behavioral indicators,
-    and string matches. Maps them to specific techniques with confidence scores
+    and string matches.
+
+    ---compact: map findings to MITRE ATT&CK techniques with confidence scores | needs: file Maps them to specific techniques with confidence scores
     and shows coverage across tactics.
 
     When to use: After analysis is complete. Provides a structured ATT&CK
@@ -338,7 +340,9 @@ async def generate_sigma_rule(
     """
     [Phase: utility] Generates draft Sigma detection rules from analysis findings:
     process creation patterns, file paths, registry keys, and network indicators
-    inferred from strings, imports, and triage data. Output is valid Sigma YAML.
+    inferred from strings, imports, and triage data.
+
+    ---compact: generate draft Sigma detection rules from analysis findings | needs: file Output is valid Sigma YAML.
 
     IMPORTANT: Generated rules are starting points requiring analyst review —
     not production-ready detections. Each rule includes a confidence annotation.

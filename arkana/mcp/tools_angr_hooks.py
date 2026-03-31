@@ -23,6 +23,8 @@ async def hook_function(
     [Phase: advanced] Hooks a function so future emulation/symbolic execution uses
     the hook instead of real code. Provide a hex address or imported symbol name.
 
+    ---compact: hook function to stub return value for emulation | needs: angr+CFG
+
     When to use: Before emulate_function_execution() or find_path_to_address() when
     a callee causes issues (infinite loops, missing APIs, crashes). Stub it out.
 
@@ -108,6 +110,8 @@ async def list_hooks(ctx: Context) -> Dict[str, Any]:
     """
     [Phase: utility] Lists all currently installed function hooks.
 
+    ---compact: list active function hooks | needs: angr
+
     When to use: Before emulation to verify which hooks are active, or to
     audit the current hook state during debugging.
     """
@@ -133,6 +137,8 @@ async def list_hooks(ctx: Context) -> Dict[str, Any]:
 async def unhook_function(ctx: Context, address_or_name: str) -> Dict[str, Any]:
     """
     [Phase: utility] Removes a previously installed hook to restore original code.
+
+    ---compact: remove function hook to restore original code | needs: angr
 
     When to use: After emulation is complete and you want to restore the original
     function behavior for subsequent analysis.

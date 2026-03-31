@@ -832,6 +832,8 @@ async def trace_taint_flows(
     [Phase: analysis] Trace inter-procedural taint flows from untrusted input
     sources to dangerous sinks through the call graph.
 
+    ---compact: trace source-to-sink taint across functions via callgraph BFS + RDA | needs: angr
+
     Phase 1 (structural): Classifies functions as source/sink callers via
     import analysis, then BFS-walks the call graph to find chains connecting
     them.  Phase 2 (validate=True): Checks decompiled pseudocode at each

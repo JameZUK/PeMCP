@@ -390,6 +390,8 @@ async def debug_start(
     Creates a persistent emulation environment using Qiling Framework.
     The binary is loaded and paused at entry point, ready for stepping.
 
+    ---compact: start debug session for loaded binary | paused at entry point | needs: file, qiling
+
     CRT stubs (enabled by default) hook ~47 Windows APIs needed for MSVC CRT
     initialization (GetSystemTimeAsFileTime, GetCurrentProcessId, GetProcessHeap,
     critical sections, TLS/FLS, etc.) to prevent crashes before user code runs.
@@ -463,6 +465,8 @@ async def debug_stop(
 
     Cleans up the emulation subprocess and frees resources.
 
+    ---compact: stop and destroy debug session | frees subprocess resources | needs: debug session
+
     Args:
         session_id: Session to stop (uses most recent if empty)
     """
@@ -484,6 +488,8 @@ async def debug_status(
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Check the status of debug sessions.
+
+    ---compact: check status of debug sessions | lists all if no session_id given
 
     Args:
         session_id: Specific session to check (lists all if empty)
@@ -526,6 +532,8 @@ async def debug_step(
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Execute N instructions (single-step).
 
+    ---compact: step N instructions | returns PC, registers, disassembly | needs: debug session
+
     Args:
         count: Number of instructions to execute (1-10000, default 1)
         session_id: Session to step (uses most recent if empty)
@@ -563,6 +571,8 @@ async def debug_step_over(
     If the current instruction is a CALL, sets a temporary breakpoint
     after it and continues. Otherwise, steps 1 instruction.
 
+    ---compact: step over CALL instruction | temp breakpoint after call | needs: debug session
+
     Args:
         max_instructions: Safety limit for call execution (default 1M)
         session_id: Session to use (uses most recent if empty)
@@ -593,6 +603,8 @@ async def debug_continue(
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Continue execution until breakpoint, watchpoint, or limit.
+
+    ---compact: continue execution until breakpoint/watchpoint/limit | needs: debug session
 
     Args:
         max_instructions: Max instructions before stopping (default 10M)
@@ -631,6 +643,8 @@ async def debug_run_until(
     """[Phase: dynamic] Run until a specific address is reached.
 
     Sets a temporary breakpoint at the target address and continues.
+
+    ---compact: run until specific address reached | temp breakpoint + continue | needs: debug session
 
     Args:
         address: Target address (hex, e.g. "0x401000")
@@ -676,6 +690,8 @@ async def debug_set_breakpoint(
     - Address breakpoint: stops when PC reaches the address
     - API breakpoint: stops when a Windows API function is called
     - Conditional: adds register/memory conditions to address/API breakpoints
+
+    ---compact: set breakpoint at address or API name | supports conditions | needs: debug session
 
     Args:
         address: Address to break at (hex, e.g. "0x401000")
@@ -729,6 +745,8 @@ async def debug_set_watchpoint(
 
     Stops execution when memory in the watched range is read or written.
 
+    ---compact: set memory watchpoint | read/write/readwrite types | needs: debug session
+
     Args:
         address: Start address of watched region (hex)
         size: Size of watched region in bytes (1 to 1MB, default 4)
@@ -760,6 +778,8 @@ async def debug_remove_breakpoint(
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Remove a breakpoint by ID.
 
+    ---compact: remove breakpoint by ID | needs: debug session
+
     Args:
         breakpoint_id: ID of the breakpoint to remove (from debug_set_breakpoint)
         session_id: Session to use (uses most recent if empty)
@@ -784,6 +804,8 @@ async def debug_remove_watchpoint(
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Remove a watchpoint by ID.
 
+    ---compact: remove watchpoint by ID | needs: debug session
+
     Args:
         watchpoint_id: ID of the watchpoint to remove (from debug_set_watchpoint)
         session_id: Session to use (uses most recent if empty)
@@ -806,6 +828,8 @@ async def debug_list_breakpoints(
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] List all breakpoints and watchpoints in a debug session.
+
+    ---compact: list all breakpoints and watchpoints | needs: debug session
 
     Args:
         session_id: Session to query (uses most recent if empty)
@@ -830,6 +854,8 @@ async def debug_read_state(
     Returns registers, program counter, next instructions (disassembled),
     stack top values, memory map summary, and breakpoint/watchpoint counts.
 
+    ---compact: read registers, PC, stack, memory map, disassembly | needs: debug session
+
     Args:
         session_id: Session to query (uses most recent if empty)
     """
@@ -851,6 +877,8 @@ async def debug_read_memory(
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Read memory at a specific address.
+
+    ---compact: read memory at address | hex or disasm format, up to 1MB | needs: debug session
 
     Args:
         address: Memory address to read from (hex)
@@ -882,6 +910,8 @@ async def debug_write_memory(
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Write bytes to memory at a specific address.
 
+    ---compact: write bytes to memory at address | hex string input | needs: debug session
+
     Args:
         address: Memory address to write to (hex)
         hex_bytes: Hex string of bytes to write (e.g. "90909090" for NOPs)
@@ -911,6 +941,8 @@ async def debug_write_register(
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Write a value to a CPU register.
+
+    ---compact: write value to CPU register | does NOT redirect execution | needs: debug session
 
     Args:
         register: Register name (e.g. "eax", "rip", "pc")
@@ -948,6 +980,8 @@ async def debug_snapshot_save(
     Snapshots capture all registers, memory, and CPU state. Use them to
     explore alternative execution paths or recover from mistakes.
 
+    ---compact: save snapshot of registers, memory, CPU state | needs: debug session
+
     Args:
         name: Human-readable snapshot name (optional)
         note: Description of what this snapshot represents (optional)
@@ -982,6 +1016,8 @@ async def debug_snapshot_restore(
 
     Restores all registers, memory, and CPU state to the snapshot point.
 
+    ---compact: restore execution state from saved snapshot | needs: debug session
+
     Args:
         snapshot_id: ID of the snapshot to restore (from debug_snapshot_save)
         session_id: Session to use (uses most recent if empty)
@@ -1008,6 +1044,8 @@ async def debug_snapshot_list(
 ) -> Dict[str, Any]:
     """[Phase: dynamic] List all saved snapshots in a debug session.
 
+    ---compact: list all saved snapshots | needs: debug session
+
     Args:
         session_id: Session to query (uses most recent if empty)
     """
@@ -1028,6 +1066,8 @@ async def debug_snapshot_diff(
 
     Shows register differences and memory regions that changed between
     two saved snapshots. Useful for understanding execution effects.
+
+    ---compact: diff two snapshots | shows register + memory changes | needs: debug session
 
     Args:
         snapshot_id_a: First snapshot ID
@@ -1067,6 +1107,8 @@ async def debug_set_input(
     consumes data from this input queue instead of crashing. Queue input
     before stepping through code that reads from stdin/cin/scanf.
 
+    ---compact: queue input for stubbed ReadConsoleA | utf-8 or hex encoding | needs: debug session
+
     Args:
         data: Input data to queue (string or hex-encoded bytes)
         encoding: "utf-8" (default) or "hex" (hex-encoded bytes)
@@ -1100,6 +1142,8 @@ async def debug_get_output(
     When I/O stubs are enabled, all text written via WriteConsoleA/W
     (covering printf, puts, cout, etc.) is captured. This tool returns
     the captured output buffer.
+
+    ---compact: get captured console output from WriteConsoleA/W stubs | needs: debug session
 
     Args:
         clear: Clear the buffer after reading (default False)
@@ -1140,6 +1184,8 @@ async def debug_get_api_trace(
     return value. Use this to see what the binary is doing at the API level
     without setting individual breakpoints.
 
+    ---compact: get API call trace | names, args, return values | paginated | needs: debug session
+
     Args:
         offset: Start offset for pagination (default 0)
         limit: Max entries to return (1-1000, default 100)
@@ -1171,6 +1217,8 @@ async def debug_clear_api_trace(
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Clear the API call trace buffer.
 
+    ---compact: clear API call trace buffer | needs: debug session
+
     Args:
         session_id: Session to use (uses most recent if empty)
     """
@@ -1191,6 +1239,8 @@ async def debug_set_trace_filter(
 
     By default all API calls are traced. Use this to whitelist specific APIs
     or disable/enable tracing entirely.
+
+    ---compact: configure API trace filter | whitelist specific APIs or disable tracing | needs: debug session
 
     Args:
         apis: Comma-separated API names to whitelist (empty = trace all)
@@ -1235,6 +1285,8 @@ async def debug_search_memory(
 
     Use cases: finding decrypted strings, config data, C2 URLs, encryption keys
     after stepping through decryption/unpacking routines.
+
+    ---compact: search emulated memory for strings/bytes | UTF-8+UTF-16LE, hex wildcards | needs: debug session
 
     Args:
         pattern: Search pattern (string text or hex bytes)
@@ -1291,6 +1343,8 @@ async def debug_stub_api(
     When the binary calls the specified Windows API, the stub intercepts it:
     sets the return value, optionally writes data to output pointer parameters,
     and returns cleanly. Useful for stubbing APIs that Qiling doesn't handle.
+
+    ---compact: stub Windows API with return value + optional pointer writes | set_last_error for anti-emu bypass | needs: debug session
 
     CRT stubs (~47 APIs) are installed by default. Use this for additional APIs
     that crash during emulation (e.g. custom DLL imports, rare Win32 APIs).
@@ -1381,6 +1435,8 @@ async def debug_list_stubs(
     stubs (MSVC initialization APIs), and user-defined stubs (created via
     debug_stub_api).
 
+    ---compact: list all API stubs | builtin I/O, CRT, and user-defined | needs: debug session
+
     Args:
         session_id: Session to query (uses most recent if empty)
     """
@@ -1402,6 +1458,8 @@ async def debug_remove_stub(
     Only user-defined stubs (created via debug_stub_api) can be removed.
     Builtin I/O and CRT stubs cannot be removed — restart the session
     with stub_io=False or stub_crt=False to disable them.
+
+    ---compact: remove user-defined API stub by name | builtin stubs cannot be removed | needs: debug session
 
     Args:
         api_name: Name of the API stub to remove

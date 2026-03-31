@@ -31,35 +31,7 @@ from arkana.mcp.server import mcp_server
 from arkana.mcp._format_helpers import detect_format_from_magic
 
 # Tool registration is managed by the tool_registry module.
-# Profile-aware registration happens in _register_tools_for_profile()
-# after argument parsing.  See --tool-profile / ARKANA_TOOL_PROFILE.
-from arkana.tool_registry import (
-    set_profile as _set_tool_profile,
-    register_core_tools as _register_core_tools,
-    register_all_tools as _register_all_tools,
-)
-
-
-def _register_tools_for_profile(profile: str) -> None:
-    """Register MCP tools based on the selected profile.
-
-    Called once during startup after argument parsing.
-
-    Profiles:
-      full    — all tools (default, backward compatible)
-      lazy    — core tools only; analysis tools added on file open
-      minimal — core tools only; no auto-expansion
-    """
-    _set_tool_profile(profile)
-
-    if profile == "full":
-        count = _register_all_tools(refinery_available=REFINERY_AVAILABLE)
-        logger.info("Tool profile 'full': %d modules registered", count)
-        if not REFINERY_AVAILABLE:
-            logger.info("binary-refinery not installed — skipping refinery tool registration")
-    else:
-        count = _register_core_tools()
-        logger.info("Tool profile %r: %d core modules registered (analysis tools deferred)", profile, count)
+from arkana.tool_registry import register_all_tools as _register_all_tools
 
 
 # ---------------------------------------------------------------------------
@@ -153,13 +125,6 @@ def _parse_arguments() -> argparse.Namespace:
     mcp_group.add_argument("--api-key", type=str, default=None, help="Bearer token for HTTP mode authentication. Clients must send 'Authorization: Bearer <key>' header. Can also be set via ARKANA_API_KEY env var.")
     mcp_group.add_argument("--samples-path", type=str, default=None, help="Path to the directory containing sample files for analysis. Exposed via the list_samples tool. Falls back to ARKANA_SAMPLES env var if not set.")
     mcp_group.add_argument("--no-dashboard", action="store_true", help="Disable the web dashboard entirely. Can also be set via ARKANA_NO_DASHBOARD=1 env var.")
-    mcp_group.add_argument("--tool-profile", choices=["full", "lazy", "minimal"], default=None,
-                           help="Tool registration profile: 'full' (all tools at startup, default), "
-                                "'lazy' (core tools at startup, analysis tools added on file open), "
-                                "'minimal' (core tools only, no auto-expansion). "
-                                "Use 'lazy' or 'minimal' to reduce context window usage when "
-                                "ENABLE_TOOL_SEARCH is disabled. "
-                                "Falls back to ARKANA_TOOL_PROFILE env var.")
     mcp_group.add_argument("--brief-descriptions", action="store_true", default=None,
                            help="Use brief tool descriptions (first paragraph only) to reduce "
                                 "context window usage. Full descriptions include 'When to use', "
@@ -470,15 +435,11 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
         set_brief_descriptions(True)
         logger.info("Brief tool descriptions enabled — tool listing will use first-paragraph summaries only")
 
-    # Resolve tool profile: CLI arg > env var > default "full"
-    tool_profile = (
-        args.tool_profile
-        or os.environ.get("ARKANA_TOOL_PROFILE", "full")
-    ).lower().strip()
-    if tool_profile not in ("full", "lazy", "minimal"):
-        logger.warning("Unknown tool profile %r, falling back to 'full'", tool_profile)
-        tool_profile = "full"
-    _register_tools_for_profile(tool_profile)
+    # Register all tools
+    count = _register_all_tools(refinery_available=REFINERY_AVAILABLE)
+    logger.info("%d tool modules registered", count)
+    if not REFINERY_AVAILABLE:
+        logger.info("binary-refinery not installed — skipping refinery tool registration")
 
     # Configure path sandboxing — mandatory for HTTP transports
     if args.allowed_paths:

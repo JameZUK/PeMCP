@@ -156,6 +156,8 @@ async def search_floss_strings(
     [Phase: explore] Performs a regex search against FLOSS strings with advanced
     score filtering and sorting.
 
+    ---compact: regex search FLOSS strings | filter: score, length; sort | needs: FLOSS
+
     When to use: When looking for specific patterns in strings — network indicators
     (IPs, URLs, domains), file paths, registry keys, or suspicious API references.
     More targeted than get_strings_summary() or get_top_sifted_strings().
@@ -296,6 +298,8 @@ async def get_floss_analysis_info(ctx: Context,
     [Phase: explore] Retrieves FLOSS analysis results with option to filter for
     strings that have code cross-references.
 
+    ---compact: retrieve FLOSS string data | static/stack/tight/decoded; filter by xrefs | needs: FLOSS
+
     When to use: When you need raw FLOSS string data (static, stack, tight, decoded)
     or metadata about the FLOSS analysis. Use only_with_references=True to find
     strings actually used in code (reduces noise significantly).
@@ -418,6 +422,8 @@ async def get_capa_analysis_info(ctx: Context,
     """
     [Phase: explore] Retrieves an overview of Capa capability rules with filtering
     and pagination. Each rule's matches are summarized by unique address count.
+
+    ---compact: capa capability overview | filter by namespace, ATT&CK, MBC | needs: capa
 
     When to use: After triage to explore detected capabilities (MITRE ATT&CK,
     MBC). Filter by namespace (e.g. 'anti-analysis'), ATT&CK ID, or rule name.
@@ -725,6 +731,8 @@ async def get_capa_rule_match_details(ctx: Context,
     """
     [Phase: deep-dive] Retrieves detailed match locations for a specific Capa rule.
 
+    ---compact: capa rule match addresses + feature details | batch mode | needs: capa
+
     When to use: After get_capa_analysis_info() identified interesting rules — use
     this to find the exact code addresses where the capability was detected.
 
@@ -841,6 +849,8 @@ async def extract_strings_from_binary(
     [Phase: explore] Extracts printable ASCII strings directly from the binary,
     optionally ranking them with StringSifter for relevance.
 
+    ---compact: extract ASCII strings from binary | optional ML ranking via StringSifter | needs: file
+
     When to use: When FLOSS data is unavailable or you need raw ASCII extraction
     with ML scoring. Prefer get_floss_analysis_info() when FLOSS ran successfully.
 
@@ -942,6 +952,8 @@ async def search_for_specific_strings(ctx: Context, search_terms: List[str], lim
     [Phase: explore] Searches for exact ASCII string occurrences in the binary data,
     returning file offsets for each match.
 
+    ---compact: exact ASCII string search | returns file offsets per match | needs: file
+
     When to use: When you have specific strings to locate (e.g. known C2 domains,
     config markers, known malware strings). Case-sensitive exact matching.
 
@@ -1010,6 +1022,8 @@ async def get_top_sifted_strings(
     """
     [Phase: explore] Returns ML-ranked strings from all sources (FLOSS + basic ASCII)
     with advanced filtering by score, length, regex, and category.
+
+    ---compact: ML-ranked strings via StringSifter | filter: score, length, regex, category | needs: file
 
     When to use: When you want the most relevant strings ranked by StringSifter ML
     scoring. More powerful than get_strings_summary() for targeted filtering.
@@ -1112,6 +1126,8 @@ async def get_strings_for_function(
     [Phase: deep-dive] Finds all strings referenced by a specific function via
     FLOSS cross-reference data.
 
+    ---compact: strings referenced by function | via FLOSS xref data | needs: FLOSS
+
     When to use: After decompiling a function, to understand what strings it uses
     (config values, error messages, API names, URLs).
 
@@ -1171,6 +1187,8 @@ async def get_string_usage_context(
     [Phase: deep-dive] Finds a static string by file offset and returns disassembly
     context for each code location that references it.
 
+    ---compact: disassembly context for string xrefs | static strings only | needs: FLOSS
+
     When to use: After finding an interesting string (via search_floss_strings,
     get_top_sifted_strings, etc.) to understand HOW it's used in code.
 
@@ -1223,6 +1241,8 @@ async def fuzzy_search_strings(
     """
     [Phase: explore] Fuzzy search for strings similar to a query across all sources.
     Results sorted by similarity ratio.
+
+    ---compact: fuzzy string matching via rapidfuzz | sorted by similarity ratio | needs: file
 
     When to use: When you have an approximate string (e.g. partial IOC, typo'd
     domain, obfuscated variant) and want to find near-matches in the binary.
@@ -1304,6 +1324,8 @@ async def get_strings_summary(
     """
     [Phase: triage] Categorizes all extracted strings by type and returns counts
     with top examples. Far more context-efficient than dumping raw strings.
+
+    ---compact: categorized string summary | URLs, IPs, paths, registry, mutex, base64 | needs: file
 
     When to use: As a first look at strings after triage — gives a structured
     overview of IOC categories without overwhelming context. Call this before
@@ -1425,6 +1447,8 @@ async def search_yara_custom(
     """
     [Phase: explore] Compiles and runs custom YARA rules (provided as a string)
     against the currently loaded binary. Returns matching rules with offsets.
+
+    ---compact: run custom YARA rules against binary | match offsets + context | needs: file
 
     When to use: When you have a hypothesis about specific byte patterns, strings,
     or structures in the binary and want to validate it with a YARA rule.
@@ -1627,6 +1651,8 @@ async def get_string_at_va(
     [Phase: deep-dive] Extracts a string at a given virtual address or file offset
     by reading bytes until a null terminator or max_length.
 
+    ---compact: read string at VA or file offset | auto-detect ASCII/UTF-16; batch mode | needs: file
+
     When to use: When decompilation, disassembly, or string analysis references a
     string at a VA or file offset and you want to see the actual string content.
 
@@ -1750,6 +1776,8 @@ async def search_hex_pattern(
     """
     [Phase: explore] Search for hex byte patterns in the loaded binary. Supports
     wildcard bytes (??) for flexible matching.
+
+    ---compact: hex byte pattern search with ?? wildcards | section filter | needs: file
 
     When to use: To find specific byte sequences — magic bytes, shellcode signatures,
     XOR keys, crypto constants, or known opcode patterns.

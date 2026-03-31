@@ -146,6 +146,9 @@ except RuntimeError:
     BSIM_DB_DIR = Path("/tmp") / ".arkana" / "bsim"
 BSIM_DEFAULT_THRESHOLD = 0.5
 BSIM_BACKGROUND_TIMEOUT = 1800  # seconds — 30 min (env: ARKANA_BSIM_BACKGROUND_TIMEOUT). Note: CLAUDE.md historically said 600s; actual value is 1800s.
+BSIM_MIN_BLOCKS_FOR_MATCH = 3   # Suppress trivial matches below this block count
+BSIM_DEFAULT_CONFIDENCE_THRESHOLD = 1.0  # Minimum confidence for meaningful matches
+BSIM_AUTO_INDEX = True  # Auto-index into signature DB during enrichment (env: ARKANA_BSIM_AUTO_INDEX)
 
 # --- Artifact Limits ---
 MAX_ARTIFACT_FILE_SIZE = 100 * 1024 * 1024        # 100 MB per artifact

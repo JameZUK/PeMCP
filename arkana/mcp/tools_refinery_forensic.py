@@ -41,6 +41,8 @@ async def refinery_forensic(
     - 'protobuf': Decode Protocol Buffer messages to JSON (schema-less).
     - 'msgpack': Decode MessagePack binary data to JSON.
 
+    ---compact: forensic ops | PCAP, EVTX, registry, LNK, defang, protobuf, msgpack | needs: refinery
+
     Args:
         ctx: MCP Context.
         operation: (str) One of the operations listed above.

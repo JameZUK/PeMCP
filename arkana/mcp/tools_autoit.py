@@ -81,6 +81,8 @@ async def autoit_decrypt(
 ) -> Dict[str, Any]:
     """[Phase: deep-dive] Decrypt and decompile AutoIt3 compiled scripts.
 
+    ---compact: decrypt AutoIt3 scripts (MT19937 / RanRot PRNG) | DarkGate/StealC support
+
     Supports two PRNG algorithms:
     - **Mersenne Twister** (MT19937) with AutoIt3's custom tempering — standard
     - **RanRot PRNG** (rotate-and-add) — used by modified AutoIt3 builds

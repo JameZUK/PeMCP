@@ -143,6 +143,8 @@ async def analyze_office_macros(
 ) -> Dict[str, Any]:
     """Analyze VBA macros in Office documents (DOC, DOCM, XLS, XLSM, PPT, etc.).
 
+    ---compact: extract VBA macros, auto-exec triggers, suspicious keywords, IOCs | needs: oletools
+
     Phase: 1 -- Identify
 
     Extracts and analyzes VBA macro source code, identifies auto-execute
@@ -287,6 +289,8 @@ async def detect_xlm_macros(
 ) -> Dict[str, Any]:
     """Detect Excel 4.0 (XLM) macros in Excel documents.
 
+    ---compact: detect Excel 4.0 (XLM) macros with EXEC/CALL/FORMULA patterns | needs: oletools
+
     Phase: 1 -- Identify
 
     Scans for Excel 4.0 macro sheets and extracts cell formulas that may
@@ -427,6 +431,8 @@ async def analyze_ole_streams(
     file_path: str = "",
 ) -> Dict[str, Any]:
     """Analyze OLE2 compound file structure and identify suspicious streams.
+
+    ---compact: analyze OLE2 streams — embedded objects, encrypted content, properties | needs: oletools
 
     Phase: 1 -- Identify
 

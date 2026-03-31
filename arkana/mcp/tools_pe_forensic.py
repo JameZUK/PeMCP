@@ -46,6 +46,8 @@ async def generate_yara_rule(
     findings: unique strings, import combinations, section names, Rich header hash,
     PDB path, file size range, and byte patterns. Outputs valid YARA syntax.
 
+    ---compact: auto-generate YARA rule | strings, imports, Rich header, PDB | needs: file
+
     When to use: After analysis is complete and you want a detection signature
     for the sample. The generated rule is a starting point — review and refine
     before production use.
@@ -375,6 +377,8 @@ async def parse_authenticode(
     validates the PE hash against the signed hash, and detects anomalies (expired,
     self-signed, mismatched hashes). Does not perform chain-of-trust verification.
 
+    ---compact: parse authenticode signature | certs, thumbprints, hash validation | needs: PE
+
     When to use: When investigating signed malware, supply chain attacks, stolen
     code signing certificates, or validating binary authenticity.
 
@@ -663,6 +667,8 @@ async def unify_artifact_timeline(
     resource timestamps, export table timestamp, digital signature timestamps,
     and .NET metadata version. Flags anomalies like timestomping, future dates,
     and mismatches between components.
+
+    ---compact: unify temporal artifacts into timeline | timestomping detection | needs: PE
 
     When to use: When investigating binary provenance, build timeline, or
     suspected timestamp tampering/timestomping.

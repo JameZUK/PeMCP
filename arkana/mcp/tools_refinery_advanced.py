@@ -32,6 +32,8 @@ async def refinery_regex_extract(
 ) -> Dict[str, Any]:
     """Extract regex matches from binary data via Binary Refinery.
 
+    ---compact: extract regex matches from binary data | named groups supported | needs: refinery
+
     Args:
         ctx: MCP Context.
         pattern: (str) Python regex pattern. Use (?P<name>...) for named groups.
@@ -94,6 +96,8 @@ async def refinery_regex_replace(
     data_hex: str,
 ) -> Dict[str, Any]:
     """Find and replace using regex in binary data via Binary Refinery.
+
+    ---compact: regex find-and-replace in binary data | backreferences supported | needs: refinery
 
     Args:
         ctx: MCP Context.
@@ -158,6 +162,8 @@ async def refinery_auto_decrypt(
 
     Uses frequency analysis, known plaintext attacks, and file signature
     detection to automatically recover the encryption key.
+
+    ---compact: auto-detect + decrypt XOR/SUB encryption | frequency analysis | needs: refinery
 
     Args:
         ctx: MCP Context.
@@ -230,6 +236,8 @@ async def refinery_key_derive(
     """Derive cryptographic keys from passwords via Binary Refinery.
 
     Methods: pbkdf2, hkdf, hmac, scrypt, argon2, pbkdf1, deskd, kblob, mscdk, mspdb, unixcrypt.
+
+    ---compact: derive keys from passwords | pbkdf2, hkdf, scrypt, argon2 + 7 more | needs: refinery
 
     Args:
         ctx: MCP Context.
@@ -363,6 +371,8 @@ async def refinery_string_operations(
 
     Operations: snip (byte slice), trim, replace (old_hex:new_hex), lower, upper, swapcase.
 
+    ---compact: string/binary transforms | snip, trim, replace, case ops | needs: refinery
+
     Args:
         ctx: MCP Context.
         data_hex: (str) Input data as hex.
@@ -469,6 +479,8 @@ async def refinery_pretty_print(
 
     Formats: json, xml, js/javascript.
 
+    ---compact: pretty-print structured data | json, xml, javascript | needs: refinery
+
     Args:
         ctx: MCP Context.
         data_hex: (str) Data as hex.
@@ -538,6 +550,8 @@ async def refinery_decompile(
     Languages:
     - 'python': Decompile Python bytecode (.pyc) to source.
     - 'autoit': Decompile AutoIt scripts (.a3x).
+
+    ---compact: decompile Python .pyc or AutoIt .a3x to source | needs: refinery
 
     Args:
         ctx: MCP Context.
@@ -630,6 +644,8 @@ async def refinery_extract_domains(
     """Extract DNS domain names from binary data via Binary Refinery.
 
     Uses DNS wire format parsing (more accurate than regex for DNS data).
+
+    ---compact: extract DNS domains via wire format parsing | needs: refinery
 
     Args:
         ctx: MCP Context.

@@ -69,6 +69,8 @@ async def list_samples(
     [Phase: load] Lists files available in the configured samples directory.
     Use this to discover what samples are available before calling open_file().
 
+    ---compact: list available sample files in configured directory
+
     By default, only analyzable binary formats (PE, ELF, Mach-O) are shown.
     PDFs, ZIPs, and other non-binary formats are hidden unless show_all=True.
 

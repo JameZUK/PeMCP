@@ -61,6 +61,8 @@ async def extract_steganography(
     (PNG IEND, JPEG FFD9, GIF trailer). Also detects BMP size mismatches and
     PE overlay data.
 
+    ---compact: extract data hidden after image EOF markers (PNG/JPEG/GIF/BMP/PE overlay)
+
     When to use: When analyzing files that contain embedded images, or when
     file size is larger than expected. I.e., if binwalk or scan_for_embedded_files()
     found image files inside the binary.
@@ -285,6 +287,8 @@ async def parse_custom_container(
     """
     [Phase: deep-dive] Parses binary data following common malware container patterns:
     delimiter + size + payload, size + payload, or repeated fixed-size chunks.
+
+    ---compact: parse custom container format (delimiter+size+payload / fixed chunks)
 
     When to use: When you've identified a custom binary format in hex dump
     (e.g., a magic string followed by size fields and encrypted blobs).
@@ -732,6 +736,8 @@ async def extract_config_automated(
     [Phase: explore] Automatically extracts potential C2 configuration data
     from the binary using regex patterns and heuristics. Finds IPs, URLs,
     domains, registry keys, file paths, mutexes, and base64-encoded config blobs.
+
+    ---compact: auto-extract C2 config — IPs, URLs, domains, registry, mutexes | needs: file
 
     When to use: After triage shows networking or persistence capabilities,
     or when looking for C2 infrastructure indicators.
@@ -1243,6 +1249,8 @@ async def extract_config_for_family(
     [Phase: deep-dive] Extracts malware configuration using family-specific
     recipes from the knowledge base. Locates the encrypted config blob, extracts
     the key, decrypts, and parses the fields automatically.
+
+    ---compact: extract C2 config using family-specific KB recipe | decrypt + parse | needs: file
 
     When to use: After identify_malware_family() returns a confirmed family, use
     this to extract the full C2 config in a single call. Falls back to generic

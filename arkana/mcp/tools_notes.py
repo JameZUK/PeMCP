@@ -32,6 +32,8 @@ async def add_note(
     [Phase: context] Add a note to the currently loaded file. Notes persist in
     the analysis cache and are restored when the same file is reopened later.
 
+    ---compact: add persistent note | categories: general, function, ioc, hypothesis, conclusion | needs: file
+
     When to use: After any analysis step that produces important findings — IOCs,
     behavioral observations, function purposes, or tool results. Notes are the
     primary context management mechanism in long-running binary analysis.
@@ -114,6 +116,8 @@ async def get_notes(
     [Phase: context] Retrieve notes for the currently loaded file, optionally
     filtered by category or address.
 
+    ---compact: retrieve notes, optionally filtered by category or address | needs: file
+
     When to use: When you need to review specific notes (e.g. all function notes,
     or notes at a specific address). For a full findings overview, prefer
     get_analysis_digest() which aggregates notes with other context.
@@ -154,6 +158,8 @@ async def update_note(
     """
     [Phase: context] Update an existing note by its ID. Only specified fields
     are changed.
+
+    ---compact: update existing note content/category by ID | needs: file
 
     When to use: When you have new information about a previously noted finding
     and want to update rather than create a duplicate note.
@@ -197,6 +203,8 @@ async def delete_note(
     """
     [Phase: context] Delete a note by its ID.
 
+    ---compact: delete note by ID | needs: file
+
     When to use: When a previous finding has been superseded or was incorrect.
 
     Args:
@@ -228,6 +236,8 @@ async def update_hypothesis(
     """
     [Phase: context] Update a hypothesis note's confidence, status, or evidence.
     Hypotheses are living notes that evolve as analysis progresses.
+
+    ---compact: update hypothesis confidence/status/evidence as analysis progresses | needs: file
 
     When to use: After each analysis step that produces evidence for or against
     a hypothesis. Update confidence and status as findings accumulate. This
@@ -513,6 +523,8 @@ async def auto_note_function(
     [Phase: deep-dive] Auto-generates a one-line behavioral summary of a function
     and saves it as a persistent note. Uses API call pattern matching (not LLM)
     based on the function's callees in the CFG.
+
+    ---compact: auto-summarize function behavior from callees + pseudocode | batch supported | needs: file
 
     When to use: After decompile_function_with_angr() — call this to record what
     the function does without keeping full pseudocode in context. Essential for

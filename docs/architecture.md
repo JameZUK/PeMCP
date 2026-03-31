@@ -133,21 +133,58 @@ arkana/
 
 ---
 
-## Tool Registration Profiles
+## Tool Registration
 
-Tool registration is managed by `arkana/tool_registry.py`. Three profiles control how many tools are registered with the MCP server at startup:
-
-- **`full`** (default) — All tools registered at startup. Backward compatible.
-- **`lazy`** — Only ~45 core tools (file management, notes, session, config) registered at startup. After `open_file` detects the binary format, format-specific tools are dynamically imported and registered. The server sends a `notifications/tools/list_changed` MCP notification so clients refresh their tool list. **Known limitation**: most MCP clients (including Claude Code as of March 2026) process the notification between conversation turns, not mid-turn — dynamically added tools become available on the next turn after `open_file`, not within the same turn. The `open_file` response includes `_tools_expanded` and `_tools_expanded_hint` fields to signal this.
-- **`minimal`** — Core tools only with no automatic expansion.
-
-Set via `--tool-profile` CLI argument or `ARKANA_TOOL_PROFILE` environment variable. Use `lazy` or `minimal` to reduce context window usage when `ENABLE_TOOL_SEARCH` is disabled in the MCP client.
+Tool registration is managed by `arkana/tool_registry.py`. All tools are registered at startup via `register_all_tools()`. Module groups (CORE, COMMON_ANALYSIS, ANGR, PE, ELF, etc.) organise tool modules by domain. Refinery tools are conditionally registered based on `REFINERY_AVAILABLE`.
 
 ### Brief Descriptions
 
-`--brief-descriptions` (or `ARKANA_BRIEF_DESCRIPTIONS=1`) trims tool descriptions to the first paragraph of each docstring — the phase label and summary sentence. This drops "When to use", "Next steps", Args, and Returns documentation, reducing the tool listing size by ~60%. Parameter schemas are still conveyed via the MCP `inputSchema` field. Applied at tool registration time via `_extract_brief_description()` in `server.py`. Independent of tool profiles — combine with `--tool-profile lazy` for maximum context savings.
+`--brief-descriptions` (or `ARKANA_BRIEF_DESCRIPTIONS=1`) extracts the `---compact:` shorthand line from each tool's docstring, replacing the full description in the MCP tool listing. This reduces the listing size by ~90% (~23 KB vs ~280 KB). Parameter schemas are still conveyed via the MCP `inputSchema` field.
 
-> **Client compatibility**: `notifications/tools/list_changed` is part of the MCP spec but client support varies. Claude Code has partial support (cross-turn only). Claude Desktop, MCP Inspector, and OpenAI Codex do not reliably process it. Cursor and VS Code Copilot reportedly handle it correctly. If your client does not support dynamic tool updates, use `full` profile.
+Every `@tool_decorator` function must include a `---compact:` line in its docstring. Grammar:
+
+```
+---compact: <action> [| <details>] [| needs: <prereqs>]
+```
+
+- **`<action>`**: Telegraphic description, no articles, max ~60 chars
+- **`<details>`**: Key modes, outputs, differentiators (pipe-separated)
+- **`needs:`**: Prerequisites — `file`, `angr`, `angr+CFG`, `PE`, `ELF`, `qiling`, `refinery`, `debug session`, etc.
+
+Compliance enforced by `tests/test_compact_descriptions.py`. Useful when `ENABLE_TOOL_SEARCH` is disabled.
+
+---
+
+## BSim Function Similarity
+
+### What BSim Does Well
+
+1. **Binary-level family detection**: "Is this sample related to anything I've analyzed before?" Use `triage_binary_similarity` after opening a new file. If the DB contains previously analyzed samples from the same campaign, they'll show up with shared function counts and overlap ratios.
+
+2. **Tracking analysis across variants**: When you rename functions in sample A (e.g., `decrypt_config`, `c2_beacon`), those names are automatically synced to the BSim DB. When sample B from the same family arrives, `transfer_annotations` can apply your renames to matching functions — saving hours of re-analysis.
+
+3. **Growing knowledge base**: Every binary you open is automatically indexed via auto-enrichment (`ARKANA_BSIM_AUTO_INDEX=1`). The more you analyze, the better BSim gets at recognizing related code.
+
+### What BSim Does NOT Do
+
+- **Identify specific library functions by name** in dynamically-linked binaries. Windows malware calls DLL functions via the IAT — the DLL code is not in the binary. Matching against ntdll.dll/msvcrt.dll signatures produces structural coincidences, not functional identification. Use FLIRT signatures (`identify_library_functions`) for that.
+
+- **Replace YARA or capa**. BSim answers "have I seen this code before?" not "does this file contain these bytes?" (YARA) or "what can this code do?" (capa).
+
+### Recommended Workflow
+
+1. **Open file** → auto-enrichment indexes into BSim DB automatically
+2. **Run `triage_binary_similarity`** → check if related to known samples
+3. **Analyze and rename functions** → names sync to BSim DB automatically
+4. **When a variant arrives** → triage detects it, then `transfer_annotations(sha256, preview=True)` shows what renames can be carried over
+5. **Use `seed_signature_db`** for statically-linked libraries (e.g., Go binaries embedding crypto) — this IS effective for identifying compiled-in code
+
+### Limitations
+
+- Function-level matching uses structural + behavioral features (8 groups: CFG, API calls, VEX IR, strings, constants, size, block hashes, call context), not exact byte patterns. Annotation transfer requires similarity ≥ 0.85, confidence ≥ 3, and ≥ 2 shared real API calls.
+- Works best comparing binaries from the same compiler and similar optimization levels.
+- Very small functions (< 3 basic blocks) are excluded from matching.
+- angr pseudo-APIs (`UnresolvableCallTarget`, etc.) are filtered from all comparisons.
 
 ---
 

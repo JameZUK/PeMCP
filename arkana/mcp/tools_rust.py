@@ -97,6 +97,8 @@ async def rust_analyze(
     dependencies (name, version, features), toolchain, and imphash.
     Falls back to string-based detection for stripped binaries.
 
+    ---compact: analyze Rust binary — compiler version, crate deps, toolchain | needs: file
+
     When to use: When detect_binary_format() identifies a Rust binary.
 
     Next steps: rust_demangle_symbols() to make symbol names readable,
@@ -182,6 +184,8 @@ async def rust_demangle_symbols(
     """
     [Phase: explore] Demangles Rust symbol names to human-readable form.
     e.g. '_ZN3foo3bar17h05af221e174051e8E' -> 'foo::bar'
+
+    ---compact: demangle Rust symbol names to human-readable form
 
     When to use: After rust_analyze() returns mangled symbol names. Readable
     names help identify interesting functions for decompilation.

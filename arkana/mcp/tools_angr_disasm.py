@@ -45,6 +45,8 @@ async def disassemble_at_address(
     [Phase: deep-dive] Disassembles raw instructions at any address — not limited
     to known functions. Useful for shellcode, data-as-code, or arbitrary offsets.
 
+    ---compact: disassemble instructions at arbitrary address | shellcode, code caves | needs: angr
+
     When to use: When you need to inspect code at an address that isn't a recognized
     function (e.g. shellcode payload, obfuscated jump target, or code cave).
 
@@ -117,6 +119,8 @@ async def get_calling_conventions(
     """
     [Phase: deep-dive] Recovers calling conventions, parameter counts, and return
     types for functions.
+
+    ---compact: recover calling conventions and param counts | single or all functions | needs: angr+CFG
 
     When to use: When decompilation shows unclear parameter usage, or to understand
     a function's ABI before emulating or hooking it.
@@ -222,6 +226,8 @@ async def get_function_variables(
     """
     [Phase: deep-dive] Recovers local variables and parameters for a function —
     names, sizes, stack offsets or register locations, and access counts.
+
+    ---compact: recover stack/register variables and parameters | needs: angr+CFG
 
     When to use: After decompilation to understand stack layout, or when
     investigating buffer overflows and stack-based vulnerabilities.
@@ -403,6 +409,8 @@ async def identify_library_functions(
     [Phase: explore] Matches functions against FLIRT signatures to identify known
     library code (statically linked CRT, OpenSSL, zlib, etc.). Reduces noise.
 
+    ---compact: identify library functions via FLIRT signatures | reduces noise | needs: angr+CFG
+
     When to use: Early in analysis to filter out library functions and focus on
     custom code. Especially useful for statically-linked binaries with many functions.
 
@@ -500,6 +508,8 @@ async def get_annotated_disassembly(
     """
     [Phase: deep-dive] Returns disassembly annotated with variable names,
     cross-references, and string references. Richer than raw disassembly.
+
+    ---compact: annotated disassembly with vars, xrefs, strings | search mode | needs: angr+CFG
 
     When ``search`` is provided, returns only matching instructions with
     surrounding context.  Searches mnemonics, operands, call targets, and
@@ -831,6 +841,8 @@ async def get_function_map(
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Ranks all functions by 'interestingness' and groups by purpose.
+
+    ---compact: rank functions by interestingness | groups by purpose | needs: angr+CFG
 
     When to use: After triage to decide which functions to decompile. This is the
     primary entry point for function-level analysis — much more efficient than

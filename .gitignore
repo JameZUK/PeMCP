@@ -50,5 +50,8 @@ backup_temp/
 WinIsoExtractor/
 reports/
 
+# SQLite databases (user runtime DBs must never be committed)
+*.db
+
 # Cast editing workspace
 cast/

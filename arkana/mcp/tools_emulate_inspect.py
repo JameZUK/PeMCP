@@ -342,6 +342,8 @@ async def emulate_and_inspect(
     emulation_read_memory, emulation_search_memory, and emulation_memory_map
     to inspect the emulated memory. Call close_emulation_session when done.
 
+    ---compact: emulate + keep session alive for memory inspection | needs: qiling or speakeasy
+
     Supports both Qiling and Speakeasy engines.
 
     Args:
@@ -463,6 +465,8 @@ async def emulation_resume(
     long-running operations like UPX decompression that need more time than
     a single timeout allows.
 
+    ---compact: continue emulation from current CPU state | staged long-running ops | needs: qiling
+
     Workflow: emulate_and_inspect(timeout=300) → check memory → emulation_resume(timeout=300)
     → check memory → repeat until decompression/unpacking is complete.
 
@@ -533,6 +537,8 @@ async def emulation_session_status(
     """[Phase: utility] List all active emulation inspect sessions.
 
     Returns metadata for all sessions: ID, engine, filepath, status, timing.
+
+    ---compact: list active emulation sessions | ID, engine, status, timing
     """
     mgr = _get_emulation_manager()
     sessions = mgr.list_sessions()
@@ -549,6 +555,8 @@ async def close_emulation_session(
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: utility] Close an emulation inspect session and release resources.
+
+    ---compact: close emulation session and release subprocess
 
     Args:
         session_id: Session to close (uses most recent if empty).
@@ -576,6 +584,8 @@ async def emulation_read_memory(
 
     Reads raw bytes at a virtual address in the emulated process. The emulator
     must have been started with emulate_and_inspect().
+
+    ---compact: read bytes at virtual address in emulated memory | hex + disasm output
 
     Args:
         address: Memory address to read (hex, e.g. "0x401000").
@@ -622,6 +632,8 @@ async def emulation_search_memory(
     patterns, searches both UTF-8 and UTF-16LE encodings. The emulator must
     have been started with emulate_and_inspect().
 
+    ---compact: search emulated memory for strings/hex | UTF-8 + UTF-16LE
+
     Args:
         search_patterns: List of string patterns to search for.
         search_hex: Hex byte pattern to search for (e.g. "4D5A9000").
@@ -666,6 +678,8 @@ async def emulation_memory_map(
     permissions, and labels. The emulator must have been started with
     emulate_and_inspect().
 
+    ---compact: list mapped memory regions | addresses, sizes, permissions
+
     Args:
         session_id: Session to query (uses most recent if empty).
 
@@ -695,6 +709,8 @@ async def emulation_write_memory(
     Writes raw bytes at a virtual address in the emulated process. Useful for
     patching code, modifying data, or bypassing checks. The emulator must have
     been started with emulate_and_inspect().
+
+    ---compact: write hex bytes to emulated memory | patch code or data
 
     Args:
         address: Memory address to write to (hex, e.g. "0x401000").

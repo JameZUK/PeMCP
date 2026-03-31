@@ -67,7 +67,9 @@ async def dotnet_analyze(
     """
     [Phase: triage] Comprehensive .NET assembly analysis: CLR header, metadata
     streams, type definitions, method definitions, member references, assembly
-    references, and user strings. Uses dnfile backend when available, falls back
+    references, and user strings.
+
+    ---compact: analyze .NET assembly metadata, types, methods | needs: file Uses dnfile backend when available, falls back
     to dotnetfile automatically.
 
     When to use: When detect_binary_format() or classify_binary_purpose()
@@ -360,6 +362,8 @@ async def dotnet_disassemble_method(
     """
     [Phase: deep-dive] Disassembles a .NET method's CIL bytecode into
     human-readable opcodes.
+
+    ---compact: disassemble .NET method CIL bytecode by RVA | needs: file
 
     When to use: After dotnet_analyze() identified interesting methods. Use
     the method_rva from dotnet_analyze()'s method_definitions output.

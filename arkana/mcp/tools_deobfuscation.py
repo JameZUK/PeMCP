@@ -30,6 +30,8 @@ async def get_hex_dump(ctx: Context, start_offset: Union[int, str] = 0, length: 
     """
     [Phase: explore] Retrieves a hex dump of a specified region from the loaded binary.
 
+    ---compact: hex dump at offset | inspect raw bytes, embedded data, crypto constants | needs: file
+
     When to use: When you need to inspect raw bytes at a specific offset — after
     finding interesting strings, embedded data, crypto constants, or archive headers.
 
@@ -108,6 +110,8 @@ async def deobfuscate_base64(ctx: Context, data_hex: str) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Decodes hex-encoded Base64 data back to plaintext.
 
+    ---compact: decode hex-encoded Base64 to plaintext
+
     When to use: After finding Base64-encoded strings in the binary via
     find_and_decode_encoded_strings() or manual hex dump inspection.
 
@@ -158,6 +162,8 @@ async def deobfuscate_base64(ctx: Context, data_hex: str) -> Dict[str, Any]:
 async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> Dict[str, Optional[str]]:
     """
     [Phase: deep-dive] Decrypts hex-encoded data using a single-byte XOR key (0-255).
+
+    ---compact: XOR decrypt hex data with known single-byte key (0-255)
 
     When to use: When you know the XOR key (from decompilation, brute_force_simple_crypto(),
     or pattern analysis). For unknown keys, use brute_force_simple_crypto() first.
@@ -228,6 +234,8 @@ async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> 
 async def is_mostly_printable_ascii(ctx: Context, text_input: str, threshold: float = 0.8) -> bool:
     """
     [Phase: utility] Checks if a string consists mostly of printable ASCII characters.
+
+    ---compact: check if string is mostly printable ASCII | validate decryption results
 
     When to use: After XOR/Base64 decryption to verify if the result is meaningful
     plaintext vs. binary garbage. Helps validate decryption attempts.
@@ -300,6 +308,8 @@ async def find_and_decode_encoded_strings(
 ) -> Dict[str, Any]:
     """
     [Phase: explore] Finds, decodes (recursively), and optionally ranks encoded strings with heuristics.
+
+    ---compact: find and decode Base64/hex/XOR encoded strings with confidence scoring | needs: file
 
     This enhanced tool implements multi-layer decoding, adds a confidence score based
     on the location of the string, and includes a single-byte XOR bruteforce decoder.

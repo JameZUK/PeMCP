@@ -255,6 +255,8 @@ async def classify_binary_purpose(ctx: Context) -> Dict[str, Any]:
     [Phase: triage] Classifies the loaded binary by purpose and type using PE header
     analysis, import patterns, section characteristics, and resource presence.
 
+    ---compact: classify binary purpose — GUI/console/DLL/driver/.NET/installer | needs: file
+
     When to use: After get_triage_report() to understand what kind of binary you
     are dealing with before deep-dive analysis.
 

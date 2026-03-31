@@ -68,20 +68,19 @@ If ambiguous, ask ONE question: "Goal: malware triage, deep RE, vuln audit, firm
 
 ## Phase 0: Environment Discovery
 
-`get_config()` first — check `tool_profile` in `_server_info`. If `session_context` returned -> `get_analysis_digest()`. No file -> `list_samples()`. Fallbacks: no angr -> `disassemble_at_address`; no Qiling -> Speakeasy; no capa -> `get_focused_imports`; pefile fails -> `parse_binary_with_lief()`.
-
-**Lazy mode** (`tool_profile: "lazy"`): Only ~45 core tools are available until `open_file` runs. After `open_file`, format-specific tools are registered and a `list_changed` notification is sent. **Important**: due to a Claude Code limitation, the new tools become available on the **next turn**, not the current one. When `open_file` returns `_tools_expanded: true`, inform the user: "File loaded. Analysis tools are now registered and will be available in my next response." Then proceed with analysis in the following message.
+`get_config()` first — check `_server_info` for available libraries. If `session_context` returned -> `get_analysis_digest()`. No file -> `list_samples()`. Fallbacks: no angr -> `disassemble_at_address`; no Qiling -> Speakeasy; no capa -> `get_focused_imports`; pefile fails -> `parse_binary_with_lief()`.
 
 ## Phase 1: Identify
 
 1. `open_file(file_path)` -- format, hashes, `file_integrity`. Unknown -> raw mode; `force=True` overrides. `session_context` -> `get_analyzed_file_summary()`.
 2. `get_triage_report(compact=True)` -- packing, sig, imports, capa, IOCs, risk.
-3. `classify_binary_purpose()`
-4. Format-specific: `elf_analyze`, `macho_analyze`, `dotnet_analyze`, `vb6_analyze`, `go_analyze`, `rust_analyze`, `detect_binary_format`.
-5. **API hash detection**: `scan_for_api_hashes()` -- detects dynamic API resolution (ror13, djb2, crc32, fnv1a). Essential when imports < 10 or shellcode mode, since the real import table is constructed at runtime. If hashes found, follow up with `qiling_resolve_api_hashes()` to map hash constants to API names. Feed resolved APIs into `identify_malware_family(hash_algorithm=..., hash_seed=...)`.
-6. Reputation (malware, risk >= 4): `get_virustotal_report_for_loaded_file()`
-7. High null ratio or shellcode mode: `detect_null_regions()` to understand binary layout.
-8. `get_session_summary()` -- prioritise `flagged` functions if present.
+3. `triage_binary_similarity()` -- check BSim DB for related samples. High overlap with user-indexed sample → `transfer_annotations(sha256, preview=True)` to inherit renames from prior analysis. High overlap with library entries → note which libraries the sample uses. No matches → novel sample, proceed with full analysis.
+4. `classify_binary_purpose()`
+5. Format-specific: `elf_analyze`, `macho_analyze`, `dotnet_analyze`, `vb6_analyze`, `go_analyze`, `rust_analyze`, `detect_binary_format`.
+6. **API hash detection**: `scan_for_api_hashes()` -- detects dynamic API resolution (ror13, djb2, crc32, fnv1a). Essential when imports < 10 or shellcode mode, since the real import table is constructed at runtime. If hashes found, follow up with `qiling_resolve_api_hashes()` to map hash constants to API names. Feed resolved APIs into `identify_malware_family(hash_algorithm=..., hash_seed=...)`.
+7. Reputation (malware, risk >= 4): `get_virustotal_report_for_loaded_file()`
+8. High null ratio or shellcode mode: `detect_null_regions()` to understand binary layout.
+9. `get_session_summary()` -- prioritise `flagged` functions if present.
 
 Packed (`likely_packed=true`, entropy > 7.2, imports < 10, PEiD) -> Phase 2. Otherwise -> Phase 3.
 
@@ -175,18 +174,9 @@ Additional tools available for specific scenarios:
 
 ## Context Management
 
-### Tool Profiles and Lazy Mode
+### Brief Descriptions
 
-If the server runs with `--tool-profile lazy` (or `ARKANA_TOOL_PROFILE=lazy`), only ~45 core tools are registered at startup. After `open_file` detects the binary format, format-specific analysis tools are registered dynamically — reducing initial context window usage by ~85%. In `minimal` profile, no auto-expansion occurs — use `list_tools_by_phase()` to discover available tools. In `full` profile (default), all 284 tools are available immediately.
-
-`--brief-descriptions` (or `ARKANA_BRIEF_DESCRIPTIONS=1`) trims tool descriptions to first-paragraph summaries (~60% smaller tool listing). Independent of tool profiles — combine with `--tool-profile lazy` for maximum savings. Parameter schemas remain available via MCP `inputSchema`.
-
-**Known limitation (Claude Code)**: Dynamically registered tools become available on the **next conversation turn**, not within the same turn that called `open_file`. This is because Claude Code's MCP client processes `notifications/tools/list_changed` between turns, not mid-turn ([anthropics/claude-code#4118](https://github.com/anthropics/claude-code/issues/4118)). When `open_file` returns `_tools_expanded: true` in lazy mode:
-1. Inform the user that analysis tools have been loaded and will be available momentarily
-2. In the **next message**, all format-specific tools will be callable
-3. Proceed with normal analysis from Phase 1 step 2 onward
-
-This does NOT affect `full` profile (default) where all tools are loaded at startup.
+`--brief-descriptions` (or `ARKANA_BRIEF_DESCRIPTIONS=1`) trims tool descriptions to first-paragraph summaries (~60% smaller tool listing). Useful when `ENABLE_TOOL_SEARCH` is disabled. Parameter schemas remain available via MCP `inputSchema`.
 
 ### Phase Transition Protocol
 

@@ -16,6 +16,8 @@ async def get_tool_history(
     Each entry includes tool name, timestamp, parameters, result summary,
     and duration in milliseconds.
 
+    ---compact: retrieve tool invocation history | filter by tool name | needs: file
+
     When to use: To review what analysis steps have already been performed,
     avoid redundant work, and understand the investigation timeline.
 
@@ -59,6 +61,8 @@ async def clear_tool_history(
     """
     [Phase: utility] Clear all tool history entries for the current session.
     This does not affect the cached history from previous sessions.
+
+    ---compact: clear current session tool history
 
     When to use: When you want a clean slate for tracking analysis steps,
     e.g. after a false start or methodology change.

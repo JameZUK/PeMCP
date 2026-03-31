@@ -256,6 +256,8 @@ async def get_analysis_context_for_function(
     """
     [Phase: analysis] Get comprehensive analysis context for a single function in one call.
 
+    ---compact: aggregate decompile + xrefs + strings + notes + triage for one function | needs: file
+
     Aggregates decompiled code, cross-references, suspicious API usage, strings, notes,
     triage status, enrichment score, and complexity into a single response. Avoids
     the need to call multiple tools individually.

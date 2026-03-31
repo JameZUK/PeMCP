@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 284 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym.
+Arkana is a Model Context Protocol (MCP) server exposing 288 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym.
 
 ## Project Structure
 
@@ -17,7 +17,7 @@ arkana/                  # Main package
 ├── auth.py             # Bearer token ASGI middleware
 ├── integrity.py        # Pre-parse file integrity checks (PE/ELF/Mach-O)
 ├── utils.py            # ReDoS-safe regex, safe_slice, safe_env_int
-├── tool_registry.py    # Lazy tool registration (--tool-profile full|lazy|minimal)
+├── tool_registry.py    # Tool module groups and startup registration
 ├── parsers/            # PE/FLOSS/capa/YARA/strings parsers
 ├── dashboard/          # Web dashboard (Starlette + htmx + Jinja2)
 │   ├── app.py          # ASGI app factory, routes, auth, SSE events
@@ -27,7 +27,7 @@ arkana/                  # Main package
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
 ├── resource_monitor.py  # Process-level RSS/CPU monitoring (psutil daemon thread)
-    └── mcp/                # MCP tool modules (284 tools across 62 files)
+    └── mcp/                # MCP tool modules (288 tools across 62 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain
@@ -70,15 +70,15 @@ ruff check arkana/ tests/ \
 - **Pagination**: Two patterns: (1) **Response-level** (`_paginated_response`) for large-output tools using `line_offset`/`line_limit`, cached via `_ToolResultCache`. (2) **Field-level** (`_paginate_field`) for dict tools with multiple list fields, adding `{field}_pagination` metadata. Pagination params listed in `_SKIP` so they don't affect cache keys.
 - **Search/grep in decompilation**: `decompile_function_with_angr`, `batch_decompile`, `get_annotated_disassembly` accept `search` (regex), `context_lines`, `case_sensitive`. Search is a view/filter on cached results. `_search_helpers.py` validates via `validate_regex_pattern()` for ReDoS safety.
 - **`tool_decorator`**: Wraps every MCP tool — handles session activation, heartbeat, history recording, error enrichment, and sets `_current_tool_var` contextvar for warning attribution.
-- **Tool profiles**: `--tool-profile` CLI arg / `ARKANA_TOOL_PROFILE` env var controls tool registration. `full` (default) registers all tools at startup. `lazy` registers ~45 core tools, then dynamically adds format-specific tools after `open_file` detects the format — sends `notifications/tools/list_changed` to the MCP client. `minimal` registers core tools only. Module groups defined in `arkana/tool_registry.py`. Use `lazy`/`minimal` when `ENABLE_TOOL_SEARCH` is disabled. **Known limitation**: Claude Code processes `list_changed` between turns, not mid-turn — dynamically added tools appear on the next conversation turn after `open_file`, not within the same turn. The `open_file` response includes `_tools_expanded` / `_tools_expanded_hint` to signal this to the model.
-- **Brief descriptions**: `--brief-descriptions` CLI flag / `ARKANA_BRIEF_DESCRIPTIONS=1` env var. Trims tool docstrings to the first paragraph only (phase label + summary sentence), dropping "When to use", "Next steps", Args, and Returns sections. Reduces tool listing size by ~60%. Independent of `--tool-profile`. Applied at tool registration time via `_extract_brief_description()` in `server.py`. Combine with `--tool-profile lazy` for maximum context savings when tool search is unavailable.
+- **Brief descriptions**: `--brief-descriptions` CLI flag / `ARKANA_BRIEF_DESCRIPTIONS=1` env var. Extracts the `---compact:` shorthand line from each tool's docstring, replacing the full description in the MCP tool listing. Reduces listing size by ~90%. Grammar: `---compact: <action> [| <details>] [| needs: <prereqs>]`. Every `@tool_decorator` function **must** include a `---compact:` line — enforced by `tests/test_compact_descriptions.py`. Applied at registration time via `_extract_brief_description()` in `server.py`.
 - **Warning capture**: `arkana/warning_handler.py` captures WARNING+ from library loggers into `state.analysis_warnings`, deduplicated, attributed via `_current_tool_var`/`_current_task_var`. Session-scoped (not persisted to cache).
 - **Resource monitor**: `arkana/resource_monitor.py` — psutil daemon thread. Alerts injected into `_collect_background_alerts()`. Returns `None` when psutil unavailable.
 - **Null-region detection**: `_is_null_region_artifact()` filters null-byte regions (angr interprets as `add [rax], al`) from `get_function_map` and enrichment. `release_angr_memory` drops angr project/CFG, calls `gc.collect()` + `malloc_trim(0)`, preserves PE data/notes/session.
 - **Background task timeout**: 14 background tools use progress-adaptive timeouts via `_run_background_task_wrapper`. Soft timeout → `TASK_OVERTIME` → stall-kill/ceiling. `_background_alerts` injected into every tool response. `cancel_all_background_tasks()` called by `open_file`/`close_file`. Generation guard prevents stale threads from writing results after file switches. Set soft timeout to 0 for old single hard-timeout behavior.
 - **Emulation debugger**: 29 tools in `tools_debug.py`, persistent Qiling subprocess (`scripts/debug_runner.py`), JSONL IPC. Three stub layers: CRT (~47 APIs), I/O (console), API trace hooks. All use `hook_address()` per IAT entry. `debug_stub_api` supports `set_last_error` for anti-emulation bypass.
 - **Emulation inspect sessions**: 8 tools in `tools_emulate_inspect.py` for post-emulation memory inspection. Keep subprocess alive after `run()` for memory search/read without re-emulation. `emulation_resume` continues execution from current CPU state for staged long-running operations (e.g. UPX decompression). Defense-in-depth timeouts: runner hard timer (`os._exit`), MCP `threading.Timer` backup, `asyncio.wait_for`. User's `timeout_seconds` properly propagated to all layers.
-- **BSim function similarity**: `_bsim_features.py` — architecture-independent matching. SQLite DB at `~/.arkana/bsim/signatures.db`. Two-phase query: SQL pre-filter then full scoring.
+- **BSim function similarity**: `_bsim_features.py` — architecture-independent matching. SQLite DB at `~/.arkana/bsim/signatures.db`. Two-phase query: SQL pre-filter then full scoring. TF-IDF confidence scoring distinguishes meaningful matches from trivial ones. `triage_binary_similarity` compares whole binary against DB. Auto-indexes during enrichment (`ARKANA_BSIM_AUTO_INDEX=1` default). `seed_signature_db` indexes library files tagged `source='library'`. `transfer_annotations` copies renames from matched functions. `validate_signature_db` runs diagnostics. Schema: `binaries` table has `source` (user/library) and `library_name` columns. **Rename sync**: `_persist_renames_to_cache()` in `tools_rename.py` syncs user function renames to the BSim DB via `sync_all_renames()` so `transfer_annotations` can carry them to variants. **Limitations**: BSim detects code sharing between variants and binary-level library usage, but does NOT reliably identify individual function names from dynamically-linked system DLLs. Use FLIRT (`identify_library_functions`) for that. 8 feature groups: cfg_structural (0.15), api_calls (0.20), vex_profile (0.10), string_refs (0.15), constants (0.10), size_metrics (0.05), block_hashes (0.15), call_context (0.10). `ANGR_PSEUDO_APIS` filtered from all API comparisons.
+- **Notes system**: Categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `conclusion`, `manual`. Hypothesis notes support `confidence`, `hypothesis_status`, `evidence` list, `superseded_by`. `update_hypothesis` MCP tool manages lifecycle.
 - **Notes system**: Categories: `general`, `function`, `tool_result`, `ioc`, `hypothesis`, `conclusion`, `manual`. Hypothesis notes support `confidence`, `hypothesis_status`, `evidence` list, `superseded_by`. `update_hypothesis` MCP tool manages lifecycle.
 - **Sandbox report ingestion**: `tools_sandbox.py` — 3 tools parsing CAPE/Cuckoo/ANY.RUN/Hybrid Analysis/Joe Sandbox JSON into unified schema on `state._sandbox_report`. Cleared on file switch.
 - **CTI report generator**: `generate_cti_report` aggregates all cached analysis into markdown or JSON. Optional `output_path` saves to file.
@@ -119,9 +119,7 @@ Global status bar shows active tool + background tasks, 3s htmx refresh, collaps
 ./run.sh --stdio          # stdio mode (for Claude Code)
 ./run.sh                  # HTTP mode (port 8082)
 ./run.sh --samples ~/dir  # Mount samples directory
-./run.sh --tool-profile lazy  # Reduced context (core tools only at startup)
 ./run.sh --brief-descriptions  # Short tool descriptions (~60% smaller listing)
-./run.sh --tool-profile lazy --brief-descriptions  # Maximum context savings
 ```
 
 4 venvs isolate incompatible unicorn versions (angr v2, Speakeasy/Unipacker/Qiling v1). .NET tools via subprocess (de4dot-cex/mono, NETReactorSlayer, ilspycmd/dotnet).

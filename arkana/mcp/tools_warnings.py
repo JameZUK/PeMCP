@@ -20,6 +20,8 @@ async def get_analysis_warnings(
     """
     [Phase: diagnostic] Returns library warnings captured during analysis.
 
+    ---compact: retrieve captured library warnings (angr/cle/pyvex/capa/FLOSS) | paginated
+
     Libraries like angr, cle, pyvex, capa, FLOSS etc. emit warnings that explain
     analysis limitations — failed decompilations, unsupported instructions, corrupt
     structures. These are normally only visible in Docker logs. This tool surfaces
@@ -81,6 +83,8 @@ async def get_analysis_warnings(
 async def clear_analysis_warnings(ctx: Context) -> Dict[str, Any]:
     """
     [Phase: diagnostic] Clears all captured library warnings.
+
+    ---compact: clear all captured library warnings
 
     Use this to reset the warning buffer after reviewing warnings, or when
     starting a new phase of analysis on the same binary.

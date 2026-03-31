@@ -294,6 +294,8 @@ async def get_current_datetime(ctx: Context) -> Dict[str,str]:
     [Phase: utility] Retrieves the current date and time in UTC and the server's
     local timezone. Does not require a file to be loaded.
 
+    ---compact: current UTC and local datetime for PE timestamp comparison
+
     When to use: When analyzing PE timestamps to check if compilation dates are
     in the future or suspiciously old.
 
@@ -319,6 +321,8 @@ async def get_current_datetime(ctx: Context) -> Dict[str,str]:
 async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
     """
     [Phase: utility] Checks the status and progress of a background analysis task.
+
+    ---compact: poll background task status, progress, stall detection
 
     When to use: After launching a background task (e.g. get_reaching_definitions,
     diff_binaries) to check if it has completed. Also shows overtime status with
@@ -476,6 +480,8 @@ async def abort_background_task(ctx: Context, task_id: str) -> Dict[str, Any]:
     """
     [Phase: utility] Aborts a running or overtime background task.
 
+    ---compact: abort running/overtime background task by ID
+
     The task thread cannot be force-killed (Python limitation), but its result
     will be silently discarded when it eventually completes. The task is immediately
     marked as failed/aborted.
@@ -531,7 +537,11 @@ async def abort_background_task(ctx: Context, task_id: str) -> Dict[str, Any]:
 async def release_angr_memory(ctx: Context) -> Dict[str, Any]:
     """
     [Phase: utility] Release angr project and CFG from memory without closing
-    the loaded file. PE data, notes, renames, tool history, and all session
+    the loaded file.
+
+    ---compact: free angr memory (200MB-10GB) | preserves notes/renames/PE data | needs: file
+
+    PE data, notes, renames, tool history, and all session
     state are preserved. Use this when angr analysis is complete and you need
     to free memory (typically 200MB-10GB).
 
@@ -628,6 +638,8 @@ async def get_resource_usage(ctx: Context) -> Dict[str, Any]:
     [Phase: utility] Returns current process resource usage: RSS memory,
     CPU percentage, thread count, and recent trend data.
 
+    ---compact: process RSS, CPU, thread count, trend data
+
     When to use: When you notice resource pressure alerts in tool responses,
     or to check server health before launching expensive operations like
     symbolic execution or CFG recovery.
@@ -690,6 +702,8 @@ async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, 
     (~/.arkana/config.json). Saved securely (owner-only permissions) and
     recalled automatically in future sessions.
 
+    ---compact: store API key persistently | e.g. vt_api_key for VirusTotal
+
     When to use: When setting up VirusTotal integration or other API-dependent tools.
 
     Supported key names:
@@ -740,6 +754,8 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
     environment overrides, container detection, writable paths, host mount
     mappings, and recommended export path.
 
+    ---compact: server config, paths, library availability, container detection
+
     When to use: At session start to understand the server environment, available
     capabilities, and where files can be safely written.
 
@@ -756,15 +772,6 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
     config = get_masked_config()
 
     # Add server capability info
-    # Tool profile info
-    try:
-        from arkana.tool_registry import get_profile, get_registered_module_count
-        _tool_profile = get_profile()
-        _tool_modules = get_registered_module_count()
-    except Exception:
-        _tool_profile = "full"
-        _tool_modules = None
-
     config["_server_info"] = {
         "angr_available": ANGR_AVAILABLE,
         "capa_available": CAPA_AVAILABLE,
@@ -777,8 +784,6 @@ async def get_config(ctx: Context) -> Dict[str, Any]:
         "samples_path": state.samples_path,
         "state_id": getattr(state, '_state_uuid', 'unknown'),
         "pid": os.getpid(),
-        "tool_profile": _tool_profile,
-        "tool_modules_registered": _tool_modules,
     }
 
     # Add environment/path information

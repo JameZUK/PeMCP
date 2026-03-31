@@ -20,6 +20,8 @@ async def search_decompiled_code(
     """
     [Phase: analysis] Search across all cached decompiled function code for a pattern.
 
+    ---compact: regex search across all cached decompiled pseudocode | needs: angr
+
     When to use: When you want to find specific code patterns, strings, or API calls
     across all decompiled functions without decompiling each one individually.
     Next steps: decompile_function_with_angr() to view full function,
@@ -83,6 +85,8 @@ async def get_entropy_analysis(
     """
     [Phase: triage] Get entropy analysis for the loaded binary (per-section and overall).
 
+    ---compact: per-section entropy analysis | detect packing/encryption (>7.0) | needs: file
+
     When to use: To detect packed/encrypted sections (high entropy >7.0) or empty sections
     (near-zero entropy). Useful for identifying obfuscation, packing, or embedded payloads.
     Next steps: detect_packing() if high entropy detected, get_hex_dump() to inspect sections,
@@ -113,6 +117,8 @@ async def generate_report(
 ) -> Dict[str, Any]:
     """
     [Phase: reporting] Generate a comprehensive markdown analysis report for the loaded binary.
+
+    ---compact: generate comprehensive markdown report from all analysis data | needs: file
 
     When to use: When you have completed your analysis and want to produce a structured report
     summarising findings, risk assessment, IOCs, function analysis, and timeline.

@@ -25,6 +25,8 @@ async def get_virustotal_report_for_loaded_file(ctx: Context) -> Dict[str, Any]:
     hash. Requires a VT API key (set via set_api_key('vt_api_key', ...) or
     VT_API_KEY environment variable).
 
+    ---compact: fetch VirusTotal report by hash | needs: file, vt_api_key
+
     When to use: After triage to check community detections, AV labels, and
     threat intelligence. Helps confirm malware family identification.
 

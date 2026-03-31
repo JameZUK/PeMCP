@@ -90,6 +90,8 @@ async def get_session_summary(
     prior session data for the loaded file. Includes file info, notes, tool history,
     angr status, analysis phase, and suggested next tools.
 
+    ---compact: full session state — notes, history, angr status, phase, next-tool suggestions
+
     When to use: Call when resuming work on a previously analyzed binary, or when
     you need to understand what has already been done before deciding next steps.
 
@@ -298,6 +300,8 @@ async def get_analysis_digest(
     [Phase: context] Returns a structured digest of what has been LEARNED about
     the binary so far — aggregates triage findings, function notes, IOCs, and
     coverage stats into a single context-efficient summary.
+
+    ---compact: aggregated findings digest — profile, IOCs, function summaries, coverage | needs: file
 
     When to use: Call periodically during analysis to refresh your understanding
     without re-reading earlier tool outputs. Essential for maintaining context in
@@ -590,6 +594,8 @@ async def get_progress_overview(
     function coverage percentage, angr status, and optionally top-3 next-action
     suggestions in a single small response.
 
+    ---compact: quick per-turn status — phase, coverage, angr, top-3 suggestions
+
     When to use: Call at the start of each turn to orient yourself. This is the
     recommended single tool for quick context — it replaces the need to call
     suggest_next_action() separately. Use get_analysis_digest() when you need
@@ -801,6 +807,8 @@ async def list_tools_by_phase(
     [Phase: utility] Lists available tools organized by analysis phase. Helps
     discover the right tool for your current workflow stage.
 
+    ---compact: list tools by workflow phase | phases: triage, explore, deep-dive, context, utility
+
     Phases: triage, explore, deep-dive, context, utility, or 'all'.
     Specialized groups: format-specific, emulation, refinery, advanced-analysis.
 
@@ -1007,6 +1015,8 @@ async def suggest_next_action(
     tool history, function scores — and recommends 3-5 specific next steps
     with rationale. No LLM involved, purely rule-based.
 
+    ---compact: rule-based next-step recommendations with rationale | needs: file
+
     When to use: When you need detailed recommendations with rationale. For a
     quick overview with suggestions included, prefer get_progress_overview()
     which is cheaper and includes top-3 suggestions.
@@ -1046,6 +1056,8 @@ async def get_analysis_timeline(
     """
     [Phase: context] Merges tool history with notes into a chronological timeline
     of analysis activity. Shows what was done and discovered, in order.
+
+    ---compact: chronological timeline of tools run + notes created | needs: file
 
     When to use: When reviewing what happened during an analysis session,
     or when documenting the analysis workflow.

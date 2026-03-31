@@ -100,6 +100,8 @@ async def create_struct(
     [Phase: deep-dive] Define a named struct type with typed fields. The struct
     can then be applied to binary data at any offset using apply_type_at_offset.
 
+    ---compact: define named struct type with typed fields | persists to cache | needs: file
+
     Uses the same field types as parse_binary_struct: uint8, int8, uint16_le/be,
     int16_le/be, uint32_le/be, int32_le/be, uint64_le/be, int64_le/be, cstring,
     wstring, bytes:N, padding:N, ipv4.
@@ -155,6 +157,8 @@ async def create_enum(
     """
     [Phase: deep-dive] Define a named enum type with name-to-integer mappings.
     Enums can be used to annotate integer fields when applying types.
+
+    ---compact: define named enum type with integer mappings | needs: file
 
     When to use: After identifying a set of integer constants (e.g. command IDs,
     status codes, protocol opcodes) used throughout the binary.
@@ -217,6 +221,8 @@ async def apply_type_at_offset(
     """
     [Phase: deep-dive] Parse binary data at an offset using a previously defined
     custom struct type. Returns the parsed field values.
+
+    ---compact: apply custom struct at file offset | parse consecutive instances | needs: file
 
     When to use: After defining a struct with create_struct, apply it to one or
     more consecutive instances in the binary.
@@ -286,6 +292,8 @@ async def list_custom_types(
     """
     [Phase: context] List all defined custom struct and enum types.
 
+    ---compact: list all custom struct and enum type definitions | needs: file
+
     When to use: To review available type definitions before applying them,
     or to check what types have been defined in the current session.
 
@@ -309,6 +317,8 @@ async def delete_custom_type(
 ) -> Dict[str, Any]:
     """
     [Phase: context] Remove a custom type definition.
+
+    ---compact: delete custom struct or enum by name | needs: file
 
     Args:
         ctx: The MCP Context object.

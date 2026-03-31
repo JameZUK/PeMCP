@@ -8,7 +8,7 @@ from arkana.mcp._rename_helpers import normalize_address
 
 
 def _persist_renames_to_cache() -> None:
-    """Persist current renames to the disk cache (best-effort)."""
+    """Persist current renames to the disk cache AND sync to BSim DB (best-effort)."""
     if state.pe_data is None:
         return
     sha = (state.pe_data.get("file_hashes") or {}).get("sha256")
@@ -16,6 +16,21 @@ def _persist_renames_to_cache() -> None:
         analysis_cache.update_session_data(sha, renames=state.get_all_renames_snapshot())
     else:
         logger.debug("Skipping rename persistence: file SHA256 unavailable")
+        return
+
+    # Sync function renames to BSim signature DB so transfer_annotations
+    # can carry them over to variants of the same malware.  Best-effort —
+    # if the binary isn't indexed or BSim isn't available, this is a no-op.
+    try:
+        func_renames = state.renames.get("functions", {})
+        if func_renames:
+            from arkana.mcp._bsim_features import sync_all_renames, is_binary_indexed
+            if is_binary_indexed(sha):
+                updated = sync_all_renames(sha, func_renames)
+                if updated:
+                    logger.debug("BSim: synced %d rename(s) for %s", updated, sha[:12])
+    except Exception:
+        logger.debug("BSim rename sync skipped", exc_info=True)
 
 
 @tool_decorator
@@ -27,6 +42,8 @@ async def rename_function(
     """
     [Phase: context] Rename a function at the given address. The name persists
     in the analysis cache and is applied in decompilation and function map output.
+
+    ---compact: rename function at address | persists across sessions | needs: file
 
     When to use: After identifying a function's purpose during reverse engineering.
     Use meaningful names like 'decrypt_config', 'resolve_api_by_hash', etc.
@@ -60,6 +77,8 @@ async def rename_variable(
     """
     [Phase: context] Rename a variable within a function scope. The rename is
     applied when decompiling that function.
+
+    ---compact: rename variable in function scope | applied in decompilation | needs: file
 
     When to use: After understanding what a variable represents in a decompiled
     function. E.g. rename 'v12' to 'decrypted_buffer'.
@@ -97,6 +116,8 @@ async def add_label(
     [Phase: context] Add a labeled marker at an address. Labels appear in
     annotated disassembly output and persist across sessions.
 
+    ---compact: add labeled marker at address | categories: general, ioc, crypto, c2 | needs: file
+
     When to use: To mark important addresses — IOC locations, crypto routines,
     C2 entry points, or interesting code sections.
 
@@ -131,6 +152,8 @@ async def list_renames(
     """
     [Phase: context] List all renames and labels, optionally filtered by type.
 
+    ---compact: list all function/variable renames and labels | needs: file
+
     When to use: To review all user-assigned names before decompilation, or
     to check what has been annotated so far.
 
@@ -159,6 +182,8 @@ async def delete_rename(
     """
     [Phase: context] Remove a specific rename or label.
 
+    ---compact: remove rename or label at address | needs: file
+
     Args:
         ctx: The MCP Context object.
         address: (str) Hex address of the rename/label to remove.
@@ -185,6 +210,8 @@ async def batch_rename(
 ) -> Dict[str, Any]:
     """
     [Phase: context] Bulk-apply up to 50 renames in a single call.
+
+    ---compact: batch-apply up to 50 function/variable/label renames atomically | needs: file
 
     Each entry in the list must have: 'type' ('function', 'variable', or 'label'),
     'address', and type-specific fields.

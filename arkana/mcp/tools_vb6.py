@@ -47,6 +47,8 @@ async def vb6_analyze(
     metadata (name, GUID, language ID), form/module/class objects with method
     counts, and Declare Function external API declarations.
 
+    ---compact: analyze VB6 PE — project metadata, forms/modules, Declare APIs | needs: file
+
     When to use: When get_triage_report() detects "Visual Basic 6" in
     compiler_language, or when MSVBVM60.DLL / MSVBVM50.DLL appears in imports.
 

@@ -10,6 +10,8 @@ async def get_cache_stats(ctx: Context) -> Dict[str, Any]:
     [Phase: utility] Returns statistics about the disk-based analysis cache
     (~/.arkana/cache/). Shows entry count, total size, and per-file details.
 
+    ---compact: disk cache stats — entry count, size, per-file details
+
     When to use: To check what files have been previously analyzed and are
     cached, or to monitor disk usage before opening new files.
 
@@ -30,6 +32,9 @@ async def get_cache_stats(ctx: Context) -> Dict[str, Any]:
 async def clear_analysis_cache(ctx: Context) -> Dict[str, Any]:
     """
     [Phase: utility] Clears the entire disk-based analysis cache (~/.arkana/cache/).
+
+    ---compact: clear entire disk analysis cache | frees disk space
+
     Removes all cached analysis results. Frees disk space but means the
     next open_file() will require a full re-analysis.
 
@@ -57,6 +62,8 @@ async def remove_cached_analysis(ctx: Context, sha256_hash: str) -> Dict[str, An
     """
     [Phase: utility] Removes a specific cached analysis result by SHA256 hash.
     Use get_cache_stats() to see which hashes are cached.
+
+    ---compact: remove one cached analysis by SHA256 | force re-analysis on next open
 
     When to use: When a specific file's cached analysis is stale and you want
     to force re-analysis on next open_file() without clearing the entire cache.

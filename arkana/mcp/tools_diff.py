@@ -19,7 +19,9 @@ async def diff_payloads(
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Compares two binary payloads byte-by-byte and reports
-    identical regions, different regions, and percentage similarity. If both
+    identical regions, different regions, and percentage similarity.
+
+    ---compact: byte-by-byte diff of two hex payloads | similarity percentage If both
     payloads are PE files, includes structural comparison (sections, imports).
 
     When to use: When you have two encrypted payloads, two versions of a

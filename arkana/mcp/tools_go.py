@@ -496,6 +496,8 @@ async def go_analyze(
     [Phase: triage] Analyses a Go binary: compiler version, packages, function
     names with addresses, type definitions. Works on stripped binaries via pclntab.
 
+    ---compact: analyze Go binary — version, packages, functions via GoReSym/pclntab | needs: file
+
     When to use: When detect_binary_format() identifies a Go binary. Go binaries
     have unique structure — this tool extracts Go-specific metadata.
 

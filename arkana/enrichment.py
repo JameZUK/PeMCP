@@ -346,6 +346,17 @@ def _enrichment_worker(state: AnalyzerState, generation: int = 0) -> None:
                 logger.warning("Enrichment: auto-note sweep failed: %s", e)
                 phases_failed.append(("auto_notes", str(e)))
 
+        # ── Phase 3d: BSim auto-index ──────────────────────────────
+        if _cancelled(state, generation):
+            state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
+            return
+        try:
+            _bsim_auto_index(state, generation=generation)
+            phases_completed.append("bsim_index")
+        except Exception as e:
+            logger.debug("Enrichment: BSim auto-index skipped: %s", e)
+            # Not added to phases_failed — BSim indexing is optional/best-effort
+
         # ── Phase 4: Cache save ──────────────────────────────────────
         if _cancelled(state, generation):
             state.update_task(TASK_ID, status=TASK_FAILED, progress_message="Cancelled")
@@ -724,3 +735,132 @@ def save_decompile_cache_async(state: AnalyzerState) -> None:
         # Release the lock if thread creation/start fails to prevent deadlock
         state._async_save_lock.release()
         raise
+
+
+# ---------------------------------------------------------------------------
+#  BSim auto-index (Phase 3d)
+# ---------------------------------------------------------------------------
+
+def _bsim_auto_index(state: AnalyzerState, *, generation: int = 0) -> None:
+    """Index the loaded binary's functions into the BSim signature DB.
+
+    Skips if:
+    - BSim auto-index is disabled (ARKANA_BSIM_AUTO_INDEX=0)
+    - angr is not available
+    - The binary is already indexed (same SHA256 in DB)
+    - No CFG is available
+    """
+    from arkana.utils import _safe_env_int
+
+    # Check config — env var overrides constant
+    enabled = _safe_env_int("ARKANA_BSIM_AUTO_INDEX", 1, min_val=0, max_val=1)
+    if not enabled:
+        logger.debug("BSim auto-index disabled via ARKANA_BSIM_AUTO_INDEX=0")
+        return
+
+    try:
+        from arkana.imports import ANGR_AVAILABLE
+        if not ANGR_AVAILABLE:
+            return
+
+        from arkana.mcp._bsim_features import (
+            _db_write_lock,
+            extract_function_features,
+            is_binary_indexed,
+            is_trivial_function,
+            register_binary,
+            store_functions_batch,
+            update_binary_function_count,
+        )
+    except ImportError:
+        return
+
+    filepath = state.filepath
+    if not filepath:
+        return
+
+    # Compute SHA256
+    import hashlib
+    sha256 = hashlib.sha256()
+    try:
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                sha256.update(chunk)
+    except OSError:
+        return
+    file_hash = sha256.hexdigest()
+
+    # Skip if already indexed
+    if is_binary_indexed(file_hash):
+        logger.debug("BSim auto-index: %s already in DB, skipping", os.path.basename(filepath))
+        return
+
+    # Need angr project + CFG
+    project, cfg = state.get_angr_snapshot()
+    if cfg is None or project is None:
+        return
+
+    _update(state, 93, "BSim auto-indexing...")
+    logger.info("BSim auto-index: indexing %s", os.path.basename(filepath))
+
+    all_funcs = [
+        f for f in cfg.functions.values()
+        if not is_trivial_function(f)
+    ]
+    all_funcs.sort(key=lambda f: f.addr)
+    total = len(all_funcs)
+    if total == 0:
+        return
+
+    arch = "unknown"
+    try:
+        arch = project.arch.name
+    except Exception:
+        pass
+
+    file_size = 0
+    try:
+        file_size = os.path.getsize(filepath)
+    except OSError:
+        pass
+
+    _BATCH_SIZE = 50
+    indexed_count = 0
+
+    with _db_write_lock:
+        binary_id, conn = register_binary(
+            sha256=file_hash,
+            filename=os.path.basename(filepath),
+            architecture=arch,
+            file_size=file_size,
+            source="user",
+        )
+
+    try:
+        batch = []
+        for func in all_funcs:
+            # Check cancellation periodically
+            if _cancelled(state, generation):
+                break
+            try:
+                feat = extract_function_features(project, cfg, func, include_vex=False)
+                batch.append(feat)
+                indexed_count += 1
+            except Exception:
+                pass
+
+            if len(batch) >= _BATCH_SIZE:
+                with _db_write_lock:
+                    store_functions_batch(conn, binary_id, batch)
+                batch.clear()
+
+        with _db_write_lock:
+            if batch:
+                store_functions_batch(conn, binary_id, batch)
+                batch.clear()
+            update_binary_function_count(conn, binary_id, indexed_count)
+    finally:
+        conn.close()
+
+    logger.info("BSim auto-index: indexed %d/%d functions for %s",
+                indexed_count, total, os.path.basename(filepath))

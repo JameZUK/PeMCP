@@ -253,6 +253,8 @@ async def open_file(
     Supports PE, ELF, Mach-O, and raw shellcode. Auto-detection is the default.
     This replaces any previously loaded file. Progress is reported during analysis.
 
+    ---compact: open and analyze binary file | PE, ELF, Mach-O, shellcode | auto-detect format
+
     Previously analysed files are cached in ~/.arkana/cache/ (keyed by SHA256).
     Set use_cache=False to force a fresh analysis and ignore any cached results.
 
@@ -885,19 +887,6 @@ async def open_file(
             )
             await ctx.info("Background Angr analysis started. Use check_task_status('startup-angr') to monitor.")
 
-        # Lazy tool registration — register format-specific tools if profile is "lazy"
-        _lazy_added = 0
-        try:
-            from arkana.tool_registry import register_tools_for_format
-            from arkana.imports import REFINERY_AVAILABLE as _refinery_ok
-            _lazy_added = await register_tools_for_format(
-                mode, ctx,
-                pe_data=state.pe_data,
-                refinery_available=_refinery_ok,
-            )
-        except Exception:
-            logger.debug("Lazy tool registration skipped", exc_info=True)
-
         # Launch background auto-enrichment
         # Run enrichment if: not cached at all, OR cached but enrichment data
         # wasn't present (old cache written before enrichment persistence).
@@ -929,16 +918,6 @@ async def open_file(
             ),
             "file_integrity": _integrity,
         }
-
-        # Signal lazy tool expansion to the model
-        if _lazy_added > 0:
-            result["_tools_expanded"] = True
-            result["_tools_expanded_count"] = _lazy_added
-            result["_tools_expanded_hint"] = (
-                "Analysis tools have been dynamically registered for this format. "
-                "They should be available in your next response. If tools appear "
-                "unavailable, send another message to refresh the tool list."
-            )
 
         if mode in ("elf", "macho"):
             format_label = "ELF" if mode == "elf" else "Mach-O"
@@ -1061,6 +1040,8 @@ async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]
     """
     Closes the currently loaded file and clears all analysis data from memory.
     After calling this, a new file must be opened with open_file before using analysis tools.
+
+    ---compact: close file and clear analysis state | persists notes/history to cache | needs: file
 
     Args:
         ctx: The MCP Context object.
@@ -1195,6 +1176,8 @@ async def check_file_integrity(
     for PE, ELF, and Mach-O formats. Can be called before or after open_file().
     Does not modify state.
 
+    ---compact: pre-parse integrity check | truncation, corruption, null-padding | PE, ELF, Mach-O
+
     Args:
         ctx: The MCP Context object.
         file_path: (Optional[str]) Path to check. If omitted, checks the currently loaded file.
@@ -1314,6 +1297,8 @@ async def reanalyze_loaded_pe_file(
     Re-triggers a full or partial analysis of the PE file that was pre-loaded at server startup.
     Allows skipping heavy analyses (PEiD, YARA, Capa, FLOSS) via 'analyses_to_skip' list.
     The analysis results are updated globally. FLOSS specific parameters can also be provided.
+
+    ---compact: re-run PE analysis | skip PEiD/YARA/capa/FLOSS; custom rules | needs: file
 
     If 'pre_analyze_angr' is True, it will also build the Angr Control Flow Graph (CFG) to speed up
     subsequent decompilation and graph queries.
@@ -1500,6 +1485,8 @@ async def get_analyzed_file_summary(ctx: Context, limit: int = 20, compact: bool
     """
     Retrieves a high-level summary of the pre-loaded and analyzed PE file.
 
+    ---compact: high-level file summary | hashes, sections, imports, FLOSS/capa/YARA counts | needs: file
+
     Prerequisites:
     - A PE file must have been successfully pre-loaded at server startup.
 
@@ -1588,6 +1575,8 @@ async def get_full_analysis_results(ctx: Context, limit: int, compact: bool = Fa
     """
     Retrieves the complete analysis results for the pre-loaded PE file.
 
+    ---compact: full PE analysis dump | all parsed structures, hashes, scans | needs: file
+
     Prerequisites:
     - A PE file must have been successfully pre-loaded at server startup.
 
@@ -1671,6 +1660,8 @@ async def get_pe_data(
     """
     Retrieves a specific portion of the PE analysis results by key name.
     This is the unified data retrieval tool for all PE structure data.
+
+    ---compact: retrieve PE data by key | imports, sections, hashes, etc.; key='list' for index | needs: file
 
     Use key='list' to discover all available data keys and their descriptions.
 
@@ -1758,6 +1749,8 @@ async def get_focused_imports(
     """
     Returns only the security-relevant imports, categorized by threat behavior.
     Filters out benign imports (GetLastError, HeapAlloc, etc.) that waste context.
+
+    ---compact: security-relevant imports only | categorized by threat behavior; risk filter | needs: file
 
     Designed for AI analysts who need to quickly understand what suspicious
     capabilities a binary imports without reading thousands of benign entries.

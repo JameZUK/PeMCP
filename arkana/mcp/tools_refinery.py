@@ -155,6 +155,8 @@ async def refinery_codec(
     uuenc, netbios, cp1252, wshenc, morse, htmlesc, z85, atbash, b65536,
     base, escps, escvb, puny, qp, recode.
 
+    ---compact: encode/decode data | b64, hex, b32, url, u16 + 20 more | needs: refinery
+
     Args:
         ctx: MCP Context.
         data_hex: (str) Input data as hex string (or raw text for text-based encodings).
@@ -255,6 +257,8 @@ async def refinery_decrypt(
     fernet, speck, hc128, hc256, isaac, sosemanuk, vigenere, rot, rijndael,
     chaskey, blabla, rncrypt, codebook, rc4mod, secstr, rsa, rsakey,
     twofish, aria, simon.
+
+    ---compact: decrypt data | aes, des, rc4, chacha + 35 more | key+iv+mode params | needs: refinery
 
     Args:
         ctx: MCP Context.
@@ -394,6 +398,8 @@ async def refinery_xor(
       plus data from data_hex or file_offset/length). Key starts at key_start,
       increments by key_step (default 1) each byte, and wraps to key_wrap
       (default 0) when it exceeds key_max (default 255).
+
+    ---compact: XOR apply/guess_key/rolling | blockwise support | needs: refinery
 
     Args:
         ctx: MCP Context.
@@ -593,6 +599,8 @@ async def refinery_decompress(
     Algorithms: auto, zl, gz, bz2, lzma, lz4, brotli, zstd, lznt1, lzo, ap,
     blz, lzf, lzg, lzip, lzjb, lzw, lzx, mscf, nrv, pkw, qlz, szdd, flz, jcalg.
 
+    ---compact: decompress data | auto-detect or specify algo | 25+ formats | needs: refinery
+
     Args:
         ctx: MCP Context.
         data_hex: (Optional[str]) Compressed data as hex. If None, uses loaded file.
@@ -693,6 +701,8 @@ async def refinery_extract_iocs(
 
     Types: all, url, ipv4, ipv6, email, domain, path, hostname, md5, sha1, sha256, guid.
 
+    ---compact: extract IOCs from data | URLs, IPs, emails, domains, hashes | needs: refinery
+
     Args:
         ctx: MCP Context.
         data_hex: (Optional[str]) Data as hex. If None, uses loaded file.
@@ -771,6 +781,8 @@ async def refinery_carve(
     Operations:
     - 'pattern': Carve encoded blobs. pattern: b64/hex/b32/b85/url/intarray/string.
     - 'files': Carve embedded files. file_type: pe/zip/7z/rtf/json/xml/lnk/der/png/tar/elf.
+
+    ---compact: carve encoded blobs or embedded files | b64, PE, ZIP, ELF, etc. | needs: refinery
 
     Args:
         ctx: MCP Context.
@@ -930,6 +942,8 @@ async def refinery_pe_operations(
 
     Operations: overlay, meta, resources, strip, debloat, signature, fix.
 
+    ---compact: PE operations | overlay, meta, resources, strip, debloat, sig, fix | needs: refinery, PE
+
     Args:
         ctx: MCP Context.
         operation: (str) PE operation to perform.
@@ -1027,6 +1041,8 @@ async def refinery_deobfuscate_script(
 
     Types: ps1 (PowerShell), vba (VBA macros), js (JavaScript).
 
+    ---compact: deobfuscate scripts | PowerShell, VBA, JavaScript | needs: refinery
+
     Args:
         ctx: MCP Context.
         data_hex: (str) Obfuscated script as hex.
@@ -1100,6 +1116,8 @@ async def refinery_hash(
 
     Supports: md5, sha1, sha256, sha384, sha512, crc32, adler32,
     fnv0, fnv1, fnv1a, murmur32, murmur64, xxhash, imphash, sm3.
+
+    ---compact: compute cryptographic + non-crypto hashes | md5, sha256, crc32 + 12 more | needs: refinery
 
     Args:
         ctx: MCP Context.
@@ -1518,6 +1536,8 @@ async def refinery_pipeline(
 
     Each step is 'unit_name:arg1:arg2'.
 
+    ---compact: chain multi-step transforms | encode+decrypt+decompress+bitwise | batch mode | needs: refinery
+
     Available pipeline steps:
     - Encoding: b64, hex, b32, b85, url, esc, u16 (keyword params: urlsafe=true for b64)
     - Compression: zl, bz2, lzma, lz4, decompress (keyword params: window=N, zlib_header=true,
@@ -1649,6 +1669,8 @@ async def refinery_list_units(
 
     Categories: blockwise, compression, crypto, encoding, formats,
     malware, meta, misc, obfuscation, pattern, sinks, strings.
+
+    ---compact: list refinery unit categories and names | needs: refinery
 
     Args:
         ctx: MCP Context.

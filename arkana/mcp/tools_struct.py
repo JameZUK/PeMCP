@@ -159,6 +159,8 @@ async def parse_binary_struct(
     [Phase: deep-dive] Parses binary data according to a field schema, like
     struct.unpack but with named fields and variable-length types.
 
+    ---compact: parse binary data with named typed fields | int/string/IP/bytes schema
+
     When to use: After decrypting a config blob, when you need to extract
     typed fields (integers, strings, IPs) from raw binary data. Ideal for
     parsing C2 configs, protocol headers, or custom binary formats.

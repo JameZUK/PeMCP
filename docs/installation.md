@@ -179,22 +179,14 @@ python arkana.py --mcp-server --mcp-transport streamable-http --mcp-host 0.0.0.0
 **Reducing context window usage:**
 
 ```bash
-# Register only core tools at startup (~85% reduction in context tokens)
-python arkana.py --mcp-server --tool-profile lazy
-
 # Trim tool descriptions to first-paragraph summaries (~60% smaller listing)
 python arkana.py --mcp-server --brief-descriptions
 
-# Combine both for maximum context savings
-python arkana.py --mcp-server --tool-profile lazy --brief-descriptions
-
-# Or via environment variables
-ARKANA_TOOL_PROFILE=lazy ARKANA_BRIEF_DESCRIPTIONS=1 python arkana.py --mcp-server
+# Or via environment variable
+ARKANA_BRIEF_DESCRIPTIONS=1 python arkana.py --mcp-server
 ```
 
-When using `--tool-profile lazy`, only ~45 essential tools (file management, notes, session) are registered at startup. Analysis tools are dynamically added after `open_file` detects the binary format. `--brief-descriptions` trims tool descriptions to the first paragraph only (phase label + summary sentence), dropping "When to use", "Next steps", Args, and Returns sections. The two flags are independent and can be used separately or together. Both are useful when `ENABLE_TOOL_SEARCH` is disabled in Claude Code.
-
-> **Note:** Due to a known MCP client limitation, dynamically registered tools become available on the **next conversation turn** after `open_file`, not within the same turn. The `open_file` response includes a `_tools_expanded_hint` to communicate this. This does not affect `--tool-profile full` (the default).
+`--brief-descriptions` trims tool descriptions to the first paragraph only (phase label + summary sentence), dropping "When to use", "Next steps", Args, and Returns sections. Useful when `ENABLE_TOOL_SEARCH` is disabled in Claude Code.
 
 ### Transport Options
 

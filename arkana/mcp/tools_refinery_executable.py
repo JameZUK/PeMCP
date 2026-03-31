@@ -43,6 +43,8 @@ async def refinery_executable(
     - 'entropy_map': Generate entropy distribution heatmap of binary data.
     - 'stego': Extract hidden data from images via LSB steganography.
 
+    ---compact: executable ops | sections, VA read, disasm, CIL, entropy, stego | needs: refinery
+
     Args:
         ctx: MCP Context.
         operation: (str) One of the operations listed above.

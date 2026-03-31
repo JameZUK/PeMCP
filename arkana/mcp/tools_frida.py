@@ -104,6 +104,8 @@ async def generate_frida_hook_script(
     """
     [Phase: advanced] Generate a Frida hook script for specified API functions or addresses.
 
+    ---compact: generate Frida JS hook script for APIs/addresses | args + backtrace | needs: file
+
     Produces JavaScript code ready to run with Frida to intercept API calls,
     log arguments, return values, and optionally capture backtraces.
 
@@ -188,6 +190,8 @@ async def generate_frida_bypass_script(
 ) -> Dict[str, Any]:
     """
     [Phase: advanced] Generate a Frida script that bypasses anti-debug techniques.
+
+    ---compact: generate Frida anti-debug bypass script | auto-detect from imports | needs: file
 
     Auto-detects anti-debug APIs from the binary's imports and triage data,
     then generates targeted bypass code for each detected technique.
@@ -276,6 +280,8 @@ async def generate_frida_trace_script(
 ) -> Dict[str, Any]:
     """
     [Phase: advanced] Generate a Frida API tracing script based on the binary's imports.
+
+    ---compact: generate Frida API trace script from imports | filter by category | needs: file
 
     Identifies suspicious/interesting APIs from the binary's import table and generates
     a comprehensive tracing script that logs all calls with arguments and return values.

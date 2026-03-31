@@ -27,6 +27,8 @@ async def get_section_permissions(ctx: Context, limit: int = 20) -> Dict[str, An
     [Phase: explore] Maps every section's permission flags (Read/Write/Execute)
     with anomaly detection. Flags sections with dangerous W+X (writable+executable).
 
+    ---compact: section permission analysis | RWX anomalies, W+X detection | needs: PE
+
     When to use: After triage reveals section anomalies, or when investigating
     packing, code injection, or self-modifying code.
 
@@ -93,6 +95,8 @@ async def get_pe_metadata(ctx: Context) -> Dict[str, Any]:
     [Phase: explore] Returns extended PE metadata not covered by basic header tools:
     machine type, subsystem, OS version, linker version, ASLR/DEP/CFG flags, and
     entry point context.
+
+    ---compact: extended PE metadata | machine, subsystem, ASLR/DEP/CFG, timestamps | needs: PE
 
     When to use: When you need detailed PE header info beyond what triage provides,
     e.g. to check security mitigations or identify the build environment.
@@ -193,6 +197,8 @@ async def extract_resources(ctx: Context, limit: int = 20) -> Dict[str, Any]:
     [Phase: explore] Extracts PE resource data with types, sizes, language IDs,
     entropy, and the first 64 bytes of each resource payload (hex encoded).
 
+    ---compact: extract PE resources | icons, manifests, version info, entropy | needs: PE
+
     When to use: When triage flags resource anomalies, or when investigating
     droppers, installers, or binaries with embedded payloads in resources.
 
@@ -274,6 +280,8 @@ async def extract_manifest(ctx: Context) -> Dict[str, Any]:
     Manifests reveal requested privileges (e.g. requireAdministrator), COM registrations,
     and OS compatibility info.
 
+    ---compact: extract RT_MANIFEST XML | privileges, UAC level, compatibility | needs: PE
+
     When to use: When investigating privilege escalation, UAC bypass, or to
     understand the binary's declared capabilities and compatibility settings.
 
@@ -320,6 +328,8 @@ async def get_load_config_details(ctx: Context) -> Dict[str, Any]:
     """
     [Phase: explore] Parses the Load Configuration directory in detail: Control Flow
     Guard (CFG), security cookie, SafeSEH handlers, and guard flags.
+
+    ---compact: Load Config directory | CFG, security cookie, SafeSEH, guard flags | needs: PE
 
     When to use: When assessing exploit mitigations, or when triage shows CFG/CET
     flags are set and you want to understand the specific protections enabled.
@@ -387,6 +397,8 @@ async def extract_wide_strings(
     [Phase: explore] Extracts UTF-16LE (wide) strings from the binary. Essential
     for Windows GUI applications and .NET binaries where strings are wchar_t*.
 
+    ---compact: extract UTF-16LE wide strings | GUI/.NET binaries | needs: file
+
     When to use: When FLOSS static strings miss expected strings (common with GUI
     apps), or when triage shows .NET/Delphi/GUI classification and you need string
     analysis. Complements get_floss_analysis_info() which focuses on ASCII.
@@ -446,6 +458,8 @@ async def detect_format_strings(ctx: Context, limit: int = 20) -> Dict[str, Any]
     [Phase: explore] Scans for printf/scanf-style format specifiers (%s, %x, %d,
     %n, etc.) in strings. The dangerous %n specifier can indicate format string
     vulnerabilities.
+
+    ---compact: detect printf/scanf format specifiers | dangerous %n flagged | needs: file
 
     When to use: When investigating vulnerability research or exploit development.
     Especially useful for binaries handling user input with printf-family functions.
@@ -532,6 +546,8 @@ async def detect_compression_headers(ctx: Context, limit: int = 30) -> Dict[str,
     """
     [Phase: explore] Scans the binary for embedded compression/archive magic bytes:
     zlib, gzip, LZMA, ZIP, RAR, 7z, bzip2, cab, and XZ.
+
+    ---compact: detect embedded archive/compression headers | zlib, ZIP, RAR, 7z, etc. | needs: file
 
     When to use: When investigating droppers, packers, or binaries with overlay data.
     Triage overlay_analysis or high resource entropy suggests embedded archives.
@@ -622,6 +638,8 @@ async def deobfuscate_xor_multi_byte(
 ) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Decrypts data using a multi-byte XOR key (repeating key cipher).
+
+    ---compact: multi-byte XOR decryption | repeating key cipher; hex in/out
 
     When to use: After identifying XOR-encrypted data via detect_crypto_constants(),
     string analysis, or decompilation. Use brute_force_simple_crypto() first if
@@ -733,6 +751,8 @@ async def detect_crypto_constants(ctx: Context, limit: int = 20) -> Dict[str, An
     [Phase: explore] Scans for known cryptographic constants (AES S-box, DES, SHA,
     RC4, etc.) to identify crypto algorithm usage without symbolic execution.
 
+    ---compact: detect crypto constants | AES, SHA, MD5, RC4, DES, Blowfish | needs: file
+
     When to use: When investigating ransomware, C2 encryption, credential theft,
     or any binary suspected of using custom cryptography.
 
@@ -819,6 +839,8 @@ async def analyze_entropy_by_offset(
     """
     [Phase: explore] Computes sliding-window Shannon entropy across the binary to
     locate encrypted, compressed, or packed regions.
+
+    ---compact: sliding-window entropy analysis | locate encrypted/packed regions | needs: file
 
     When to use: When investigating packing or embedded encrypted payloads. Triage
     packing_assessment provides a summary; this gives offset-level granularity.
@@ -970,6 +992,8 @@ async def scan_for_api_hashes(
     """
     [Phase: explore] Scans for known API name hashes used by shellcode and malware
     to hide imports via dynamic resolution (e.g. ror13, djb2, crc32, fnv1a).
+
+    ---compact: scan for API hashes | ror13/djb2/crc32/fnv1a; malware KB lookup | needs: file
 
     When to use: When triage shows very few imports (suggesting dynamic resolution),
     or when analyzing shellcode. Common in malware that avoids static import tables.
@@ -1137,6 +1161,8 @@ async def get_import_hash_analysis(ctx: Context, compact: bool = False) -> Dict[
     imports by function: networking, crypto, process manipulation, file I/O, registry,
     anti-debug, privilege escalation, service control, and code injection.
 
+    ---compact: imphash + import categorization | threat behavior grouping | needs: PE
+
     When to use: After triage to understand the binary's API usage patterns and for
     sample clustering. The imphash can identify malware families sharing code.
 
@@ -1217,6 +1243,8 @@ async def detect_null_regions(
     [Phase: explore] Scan the loaded binary for contiguous null-byte (0x00)
     regions. These regions cause angr's CFG to create fake 'add [rax], al'
     functions, wasting analysis time and memory.
+
+    ---compact: detect null-byte regions | BSS, padding, overlay; CFG impact estimate | needs: file
 
     Common causes: BSS sections, shellcode staging areas, resource padding,
     PE overlay padding, uninitialized data sections.
