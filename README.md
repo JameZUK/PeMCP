@@ -23,7 +23,7 @@ Arkana starts an interactive debug session, sets breakpoints on `VirtualAlloc` a
 
 ![Arkana analysing AsyncRAT](docs/demos/demo-asyncrat.gif)
 
-Arkana is a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that gives **Claude Code** (or any MCP client) **284 analysis tools** -- decompilation, symbolic execution, interactive step-through debugging, data-flow analysis, YARA/capa/FLOSS signatures, Binary Refinery data transforms, Qiling/Speakeasy emulation, .NET deobfuscation, function similarity matching, and a real-time web dashboard -- so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
+Arkana is a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that gives **Claude Code** (or any MCP client) **288 analysis tools** -- decompilation, symbolic execution, interactive step-through debugging, data-flow analysis, YARA/capa/FLOSS signatures, Binary Refinery data transforms, Qiling/Speakeasy emulation, .NET deobfuscation, function similarity matching, and a real-time web dashboard -- so you can investigate PE, ELF, Mach-O, .NET, Go, Rust, and shellcode samples by describing what you want to know. No Ghidra scripts, no CLI flags, no context-switching between a dozen tools. Just results.
 
 ---
 
@@ -60,7 +60,7 @@ Arkana eliminates this by putting **284 specialised analysis tools behind a sing
 - **Binary Refinery integration** -- 23 context-efficient tools wrapping 200+ composable data transforms (encoding, crypto, compression, forensics)
 - **Cross-platform emulation** -- Speakeasy (Windows APIs) and Qiling (Windows/Linux/macOS, x86/x64/ARM/MIPS)
 - **Interactive debugger** -- 29 tools for step-through emulation with breakpoints, watchpoints, memory inspection, snapshots, API call tracing, I/O capture, custom API stubs, and memory search -- up to 3 concurrent debug sessions
-- **Function similarity (BSim-style)** -- Architecture-independent function matching across binaries using CFG, API, VEX IR, string, and constant features with persistent SQLite signature database
+- **Function similarity (BSim-style)** -- Architecture-independent function matching across binaries using 8 feature groups (CFG, API calls, VEX IR, strings, constants, size, block hashes, call context). Auto-indexes every binary during enrichment; renames sync to the BSim DB so `transfer_annotations` carries your analysis to variants. Includes whole-binary triage, confidence scoring, and false-positive guards
 - **Interactive annotation** -- Rename functions and variables, define custom structs/enums, add address labels -- all persisted across sessions and applied automatically in decompilation output
 - **Session persistence** -- Notes, renames, custom types, tool history, and analysis cache survive restarts and context window limits
 - **Auto-enrichment** -- Opening a file automatically triggers background classification, triage, MITRE mapping, IOC collection, library identification, and a decompilation sweep -- results are ready before you ask

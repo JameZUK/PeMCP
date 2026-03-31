@@ -296,6 +296,11 @@ IDs, prerequisites, tools, and exercises. The concept reference files in the
 - 4.2: Protocol Reverse Engineering (no separate ref file — teach from experience)
 - 4.3: YARA Rule Authoring → [yara-authoring.md](concepts/yara-authoring.md)
 - 4.4: Campaign Analysis → [campaign-analysis.md](concepts/campaign-analysis.md)
+- 4.5: Function Similarity (BSim) — variant detection, annotation transfer, auto-indexing.
+  Tools: `triage_binary_similarity`, `transfer_annotations`, `build_function_signature_db`,
+  `query_signature_db`, `validate_signature_db`, `seed_signature_db`.
+  Key lesson: BSim detects code sharing between variants and enables rename transfer.
+  It does NOT reliably name functions from dynamically-linked DLLs — use FLIRT for that.
 
 ## Vocabulary Adaptation
 

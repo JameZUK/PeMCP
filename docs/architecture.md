@@ -84,7 +84,7 @@ arkana/
     ├── tools_rename.py             - Function/variable renames & address labels (6 tools)
     ├── tools_types.py              - Custom struct/enum type definitions (5 tools)
     ├── tools_struct.py             - Binary struct parsing (1 tool)
-    ├── tools_similarity.py         - BSim function similarity matching (5 tools)
+    ├── tools_bsim.py              - BSim function similarity matching (9 tools)
     ├── tools_malware_id.py         - Malware family identification (3 tools)
     ├── tools_detection.py          - Detection engineering: YARA/Sigma rule generation (2 tools)
     ├── tools_forensic_pe.py        - PE forensics & detection engineering (7 tools)
@@ -101,7 +101,6 @@ arkana/
     ├── tools_vuln.py             - Vulnerability pattern detection (2 tools)
     ├── tools_dotnet_deobfuscate.py - .NET deobfuscation & decompilation (3 tools)
     ├── tools_batch.py            - Batch analysis operations
-    ├── tools_bsim.py             - BSim function similarity internals
     ├── tools_learning.py         - Learner progress tracking (4 tools)
     ├── tools_malware_detect.py   - DGA/C2/kernel driver detection (3 tools)
     ├── tools_malware_id.py       - Malware family identification (3 tools)

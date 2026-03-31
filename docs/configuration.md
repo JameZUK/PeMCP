@@ -103,7 +103,8 @@ Beyond the cache and API key settings above, Arkana supports several environment
 | Variable | Default | Description |
 |---|---|---|
 | `ARKANA_BACKGROUND_TASK_TIMEOUT` | `1800` | Hard timeout (seconds) for background tasks. Used as fallback when soft timeout is disabled (set to 0). |
-| `ARKANA_BSIM_BACKGROUND_TIMEOUT` | `1800` | Separate timeout (seconds) for BSim function similarity background tasks (`find_similar_functions`, `build_function_signature_db`). |
+| `ARKANA_BSIM_BACKGROUND_TIMEOUT` | `1800` | Separate timeout (seconds) for BSim function similarity background tasks (`find_similar_functions`, `build_function_signature_db`, `triage_binary_similarity`, `seed_signature_db`). |
+| `ARKANA_BSIM_AUTO_INDEX` | `1` | When set to `1` (default), automatically indexes every opened binary into the BSim signature DB during enrichment. Set to `0` to disable. The DB grows organically as you work — each analyzed sample becomes available for variant detection via `triage_binary_similarity`. |
 | `ARKANA_ANGR_CFG_SOFT_TIMEOUT` | `900` | Soft timeout (15 min) for CFG build. After this, the task enters OVERTIME status but keeps running. Set to `0` to disable progress-adaptive timeout and use hard timeout instead. |
 | `ARKANA_BACKGROUND_TASK_SOFT_TIMEOUT` | `300` | Soft timeout (5 min) for generic background tasks. Set to `0` to fall back to hard timeout. |
 | `ARKANA_OVERTIME_CHECK_INTERVAL` | `60` | How often (seconds) to check progress during overtime. |
