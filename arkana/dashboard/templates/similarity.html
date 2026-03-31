@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Similarity{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">SIMILARITY</h1>
+</div>
+
+<div class="panel">
+    <div class="sim-mode-tabs" id="sim-mode-tabs">
+        <button class="sim-tab active" data-tab="similarity">SIMILARITY</button>
+        <button class="sim-tab" data-tab="diff">DIFF</button>
+        <button class="sim-tab" data-tab="database">DATABASE</button>
+    </div>
+</div>
+
+<!-- ============ TAB 1: SIMILARITY (BSim) ============ -->
+<div id="tab-similarity">
+
+    <!-- Stats strip -->
+    <div class="panel">
+        <div class="panel-header bsim-stats-strip">
+            <span id="bsim-stats-text" class="dim">Loading DB stats...</span>
+            <span class="bsim-stats-actions">
+                <span id="bsim-index-status"></span>
+                <button class="btn" id="bsim-index-btn" disabled>INDEX</button>
+                <button class="btn" id="bsim-triage-btn" disabled>RUN TRIAGE</button>
+                <span id="bsim-action-spinner" class="dim d-none">Working...</span>
+            </span>
+        </div>
+    </div>
+
+    <!-- Triage results -->
+    <div class="panel">
+        <div class="panel-header">BINARY TRIAGE <span id="bsim-triage-count" class="badge badge-dim">0</span></div>
+        <div class="table-wrap">
+            <table class="data-table" id="bsim-triage-table">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th class="sortable" data-sort="binary" data-table="triage">BINARY <span class="sort-arrow"></span></th>
+                        <th class="sortable active" data-sort="shared" data-table="triage">SHARED <span class="sort-arrow">&#9660;</span></th>
+                        <th class="sortable" data-sort="overlap" data-table="triage">OVERLAP <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="avg_sim" data-table="triage">AVG SIM <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="confidence" data-table="triage">CONFIDENCE <span class="sort-arrow"></span></th>
+                        <th>ACTIONS</th>
+                    </tr>
+                </thead>
+                <tbody id="bsim-triage-tbody">
+                    <tr><td colspan="7" class="empty-msg">No triage results. Click RUN TRIAGE to compare against the signature database.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Error panel -->
+    <div id="bsim-error" class="panel d-none">
+        <div class="panel-header badge-danger">ERROR</div>
+        <div id="bsim-error-msg" class="p-10"></div>
+    </div>
+</div>
+
+<!-- ============ TAB 2: DIFF (BinDiff) ============ -->
+<div id="tab-diff" class="d-none">
+
+    <div class="panel">
+        <div class="panel-header">COMPARE BINARIES</div>
+        <div class="diff-mode-tabs" id="diff-mode-tabs">
+            <button class="diff-tab active" data-mode="browse">BROWSE</button>
+            <button class="diff-tab" data-mode="manual">MANUAL PATH</button>
+        </div>
+
+        <!-- Browse mode -->
+        <div id="diff-browse-panel" class="diff-browse-panel">
+            <div class="filter-bar">
+                <div class="filter-group">
+                    <label>FILTER:</label>
+                    <input type="text" id="file-browser-search" placeholder="search files...">
+                </div>
+                <div class="filter-group">
+                    <label>SORT:</label>
+                    <select id="file-browser-sort">
+                        <option value="name">Name</option>
+                        <option value="size">Size</option>
+                        <option value="format">Format</option>
+                    </select>
+                </div>
+            </div>
+            <div class="file-browser-table-wrap">
+                <table class="data-table data-table-sm" id="file-browser-table">
+                    <thead>
+                        <tr>
+                            <th class="sortable active" data-sort="name" data-table="files">NAME <span class="sort-arrow">&#9650;</span></th>
+                            <th class="sortable" data-sort="size" data-table="files">SIZE <span class="sort-arrow"></span></th>
+                            <th class="sortable" data-sort="format" data-table="files">FORMAT <span class="sort-arrow"></span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="file-browser-tbody">
+                        <tr><td colspan="3" class="empty-msg">Loading files...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="diff-browser-footer">
+                <span id="file-browser-selected" class="dim">No file selected</span>
+                <button class="btn" id="diff-run-browse-btn" disabled>RUN DIFF</button>
+                <span id="diff-spinner-browse" class="dim d-none">Analyzing...</span>
+            </div>
+        </div>
+
+        <!-- Manual mode -->
+        <div id="diff-manual-panel" class="diff-input-panel d-none">
+            <div class="filter-group">
+                <label>SECOND BINARY PATH:</label>
+                <input type="text" id="diff-path-input" placeholder="/path/to/second/binary" class="diff-path-input">
+            </div>
+            <button class="btn" id="diff-run-btn">RUN DIFF</button>
+            <span id="diff-spinner" class="dim d-none">Analyzing...</span>
+        </div>
+    </div>
+
+    <div id="diff-error" class="panel d-none">
+        <div class="panel-header badge-danger">ERROR</div>
+        <div id="diff-error-msg" class="p-10"></div>
+    </div>
+
+    <div id="diff-results" class="d-none">
+        <div id="diff-summary-bar" class="diff-summary-bar"></div>
+        <div id="diff-panels"></div>
+    </div>
+</div>
+
+<!-- ============ TAB 3: DATABASE ============ -->
+<div id="tab-database" class="d-none">
+
+    <div class="panel">
+        <div class="panel-header">
+            INDEXED BINARIES <span id="bsim-db-count" class="badge badge-dim">0</span>
+            <span class="ml-auto bsim-db-actions">
+                <button class="btn" id="bsim-validate-btn">VALIDATE</button>
+                <button class="btn btn-danger" id="bsim-clear-btn">CLEAR DB</button>
+            </span>
+        </div>
+        <div class="table-wrap">
+            <table class="data-table data-table-sm" id="bsim-db-table">
+                <thead>
+                    <tr>
+                        <th class="sortable active" data-sort="name" data-table="db">NAME <span class="sort-arrow">&#9660;</span></th>
+                        <th class="sortable" data-sort="arch" data-table="db">ARCH <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="functions" data-table="db">FUNCTIONS <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="source" data-table="db">SOURCE <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="indexed" data-table="db">INDEXED <span class="sort-arrow"></span></th>
+                        <th>ACTIONS</th>
+                    </tr>
+                </thead>
+                <tbody id="bsim-db-tbody">
+                    <tr><td colspan="6" class="empty-msg">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Health/Validation results -->
+    <div id="bsim-health-panel" class="panel d-none">
+        <div class="panel-header">DATABASE HEALTH</div>
+        <div id="bsim-health-body" class="p-10"></div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/similarity.js"></script>
+{% endblock %}

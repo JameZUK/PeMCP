@@ -3190,6 +3190,494 @@ def search_decompiled_code(query: str, max_results: int = 100) -> Dict[str, Any]
 
 
 # ---------------------------------------------------------------------------
+#  BSim signature database data (for Similarity page)
+# ---------------------------------------------------------------------------
+
+# Module-level cache for BSim triage results (keyed by sha256)
+_bsim_triage_cache: Dict[str, tuple] = {}  # sha256 -> (expire_time, result)
+_BSIM_TRIAGE_TTL = 300.0  # 5 minutes — triage is expensive
+
+_BSIM_HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+def _validate_sha256(sha256: str) -> bool:
+    """Return True if sha256 is a valid 64-char hex string."""
+    return bool(_BSIM_HEX64_RE.match(sha256))
+
+
+def get_bsim_db_stats() -> Dict[str, Any]:
+    """Return BSim signature DB statistics.  No angr needed — pure SQLite read."""
+    try:
+        from arkana.mcp._bsim_features import get_db_path, _get_connection
+    except ImportError:
+        return {"available": False, "error": "BSim module not available"}
+
+    db = get_db_path()
+    if not db.exists():
+        return {
+            "available": True,
+            "total_binaries": 0,
+            "total_functions": 0,
+            "user_entries": 0,
+            "library_entries": 0,
+            "db_size_bytes": 0,
+            "current_indexed": False,
+            "current_sha256": "",
+        }
+
+    st = _get_state()
+    current_sha256 = ""
+    pe_data = st.pe_data or {}
+    file_hashes = pe_data.get("file_hashes", {})
+    if isinstance(file_hashes, dict):
+        current_sha256 = file_hashes.get("sha256", "")
+
+    conn = _get_connection(db)
+    try:
+        total_f = conn.execute("SELECT COUNT(*) FROM functions").fetchone()[0]
+        # Single query for binary counts by source
+        user_b = 0
+        lib_b = 0
+        for row in conn.execute(
+            "SELECT source, COUNT(*) FROM binaries GROUP BY source"
+        ).fetchall():
+            if row[0] == "library":
+                lib_b = row[1]
+            else:
+                user_b = row[1]
+        total_b = user_b + lib_b
+
+        current_indexed = False
+        if current_sha256:
+            row = conn.execute(
+                "SELECT 1 FROM binaries WHERE sha256 = ? LIMIT 1",
+                (current_sha256,),
+            ).fetchone()
+            current_indexed = row is not None
+
+        return {
+            "available": True,
+            "total_binaries": total_b,
+            "total_functions": total_f,
+            "user_entries": user_b,
+            "library_entries": lib_b,
+            "db_size_bytes": db.stat().st_size,
+            "current_indexed": current_indexed,
+            "current_sha256": current_sha256,
+        }
+    except Exception:
+        logger.debug("BSim DB stats query failed", exc_info=True)
+        return {"available": False, "error": "Failed to read signature DB"}
+    finally:
+        conn.close()
+
+
+def get_bsim_indexed_binaries() -> Dict[str, Any]:
+    """List all indexed binaries in the BSim DB for the DATABASE tab."""
+    try:
+        from arkana.mcp._bsim_features import list_indexed_binaries
+    except ImportError:
+        return {"binaries": [], "error": "BSim module not available"}
+
+    try:
+        binaries = list_indexed_binaries()
+        return {"binaries": binaries, "total": len(binaries)}
+    except Exception:
+        logger.debug("BSim list binaries failed", exc_info=True)
+        return {"binaries": [], "error": "Failed to read signature DB"}
+
+
+def get_bsim_triage_data() -> Dict[str, Any]:
+    """Run BSim triage or return cached results.
+
+    This is expensive (iterates all functions).  Results are cached for
+    ``_BSIM_TRIAGE_TTL`` seconds keyed by the loaded file's SHA256.
+    """
+    st = _get_state()
+    if st.angr_project is None or st.angr_cfg is None:
+        return {"available": False, "error": "angr CFG not ready"}
+
+    pe_data = st.pe_data or {}
+    file_hashes = pe_data.get("file_hashes", {})
+    sha256 = file_hashes.get("sha256", "") if isinstance(file_hashes, dict) else ""
+    if not sha256:
+        return {"available": False, "error": "No file loaded"}
+
+    # Check cache
+    now = time.time()
+    with _cache_lock:
+        cached = _bsim_triage_cache.get(sha256)
+    if cached is not None:
+        expire_time, result = cached
+        if now < expire_time:
+            return result
+
+    try:
+        from arkana.mcp._bsim_features import (
+            get_db_path, extract_function_features, query_similar_functions,
+            is_trivial_function, compute_feature_idf,
+        )
+    except ImportError:
+        return {"available": False, "error": "BSim module not available"}
+
+    db = get_db_path()
+    if not db.exists():
+        return {"available": True, "results": [], "total_functions_analyzed": 0,
+                "functions_with_matches": 0, "indexed_binaries_matched": 0}
+
+    project = st.angr_project
+    cfg = st.angr_cfg
+
+    all_funcs = [
+        f for f in cfg.functions.values()
+        if not is_trivial_function(f)
+    ]
+    all_funcs.sort(key=lambda f: f.addr)
+    total = len(all_funcs)
+
+    arch = None
+    try:
+        arch = project.arch.name
+    except Exception:
+        pass
+
+    idf = compute_feature_idf()
+    binary_matches: Dict[str, Dict[str, Any]] = {}
+    functions_matched = 0
+    renames = st.get_renames().get("functions", {})
+
+    for func in all_funcs:
+        try:
+            features = extract_function_features(project, cfg, func, include_vex=False)
+            matches = query_similar_functions(
+                target_features=features,
+                threshold=0.7,
+                metrics="combined",
+                limit=3,
+                source_architecture=arch,
+                idf_weights=idf,
+            )
+            if matches:
+                for match in matches:
+                    msha = match["binary_sha256"]
+                    if msha not in binary_matches:
+                        binary_matches[msha] = {
+                            "binary_sha256": msha,
+                            "binary_filename": match["binary_filename"],
+                            "architecture": match.get("architecture", ""),
+                            "source": match.get("source", "user"),
+                            "library_name": match.get("library_name"),
+                            "shared_functions": [],
+                            "similarity_sum": 0.0,
+                            "confidence_sum": 0.0,
+                        }
+                    entry = binary_matches[msha]
+                    addr_hex = hex(func.addr)
+                    func_name = renames.get(addr_hex, func.name or f"sub_{func.addr:x}")
+                    if not any(sf["source_address"] == addr_hex for sf in entry["shared_functions"]):
+                        entry["shared_functions"].append({
+                            "source_address": addr_hex,
+                            "source_name": func_name,
+                            "match_address": match.get("address", ""),
+                            "match_name": match["name"],
+                            "similarity": round(match["scores"].get("combined", 0), 4),
+                            "confidence": round(match.get("confidence", 0), 2),
+                        })
+                        entry["similarity_sum"] += match["scores"].get("combined", 0)
+                        entry["confidence_sum"] += match.get("confidence", 0)
+        except Exception:
+            logger.debug("BSim triage feature extraction failed for %#x", func.addr, exc_info=True)
+
+    results = []
+    for entry in binary_matches.values():
+        count = len(entry["shared_functions"])
+        avg_sim = entry["similarity_sum"] / count if count else 0
+        avg_conf = entry["confidence_sum"] / count if count else 0
+        top_matches = sorted(
+            entry["shared_functions"],
+            key=lambda m: m.get("confidence", 0) * m.get("similarity", 0),
+            reverse=True,
+        )[:20]
+        results.append({
+            "binary_sha256": entry["binary_sha256"],
+            "binary_filename": entry["binary_filename"],
+            "architecture": entry.get("architecture", ""),
+            "source": entry.get("source", "user"),
+            "library_name": entry.get("library_name"),
+            "shared_function_count": count,
+            "shared_function_ratio": round(count / max(total, 1), 3),
+            "avg_similarity": round(avg_sim, 4),
+            "avg_confidence": round(avg_conf, 2),
+            "top_matches": top_matches,
+        })
+
+    results.sort(key=lambda r: r.get("avg_similarity", 0) * r.get("avg_confidence", 0) * r.get("shared_function_count", 0), reverse=True)
+    results = results[:20]
+
+    result = {
+        "available": True,
+        "binary": os.path.basename(st.filepath) if st.filepath else "",
+        "total_functions_analyzed": total,
+        "functions_with_matches": functions_matched,
+        "indexed_binaries_matched": len(results),
+        "results": results,
+    }
+
+    # Cache the result
+    with _cache_lock:
+        if len(_bsim_triage_cache) >= 4:
+            oldest = min(_bsim_triage_cache, key=lambda k: _bsim_triage_cache[k][0])
+            del _bsim_triage_cache[oldest]
+        _bsim_triage_cache[sha256] = (time.time() + _BSIM_TRIAGE_TTL, result)
+
+    return result
+
+
+def get_bsim_triage_function_matches(binary_sha256: str) -> Dict[str, Any]:
+    """Return function-level match details for a matched binary from triage cache."""
+    if not _validate_sha256(binary_sha256):
+        return {"error": "Invalid SHA256 format"}
+
+    # Look through triage cache for the match
+    now = time.time()
+    with _cache_lock:
+        for _sha, (expire_time, result) in _bsim_triage_cache.items():
+            if now >= expire_time:
+                continue
+            for entry in result.get("results", []):
+                if entry.get("binary_sha256") == binary_sha256:
+                    return {
+                        "available": True,
+                        "binary_filename": entry.get("binary_filename", ""),
+                        "binary_sha256": binary_sha256,
+                        "shared_function_count": entry.get("shared_function_count", 0),
+                        "avg_similarity": entry.get("avg_similarity", 0),
+                        "matches": entry.get("top_matches", []),
+                    }
+
+    return {"available": False, "error": "No cached triage data for this binary"}
+
+
+def get_bsim_db_health() -> Dict[str, Any]:
+    """Run BSim DB validation and return health diagnostics."""
+    try:
+        from arkana.mcp._bsim_features import get_db_path, _get_connection
+    except ImportError:
+        return {"error": "BSim module not available"}
+
+    db = get_db_path()
+    if not db.exists():
+        return {"status": "empty", "message": "Signature DB does not exist."}
+
+    conn = _get_connection(db)
+    try:
+        total_b = conn.execute("SELECT COUNT(*) FROM binaries").fetchone()[0]
+        total_f = conn.execute("SELECT COUNT(*) FROM functions").fetchone()[0]
+        lib_count = conn.execute(
+            "SELECT COUNT(*) FROM binaries WHERE source = 'library'"
+        ).fetchone()[0]
+        user_count = total_b - lib_count
+
+        binaries = []
+        for row in conn.execute(
+            "SELECT filename, function_count, architecture, source, library_name "
+            "FROM binaries ORDER BY indexed_at DESC"
+        ).fetchall():
+            binaries.append(dict(row))
+
+        # Sanity test: sample random functions, query themselves
+        sanity_results = []
+        all_passed = True
+        if total_f > 0:
+            from arkana.mcp._bsim_features import (
+                _row_to_features, compute_similarity,
+            )
+            sample_rows = conn.execute(
+                "SELECT * FROM functions ORDER BY RANDOM() LIMIT 10"
+            ).fetchall()
+            for row in sample_rows:
+                try:
+                    features = _row_to_features(row)
+                    scores = compute_similarity(features, features)
+                    self_sim = scores.get("combined", 0)
+                    passed = self_sim >= 0.95
+                    if not passed:
+                        all_passed = False
+                    sanity_results.append({
+                        "name": row["name"] or f"sub_{row['address']:x}",
+                        "self_similarity": round(self_sim, 4),
+                        "pass": passed,
+                    })
+                except Exception:
+                    sanity_results.append({
+                        "name": row["name"] or "unknown",
+                        "self_similarity": 0,
+                        "pass": False,
+                    })
+                    all_passed = False
+
+        health = []
+        if all_passed:
+            health.append("All checks passed")
+        else:
+            health.append("Self-match test had failures")
+        if total_f == 0:
+            health.append("Database is empty — index some binaries")
+
+        return {
+            "status": "success",
+            "stats": {
+                "total_binaries": total_b,
+                "total_functions": total_f,
+                "user_entries": user_count,
+                "library_entries": lib_count,
+            },
+            "binaries": binaries,
+            "sanity_test": {
+                "samples_tested": len(sanity_results),
+                "all_passed": all_passed,
+                "results": sanity_results,
+            },
+            "health": health,
+        }
+    except Exception:
+        logger.debug("BSim DB health check failed", exc_info=True)
+        return {"error": "Health check failed"}
+    finally:
+        conn.close()
+
+
+def delete_bsim_binary(sha256: str) -> Dict[str, Any]:
+    """Delete a single binary from the BSim signature DB."""
+    if not _validate_sha256(sha256):
+        return {"error": "Invalid SHA256 format"}
+
+    try:
+        from arkana.mcp._bsim_features import get_db_path, _get_connection, _db_write_lock
+    except ImportError:
+        return {"error": "BSim module not available"}
+
+    db = get_db_path()
+    if not db.exists():
+        return {"error": "Signature DB does not exist"}
+
+    with _db_write_lock:
+        conn = _get_connection(db)
+        try:
+            cursor = conn.execute(
+                "DELETE FROM binaries WHERE sha256 = ?", (sha256,)
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                return {"error": "Binary not found in DB"}
+            return {"status": "success", "deleted_sha256": sha256}
+        except Exception:
+            logger.debug("BSim delete binary failed", exc_info=True)
+            return {"error": "Delete failed"}
+        finally:
+            conn.close()
+
+
+def clear_bsim_db() -> Dict[str, Any]:
+    """Clear all entries from the BSim signature DB."""
+    try:
+        from arkana.mcp._bsim_features import get_db_path, _get_connection, _db_write_lock
+    except ImportError:
+        return {"error": "BSim module not available"}
+
+    db = get_db_path()
+    if not db.exists():
+        return {"status": "success", "message": "DB already empty"}
+
+    with _db_write_lock:
+        conn = _get_connection(db)
+        try:
+            conn.execute("DELETE FROM functions")
+            conn.execute("DELETE FROM binaries")
+            conn.commit()
+        except Exception:
+            logger.debug("BSim clear DB failed", exc_info=True)
+            return {"error": "Clear failed"}
+        finally:
+            conn.close()
+    # Clear triage cache outside DB lock to avoid nested locking
+    with _cache_lock:
+        _bsim_triage_cache.clear()
+    return {"status": "success", "message": "All entries cleared"}
+
+
+def index_current_binary() -> Dict[str, Any]:
+    """Index the currently loaded binary into the BSim signature DB."""
+    st = _get_state()
+    if st.angr_project is None or st.angr_cfg is None:
+        return {"error": "angr CFG not ready. Wait for background analysis."}
+
+    pe_data = st.pe_data or {}
+    file_hashes = pe_data.get("file_hashes", {})
+    sha256 = file_hashes.get("sha256", "") if isinstance(file_hashes, dict) else ""
+    if not sha256:
+        return {"error": "No file loaded"}
+
+    try:
+        from arkana.mcp._bsim_features import (
+            extract_function_features, store_binary_features,
+            is_trivial_function,
+        )
+    except ImportError:
+        return {"error": "BSim module not available"}
+
+    project = st.angr_project
+    cfg = st.angr_cfg
+    filepath = st.filepath or ""
+
+    arch = "unknown"
+    try:
+        arch = project.arch.name
+    except Exception:
+        pass
+
+    all_funcs = [
+        f for f in cfg.functions.values()
+        if not is_trivial_function(f)
+    ]
+
+    features_list = []
+    for func in all_funcs:
+        try:
+            feat = extract_function_features(project, cfg, func, include_vex=False)
+            features_list.append(feat)
+        except Exception:
+            logger.debug("BSim index feature extraction failed for %#x", func.addr, exc_info=True)
+
+    file_size = 0
+    try:
+        file_size = os.path.getsize(filepath)
+    except Exception:
+        pass
+
+    try:
+        binary_id = store_binary_features(
+            sha256=sha256,
+            filename=os.path.basename(filepath),
+            architecture=arch,
+            file_size=file_size,
+            features_list=features_list,
+        )
+        # Invalidate triage cache since DB changed
+        with _cache_lock:
+            _bsim_triage_cache.clear()
+        return {
+            "status": "success",
+            "binary_id": binary_id,
+            "functions_indexed": len(features_list),
+            "sha256": sha256,
+        }
+    except Exception:
+        logger.debug("BSim index failed", exc_info=True)
+        return {"error": "Indexing failed"}
+
+
+# ---------------------------------------------------------------------------
 #  Binary diff data (Batch 4)
 # ---------------------------------------------------------------------------
 

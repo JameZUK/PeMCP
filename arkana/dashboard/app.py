@@ -63,6 +63,15 @@ from arkana.dashboard.state_api import (
     generate_report_text,
     get_ioc_summary_data,
     get_capabilities_summary_data,
+    get_bsim_db_stats,
+    get_bsim_indexed_binaries,
+    get_bsim_triage_data,
+    get_bsim_triage_function_matches,
+    get_bsim_db_health,
+    delete_bsim_binary,
+    clear_bsim_db,
+    index_current_binary,
+    _BSIM_HEX64_RE,
 )
 
 from arkana.constants import DASHBOARD_THREAD_POOL_SIZE
@@ -247,6 +256,7 @@ _MAX_LOGIN_IPS = 1000  # Hard cap to prevent unbounded memory growth
 _diff_semaphore = asyncio.Semaphore(2)
 _decompile_semaphore = asyncio.Semaphore(2)
 _report_semaphore = asyncio.Semaphore(2)
+_bsim_semaphore = asyncio.Semaphore(1)  # BSim index/triage are heavy
 
 # --- Content-Security-Policy value (single source of truth) ---
 _CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self';"
@@ -1418,6 +1428,114 @@ def _create_routes(dashboard_token: str) -> list:
         except Exception as exc:
             return _api_error_response("api_list_files", exc)
 
+    # --- BSim signature database endpoints ---
+
+    async def api_bsim_stats(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            data = await _dash_to_thread(get_bsim_db_stats)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_bsim_stats", exc)
+
+    async def api_bsim_binaries(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            data = await _dash_to_thread(get_bsim_indexed_binaries)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_bsim_binaries", exc)
+
+    async def api_bsim_triage(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        async with _bsim_semaphore:
+            try:
+                data = await _dash_to_thread(get_bsim_triage_data)
+                return JSONResponse(data)
+            except Exception as exc:
+                return _api_error_response("api_bsim_triage", exc)
+
+    async def api_bsim_matches(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        sha256 = body.get("binary_sha256", "")
+        if not isinstance(sha256, str) or not _BSIM_HEX64_RE.match(sha256):
+            return JSONResponse({"error": "Invalid SHA256"}, status_code=400)
+        try:
+            data = await _dash_to_thread(get_bsim_triage_function_matches, sha256)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_bsim_matches", exc)
+
+    async def api_bsim_index(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        async with _bsim_semaphore:
+            try:
+                data = await _dash_to_thread(index_current_binary)
+                return JSONResponse(data)
+            except Exception as exc:
+                return _api_error_response("api_bsim_index", exc)
+
+    async def api_bsim_validate(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        async with _bsim_semaphore:
+            try:
+                data = await _dash_to_thread(get_bsim_db_health)
+                return JSONResponse(data)
+            except Exception as exc:
+                return _api_error_response("api_bsim_validate", exc)
+
+    async def api_bsim_delete(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        sha256 = body.get("sha256", "")
+        if not isinstance(sha256, str) or not _BSIM_HEX64_RE.match(sha256):
+            return JSONResponse({"error": "Invalid SHA256"}, status_code=400)
+        if not body.get("confirm"):
+            return JSONResponse({"error": "Confirmation required"}, status_code=400)
+        try:
+            data = await _dash_to_thread(delete_bsim_binary, sha256)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_bsim_delete", exc)
+
+    async def api_bsim_clear(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        if not body.get("confirm"):
+            return JSONResponse({"error": "Confirmation required"}, status_code=400)
+        try:
+            data = await _dash_to_thread(clear_bsim_db)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_bsim_clear", exc)
+
     return [
         Route("/login", endpoint=login_page, methods=["GET"]),
         Route("/login", endpoint=login_post, methods=["POST"]),
@@ -1435,7 +1553,7 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/capabilities", endpoint=_auth_page("capabilities.html", "capabilities", get_capa_data), methods=["GET"]),
         Route("/types", endpoint=_auth_page("types.html", "types", get_custom_types_data), methods=["GET"]),
         # New pages (Batch 4)
-        Route("/diff", endpoint=_auth_page("diff.html", "diff"), methods=["GET"]),
+        Route("/similarity", endpoint=_auth_page("similarity.html", "similarity"), methods=["GET"]),
         # API
         Route("/api/state", endpoint=api_state, methods=["GET"]),
         Route("/api/functions", endpoint=api_functions, methods=["GET"]),
@@ -1478,6 +1596,15 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/search-code", endpoint=api_search_code, methods=["GET"]),
         Route("/api/diff", endpoint=api_diff, methods=["POST"]),
         Route("/api/list-files", endpoint=api_list_files, methods=["GET"]),
+        # BSim API endpoints
+        Route("/api/bsim/stats", endpoint=api_bsim_stats, methods=["GET"]),
+        Route("/api/bsim/binaries", endpoint=api_bsim_binaries, methods=["GET"]),
+        Route("/api/bsim/triage", endpoint=api_bsim_triage, methods=["POST"]),
+        Route("/api/bsim/matches", endpoint=api_bsim_matches, methods=["POST"]),
+        Route("/api/bsim/index", endpoint=api_bsim_index, methods=["POST"]),
+        Route("/api/bsim/validate", endpoint=api_bsim_validate, methods=["POST"]),
+        Route("/api/bsim/delete", endpoint=api_bsim_delete, methods=["POST"]),
+        Route("/api/bsim/clear", endpoint=api_bsim_clear, methods=["POST"]),
         # Partials
         Route("/partials/overview-stats", endpoint=partial_overview_stats, methods=["GET"]),
         Route("/partials/task-list", endpoint=partial_task_list, methods=["GET"]),

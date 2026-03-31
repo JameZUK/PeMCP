@@ -108,7 +108,7 @@ ruff check arkana/ tests/ \
 
 Port 8082, auto-starts. Access URL logged at startup with token query parameter.
 
-Pages: Overview, Functions (sortable, triage, XREF panel, code search, symbol tree), Call Graph (Cytoscape.js, dagre), Sections (entropy heatmap), Imports, Hex View (infinite scroll), Strings (FLOSS detail, sifter scores), CAPA, MITRE, Types (struct/enum editor), Diff (BinDiff), Timeline, Notes.
+Pages: Overview, Functions (sortable, triage, XREF panel, code search, symbol tree), Call Graph (Cytoscape.js, dagre), Sections (entropy heatmap), Imports, Hex View (infinite scroll), Strings (FLOSS detail, sifter scores), CAPA, MITRE, Types (struct/enum editor), Similarity (BSim triage + BinDiff, DB management), Timeline, Notes.
 
 Global status bar shows active tool + background tasks, 3s htmx refresh, collapses when idle. Triage flags persisted to cache.
 

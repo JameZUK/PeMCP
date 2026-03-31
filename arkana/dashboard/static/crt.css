@@ -2666,6 +2666,106 @@ button.btn-analysis:hover {
     border-top: 1px solid var(--primary-ghost);
 }
 
+/* --- Similarity page tabs --- */
+.sim-mode-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--primary-ghost);
+}
+.sim-tab {
+    padding: 8px 16px;
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 2px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--primary-dim);
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+.sim-tab:hover { color: var(--primary); }
+.sim-tab.active {
+    color: var(--primary);
+    border-bottom-color: var(--primary);
+}
+
+/* BSim stats strip */
+.bsim-stats-strip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.bsim-stats-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* BSim triage table */
+.bsim-triage-row { cursor: pointer; transition: background 0.1s; }
+.bsim-triage-row:hover { background: var(--bg-raised); }
+.bsim-expand-cell { width: 20px; text-align: center; }
+.bsim-sim-high { color: var(--safe); }
+.bsim-sim-med { color: var(--warning); }
+.bsim-sim-low { color: var(--primary-ghost); }
+
+/* BSim overlap bar */
+.bsim-overlap-bar {
+    position: relative;
+    width: 80px;
+    height: 14px;
+    background: var(--bg-deep);
+    border: 1px solid var(--primary-ghost);
+    border-radius: 2px;
+    display: inline-block;
+    vertical-align: middle;
+}
+.bsim-overlap-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    background: var(--primary-ghost);
+    border-radius: 1px;
+    transition: width 0.3s;
+}
+.bsim-overlap-text {
+    position: relative;
+    z-index: 1;
+    font-size: 10px;
+    line-height: 14px;
+    padding-left: 4px;
+    color: var(--primary-dim);
+}
+
+/* BSim match detail (expandable row) */
+.bsim-match-detail {
+    background: var(--bg-raised);
+    border-left: 2px solid var(--primary-ghost);
+    padding: 8px 12px;
+}
+.bsim-match-detail-row td { padding: 0; }
+
+/* Database tab */
+.bsim-db-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.btn-danger {
+    color: var(--danger);
+    border-color: var(--danger);
+}
+.btn-danger:hover {
+    background: rgba(255, 65, 65, 0.12);
+}
+.btn-sm {
+    padding: 2px 8px;
+    font-size: 10px;
+}
+
 /* --- Symbol Tree --- */
 .symbol-tree { padding: 0; }
 .tree-controls { border-bottom: 1px solid var(--primary-ghost); }
