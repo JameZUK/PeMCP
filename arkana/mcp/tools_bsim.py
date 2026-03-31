@@ -593,18 +593,79 @@ async def query_signature_db(
 @tool_decorator
 async def list_signature_dbs(
     ctx: Context,
+    binary_sha256: str = "",
+    limit: int = 50,
 ) -> Dict[str, Any]:
-    """List all binaries indexed in the function signature database.
+    """List indexed binaries in the signature DB, or drill into a specific binary's functions.
 
-    ---compact: list indexed binaries in signature DB with function counts
+    ---compact: list indexed binaries in signature DB | drill into functions by SHA256
 
-    Returns metadata for each indexed binary: SHA256, filename, architecture,
-    function count, and indexing date.  No angr dependency — reads only
-    SQLite metadata.
+    When called without binary_sha256: returns metadata for each indexed binary.
+    When called with binary_sha256: returns the named functions for that binary,
+    showing which functions have user-assigned names vs default sub_* names.
+    No angr dependency — reads only SQLite metadata.
+
+    Args:
+        binary_sha256: If provided, lists functions for this specific binary.
+            Use the SHA256 from a previous list_signature_dbs call.
+        limit: Max functions to return when drilling into a binary (default 50).
 
     Returns:
-        dict with list of indexed binaries and summary statistics.
+        dict with list of indexed binaries, or function list for a specific binary.
     """
+    limit = max(1, min(limit, MAX_TOOL_LIMIT))
+
+    # Drill into a specific binary's functions
+    if binary_sha256:
+        db = get_db_path()
+        if not db.exists():
+            return {"error": "Signature DB does not exist."}
+        conn = _get_connection(db)
+        try:
+            binary_row = conn.execute(
+                "SELECT id, filename, architecture, function_count, source, library_name "
+                "FROM binaries WHERE sha256 = ?", (binary_sha256,)
+            ).fetchone()
+            if not binary_row:
+                return {"error": f"Binary {binary_sha256[:16]}... not found in signature DB."}
+
+            # Get functions — named (non-sub_*) first, then sub_* sorted by address
+            rows = conn.execute(
+                "SELECT address, name, block_count, instruction_count "
+                "FROM functions WHERE binary_id = ? "
+                "ORDER BY CASE WHEN name LIKE 'sub_%' THEN 1 ELSE 0 END, name "
+                "LIMIT ?",
+                (binary_row["id"], limit),
+            ).fetchall()
+
+            named_count = sum(1 for r in rows if not r["name"].startswith("sub_"))
+            functions = [
+                {
+                    "address": hex(r["address"]),
+                    "name": r["name"],
+                    "blocks": r["block_count"],
+                    "instructions": r["instruction_count"],
+                    "named": not r["name"].startswith("sub_"),
+                }
+                for r in rows
+            ]
+
+            return {
+                "status": "success",
+                "binary_sha256": binary_sha256,
+                "binary_filename": binary_row["filename"],
+                "architecture": binary_row["architecture"],
+                "source": binary_row["source"],
+                "library_name": binary_row["library_name"],
+                "total_functions": binary_row["function_count"],
+                "named_functions": named_count,
+                "returned": len(functions),
+                "functions": functions,
+            }
+        finally:
+            conn.close()
+
+    # Default: list all binaries
     binaries = list_indexed_binaries()
     total_functions = sum(b.get("function_count", 0) for b in binaries)
     library_count = sum(1 for b in binaries if b.get("source") == "library")
@@ -1325,3 +1386,101 @@ async def validate_signature_db(
             conn.close()
 
     return await asyncio.to_thread(_validate)
+
+
+# ---------------------------------------------------------------------------
+#  Tool 10: manage_signature_db
+# ---------------------------------------------------------------------------
+
+@tool_decorator
+async def manage_signature_db(
+    ctx: Context,
+    action: str,
+    binary_sha256: str = "",
+) -> Dict[str, Any]:
+    """Manage the BSim signature database — remove entries or clear data.
+    ---compact: remove binary entries or clear BSim signature DB
+
+    Actions:
+      remove_binary — Remove a specific binary and all its functions from the DB.
+      clear_user    — Remove all user-indexed entries, keep library entries.
+      clear_all     — Delete the entire DB (irreversible).
+
+    Args:
+        action: One of 'remove_binary', 'clear_user', 'clear_all'.
+        binary_sha256: Required for 'remove_binary'. SHA256 of the binary to remove.
+
+    Returns:
+        dict with action result and updated DB stats.
+    """
+    from arkana.mcp._bsim_features import _db_write_lock, _get_connection, get_db_path
+
+    db = get_db_path()
+    if not db.exists():
+        return {"error": "Signature DB does not exist."}
+
+    if action == "remove_binary":
+        if not binary_sha256:
+            return {"error": "binary_sha256 is required for remove_binary action."}
+        with _db_write_lock:
+            conn = _get_connection(db)
+            try:
+                # Get binary info before deleting
+                row = conn.execute(
+                    "SELECT filename, function_count FROM binaries WHERE sha256 = ?",
+                    (binary_sha256,),
+                ).fetchone()
+                if not row:
+                    return {"error": f"Binary {binary_sha256[:16]}... not found in DB."}
+                filename = row["filename"]
+                func_count = row["function_count"]
+                # CASCADE delete removes functions too
+                conn.execute("DELETE FROM binaries WHERE sha256 = ?", (binary_sha256,))
+                conn.commit()
+                return {
+                    "status": "success",
+                    "action": "remove_binary",
+                    "removed_binary": filename,
+                    "removed_functions": func_count,
+                }
+            finally:
+                conn.close()
+
+    elif action == "clear_user":
+        with _db_write_lock:
+            conn = _get_connection(db)
+            try:
+                user_count = conn.execute(
+                    "SELECT COUNT(*) FROM binaries WHERE source != 'library'"
+                ).fetchone()[0]
+                func_count = conn.execute(
+                    "SELECT COALESCE(SUM(function_count), 0) FROM binaries WHERE source != 'library'"
+                ).fetchone()[0]
+                conn.execute("DELETE FROM binaries WHERE source != 'library'")
+                conn.commit()
+                return {
+                    "status": "success",
+                    "action": "clear_user",
+                    "removed_binaries": user_count,
+                    "removed_functions": func_count,
+                    "library_entries_preserved": True,
+                }
+            finally:
+                conn.close()
+
+    elif action == "clear_all":
+        import os
+        try:
+            os.remove(str(db))
+            return {
+                "status": "success",
+                "action": "clear_all",
+                "message": "Signature DB deleted. A new empty DB will be created on next use.",
+            }
+        except OSError as e:
+            return {"error": f"Failed to delete DB: {e}"}
+
+    else:
+        return {
+            "error": f"Unknown action: {action}. Valid: remove_binary, clear_user, clear_all.",
+        }
