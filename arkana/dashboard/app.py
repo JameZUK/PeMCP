@@ -1453,9 +1453,13 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        cache_only = bool(body.get("cache_only", False))
         async with _bsim_semaphore:
             try:
-                data = await _dash_to_thread(get_bsim_triage_data)
+                data = await _dash_to_thread(get_bsim_triage_data, cache_only)
                 return JSONResponse(data)
             except Exception as exc:
                 return _api_error_response("api_bsim_triage", exc)

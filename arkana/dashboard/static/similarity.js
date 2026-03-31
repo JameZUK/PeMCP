@@ -914,11 +914,11 @@
     // ====================================================================
     loadBsimStats();
 
-    // Auto-load cached triage results on page load (instant if server has cache)
+    // Auto-load cached triage results on page load (cache_only: never triggers computation)
     fetchJSON("/dashboard/api/bsim/triage", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-CSRF-Token": getCsrfToken() },
-        body: "{}"
+        body: JSON.stringify({ cache_only: true })
     })
     .then(function (data) {
         if (!data.error && data.available !== false && data.results && data.results.length) {

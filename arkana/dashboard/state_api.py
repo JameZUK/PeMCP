@@ -3287,16 +3287,16 @@ def get_bsim_indexed_binaries() -> Dict[str, Any]:
         return {"binaries": [], "error": "Failed to read signature DB"}
 
 
-def get_bsim_triage_data() -> Dict[str, Any]:
+def get_bsim_triage_data(cache_only: bool = False) -> Dict[str, Any]:
     """Run BSim triage or return cached results.
 
     This is expensive (iterates all functions).  Results are cached for
     ``_BSIM_TRIAGE_TTL`` seconds keyed by the loaded file's SHA256.
+
+    When *cache_only* is True, return cached results without computing.
+    Used by the page-load auto-fetch to avoid expensive surprise computation.
     """
     st = _get_state()
-    if st.angr_project is None or st.angr_cfg is None:
-        return {"available": False, "error": "angr CFG not ready"}
-
     pe_data = st.pe_data or {}
     file_hashes = pe_data.get("file_hashes", {})
     sha256 = file_hashes.get("sha256", "") if isinstance(file_hashes, dict) else ""
@@ -3311,6 +3311,12 @@ def get_bsim_triage_data() -> Dict[str, Any]:
         expire_time, result = cached
         if now < expire_time:
             return result
+
+    if cache_only:
+        return {"available": False, "cached": False}
+
+    if st.angr_project is None or st.angr_cfg is None:
+        return {"available": False, "error": "angr CFG not ready"}
 
     try:
         from arkana.mcp._bsim_features import (
@@ -3358,6 +3364,7 @@ def get_bsim_triage_data() -> Dict[str, Any]:
                 idf_weights=idf,
             )
             if matches:
+                functions_matched += 1
                 for match in matches:
                     msha = match["binary_sha256"]
                     if msha not in binary_matches:
@@ -3471,12 +3478,17 @@ def get_bsim_db_health() -> Dict[str, Any]:
 
     conn = _get_connection(db)
     try:
-        total_b = conn.execute("SELECT COUNT(*) FROM binaries").fetchone()[0]
         total_f = conn.execute("SELECT COUNT(*) FROM functions").fetchone()[0]
-        lib_count = conn.execute(
-            "SELECT COUNT(*) FROM binaries WHERE source = 'library'"
-        ).fetchone()[0]
-        user_count = total_b - lib_count
+        user_count = 0
+        lib_count = 0
+        for row in conn.execute(
+            "SELECT source, COUNT(*) FROM binaries GROUP BY source"
+        ).fetchall():
+            if row[0] == "library":
+                lib_count = row[1]
+            else:
+                user_count = row[1]
+        total_b = user_count + lib_count
 
         binaries = []
         for row in conn.execute(
@@ -3570,12 +3582,15 @@ def delete_bsim_binary(sha256: str) -> Dict[str, Any]:
             conn.commit()
             if cursor.rowcount == 0:
                 return {"error": "Binary not found in DB"}
-            return {"status": "success", "deleted_sha256": sha256}
         except Exception:
             logger.debug("BSim delete binary failed", exc_info=True)
             return {"error": "Delete failed"}
         finally:
             conn.close()
+    # Invalidate triage cache — deleted binary may appear in cached results
+    with _cache_lock:
+        _bsim_triage_cache.clear()
+    return {"status": "success", "deleted_sha256": sha256}
 
 
 def clear_bsim_db() -> Dict[str, Any]:
