@@ -91,7 +91,7 @@ Custom struct and enum type editor for defining binary data structures. Create s
 
 BSim triage (whole-binary similarity against signature DB), BinDiff function-level comparison, and signature database management. Three tabs: SIMILARITY (BSim triage with sortable results, expandable function matches, overlap bars), DIFF (angr BinDiff with file browser), DATABASE (indexed binaries, validate, clear).
 
-![Dashboard Binary Diff](screenshots/Arkana%20%E2%80%94%20Binary%20Diff.png)
+![Dashboard Similarity](screenshots/Arkana%20%E2%80%94%20Similarity.png)
 
 ---
 
