@@ -131,6 +131,7 @@ Every report below was generated from a single prompt: *"Analyse this binary and
 | [StealC v2 7-Layer AutoIt3 Loader](docs/examples/example-report-stealc-autoit.md) | 7-layer process hollowing loader | IExpress SFX → batch deobfuscation → PE fragment reassembly → RanRot PRNG decryption → 41-API process hollowing → RC4 + LZNT1 payload extraction → StealC v2 PE with encrypted C2 config, builder path, and credential targets |
 | [Elysium RAT (SheetRAT)](docs/examples/example-report-elysium-rat.md) | .NET plugin-based RAT | Same-day MalwareBazaar sample, custom 2-alphabet substitution cipher, 313 C# files recovered, AMSI/ETW patch bytes extracted, plugin-framework architecture with registry DLL storage, dual C2 with Dead Drop Resolver |
 | [CrySome RAT](docs/examples/example-report-crysome-rat.md) | .NET modular RAT | 124 C# files decompiled, 5-layer persistence with factory reset survival, BSOD-on-kill self-protection, 5-vector AV killer targeting 114+ products, HVNC for 6 browsers, DLL-injection credential theft, mutual watchdog processes |
+| [MBA-Obfuscated WinHTTP RAT](docs/examples/example-report-malbazaar-rat.md) | Same-day Malware Bazaar RAT | Full C2 protocol reversal (4 commands, versioned protocol, Cloudflare bypass), Mixed Boolean-Arithmetic obfuscation hiding XOR crypto, Base64+XOR encrypted C2, download-and-execute (EXE/DLL/custom), 27 anti-analysis techniques, embedded Chromium form injection, system profiling with author misspelling fingerprint |
 
 ---
 
