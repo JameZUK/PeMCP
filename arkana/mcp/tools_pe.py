@@ -748,6 +748,7 @@ async def open_file(
                 state.register_task_infra(_pe_task_id, _pe_cancel)
                 state.set_task(_pe_task_id, {
                     "status": TASK_RUNNING,
+                    "tool": "open_file (PE analysis)",
                     "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
                     "created_at_epoch": _pe_task_start,
                     "progress_percent": 15,
