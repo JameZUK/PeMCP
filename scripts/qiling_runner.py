@@ -682,6 +682,16 @@ def emulate_binary(cmd):
         return init_result
     dll_warning = init_result
 
+    # Install anti-VM bypass hooks if requested
+    anti_vm_triggers = []
+    anti_vm_summary = None
+    if cmd.get("anti_vm_bypass"):
+        try:
+            from _anti_vm_hooks_qiling import install_anti_vm_hooks_qiling
+            anti_vm_summary = install_anti_vm_hooks_qiling(ql, anti_vm_triggers)
+        except ImportError:
+            anti_vm_summary = {"warning": "anti-VM hooks module not available in this venv"}
+
     try:
         api_calls = []
         file_activity = []
@@ -749,6 +759,11 @@ def emulate_binary(cmd):
         # Add memory allocation analysis when tracking is enabled
         if track_memory:
             result["memory_activity"] = _analyze_memory_activity(api_calls, limit)
+
+        # Add anti-VM bypass report when enabled
+        if anti_vm_summary and cmd.get("anti_vm_bypass"):
+            from _anti_vm_hooks_qiling import check_anti_vm_triggers
+            result["anti_vm_bypass"] = check_anti_vm_triggers(anti_vm_triggers)
 
         if dll_warning:
             result["warning"] = dll_warning

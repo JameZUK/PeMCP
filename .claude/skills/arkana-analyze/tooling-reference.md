@@ -213,6 +213,11 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `debug_stub_api` | Create custom API stub at runtime (set return value, write to output pointers) | `api_name`, `return_value`, `num_params`, `writes` (JSON), `session_id` |
 | `debug_list_stubs` | List all installed stubs: builtin I/O (8), builtin CRT (~47), user-defined | `session_id` |
 | `debug_remove_stub` | Remove a user-defined API stub (builtin stubs cannot be removed) | `api_name`, `session_id` |
+| `import_coverage_data` | Import drcov/JSON/CSV coverage data and overlay on function map | `file_path`, `format` (auto/drcov/json/csv) |
+| `get_coverage_summary` | Summarise imported coverage: percent, uncovered/covered functions | `show_uncovered`, `show_covered` |
+| `analyze_instruction_trace` | Import PIN/CSV/JSON instruction traces; optional Triton symbolic analysis | `trace_path`, `format` (auto/pin/csv/json) |
+| `detect_mba_obfuscation` | Scan decompiled code for MBA obfuscation patterns (XOR-via-NOT-AND, identities) | `function_address` |
+| `generate_frida_stalker_script` | Generate Frida DBI scripts: coverage, anti-VM bypass, injection detector, API logger | `script_type`, `target_module`, `apis`, `output_format`, `output_path` |
 | `find_path_to_address` | Symbolic execution to find reaching inputs (timeout 600s, partial results on timeout: steps/active states) | `target_address` |
 | `find_path_with_custom_input` | Path finding with custom constraints (timeout 600s, partial results on timeout: steps/active states) | `target`, `constraints` |
 | `explore_symbolic_states` | BFS/DFS symbolic exploration towards target addresses, avoiding others. **OOM risk**: keep `max_active` ≤ 10 and `max_steps` ≤ 10000 for complex binaries — angr clones entire state objects per branch, and hash-heavy or CRT-heavy code causes exponential memory growth that can OOM-kill the container | `find_addresses`, `avoid_addresses`, `strategy`, `max_steps`, `max_active`, `timeout_seconds` |

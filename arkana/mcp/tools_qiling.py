@@ -174,13 +174,14 @@ async def emulate_binary_with_qiling(
     trace_syscalls: bool = False,
     syscall_filter: Optional[List[str]] = None,
     track_memory: bool = False,
+    anti_vm_bypass: bool = False,
 ) -> Dict[str, Any]:
     """
     Emulates the loaded binary (PE, ELF, or Mach-O) using the Qiling Framework
     with full OS emulation.  Returns a behavioral report: API/syscall calls,
     file activity, registry activity, and network activity.
 
-    ---compact: full OS emulation with syscall/API tracing | PE/ELF/Mach-O | needs: qiling, file
+    ---compact: full OS emulation with syscall/API tracing | anti-VM bypass | PE/ELF/Mach-O | needs: qiling, file
 
     This is a cross-platform emulator — unlike Speakeasy (Windows-only), Qiling
     can emulate Linux ELF and macOS Mach-O binaries as well.
@@ -215,6 +216,11 @@ async def emulate_binary_with_qiling(
             patterns. Returns memory_activity with operations timeline, anomalies
             (RWX allocations, protection changes to executable, guard pages, large
             allocations), and alloc-then-execute sequence detection.
+        anti_vm_bypass: If True, installs hooks to bypass common VM detection
+            techniques: CPUID hypervisor bit spoofing, RDTSC timing normalisation,
+            VMware I/O port masking, and registry/firmware/process-based VM
+            detection interception. Useful for analysing protectors like VMProtect,
+            Themida, and Enigma that refuse to run in virtual environments.
     """
     await ctx.info("Emulating binary with Qiling Framework")
     _check_qiling("emulate_binary_with_qiling")
@@ -235,6 +241,7 @@ async def emulate_binary_with_qiling(
             "trace_syscalls": trace_syscalls,
             "syscall_filter": syscall_filter or [],
             "track_memory": track_memory,
+            "anti_vm_bypass": anti_vm_bypass,
         }, timeout_seconds)
     finally:
         progress_task.cancel()

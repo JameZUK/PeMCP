@@ -2,7 +2,7 @@
 
 ## What is Arkana?
 
-Arkana is a Model Context Protocol (MCP) server exposing 289 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym.
+Arkana is a Model Context Protocol (MCP) server exposing 294 binary analysis tools to AI clients. It supports PE, ELF, and Mach-O formats with integrations for angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym.
 
 ## Project Structure
 
@@ -27,7 +27,7 @@ arkana/                  # Main package
 │   │   └── partials/   # htmx partials (_global_status, _overview_stats, _task_list, _timeline_entry)
 │   └── static/         # CSS (CRT theme), JS (htmx, Cytoscape.js, strings.js), logo
 ├── resource_monitor.py  # Process-level RSS/CPU monitoring (psutil daemon thread)
-    └── mcp/                # MCP tool modules (289 tools across 62 files)
+    └── mcp/                # MCP tool modules (294 tools across 65 files)
     ├── server.py       # FastMCP instance, tool_decorator, response truncation
     ├── _*.py           # Private helpers (angr, input, format, progress, refinery, rename, search)
     └── tools_*.py      # Tool modules grouped by domain
@@ -94,6 +94,11 @@ ruff check arkana/ tests/ \
 - **Incremental enrichment saves**: Saves at 3 points: after Phase 2g, every 60s during decompile sweep, and async after on-demand decompiles (throttled 30s).
 - **Decompile meta cache**: `_decompile_meta` — `OrderedDict` with LRU eviction (cap 2000). Dashboard functions build keys using `_get_state()._state_uuid` directly (not `_make_decompile_key()`) since dashboard threads lack MCP session contextvar.
 - **`_ToolResultCache` GC safety**: `_ToolResultCache` uses a `WeakSet` for instance tracking. Fixed: `weakref.finalize` removed from `_ToolResultCache.__init__` — periodic `sweep_all_expired()` handles recount instead. The finalizer caused single-thread deadlocks on Python 3.10 when GC fired during `_commit_removals` while `_global_lock` was held.
+- **Code coverage import**: `tools_coverage.py` — 2 tools (`import_coverage_data`, `get_coverage_summary`). Parses DynamoRIO drcov binary format, Frida/Lighthouse JSON, and CSV coverage. Overlays on function map via angr CFG. Stored on `state._cached_coverage`.
+- **Anti-VM bypass hooks**: `_anti_vm_hooks.py` + `scripts/_anti_vm_hooks_qiling.py` — CPUID hypervisor bit spoofing, RDTSC timing normalisation, VMware I/O port masking. Enabled via `anti_vm_bypass=True` on `emulate_binary_with_qiling` and `debug_start`. Based on IEEE paper techniques (Lee et al., 2021). Trigger capped at 10K.
+- **VM protection option identification**: `detect_vm_protection` enhanced with protector-specific option detection (Themida: anti_debug/api_wrapping/vm_code/string_encryption; VMProtect: virtualization/mutation/import_protection; Enigma: anti_vm/virtualization), import obfuscation scoring (0.0–1.0), and protector-specific analysis recommendations. Based on UnThemida research.
+- **Frida DBI script generation**: `generate_frida_stalker_script` — 4 script types: Stalker coverage (drcov/JSON), anti-VM bypass (registry/firmware/process/MAC hooks), injection detector (VirtualAllocEx→WriteProcessMemory→CreateRemoteThread sequence monitoring), API logger (structured JSON with arg resolution from FRIDA_API_SIGNATURES).
+- **Trace analysis & MBA detection**: `tools_trace_analysis.py` — 2 tools. `analyze_instruction_trace` parses PIN/CSV/JSON traces with optional Triton symbolic analysis (`TRITON_AVAILABLE`). `detect_mba_obfuscation` scans decompiled pseudocode for 9 MBA pattern types (XOR-via-NOT-AND-OR, algebraic identities, tautologies, double negation). Pure-Python fallback when Triton unavailable.
 
 ## Input Validation & Safety Guards
 

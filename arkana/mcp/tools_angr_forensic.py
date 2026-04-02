@@ -2615,18 +2615,159 @@ async def detect_vm_protection(
             except Exception:
                 pass
 
+        # ── 7. Protector option identification ────────────────────
+        protection_options = []
+        detected_protector = (result.get("protector") or "").lower()
+
+        # Collect helper data for option detection
+        vm_section_names = {s["name"].strip().lower() for s in result["virtualized_sections"]}
+        high_entropy_nonstandard = any(
+            ind["type"] == "high_entropy_section" for ind in result["indicators"]
+        )
+        ep_section_name = (result.get("entry_point_info") or {}).get("section", "").strip().lower()
+        ep_in_vm = any(
+            ind["type"] == "entry_in_vm_section" for ind in result["indicators"]
+        )
+
+        # Count direct kernel32/ntdll APIs
+        core_api_count = 0
+        for dll_entry in imports_list:
+            if not isinstance(dll_entry, dict):
+                continue
+            dll_name = (dll_entry.get("dll") or dll_entry.get("name") or "").lower()
+            if dll_name in ("kernel32.dll", "ntdll.dll"):
+                core_api_count += len(dll_entry.get("symbols", []))
+
+        # Estimate string count relative to binary size
+        file_size = pe_data.get("file_size", 0)
+        raw_strings = pe_data.get("strings") or pe_data.get("ascii_strings") or []
+        string_count = len(raw_strings) if isinstance(raw_strings, list) else 0
+        # Heuristic: expect ~1 string per 1KB for a typical binary
+        expected_strings = max(1, file_size // 1024) if file_size > 0 else 100
+        low_string_ratio = string_count < (expected_strings * 0.1) if expected_strings > 0 else False
+
+        if "themida" in detected_protector or "winlicense" in detected_protector:
+            # anti_dump is default-on for Themida/WinLicense
+            protection_options.append({
+                "option": "anti_dump",
+                "detected": True,
+                "reason": "Default-on for Themida/WinLicense",
+            })
+            if import_count < 10 and high_entropy_nonstandard:
+                protection_options.append({
+                    "option": "anti_debug",
+                    "detected": True,
+                    "reason": f"Very low import count ({import_count}) with high-entropy non-standard sections",
+                })
+            if core_api_count < 5:
+                protection_options.append({
+                    "option": "api_wrapping",
+                    "detected": True,
+                    "reason": f"Only {core_api_count} direct kernel32/ntdll APIs — calls likely wrapped through obfuscated stubs",
+                })
+            if ep_in_vm:
+                protection_options.append({
+                    "option": "vm_code",
+                    "detected": True,
+                    "reason": f"Entry point resides in VM section ({ep_section_name})",
+                })
+            if low_string_ratio:
+                protection_options.append({
+                    "option": "string_encryption",
+                    "detected": True,
+                    "reason": f"Very low string count ({string_count}) relative to binary size ({file_size} bytes)",
+                })
+
+        elif "vmprotect" in detected_protector:
+            vmp_sections = [s for s in vm_section_names if s.startswith(".vmp")]
+            vmp_high_entropy = any(
+                sec.get("entropy", 0) > 7.0
+                for sec in result["virtualized_sections"]
+                if sec["name"].strip().lower().startswith(".vmp")
+            )
+            if vmp_sections and vmp_high_entropy:
+                protection_options.append({
+                    "option": "virtualization",
+                    "detected": True,
+                    "reason": f"VMP sections ({', '.join(vmp_sections)}) with high entropy",
+                })
+            # Mutation: high code-section entropy without VM sections
+            code_section_entropy = 0.0
+            for sec in sections:
+                if sec.get("name", "").strip().lower() in (".text", ".code"):
+                    code_section_entropy = sec.get("entropy", 0)
+                    break
+            if code_section_entropy > 6.5 and not vmp_sections:
+                protection_options.append({
+                    "option": "mutation",
+                    "detected": True,
+                    "reason": f"Code section entropy {code_section_entropy:.2f} > 6.5 without VM sections — mutation without virtualization",
+                })
+            if import_count < 5:
+                protection_options.append({
+                    "option": "import_protection",
+                    "detected": True,
+                    "reason": f"Only {import_count} imports — import table likely protected",
+                })
+
+        elif "enigma" in detected_protector:
+            enigma_sections = [s for s in vm_section_names if s.startswith(".enigma")]
+            if enigma_sections:
+                protection_options.append({
+                    "option": "anti_vm",
+                    "detected": True,
+                    "reason": f"Enigma sections present: {', '.join(enigma_sections)}",
+                })
+                enigma_high_entropy = any(
+                    sec.get("entropy", 0) > 7.0
+                    for sec in result["virtualized_sections"]
+                    if sec["name"].strip().lower().startswith(".enigma")
+                )
+                if enigma_high_entropy:
+                    protection_options.append({
+                        "option": "virtualization",
+                        "detected": True,
+                        "reason": "High entropy in Enigma sections indicates code virtualization",
+                    })
+
+        result["protection_options"] = protection_options
+
+        # ── 8. Import obfuscation scoring ────────────────────────────
+        expected_baseline = 50  # Typical binary API count
+        result["import_obfuscation_score"] = round(
+            1.0 - min(1.0, import_count / expected_baseline), 2
+        )
+
+        # ── 9. Analysis recommendations ──────────────────────────────
+        # Build protector-specific recommendation (applied in final assessment below)
+        active_options = {opt["option"] for opt in protection_options}
+
         # ── Final assessment ────────────────────────────────────────
         result["vm_protection_detected"] = result["confidence"] >= 50
 
         if result["vm_protection_detected"]:
             protector = result["protector"] or "Unknown"
-            result["recommendation"] = (
-                f"{protector} protection detected (confidence: {result['confidence']}%). "
-                "Full devirtualization is not feasible via automated analysis. "
-                "Recommended approach: (1) Use emulate_pe_with_windows_apis() for behavioral profiling, "
-                "(2) Use emulate_and_inspect() for post-emulation memory analysis, "
-                "(3) Focus on unprotected functions for static analysis."
-            )
+
+            # Protector-specific recommendations based on detected options
+            if "vmprotect" in detected_protector and "virtualization" in active_options:
+                result["recommendation"] = (
+                    f"{protector} protection detected (confidence: {result['confidence']}%). "
+                    "Use behavioral analysis (emulate_pe_with_windows_apis). "
+                    "VM bytecode devirtualization requires specialized tools. "
+                    "Focus on API calls and memory patterns."
+                )
+            elif ("themida" in detected_protector or "winlicense" in detected_protector) and "api_wrapping" in active_options:
+                result["recommendation"] = (
+                    f"{protector} protection detected (confidence: {result['confidence']}%). "
+                    "Use emulation with anti-VM bypasses (anti_vm_bypass=True). "
+                    "Import recovery may require tracing actual API calls during execution."
+                )
+            else:
+                result["recommendation"] = (
+                    f"{protector} protection detected (confidence: {result['confidence']}%). "
+                    "Use detect_packing() to check for outer packing layer, then "
+                    "emulate_pe_with_windows_apis() for behavioral analysis."
+                )
         else:
             result["recommendation"] = "No VM-based protection detected."
 

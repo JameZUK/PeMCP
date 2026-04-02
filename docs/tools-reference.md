@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Arkana exposes **289 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
+Arkana exposes **294 tools** organised into the following categories. All list-returning tools support pagination via `limit` and `offset` parameters  - see [Pagination & Result Limits](architecture.md#pagination--result-limits) for details.
 
 > **Address format:** All tools accept both hex (`0x401000`) and decimal (`4198400`) for address/offset parameters. Hex strings with a `0x` prefix are auto-detected.
 
@@ -667,7 +667,7 @@ Functions previously only accessible via the web dashboard, now available as MCP
 | `get_entropy_analysis` | Per-section and overall entropy analysis for the loaded binary. Detects packed/encrypted sections (high entropy >7.0) or empty sections (near-zero entropy). Optionally includes byte-level heatmap data. |
 | `generate_report` | Generate a comprehensive markdown analysis report summarising findings, risk assessment, IOCs, function analysis, and timeline. Optionally saves to a file path. |
 
-## Frida Script Generation (3 tools)
+## Frida Script Generation (4 tools)
 
 Generate ready-to-run Frida JavaScript instrumentation scripts from static analysis findings. No Frida dependency  - generates standalone `.js` code that can be used with `frida -l`.
 
@@ -676,6 +676,25 @@ Generate ready-to-run Frida JavaScript instrumentation scripts from static analy
 | `generate_frida_hook_script` | Generate a Frida hook script for specified API functions or hex addresses (up to 50 targets). Produces code that intercepts API calls, logs arguments/return values with type-aware formatting for 50+ common APIs, and captures backtraces. |
 | `generate_frida_bypass_script` | Generate a Frida script that bypasses anti-debug techniques. Auto-detects anti-debug APIs from the binary's imports/triage data and generates targeted bypass code (IsDebuggerPresent, NtQueryInformationProcess, timing checks, PEB patches, etc.). |
 | `generate_frida_trace_script` | Generate a Frida API tracing script based on the binary's import table. Identifies suspicious/interesting APIs and creates a comprehensive tracing script filterable by category (networking, crypto, injection, file_io, registry, etc.). |
+| `generate_frida_stalker_script` | Generate specialised Frida DBI scripts: Stalker-based code coverage collection (drcov/JSON output), anti-VM detection bypass (registry/firmware/process/MAC hooks), process injection sequence detector (VirtualAllocEx→WriteProcessMemory→CreateRemoteThread monitoring), or structured API argument logger with type-aware resolution. |
+
+## Code Coverage Import (2 tools)
+
+Import and analyse code coverage data collected from external DBI tools (DynamoRIO, Frida Stalker, Intel PIN) to identify executed vs. uncovered code regions.
+
+| Tool | Description |
+|---|---|
+| `import_coverage_data` | Import coverage from DynamoRIO drcov binary format, Frida/Lighthouse JSON, or CSV files. Overlays coverage onto the loaded binary's function map to show which functions were executed during dynamic analysis. |
+| `get_coverage_summary` | Summarise imported coverage: coverage percentage, top uncovered functions (potential hidden functionality), and top covered functions. |
+
+## Trace Analysis & MBA Detection (2 tools)
+
+Analyse instruction traces and detect Mixed Boolean-Arithmetic (MBA) obfuscation patterns used by VM protectors like VMProtect and Themida.
+
+| Tool | Description |
+|---|---|
+| `analyze_instruction_trace` | Import and analyse instruction traces in PIN, CSV, or JSON format. With Triton installed, applies symbolic execution to reconstruct simplified input-output expressions. Without Triton, computes trace statistics (instruction count, mnemonic frequency, unique addresses). |
+| `detect_mba_obfuscation` | Scan decompiled pseudocode for MBA obfuscation patterns: XOR-via-NOT-AND-OR, algebraic identities, tautologies, double negation, and other redundant expressions used by VM protectors. Reports detected patterns with simplified forms. |
 
 ## Vulnerability Detection & Data Flow (4 tools)
 

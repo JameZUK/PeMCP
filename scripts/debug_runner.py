@@ -1708,6 +1708,18 @@ def cmd_init(cmd):
     # Install API call tracing (lowest priority)
     _install_api_trace()
 
+    # Install anti-VM bypass hooks if requested
+    anti_vm_info = None
+    if cmd.get("anti_vm_bypass"):
+        try:
+            from _anti_vm_hooks_qiling import install_anti_vm_hooks_qiling
+            _anti_vm_triggers = []
+            anti_vm_info = install_anti_vm_hooks_qiling(_ql, _anti_vm_triggers)
+            # Store triggers globally for reporting via debug_get_api_trace
+            globals()["_anti_vm_triggers"] = _anti_vm_triggers
+        except ImportError:
+            anti_vm_info = {"warning": "anti-VM hooks module not available"}
+
     pc = _get_pc()
     result = {
         "status": "ok",
@@ -1723,6 +1735,8 @@ def cmd_init(cmd):
         "crt_stub_count": len(_crt_stub_names),
         "api_trace_enabled": _api_trace_enabled,
     }
+    if anti_vm_info:
+        result["anti_vm_bypass"] = anti_vm_info
     if _dll_warning:
         result["warning"] = _dll_warning
     return result

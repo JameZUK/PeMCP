@@ -162,6 +162,9 @@ class AnalyzerState:
         self._cached_go_version: str = ""
         self._cached_go_abi_detected: Optional[bool] = None
 
+        # Coverage data (populated by import_coverage_data)
+        self._cached_coverage: Optional[Dict[str, Any]] = None
+
         # Decompilation priority control (background vs on-demand)
         self._decompile_lock = threading.Lock()
         self._decompile_on_demand_count: int = 0  # Atomic counter for on-demand decompile requests

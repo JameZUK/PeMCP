@@ -235,7 +235,8 @@ class _DebugSessionManager:
 
     async def create_session(self, filepath: str, rootfs_path: str = None,
                              stub_io: bool = True,
-                             stub_crt: bool = True) -> _DebugSession:
+                             stub_crt: bool = True,
+                             anti_vm_bypass: bool = False) -> _DebugSession:
         """Spawn a new debug subprocess and initialise Qiling."""
         # Evict oldest session under lock (sync portion only)
         old_to_kill = None
@@ -270,6 +271,7 @@ class _DebugSessionManager:
                 "rootfs_path": rootfs_path or str(_QILING_DEFAULT_ROOTFS),
                 "stub_io": stub_io,
                 "stub_crt": stub_crt,
+                "anti_vm_bypass": anti_vm_bypass,
             }
             result = await session.send_command(init_cmd, timeout=120)
         except Exception:
@@ -402,6 +404,7 @@ async def debug_start(
     rootfs_path: str = "",
     stub_io: bool = True,
     stub_crt: bool = True,
+    anti_vm_bypass: bool = False,
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Start an interactive debug session for the loaded binary.
@@ -409,7 +412,7 @@ async def debug_start(
     Creates a persistent emulation environment using Qiling Framework.
     The binary is loaded and paused at entry point, ready for stepping.
 
-    ---compact: start debug session for loaded binary | paused at entry point | needs: file, qiling
+    ---compact: start debug session for loaded binary | anti-VM bypass | paused at entry point | needs: file, qiling
 
     CRT stubs (enabled by default) hook ~47 Windows APIs needed for MSVC CRT
     initialization (GetSystemTimeAsFileTime, GetCurrentProcessId, GetProcessHeap,
@@ -429,6 +432,8 @@ async def debug_start(
         rootfs_path: Custom rootfs path (optional, uses default if empty)
         stub_io: Install console I/O stubs to prevent crashes (default True)
         stub_crt: Install CRT initialization stubs to prevent crashes (default True)
+        anti_vm_bypass: Install anti-VM detection bypass hooks (default False).
+            Spoofs CPUID, RDTSC, I/O port checks to defeat VMProtect/Themida/Enigma.
         session_id: Ignored (auto-generated). Use debug_status to see session IDs.
 
     Returns:
@@ -453,6 +458,7 @@ async def debug_start(
         rootfs_path=rootfs_path or None,
         stub_io=stub_io,
         stub_crt=stub_crt,
+        anti_vm_bypass=anti_vm_bypass,
     )
 
     await ctx.report_progress(100, 100)

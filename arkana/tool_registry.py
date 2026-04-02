@@ -59,6 +59,8 @@ COMMON_ANALYSIS_MODULES = [
     "arkana.mcp.tools_bsim",
     "arkana.mcp.tools_virustotal",
     "arkana.mcp.tools_frida",
+    "arkana.mcp.tools_coverage",
+    "arkana.mcp.tools_trace_analysis",
 ]
 
 # angr-based tools

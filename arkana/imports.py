@@ -36,6 +36,7 @@ __all__ = [
     "REFINERY_AVAILABLE",
     "OLETOOLS_AVAILABLE",
     "AUTOIT_RIPPER_AVAILABLE",
+    "TRITON_AVAILABLE",
     "PSUTIL_AVAILABLE",
     "DE4DOT_AVAILABLE", "DE4DOT_IMPORT_ERROR",
     "NETREACTORSLAYER_AVAILABLE", "NETREACTORSLAYER_IMPORT_ERROR",
@@ -615,6 +616,13 @@ AUTOIT_RIPPER_AVAILABLE = False
 try:
     import autoit_ripper  # noqa: F401
     AUTOIT_RIPPER_AVAILABLE = True
+except ImportError:
+    pass
+
+TRITON_AVAILABLE = False
+try:
+    from triton import TritonContext  # noqa: F401
+    TRITON_AVAILABLE = True
 except ImportError:
     pass
 

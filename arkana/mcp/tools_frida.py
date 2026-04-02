@@ -15,6 +15,10 @@ from arkana.mcp._frida_templates import (
     generate_hook_for_address,
     generate_bypass_js,
     generate_trace_js,
+    generate_stalker_coverage_js,
+    generate_anti_vm_bypass_js,
+    generate_injection_detector_js,
+    generate_api_logger_js,
 )
 
 
@@ -386,3 +390,127 @@ async def generate_frida_trace_script(
         result["saved_to"] = artifact.get("path", output_path)
 
     return await _check_mcp_response_size(ctx, result, "generate_frida_trace_script")
+
+
+@tool_decorator
+async def generate_frida_stalker_script(
+    ctx: Context,
+    script_type: str = "coverage",
+    target_module: Optional[str] = None,
+    apis: Optional[List[str]] = None,
+    output_format: str = "drcov",
+    output_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    [Phase: advanced] Generate advanced Frida DBI scripts: Stalker coverage, anti-VM bypass, injection detection, or structured API logging.
+
+    ---compact: generate Frida Stalker/anti-VM/injection/logger script | drcov or JSON output | needs: file
+
+    Generates specialised Frida scripts for dynamic binary instrumentation scenarios
+    beyond simple API hooking. Supports four script types:
+
+    - **coverage**: Stalker-based basic-block coverage collection in drcov or JSON format.
+      Compatible with Lighthouse, dragondance, and other coverage visualisation tools.
+    - **anti_vm**: Bypasses common VM detection — registry keys, SMBIOS strings,
+      process enumeration, and MAC address checks.
+    - **injection_detector**: Monitors VirtualAllocEx/WriteProcessMemory/CreateRemoteThread/
+      NtMapViewOfSection and detects the classic injection sequence.
+    - **api_logger**: Structured JSON logging of specified APIs with full argument resolution.
+
+    When to use: When you need DBI-level instrumentation beyond simple hooks — e.g. collecting
+    code coverage for a fuzzer, bypassing VM-aware malware, or detecting injection behaviour.
+    Next steps: Run with Frida, then add_note() to record findings.
+
+    Args:
+        script_type: Type of script to generate. One of: 'coverage', 'anti_vm',
+            'injection_detector', 'api_logger'.
+        target_module: Module name for Stalker coverage (e.g. 'sample.exe'). Default: main binary.
+            Only used when script_type='coverage'.
+        apis: List of API names for api_logger script type. Max 50.
+            Only used when script_type='api_logger'.
+        output_format: Output format for coverage scripts: 'drcov' or 'json'. Default 'drcov'.
+            Only used when script_type='coverage'.
+        output_path: Optional file path to save the generated script.
+    """
+    valid_types = {"coverage", "anti_vm", "injection_detector", "api_logger"}
+    if script_type not in valid_types:
+        return {
+            "error": f"Invalid script_type: {script_type!r}",
+            "valid_types": sorted(valid_types),
+        }
+
+    tool_name = "generate_frida_stalker_script"
+
+    if script_type == "coverage":
+        if output_format not in ("drcov", "json"):
+            return {
+                "error": f"Invalid output_format: {output_format!r}. Must be 'drcov' or 'json'.",
+            }
+        script_text = generate_stalker_coverage_js(
+            target_module=target_module,
+            output_format=output_format,
+        )
+        result: Dict[str, Any] = {
+            "script": script_text,
+            "script_type": "coverage",
+            "target_module": target_module or "(main binary)",
+            "output_format": output_format,
+            "usage": "frida -l <script.js> -f <binary>  # then rpc.exports.dump() to collect",
+        }
+
+    elif script_type == "anti_vm":
+        script_text = generate_anti_vm_bypass_js()
+        result = {
+            "script": script_text,
+            "script_type": "anti_vm",
+            "bypasses": [
+                "RegOpenKeyExA/W (VM registry keys)",
+                "GetSystemFirmwareTable (SMBIOS scrub)",
+                "Process32FirstW/NextW (VM process hiding)",
+                "GetAdaptersInfo (MAC prefix masking)",
+            ],
+            "usage": "frida -l <script.js> -f <binary>",
+        }
+
+    elif script_type == "injection_detector":
+        script_text = generate_injection_detector_js()
+        result = {
+            "script": script_text,
+            "script_type": "injection_detector",
+            "monitored_apis": [
+                "VirtualAllocEx", "WriteProcessMemory",
+                "CreateRemoteThread", "NtMapViewOfSection",
+            ],
+            "sequence_detection": "VirtualAllocEx -> WriteProcessMemory -> CreateRemoteThread",
+            "usage": "frida -l <script.js> -f <binary>  # alerts via send()",
+        }
+
+    elif script_type == "api_logger":
+        if not apis:
+            return {
+                "error": "apis parameter is required for script_type='api_logger'.",
+                "hint": "Provide a list of API names, e.g. apis=['CreateFileA', 'WriteFile']",
+            }
+        apis = _validate_targets(apis)
+        script_text = generate_api_logger_js(
+            apis=apis,
+            include_args=True,
+            include_backtrace=False,
+        )
+        known = [a for a in apis if a in FRIDA_API_SIGNATURES]
+        unknown = [a for a in apis if a not in FRIDA_API_SIGNATURES]
+        result = {
+            "script": script_text,
+            "script_type": "api_logger",
+            "logged_apis": apis,
+            "known_signatures": known,
+            "generic_hooks": unknown,
+            "total_apis": len(apis),
+            "usage": "frida -l <script.js> -f <binary>  # JSON events via send()",
+        }
+
+    artifact = _save_script(output_path, script_text, tool_name)
+    if artifact:
+        result["saved_to"] = artifact.get("path", output_path)
+
+    return await _check_mcp_response_size(ctx, result, tool_name)
