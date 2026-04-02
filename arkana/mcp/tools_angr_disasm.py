@@ -11,6 +11,9 @@ from arkana.mcp._angr_helpers import _ensure_project_and_cfg, _parse_addr, _reso
 from arkana.mcp._rename_helpers import get_display_name
 from arkana.mcp._search_helpers import search_instructions_with_context
 from arkana.mcp._input_helpers import _paginate_field
+from arkana.mcp._go_abi import (
+    annotate_go_call, detect_go_abi, is_go_binary as _is_go_binary_check,
+)
 
 if ANGR_AVAILABLE:
     import angr
@@ -572,6 +575,32 @@ async def get_annotated_disassembly(
         except Exception as e:
             logger.debug("Skipped item during processing: %s", e)
 
+        # G-1: Detect Go binary and ABI version for call annotations.
+        # Cache detection on state to avoid repeated scans.
+        go_abi_type = None
+        go_version_hint = ""
+        go_arch = ""
+        _go_detected = getattr(state, "_cached_go_abi_detected", None)
+        if _go_detected is None:
+            # Sample function names from CFG for Go detection
+            try:
+                sample_names = [
+                    f.name for f in list(state.angr_cfg.functions.values())[:50]
+                    if not f.is_simprocedure and not f.is_syscall
+                ]
+                _go_detected = _is_go_binary_check(sample_names)
+            except Exception:
+                _go_detected = False
+            state._cached_go_abi_detected = _go_detected
+        if _go_detected:
+            # Resolve Go version from gopclntab or cached analysis
+            go_version_hint = getattr(state, "_cached_go_version", "") or ""
+            try:
+                go_arch = state.angr_project.arch.name.lower()
+            except Exception:
+                go_arch = ""
+            go_abi_type = detect_go_abi(go_version_hint, go_arch)
+
         instructions = []
         for block in func.blocks:
             for insn in block.capstone.insns:
@@ -602,6 +631,17 @@ async def get_annotated_disassembly(
                             entry["call_target"] = state.angr_cfg.functions[target_val].name
                     except ValueError:
                         pass
+
+                    # G-2: Add Go ABI annotation for resolved call targets
+                    if go_abi_type and "call_target" in entry:
+                        go_ann = annotate_go_call(
+                            entry["call_target"],
+                            go_abi_type,
+                            go_arch,
+                            go_version_hint=go_version_hint,
+                        )
+                        if go_ann:
+                            entry["go_abi"] = go_ann
 
                 instructions.append(entry)
                 if len(instructions) >= limit:

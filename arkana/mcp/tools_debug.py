@@ -33,6 +33,25 @@ from arkana.constants import (
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
+# Import trace query validation from scripts/ (same module used by debug_runner.py)
+try:
+    import importlib.util as _ilu
+    _tq_spec = _ilu.spec_from_file_location(
+        "trace_query",
+        os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "trace_query.py"),
+    )
+    if _tq_spec and _tq_spec.loader:
+        _tq_mod = _ilu.module_from_spec(_tq_spec)
+        _tq_spec.loader.exec_module(_tq_mod)
+        _validate_trace_query = _tq_mod.validate_query
+        _validate_trace_sequence = _tq_mod.validate_sequence
+    else:
+        _validate_trace_query = None
+        _validate_trace_sequence = None
+except Exception:
+    _validate_trace_query = None
+    _validate_trace_sequence = None
+
 
 # ---------------------------------------------------------------------------
 #  Validation helpers
@@ -1060,6 +1079,7 @@ async def debug_snapshot_diff(
     ctx: Context,
     snapshot_id_a: int = 0,
     snapshot_id_b: int = 0,
+    attribute_changes: bool = False,
     session_id: str = "",
 ) -> Dict[str, Any]:
     """[Phase: dynamic] Compare two snapshots to see what changed.
@@ -1067,11 +1087,16 @@ async def debug_snapshot_diff(
     Shows register differences and memory regions that changed between
     two saved snapshots. Useful for understanding execution effects.
 
-    ---compact: diff two snapshots | shows register + memory changes | needs: debug session
+    When ``attribute_changes=True``, correlates memory changes with API
+    calls that occurred between the two snapshots — showing which
+    VirtualAlloc/WriteProcessMemory/ReadFile calls caused which changes.
+
+    ---compact: diff two snapshots | register + memory changes | optional API attribution | needs: debug session
 
     Args:
         snapshot_id_a: First snapshot ID
         snapshot_id_b: Second snapshot ID
+        attribute_changes: Include API call attribution for memory changes (default False)
         session_id: Session to use (uses most recent if empty)
     """
     mgr = _get_debug_manager()
@@ -1082,11 +1107,15 @@ async def debug_snapshot_diff(
     if snapshot_id_a == snapshot_id_b:
         return {"error": "Cannot diff a snapshot with itself"}
 
-    result = await session.send_command({
+    cmd = {
         "action": "snapshot_diff",
         "snapshot_id_a": snapshot_id_a,
         "snapshot_id_b": snapshot_id_b,
-    })
+    }
+    if attribute_changes:
+        cmd["attribute_changes"] = True
+
+    result = await session.send_command(cmd)
     return await _check_mcp_response_size(ctx, result, "debug_snapshot_diff")
 
 
@@ -1176,20 +1205,39 @@ async def debug_get_api_trace(
     offset: int = 0,
     limit: int = 100,
     filter: str = "",
+    query: str = "",
+    sequence: str = "",
+    gap_max: int = 0,
     session_id: str = "",
 ) -> Dict[str, Any]:
-    """[Phase: dynamic] Retrieve the API call trace log.
+    """[Phase: dynamic] Retrieve the API call trace log with optional filtering.
 
     All Windows API calls are logged with function name, arguments, and
     return value. Use this to see what the binary is doing at the API level
     without setting individual breakpoints.
 
-    ---compact: get API call trace | names, args, return values | paginated | needs: debug session
+    Query syntax — comma-separated predicates::
+
+        query="api=VirtualAlloc,args.p3=0x40"   (exact match + hex arg)
+        query="api~WriteProcess,retval!=0x0"     (substring + not-equal)
+        query="seq>100,seq<200"                  (range filter)
+
+    Operators: ``=``, ``!=``, ``~`` (substring), ``>``, ``<``, ``>=``, ``<=``
+
+    Sequence matching — semicolon-separated API name patterns that must
+    appear in order::
+
+        sequence="VirtualAlloc;WriteProcessMemory;CreateRemoteThread"
+
+    ---compact: get API call trace | query filter on args/retval | sequence matching | needs: debug session
 
     Args:
         offset: Start offset for pagination (default 0)
         limit: Max entries to return (1-1000, default 100)
         filter: Optional API name filter (case-insensitive substring match)
+        query: Structured query predicates (e.g. "api=VirtualAlloc,args.p3=0x40")
+        sequence: Ordered API sequence pattern (e.g. "VirtualAlloc;WriteProcessMemory")
+        gap_max: Max entries between sequence steps (0 = unlimited)
         session_id: Session to use (uses most recent if empty)
     """
     mgr = _get_debug_manager()
@@ -1198,6 +1246,16 @@ async def debug_get_api_trace(
     offset = max(0, offset)
     limit = max(1, min(limit, 1000))
 
+    # Validate query/sequence syntax before sending to subprocess
+    if query and _validate_trace_query:
+        err = _validate_trace_query(query)
+        if err:
+            return {"error": f"Invalid query: {err}"}
+    if sequence and _validate_trace_sequence:
+        err = _validate_trace_sequence(sequence)
+        if err:
+            return {"error": f"Invalid sequence: {err}"}
+
     cmd = {
         "action": "get_api_trace",
         "offset": offset,
@@ -1205,6 +1263,11 @@ async def debug_get_api_trace(
     }
     if filter:
         cmd["filter"] = filter
+    if query:
+        cmd["query"] = query
+    if sequence:
+        cmd["sequence"] = sequence
+        cmd["gap_max"] = max(0, gap_max)
 
     result = await session.send_command(cmd)
     return await _check_mcp_response_size(ctx, result, "debug_get_api_trace", "'limit' parameter")

@@ -16,6 +16,7 @@ from arkana.parsers.go_pclntab import (
     _parse_elf_section_headers,
     _parse_macho_section_headers,
 )
+from arkana.parsers.go_types import parse_go_types
 
 if PYGORE_AVAILABLE:
     import pygore
@@ -170,9 +171,45 @@ def _run_gopclntab(filepath: str, limit: int, func_cap: int) -> Optional[Dict[st
         result["source_files"] = source_files[:200]
         result["source_file_count"] = len(source_files)
 
+    # Parse Go type descriptors (typelink/itab sections)
+    try:
+        go_ver = parsed.get("go_version_hint", "")
+        ptr_sz = parsed.get("pointer_size", 8)
+        type_result = parse_go_types(
+            file_data, sections,
+            go_version_hint=go_ver,
+            ptr_size=ptr_sz,
+        )
+        if type_result:
+            if type_result.get("structs"):
+                result["structs"] = type_result["structs"][:limit]
+                result["struct_count"] = type_result.get("struct_count", 0)
+            if type_result.get("interfaces"):
+                result["interfaces"] = type_result["interfaces"][:limit]
+                result["interface_count"] = type_result.get("interface_count", 0)
+            if type_result.get("types"):
+                result["types"] = type_result["types"][:limit]
+            if type_result.get("itabs"):
+                result["itabs"] = type_result["itabs"][:limit]
+                result["itab_count"] = type_result.get("itab_count", 0)
+            if type_result.get("type_packages"):
+                result["type_packages"] = type_result["type_packages"]
+            result["type_count"] = type_result.get("type_count", 0)
+    except Exception as e:
+        logger.debug("go_analyze: type parsing failed: %s", e)
+        parse_errors = result.get("parse_errors", [])
+        parse_errors.append(f"type parsing: {str(e)[:200]}")
+        result["parse_errors"] = parse_errors
+
     parse_errors = parsed.get("parse_errors", [])
-    if parse_errors:
+    if parse_errors and "parse_errors" not in result:
         result["parse_errors"] = parse_errors[:20]
+    elif parse_errors:
+        existing = result.get("parse_errors", [])
+        for err in parse_errors[:20]:
+            if err not in existing:
+                existing.append(err)
+        result["parse_errors"] = existing[:20]
 
     return result
 
@@ -581,6 +618,11 @@ async def go_analyze(
     # Attach fallback chain info when we fell back
     if fallback_reasons:
         result["fallback_reasons"] = fallback_reasons
+
+    # Cache Go version on state for downstream tools (e.g. ABI annotations)
+    go_ver = result.get("go_version") or result.get("compiler_version") or ""
+    if go_ver:
+        state._cached_go_version = str(go_ver)
 
     # Add file basename
     result["file"] = os.path.basename(target)

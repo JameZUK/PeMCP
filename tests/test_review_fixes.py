@@ -748,7 +748,7 @@ class TestNoteHintsInTools:
         with open(disasm_path) as f:
             source = f.read()
         idx = source.index("async def get_annotated_disassembly")
-        func_body = source[idx:idx + 8000]
+        func_body = source[idx:idx + 10000]
         assert '"next_step"' in func_body
 
     def test_emulate_has_next_step(self):

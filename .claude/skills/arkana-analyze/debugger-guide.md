@@ -60,15 +60,23 @@ variable, so `set_last_error` on any stub automatically affects subsequent `GetL
 ## API Tracing
 
 Enabled by default. Logs all Windows API calls with arguments and return values.
-- `debug_get_api_trace(filter="Crypt")` — retrieve only matching calls
+- `debug_get_api_trace(filter="Crypt")` — retrieve only matching calls (simple name filter)
+- `debug_get_api_trace(query="api=VirtualAlloc,args.p3=0x40")` — structured query with argument filtering
+- `debug_get_api_trace(query="api~Write,retval!=0x0")` — substring match + not-equal
+- `debug_get_api_trace(query="seq>10,seq<50")` — range filtering on sequence numbers
+- `debug_get_api_trace(sequence="VirtualAlloc;WriteProcessMemory;CreateRemoteThread")` — find ordered API call patterns
+- `debug_get_api_trace(sequence="VirtualAlloc;memcpy", gap_max=5)` — sequence with max gap between steps
 - `debug_set_trace_filter(whitelist=["VirtualAlloc", "memcpy"])` — limit what gets traced
+
+Query operators: `=` (exact), `!=`, `~` (substring), `>`, `<`, `>=`, `<=`. Fields: `api`, `args.<key>`, `retval`, `address`, `seq`, `timestamp`. Hex values (e.g. `0x40`) are auto-coerced for numeric comparison.
 
 ## Snapshots
 
 Save and compare state at different execution points:
-- `debug_snapshot_save(name)` — save full emulation state
+- `debug_snapshot_save(name)` — save full emulation state (includes trace_seq for attribution)
 - `debug_snapshot_restore(name)` — revert to a saved state
-- `debug_snapshot_diff(name_a, name_b)` — compare register and memory differences
+- `debug_snapshot_diff(id_a, id_b)` — compare register and memory differences
+- `debug_snapshot_diff(id_a, id_b, attribute_changes=True)` — also correlate memory changes with API calls between snapshots (shows which VirtualAlloc/WriteProcessMemory/ReadFile calls caused which changes, plus unattributed change count)
 
 ## Memory Search
 
@@ -173,9 +181,12 @@ to identify the missing API, then use `debug_stub_api` or IAT patching to add co
 | Stepping through decryption loop instruction-by-instruction | `debug_start` + `debug_step` + `debug_read_memory` |
 | Supplying specific stdin input during emulation | `debug_set_input` + `debug_continue` |
 | Comparing state before/after a function call | `debug_snapshot_save`/`restore`/`diff` |
+| Understanding what caused memory changes between snapshots | `debug_snapshot_diff(attribute_changes=True)` — correlates with API calls |
 | Finding decrypted data after stepping past crypto | `debug_search_memory` |
 | Fire-and-forget emulation crashed, need finer control | `debug_start` with breakpoints |
 | Monitoring specific API calls with live argument inspection | `debug_get_api_trace` with filter |
+| Filtering API trace by argument values (e.g. PAGE_EXECUTE_READWRITE) | `debug_get_api_trace(query="api=VirtualAlloc,args.p3=0x40")` |
+| Detecting process injection API sequence | `debug_get_api_trace(sequence="VirtualAlloc;WriteProcessMemory;CreateRemoteThread")` |
 | Binary with unresolved MSVCRT imports crashing at CRT init | IAT patching + code-cave stubs |
 | Extracting encrypted data from a function you can't call directly | Code patching: JMP to target + EB FE trap + memory read |
 | Multi-threaded binary where threads don't execute under emulation | Stub `CreateThread` + code-patch main flow into thread funcs |

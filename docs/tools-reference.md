@@ -238,7 +238,7 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 | `get_call_graph` | Generate full or filtered inter-procedural call graph. Paginated (default limit 50). |
 | `find_path_with_custom_input` | Symbolic execution with custom constraints. |
 | `emulate_with_watchpoints` | Emulate with memory/register watchpoints. |
-| `get_annotated_disassembly` | Rich disassembly with resolved names and comments. Paginated (default limit 300). Supports `search` parameter for regex grep within instructions (mnemonics, operands, call targets, labels). |
+| `get_annotated_disassembly` | Rich disassembly with resolved names and comments. Paginated (default limit 300). Supports `search` parameter for regex grep within instructions (mnemonics, operands, call targets, labels). For Go binaries, automatically annotates call instructions with Go ABI parameter/return register mappings (register ABI for Go 1.17+ AMD64/ARM64, stack ABI for older versions). |
 | `get_value_set_analysis` | Determine possible values at program points. Computationally expensive; consider `get_reaching_definitions` or `propagate_constants` for lighter analysis. Paginated (default limit 80). |
 | `detect_packing` | Heuristic packing/encryption detection (not paginated). |
 | `save_patched_binary` | Save a patched binary to disk. |
@@ -347,7 +347,7 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 | `debug_snapshot_save` | Save complete emulation state (CPU, memory, hooks) with an optional name and note. Max 10 per session. |
 | `debug_snapshot_restore` | Restore a previously saved snapshot, rewinding execution to that point. |
 | `debug_snapshot_list` | List all saved snapshots with metadata (PC, instruction count, timestamp). |
-| `debug_snapshot_diff` | Compare two snapshots  - shows register differences and changed memory regions. |
+| `debug_snapshot_diff` | Compare two snapshots — shows register differences and changed memory regions. With `attribute_changes=True`, correlates memory changes with API calls that occurred between snapshots (VirtualAlloc, WriteProcessMemory, ReadFile, VirtualProtect categories) and reports unattributed changes. |
 
 ### I/O Stubs
 
@@ -360,7 +360,7 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 
 | Tool | Description |
 |---|---|
-| `debug_get_api_trace` | Retrieve the API call trace log. All Windows API calls are logged with function name, arguments, and return value. Paginated with optional name filter. |
+| `debug_get_api_trace` | Retrieve the API call trace log. All Windows API calls are logged with function name, arguments, and return value. Paginated with optional name filter. Supports structured `query` predicates for filtering by argument values, return values, and sequence numbers (e.g. `api=VirtualAlloc,args.p3=0x40`). Operators: `=`, `!=`, `~` (substring), `>`, `<`, `>=`, `<=`. Also supports ordered `sequence` matching to find API call patterns (e.g. `VirtualAlloc;WriteProcessMemory;CreateRemoteThread`). |
 | `debug_clear_api_trace` | Clear the API call trace buffer. |
 | `debug_set_trace_filter` | Configure API trace filtering. Set a whitelist of specific API names, or enable/disable tracing entirely. |
 
@@ -406,7 +406,7 @@ All multi-format analysis tools support pagination via `limit` (default 20) and 
 | `detect_binary_format` | Auto-detect format (PE/.NET/ELF/Mach-O/Go/Rust) from magic bytes. |
 | `dotnet_analyze` | Comprehensive .NET metadata: CLR header, types, methods, assembly refs, user strings. Type/method attribute flags are displayed in compact pipe-separated format (e.g. `Public | Class | AutoLayout`). Paginated (default limit 20). |
 | `dotnet_disassemble_method` | Disassemble .NET CIL bytecode to human-readable opcodes. Paginated (default limit 20). |
-| `go_analyze` | Go binary analysis: compiler version, packages, functions (works on stripped binaries). Falls back to string-scanning detection when pygore cannot parse modern Go versions. Paginated (default limit 20). |
+| `go_analyze` | Go binary analysis: compiler version, packages, functions, type descriptors (works on stripped binaries). Parses typelink/itab sections for struct field layouts, interface method sets, and interface dispatch tables (Go 1.7–1.26+). Falls back through GoReSym→pygore→gopclntab→string-scan. Paginated (default limit 20). |
 | `rust_analyze` | Rust binary metadata: compiler version, crate dependencies, toolchain. |
 | `rust_demangle_symbols` | Demangle Rust symbol names to human-readable form. Paginated (default limit 20). |
 | `elf_analyze` | Comprehensive ELF analysis: headers, sections, segments, symbols, dynamic deps. Paginated (default limit 20). |

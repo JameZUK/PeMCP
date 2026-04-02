@@ -34,6 +34,9 @@ from qiling_runner import (
     _cleanup_staged_binary, _ql_arch, _ql_os, _check_windows_dlls,
     _ensure_windows_registry, _hex, _validate_file_path,
 )
+from trace_query import (
+    parse_query, parse_sequence, filter_trace, match_sequences,
+)
 
 from qiling import Qiling
 from qiling.const import QL_VERBOSE
@@ -2413,6 +2416,7 @@ def cmd_snapshot_save(cmd):
         "insn_count": _insn_count,
         "registers": _get_registers(),
         "timestamp": time.time(),
+        "trace_seq": _api_trace_seq,  # For cross-snapshot attribution
     }
 
     return {
@@ -2572,7 +2576,7 @@ def cmd_snapshot_diff(cmd):
     except Exception as e:
         mem_diffs = [{"error": f"Memory diff failed: {str(e)[:200]}"}]
 
-    return {
+    result = {
         "status": "ok",
         "snapshot_a": {"id": snap_id_a, "name": snap_a.get("name"), "pc": snap_a.get("pc")},
         "snapshot_b": {"id": snap_id_b, "name": snap_b.get("name"), "pc": snap_b.get("pc")},
@@ -2581,6 +2585,154 @@ def cmd_snapshot_diff(cmd):
         "total_register_diffs": len(reg_diffs),
         "total_memory_diffs": len(mem_diffs),
     }
+
+    # Cross-snapshot attribution: correlate memory changes with API calls
+    if cmd.get("attribute_changes"):
+        attribution = _attribute_memory_changes(snap_a, snap_b, mem_diffs)
+        result.update(attribution)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Memory-to-API attribution for snapshot diffs
+# ---------------------------------------------------------------------------
+
+# APIs known to allocate, write to, or modify memory regions
+_ALLOC_APIS = frozenset({
+    "virtualalloc", "virtualallocex", "heapalloc", "localalloc",
+    "globalalloc", "ntmapviewofsection", "ntallocatevirtualmemory",
+    "rtlallocateheap", "mapviewoffile",
+})
+_WRITE_APIS = frozenset({
+    "writeprocessmemory", "ntwritevirtualmemory", "memcpy", "memmove",
+    "rtlmovememory", "rtlcopymemory", "rtlfillmemory", "memset",
+})
+_IO_APIS = frozenset({
+    "readfile", "recv", "internetreadfile", "wsarecv",
+    "ntreadfile", "readfilescatter",
+})
+_PROTECT_APIS = frozenset({
+    "virtualprotect", "virtualprotectex", "ntprotectvirtualmemory",
+})
+
+_MAX_ATTRIBUTED_CALLS = 200
+
+
+def _attribute_memory_changes(snap_a, snap_b, mem_diffs):
+    """Correlate memory diffs with API calls between two snapshots.
+
+    Returns a dict with ``api_calls_between``, ``attribution``, and
+    ``unattributed_changes`` to be merged into the diff result.
+    """
+    seq_a = snap_a.get("trace_seq", 0)
+    seq_b = snap_b.get("trace_seq", 0)
+
+    # Ensure ordering
+    lo, hi = min(seq_a, seq_b), max(seq_a, seq_b)
+
+    # Collect API calls between the two snapshots
+    calls_between = [e for e in _api_trace if lo < e.get("seq", 0) <= hi]
+
+    # Build attribution categories
+    allocations = []
+    writes = []
+    io_reads = []
+    protections = []
+
+    for call in calls_between:
+        api_lower = str(call.get("api", "")).lower()
+
+        if api_lower in _ALLOC_APIS:
+            retval = call.get("retval", "0x0")
+            size_arg = call.get("args", {}).get("p1", "0")
+            allocations.append({
+                "api": call.get("api"),
+                "seq": call.get("seq"),
+                "address": retval,
+                "size": size_arg,
+            })
+        elif api_lower in _WRITE_APIS:
+            args = call.get("args", {})
+            writes.append({
+                "api": call.get("api"),
+                "seq": call.get("seq"),
+                "target": args.get("p1", "unknown"),
+                "size": args.get("p3", args.get("p2", "unknown")),
+            })
+        elif api_lower in _IO_APIS:
+            args = call.get("args", {})
+            io_reads.append({
+                "api": call.get("api"),
+                "seq": call.get("seq"),
+                "buffer": args.get("p1", "unknown"),
+                "size": args.get("p2", "unknown"),
+            })
+        elif api_lower in _PROTECT_APIS:
+            args = call.get("args", {})
+            protections.append({
+                "api": call.get("api"),
+                "seq": call.get("seq"),
+                "address": args.get("p0", args.get("p1", "unknown")),
+                "new_protection": args.get("p2", args.get("p3", "unknown")),
+            })
+
+    # Count unattributed changes: memory diffs not explainable by any API
+    attributed_addrs = set()
+    for a in allocations:
+        addr = _try_parse_hex(a.get("address"))
+        if addr is not None:
+            attributed_addrs.add(addr)
+    for w in writes:
+        addr = _try_parse_hex(w.get("target"))
+        if addr is not None:
+            attributed_addrs.add(addr)
+    for io in io_reads:
+        addr = _try_parse_hex(io.get("buffer"))
+        if addr is not None:
+            attributed_addrs.add(addr)
+
+    unattributed = 0
+    for diff in mem_diffs:
+        diff_addr = _try_parse_hex(diff.get("address"))
+        if diff_addr is not None and diff_addr not in attributed_addrs:
+            unattributed += 1
+
+    # Warn if snapshots lack trace_seq (old format)
+    warnings = []
+    if "trace_seq" not in snap_a or "trace_seq" not in snap_b:
+        warnings.append(
+            "One or both snapshots lack trace_seq — attribution may be "
+            "inaccurate. Re-save snapshots for reliable results."
+        )
+
+    result = {
+        "api_calls_between": calls_between[:_MAX_ATTRIBUTED_CALLS],
+        "api_calls_between_count": len(calls_between),
+        "attribution": {
+            "memory_allocations": allocations,
+            "memory_writes": writes,
+            "io_reads": io_reads,
+            "protection_changes": protections,
+        },
+        "unattributed_changes": unattributed,
+    }
+    if warnings:
+        result["attribution_warnings"] = warnings
+    return result
+
+
+def _try_parse_hex(value):
+    """Try to parse a hex string to int, return None on failure."""
+    if value is None:
+        return None
+    try:
+        return int(str(value), 16)
+    except (ValueError, OverflowError):
+        try:
+            return int(str(value))
+        except (ValueError, OverflowError):
+            return None
 
 
 def cmd_stop(cmd):
@@ -2692,25 +2844,55 @@ def cmd_get_output(cmd):
 
 
 def cmd_get_api_trace(cmd):
-    """Return API trace entries (paginated, optional filter)."""
+    """Return API trace entries (paginated, optional filter/query/sequence)."""
     if _ql is None:
         return {"error": "No debug session active. Call 'init' first."}
 
     offset = max(0, cmd.get("offset", 0))
     limit = max(1, min(cmd.get("limit", 100), 1000))
-    api_filter = cmd.get("filter")  # Optional API name filter
+    api_filter = cmd.get("filter")  # Legacy: simple API name substring
+    query_str = cmd.get("query", "")  # Structured query predicates
+    sequence_str = cmd.get("sequence", "")  # Ordered API sequence matching
 
+    # Step 1: Apply legacy name filter
     if api_filter:
-        # Filter entries by API name (case-insensitive substring)
         api_filter_lower = api_filter.lower()
         filtered = [e for e in _api_trace if api_filter_lower in e.get("api", "").lower()]
     else:
         filtered = _api_trace
 
+    # Step 2: Apply structured query predicates
+    if query_str:
+        try:
+            predicates = parse_query(query_str)
+            filtered = filter_trace(filtered, predicates)
+        except ValueError as e:
+            return {"error": f"Invalid query: {e}"}
+
+    # Step 3: Handle sequence matching (separate from pagination)
+    if sequence_str:
+        try:
+            steps = parse_sequence(sequence_str)
+        except ValueError as e:
+            return {"error": f"Invalid sequence: {e}"}
+        if steps:
+            gap_max = max(0, cmd.get("gap_max", 0))
+            seq_matches = match_sequences(filtered, steps, gap_max=gap_max)
+            return {
+                "status": "ok",
+                "sequence_matches": seq_matches,
+                "sequence_pattern": sequence_str,
+                "total_matches": len(seq_matches),
+                "trace_size": len(_api_trace),
+                "filtered_size": len(filtered),
+                "trace_enabled": _api_trace_enabled,
+            }
+
+    # Step 4: Paginate
     entries = filtered[offset:offset + limit]
     total = len(filtered)
 
-    return {
+    result = {
         "status": "ok",
         "entries": entries,
         "total": total,
@@ -2721,6 +2903,9 @@ def cmd_get_api_trace(cmd):
         "trace_enabled": _api_trace_enabled,
         "filter_active": _api_trace_filter is not None,
     }
+    if query_str:
+        result["query"] = query_str
+    return result
 
 
 def cmd_clear_api_trace(cmd):

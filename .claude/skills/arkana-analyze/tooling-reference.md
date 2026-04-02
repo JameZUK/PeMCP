@@ -90,7 +90,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `dotnet_analyze` | .NET assembly analysis (dnfile + dotnetfile fallback) | — |
 | `dotnet_disassemble_method` | Disassemble specific .NET CIL method by RVA (from `dotnet_analyze` method_definitions) | `method_rva` |
 | `vb6_analyze` | VB6 binary analysis: project metadata, forms/modules, Declare Function externals, security-relevant API flagging. Use when MSVBVM60/50.DLL in imports. | `limit` |
-| `go_analyze` | Go binary analysis (packages, version). Falls back to string-scan detection when pygore can't parse modern Go versions — use `elf_analyze()` for full symbols in that case | — |
+| `go_analyze` | Go binary analysis (packages, version, type descriptors). Parses typelink/itab for struct fields, interface methods, itab dispatch tables (Go 1.7–1.26+). Fallback chain: GoReSym→pygore→gopclntab→string-scan. Use `elf_analyze()` for full symbols when all fail | `file_path`, `limit` |
 | `rust_analyze` | Rust binary metadata | — |
 | `rust_demangle_symbols` | Demangle Rust symbol names | — |
 
@@ -120,7 +120,7 @@ Source files: `arkana/mcp/tools_*.py`
 | `decompile_function_with_angr` | Get C-like pseudocode for a function (paginated); works without full CFG; applies user renames; supports regex grep via `search`. If the response includes a `note` field mentioning "cffi pickle incompatibility", the decompiler fell back to a reduced-quality path — cross-references and type propagation may be limited; verify critical logic against `get_annotated_disassembly()` | `address`, `line_offset` (default 0), `line_limit` (default 80), `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
 | `batch_decompile` | Decompile up to 20 functions in one call; per-function 60s timeout; applies renames; `search` filters to matching functions only. Per-function `note` field indicates if cffi fallback was used | `addresses`, `max_lines_per_function` (default 30), `summary_mode`, `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
 | `get_angr_partial_functions` | List functions discovered so far (works during/after CFG build) | `limit` (default 50) |
-| `get_annotated_disassembly` | Disassembly with variable names and xrefs; supports regex grep via `search` | `address`, `limit` (default 50), `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
+| `get_annotated_disassembly` | Disassembly with variable names and xrefs; supports regex grep via `search`. Auto-annotates Go binary call sites with ABI parameter/return mappings (register ABI Go 1.17+, stack ABI pre-1.17) | `address`, `limit` (default 50), `search` (optional regex), `context_lines` (default 2), `case_sensitive` (default False) |
 | `disassemble_at_address` | Raw disassembly at arbitrary address; works without full CFG | `address`, `count` |
 | `disassemble_raw_bytes` | Disassemble arbitrary byte sequences | `bytes`, `arch` |
 | `get_function_map` | List functions ranked by interestingness | `offset` (default 0), `limit` (default 30) |
@@ -203,10 +203,10 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `debug_snapshot_save` | Save full emulation state with metadata | `name`, `note`, `session_id` |
 | `debug_snapshot_restore` | Restore saved snapshot | `snapshot_id`, `session_id` |
 | `debug_snapshot_list` | List snapshots with metadata | `session_id` |
-| `debug_snapshot_diff` | Compare two snapshots (registers + memory regions) | `snapshot_id_a`, `snapshot_id_b`, `session_id` |
+| `debug_snapshot_diff` | Compare two snapshots (registers + memory regions). `attribute_changes=True` correlates memory changes with API calls between snapshots (allocations, writes, I/O, protection changes) | `snapshot_id_a`, `snapshot_id_b`, `attribute_changes` (default False), `session_id` |
 | `debug_set_input` | Queue input for stubbed ReadConsole (stdin/cin/scanf) | `data`, `encoding` (utf-8/hex), `session_id` |
 | `debug_get_output` | Retrieve captured console output (WriteConsoleA/W → printf/cout/puts) | `clear`, `offset`, `limit`, `session_id` |
-| `debug_get_api_trace` | Get paginated API call trace log (all Windows API calls with args/retval) | `offset`, `limit`, `filter`, `session_id` |
+| `debug_get_api_trace` | Get paginated API call trace log (all Windows API calls with args/retval). Supports structured `query` predicates (`api=VirtualAlloc,args.p3=0x40`; operators: `=`,`!=`,`~`,`>`,`<`,`>=`,`<=`) and ordered `sequence` matching (`VirtualAlloc;WriteProcessMemory;CreateRemoteThread`) | `offset`, `limit`, `filter`, `query`, `sequence`, `gap_max`, `session_id` |
 | `debug_clear_api_trace` | Clear API trace buffer | `session_id` |
 | `debug_set_trace_filter` | Configure API trace whitelist or enable/disable tracing | `apis` (comma-sep), `enabled`, `session_id` |
 | `debug_search_memory` | Search all mapped memory for string (UTF-8+UTF-16LE) or hex patterns with ?? wildcards | `pattern`, `pattern_type`, `max_matches`, `context_bytes`, `region_filter`, `session_id` |

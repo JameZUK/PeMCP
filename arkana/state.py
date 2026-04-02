@@ -158,6 +158,10 @@ class AnalyzerState:
         # Sandbox report (imported via tools_sandbox.import_sandbox_report)
         self._sandbox_report: Optional[Dict[str, Any]] = None
 
+        # Go binary metadata (populated by go_analyze, used by ABI annotations)
+        self._cached_go_version: str = ""
+        self._cached_go_abi_detected: Optional[bool] = None
+
         # Decompilation priority control (background vs on-demand)
         self._decompile_lock = threading.Lock()
         self._decompile_on_demand_count: int = 0  # Atomic counter for on-demand decompile requests

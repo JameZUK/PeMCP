@@ -141,8 +141,9 @@ Workflow: Stepping through a decryption function
    → Steps through the decryption logic
 
 7. debug_snapshot_save(name="after_decrypt")
-8. debug_snapshot_diff(name_a="before_decrypt", name_b="after_decrypt")
-   → Shows which memory regions changed (the output buffer)
+8. debug_snapshot_diff(id_a=1, id_b=2, attribute_changes=True)
+   → Shows which memory regions changed AND which API calls caused the changes
+     (e.g. VirtualAlloc allocated the buffer, WriteProcessMemory filled it)
 
 9. debug_read_memory(address="0x00500000", length=256)
    → Read the decrypted data from the output buffer
@@ -159,13 +160,20 @@ Workflow: Stepping through a decryption function
 
 ```
 Tool: debug_get_api_trace(filter="VirtualAlloc")
+  → Simple name filter — returns only calls matching "VirtualAlloc"
 
-Returns only API trace entries matching the filter. Example output:
+Tool: debug_get_api_trace(query="api=VirtualAlloc,args.p3=0x40")
+  → Structured query — match VirtualAlloc calls where protection arg is PAGE_EXECUTE_READWRITE
+  → Operators: = != ~ (substring) > < >= <=
+  → Fields: api, args.<key>, retval, address, seq, timestamp
+
+Tool: debug_get_api_trace(sequence="VirtualAlloc;WriteProcessMemory;CreateRemoteThread")
+  → Sequence matching — find ordered API call patterns (process injection signature)
+
+Example output (simple filter):
   entries:
-    - type: ENTER, api: VirtualAlloc, args: [0, 65536, 0x3000, 0x40]
-    - type: EXIT, api: VirtualAlloc, return_value: 0x00500000
-  total_entries: 2
-  filter_applied: "VirtualAlloc"
+    - seq: 1, api: VirtualAlloc, args: {p0: 0, p1: 0x10000, p2: 0x3000, p3: 0x40}, retval: 0x00500000
+  total: 1
 ```
 
 ### Speakeasy (Windows PE Emulation)
