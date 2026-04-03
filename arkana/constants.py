@@ -28,7 +28,8 @@ __all__ = [
     "MAX_BATCH_DECOMPILE", "BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT",
     "MAX_HEX_PATTERN_TOKENS", "MAX_HEX_PATTERN_MATCHES",
     "DEFAULT_SEARCH_CONTEXT_LINES", "MAX_SEARCH_CONTEXT_LINES", "MAX_SEARCH_MATCHES",
-    "ENRICHMENT_MAX_DECOMPILE", "ENRICHMENT_TIMEOUT",
+    "CFG_ERROR_RATE_THRESHOLD", "CFG_PARTIAL_MIN_FUNCS",
+    "ENRICHMENT_MAX_DECOMPILE", "ENRICHMENT_TIMEOUT", "MAX_ENRICHMENT_BLOCKS",
     "MIN_STR_LEN_FALLBACK_FLOSS", "MAX_FLOSS_ENRICHMENT_STRINGS",
     "MAX_FLOSS_REFS_PER_STRING",
     "VIVISECT_BYTES_PER_SECOND_ESTIMATE", "VIVISECT_POLL_INTERVAL",
@@ -109,6 +110,9 @@ BACKGROUND_TASK_SOFT_TIMEOUT = 300   # 5 min — env: ARKANA_BACKGROUND_TASK_SOF
 OVERTIME_CHECK_INTERVAL = 60         # Check progress every 60s during overtime
 OVERTIME_STALL_KILL = 300            # Kill after 300s (5 min) of zero progress
 OVERTIME_MAX_RUNTIME = 21600         # 6 hour absolute ceiling — env: ARKANA_OVERTIME_MAX_RUNTIME
+# CFG degradation detection — accept partial CFG when error rate is high
+CFG_ERROR_RATE_THRESHOLD = 50        # errors per check interval → degraded — env: ARKANA_CFG_ERROR_RATE_THRESHOLD
+CFG_PARTIAL_MIN_FUNCS = 100          # min functions before accepting partial CFG
 
 # PE analysis overtime (open_file)
 PE_ANALYSIS_SOFT_TIMEOUT = 300      # 5 min — env: ARKANA_PE_ANALYSIS_SOFT_TIMEOUT
@@ -177,6 +181,7 @@ MAX_SEARCH_MATCHES = 500
 # --- Auto-Enrichment ---
 ENRICHMENT_MAX_DECOMPILE = 100       # max functions to decompile in background sweep
 ENRICHMENT_TIMEOUT = 1800            # overall enrichment timeout (seconds)
+MAX_ENRICHMENT_BLOCKS = 300          # max basic blocks per function for background decompile
 
 # --- FLOSS Fallback Constants ---
 MIN_STR_LEN_FALLBACK_FLOSS = 4

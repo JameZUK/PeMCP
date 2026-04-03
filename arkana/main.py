@@ -520,8 +520,14 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
 
     # Translate SIGTERM into KeyboardInterrupt so the existing cleanup
     # path (finally block) runs identically for both Ctrl-C and container
-    # stop / kill signals.
+    # stop / kill signals.  A watchdog ensures the process exits within 5s
+    # even if asyncio's executor shutdown hangs on a stuck thread.
     def _sigterm_handler(signum, frame):
+        import time as _time
+        def _watchdog():
+            _time.sleep(5)
+            os._exit(1)
+        threading.Thread(target=_watchdog, daemon=True).start()
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, _sigterm_handler)

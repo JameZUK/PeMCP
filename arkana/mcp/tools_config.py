@@ -364,12 +364,12 @@ async def check_task_status(ctx: Context, task_id: str) -> Dict[str, Any]:
             response["functions_discovered_so_far"] = func_count
 
         if task["status"] in ("running", "overtime") and len(snapshots) >= 2:
-            latest_time, latest_count = snapshots[-1]
+            latest_time, latest_count = snapshots[-1][0], snapshots[-1][1]
             stall_start = latest_time
-            for ts, count in reversed(snapshots):
-                if count != latest_count:
+            for snap in reversed(snapshots):
+                if snap[1] != latest_count:
                     break
-                stall_start = ts
+                stall_start = snap[0]
             seconds_stalled = latest_time - stall_start
             is_stalled = seconds_stalled >= 30
 

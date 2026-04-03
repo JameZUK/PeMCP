@@ -1,6 +1,6 @@
 # Testing Guide
 
-Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 294 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request.
+Arkana has two layers of testing: **unit tests** for fast, isolated verification of core modules, and **integration tests** for end-to-end validation of all 294 MCP tools against a running server. A **CI/CD pipeline** via GitHub Actions runs unit tests automatically on every push and pull request. The unit test suite currently includes 2853 passing tests across 20+ files.
 
 ---
 
@@ -67,7 +67,7 @@ pytest tests/ -v --cov=arkana --cov-report=term-missing --cov-config=.coveragerc
 
 ## Unit Tests
 
-Unit tests live in the `tests/` directory (2818 tests across 18 files) and test individual functions and classes in isolation. They do **not** require a running MCP server, binary samples, or heavy optional dependencies like Angr, Capa, or FLOSS.
+Unit tests live in the `tests/` directory (2853 tests across 20+ files) and test individual functions and classes in isolation. They do **not** require a running MCP server, binary samples, or heavy optional dependencies like Angr, Capa, or FLOSS.
 
 ### Running Unit Tests
 

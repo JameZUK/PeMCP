@@ -270,6 +270,39 @@ def _collect_background_alerts(current_state) -> list:
     except Exception:
         logger.debug("Resource alert collection error", exc_info=True)
 
+    # Decompile lock force-reset alert (transient, 30s window)
+    try:
+        lock = current_state._decompile_lock
+        if hasattr(lock, '_last_force_reset') and lock._last_force_reset:
+            age = now - lock._last_force_reset
+            if age < 30:
+                alerts.append({
+                    "type": "decompile_lock_reset",
+                    "message": "Decompile lock was force-released during file switch. "
+                               "A stale background thread from the previous file may still be running.",
+                    "seconds_ago": round(age),
+                })
+    except Exception:
+        logger.debug("Lock alert collection error", exc_info=True)
+
+    # Partial CFG alert (persistent until next file switch)
+    try:
+        cfg_quality = current_state._cfg_quality
+        if cfg_quality and cfg_quality.get("status") == "partial":
+            alerts.append({
+                "type": "cfg_partial",
+                "message": (
+                    f"CFG is partial: {cfg_quality.get('functions_discovered', '?')} functions "
+                    f"({cfg_quality.get('reason', 'unknown reason')}). "
+                    "Function map and decompilation available for discovered functions."
+                ),
+                "functions_discovered": cfg_quality.get("functions_discovered", 0),
+                "errors_during_build": cfg_quality.get("errors_during_build", 0),
+                "reason": cfg_quality.get("reason", ""),
+            })
+    except Exception:
+        logger.debug("CFG quality alert collection error", exc_info=True)
+
     return alerts
 
 

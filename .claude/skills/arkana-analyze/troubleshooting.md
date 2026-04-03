@@ -23,6 +23,13 @@ blindly.
   `disassemble_at_address` to see what's there, or check `get_function_map()`.
 - cffi fallback note in response → Decompiler quality reduced. Cross-check critical
   logic against `get_annotated_disassembly()`.
+- **Partial CFG alert** (`_background_alerts` with `type: cfg_partial`) → The CFG build
+  stalled, timed out, or crashed after discovering functions. The partial result is usable —
+  `get_function_map()` and `decompile_function_with_angr()` work on discovered functions.
+  Functions not in the partial CFG can still be decompiled on-demand (local CFG is built).
+- **Decompile lock contention** ("lock still held after 120s") → On file switch, the lock
+  is force-released via `ResettableLock.force_reset()`. If this alert appears, a stale
+  thread from the previous file is still running but won't block new work.
 
 ## Emulation Failures
 

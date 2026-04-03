@@ -19,6 +19,70 @@ from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger("Arkana")
 
+
+class ResettableLock:
+    """A ``threading.Lock`` replacement that supports ``force_reset()``.
+
+    When a file switch occurs while a background thread holds this lock
+    (e.g. stuck inside angr's Decompiler C extension), ``force_reset()``
+    releases the underlying lock and increments a generation counter.
+    The stale thread's later ``release()`` becomes a no-op because its
+    generation no longer matches.
+
+    API-compatible with ``threading.Lock`` — callers use ``acquire()``
+    (returns *bool*) and ``release()`` (no arguments) unchanged.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._generation: int = 0
+        self._holder_gen: dict = {}        # thread_id → generation at acquisition
+        self._meta_lock = threading.Lock()  # serializes gen check + release
+        self._last_force_reset: float = 0.0
+
+    def acquire(self, timeout=-1, blocking=True) -> bool:
+        """Acquire the lock.  Same API as ``threading.Lock.acquire``."""
+        if timeout == -1 and blocking:
+            result = self._lock.acquire()
+        elif not blocking:
+            result = self._lock.acquire(blocking=False)
+        else:
+            result = self._lock.acquire(timeout=timeout)
+        if result:
+            with self._meta_lock:
+                self._holder_gen[threading.get_ident()] = self._generation
+        return result
+
+    def release(self):
+        """Release the lock.  Silently ignored if generation changed (stale)."""
+        tid = threading.get_ident()
+        with self._meta_lock:
+            holder_gen = self._holder_gen.pop(tid, -1)
+            if holder_gen == self._generation:
+                try:
+                    self._lock.release()
+                except RuntimeError:
+                    pass  # Already force-released
+
+    def force_reset(self):
+        """Force-release and invalidate all current holders.
+
+        Called on file switch so new threads can acquire the lock
+        immediately, without waiting for a stale C-extension call.
+        """
+        with self._meta_lock:
+            self._generation += 1
+            self._holder_gen.clear()
+            self._last_force_reset = time.time()
+            try:
+                self._lock.release()
+            except RuntimeError:
+                pass  # Lock was not held
+
+    def __repr__(self):
+        return f"<ResettableLock gen={self._generation} holders={len(self._holder_gen)}>"
+
+
 # Stable session ID map — avoids id() reuse after GC.
 _session_id_map: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 _session_id_map_lock = threading.Lock()
@@ -86,6 +150,7 @@ class AnalyzerState:
         self.angr_loop_cache_config = None
         self.angr_hooks: Dict[str, Dict[str, Any]] = {}  # addr_hex -> hook info
         self._cfg_null_artifact_count: int = 0  # null-byte disassembly artifacts filtered out
+        self._cfg_quality: Optional[Dict[str, Any]] = None  # CFG build quality metadata
 
         # Background Tasks
         self._task_lock = threading.Lock()
@@ -166,7 +231,7 @@ class AnalyzerState:
         self._cached_coverage: Optional[Dict[str, Any]] = None
 
         # Decompilation priority control (background vs on-demand)
-        self._decompile_lock = threading.Lock()
+        self._decompile_lock = ResettableLock()
         self._decompile_on_demand_count: int = 0  # Atomic counter for on-demand decompile requests
 
         # Enrichment cancellation and generation tracking
@@ -346,6 +411,11 @@ class AnalyzerState:
         # Set events outside _task_lock — workers' finally blocks acquire it
         for cancel in cancel_snapshot:
             cancel.set()
+
+        # Force-release the decompile lock so new enrichment isn't blocked
+        # by a stale thread stuck in an uninterruptible C extension call.
+        self._decompile_lock.force_reset()
+        self._decompile_on_demand_count = 0
 
     def _evict_old_tasks(self):
         """Remove oldest completed/failed tasks when the count exceeds the limit.
@@ -926,6 +996,7 @@ class AnalyzerState:
             self.angr_loop_cache = None
             self.angr_loop_cache_config = None
             self.angr_hooks = {}
+        self._cfg_quality = None
         # Increment generation so stale background threads discard their results
         self.increment_generation()
         _angr_task_ids = {"startup-angr", "angr-cfg", "angr-analysis"}

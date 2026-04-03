@@ -22,7 +22,8 @@ class TestEnrichmentStateFields:
         assert self.state._cached_iocs is None
 
     def test_decompile_lock_exists(self):
-        assert isinstance(self.state._decompile_lock, type(threading.Lock()))
+        from arkana.state import ResettableLock
+        assert isinstance(self.state._decompile_lock, ResettableLock)
 
     def test_decompile_on_demand_counter_default(self):
         assert self.state._decompile_on_demand_count == 0

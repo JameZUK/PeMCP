@@ -110,6 +110,9 @@ Beyond the cache and API key settings above, Arkana supports several environment
 | `ARKANA_OVERTIME_CHECK_INTERVAL` | `60` | How often (seconds) to check progress during overtime. |
 | `ARKANA_OVERTIME_STALL_KILL` | `300` | Kill the task after this many seconds (5 min) of zero progress during overtime. |
 | `ARKANA_OVERTIME_MAX_RUNTIME` | `21600` | Absolute ceiling (6 hours) — tasks are killed regardless of progress after this. |
+| `ARKANA_CFG_ERROR_RATE_THRESHOLD` | `50` | Number of angr warnings per check interval that indicates a degraded CFG build. When exceeded with stalled progress, the partial CFG is accepted instead of continuing. |
+| `ARKANA_CFG_PARTIAL_MIN_FUNCS` | `100` | Minimum functions discovered before a stalled/crashed CFG build can be accepted as partial. Below this threshold, the build is marked failed. |
+| `ARKANA_MAX_ENRICHMENT_BLOCKS` | `300` | Maximum basic blocks per function for the background enrichment decompile sweep. Functions with more blocks are skipped (decompile on-demand with `decompile_function_with_angr` instead). Prevents long uninterruptible decompiler calls from blocking the lock. |
 | `ARKANA_PE_ANALYSIS_SOFT_TIMEOUT` | `300` | Soft timeout (5 min) for PE analysis in `open_file`. After this, the task enters OVERTIME status but keeps running if making progress. Set to `0` to disable and use hard timeout instead. |
 | `ARKANA_PE_ANALYSIS_MAX_RUNTIME` | `3600` | Absolute ceiling (1 hour) for PE analysis — killed regardless of progress after this. |
 

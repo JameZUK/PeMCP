@@ -463,10 +463,11 @@ class TestAlertCollectionLogging(unittest.TestCase):
 
         # Should return empty list (not crash)
         assert alerts == []
-        # Should have logged the error
-        mock_logger.debug.assert_called_once()
-        args = mock_logger.debug.call_args
-        assert "Alert collection error" in args[0][0]
+        # Should have logged the error (may be called multiple times for
+        # different alert collection stages: task alerts, resource, lock)
+        assert mock_logger.debug.call_count >= 1
+        first_call = mock_logger.debug.call_args_list[0]
+        assert "Alert collection error" in first_call[0][0]
 
 
 class TestMonitorThreadStartedRemoved(unittest.TestCase):

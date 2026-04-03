@@ -13,6 +13,7 @@ from arkana.constants import (
     ANGR_CFG_TIMEOUT, BACKGROUND_TASK_TIMEOUT,
     ANGR_CFG_SOFT_TIMEOUT, BACKGROUND_TASK_SOFT_TIMEOUT,
     OVERTIME_CHECK_INTERVAL, OVERTIME_STALL_KILL, OVERTIME_MAX_RUNTIME,
+    CFG_ERROR_RATE_THRESHOLD, CFG_PARTIAL_MIN_FUNCS,
 )
 from arkana.utils import _safe_env_int
 from arkana.state import (
@@ -24,6 +25,99 @@ from arkana.warning_handler import _current_task_var
 # Global lock and flag for the heartbeat monitor thread (shared across sessions)
 _monitor_lock = threading.Lock()
 _monitor_started = False
+
+# Resolve env-configurable error thresholds for CFG degradation detection
+_CFG_ERROR_RATE = _safe_env_int("ARKANA_CFG_ERROR_RATE_THRESHOLD", CFG_ERROR_RATE_THRESHOLD, min_val=5)
+_CFG_PARTIAL_MIN = _safe_env_int("ARKANA_CFG_PARTIAL_MIN_FUNCS", CFG_PARTIAL_MIN_FUNCS, min_val=10)
+
+
+class _PartialCFG:
+    """Shim for a partially-built CFG, backed by the live angr project KB.
+
+    When the CFG build is interrupted (stall, timeout, or high error rate),
+    ``project.kb.functions`` already contains whatever was discovered.
+    This wrapper exposes the same interface that tools expect from a full
+    ``CFGFast`` result — ``.functions``, ``.model``, ``.functions.callgraph``.
+
+    Since ``.functions`` is a live reference to the project KB, any
+    functions discovered by a still-running CFGFast thread appear
+    automatically.
+    """
+
+    def __init__(self, project):
+        self.functions = project.kb.functions
+        self.model = None
+        try:
+            self.model = project.kb.cfgs.get_most_accurate()
+        except Exception:
+            pass
+        self._partial = True
+
+    def __repr__(self):
+        try:
+            n = len(self.functions)
+        except Exception:
+            n = "?"
+        return f"<_PartialCFG functions={n} model={'yes' if self.model else 'no'}>"
+
+
+def _accept_partial_cfg(task_id, project, reason, func_count, error_count, bridge=None):
+    """Accept a partial CFG result instead of marking the task as FAILED.
+
+    Stores a ``_PartialCFG`` wrapper on state so tools can use whatever
+    functions were discovered, and sets ``state._cfg_quality`` metadata.
+    """
+    partial = _PartialCFG(project)
+    state.set_angr_results(project, partial, None, None)
+
+    quality = {
+        "status": "partial",
+        "reason": reason,
+        "functions_discovered": func_count,
+        "errors_during_build": error_count,
+        "timestamp": time.time(),
+    }
+    state._cfg_quality = quality
+
+    msg = (
+        f"CFG partial: {func_count} functions discovered ({reason}). "
+        "Function map and decompilation available for discovered functions. "
+        "Use decompile_function_with_angr(address) to decompile any function "
+        "(builds a local CFG if not in the partial result)."
+    )
+    state.update_task(task_id, status=TASK_COMPLETED,
+                      result={"message": msg, "cfg_quality": quality},
+                      progress_percent=100,
+                      progress_message=f"CFG partial ({func_count} funcs)")
+    if bridge is not None:
+        bridge.info(msg, force=True)
+    logger.info("Accepted partial CFG: %s (%d funcs, %d errors)", reason, func_count, error_count)
+
+
+def _try_salvage_partial(task_id, project, error_msg, bridge=None):
+    """Try to salvage a partial CFG after an exception during CFG build/post-processing.
+
+    If enough functions were discovered in project.kb before the crash,
+    accepts them as a partial CFG instead of discarding everything.
+    Returns True if partial was accepted, False otherwise.
+    """
+    if project is None:
+        return False
+    try:
+        func_count = len(project.kb.functions)
+    except Exception:
+        return False
+    if func_count < _CFG_PARTIAL_MIN:
+        return False
+
+    _accept_partial_cfg(
+        task_id, project,
+        reason=f"exception after {func_count} funcs: {error_msg[:100]}",
+        func_count=func_count,
+        error_count=0,
+        bridge=bridge,
+    )
+    return True
 
 
 def _console_heartbeat_loop():
@@ -381,15 +475,16 @@ async def _run_background_task_wrapper(task_id: str, func, *args, ctx=None,
 
 
 def _cfg_stall_monitor(project, task_id, interval=15, _session_state=None):
-    """Sample KB function count periodically during CFGFast.
+    """Sample KB function count and error rate periodically during CFGFast.
 
-    Writes snapshots to task metadata so check_task_status can compute
-    stall detection. Runs until the task leaves RUNNING/OVERTIME state.
+    Writes snapshots to task metadata so the overtime loop can detect
+    stalls and high error rates. Runs until the task leaves RUNNING/OVERTIME.
     """
     # Propagate session state so StateProxy resolves correctly in this thread
     if _session_state is not None:
         set_current_state(_session_state)
-    snapshots = []  # list of (timestamp, func_count)
+    snapshots = []  # list of (timestamp, func_count, error_count)
+    baseline_warnings = state.get_warning_count()
     while True:
         task = state.get_task(task_id)
         if not task or task["status"] not in (TASK_RUNNING, TASK_OVERTIME):
@@ -398,8 +493,9 @@ def _cfg_stall_monitor(project, task_id, interval=15, _session_state=None):
             count = len(project.kb.functions)
         except Exception:
             count = 0
+        error_count = max(0, state.get_warning_count() - baseline_warnings)
         now = time.time()
-        snapshots.append((now, count))
+        snapshots.append((now, count, error_count))
         # Keep last 20 snapshots (~5 min at 15s interval)
         if len(snapshots) > 20:
             snapshots = snapshots[-20:]
@@ -407,6 +503,7 @@ def _cfg_stall_monitor(project, task_id, interval=15, _session_state=None):
             task_id,
             cfg_func_snapshots=list(snapshots),
             cfg_functions_discovered=count,
+            cfg_error_count=error_count,
         )
         time.sleep(interval)
 
@@ -540,6 +637,10 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
                         except Exception:
                             current_funcs = last_known_funcs
 
+                        # Check error rate from stall monitor snapshots
+                        task_data = state.get_task(task_id)
+                        cfg_errors = task_data.get("cfg_error_count", 0) if task_data else 0
+
                         if current_funcs > last_known_funcs:
                             # Progress! Reset stall timer
                             last_known_funcs = current_funcs
@@ -554,20 +655,43 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
                                 stall_start = time.time()
                             stalled_for = time.time() - stall_start
                             if stalled_for >= stall_kill:
-                                error_msg = (
-                                    f"CFG stalled for {int(stalled_for)}s ({current_funcs} funcs). "
-                                    "Binary is likely packed/obfuscated. Try: auto_unpack_pe() → "
-                                    "try_all_unpackers() → qiling_dump_unpacked_binary(). "
-                                    "You can still decompile discovered functions — "
-                                    "decompile_function_with_angr() will build a local CFG."
-                                )
-                                logger.warning("CFG stall-killed for %s (%d funcs)", filepath, current_funcs)
-                                state.update_task(task_id, status=TASK_FAILED, error=error_msg,
-                                                  progress_message=f"CFG stall-killed ({current_funcs} funcs)")
-                                if bridge is not None:
-                                    bridge.info(f"CFG stall-killed ({current_funcs} funcs).", force=True)
+                                if current_funcs >= _CFG_PARTIAL_MIN:
+                                    # Accept partial CFG instead of discarding
+                                    _accept_partial_cfg(
+                                        task_id, project,
+                                        reason=f"stalled for {int(stalled_for)}s",
+                                        func_count=current_funcs,
+                                        error_count=cfg_errors,
+                                        bridge=bridge,
+                                    )
+                                else:
+                                    error_msg = (
+                                        f"CFG stalled for {int(stalled_for)}s ({current_funcs} funcs). "
+                                        "Too few functions to accept partial result. "
+                                        "Binary may be packed — try auto_unpack_pe()."
+                                    )
+                                    logger.warning("CFG stall-killed for %s (%d funcs)", filepath, current_funcs)
+                                    state.update_task(task_id, status=TASK_FAILED, error=error_msg,
+                                                      progress_message=f"CFG stall-killed ({current_funcs} funcs)")
+                                    if bridge is not None:
+                                        bridge.info(f"CFG stall-killed ({current_funcs} funcs).", force=True)
                                 executor.shutdown(wait=False, cancel_futures=True)
                                 return
+
+                        # Check for high error rate with slow progress
+                        # (catches degraded builds that make progress but produce many errors)
+                        if (cfg_errors >= _CFG_ERROR_RATE
+                                and current_funcs >= _CFG_PARTIAL_MIN
+                                and stall_start is not None):
+                            _accept_partial_cfg(
+                                task_id, project,
+                                reason=f"high error rate ({cfg_errors} errors, progress stalled)",
+                                func_count=current_funcs,
+                                error_count=cfg_errors,
+                                bridge=bridge,
+                            )
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            return
 
                         # Check absolute ceiling
                         total_elapsed = time.time() - task_start_time
@@ -576,13 +700,21 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
                                 f_count = len(project.kb.functions)
                             except Exception:
                                 f_count = 0
-                            error_msg = (
-                                f"Absolute max runtime ({int(max_runtime)}s) exceeded "
-                                f"({f_count} funcs discovered). "
-                                "decompile_function_with_angr() will build a local CFG."
-                            )
-                            state.update_task(task_id, status=TASK_FAILED, error=error_msg,
-                                              progress_message=f"Max runtime exceeded ({f_count} funcs)")
+                            if f_count >= _CFG_PARTIAL_MIN:
+                                _accept_partial_cfg(
+                                    task_id, project,
+                                    reason=f"max runtime ({int(max_runtime)}s) exceeded",
+                                    func_count=f_count,
+                                    error_count=cfg_errors,
+                                    bridge=bridge,
+                                )
+                            else:
+                                error_msg = (
+                                    f"Absolute max runtime ({int(max_runtime)}s) exceeded "
+                                    f"({f_count} funcs discovered)."
+                                )
+                                state.update_task(task_id, status=TASK_FAILED, error=error_msg,
+                                                  progress_message=f"Max runtime exceeded ({f_count} funcs)")
                             executor.shutdown(wait=False, cancel_futures=True)
                             return
 
@@ -630,6 +762,23 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
         state.set_angr_results(project, cfg, raw_loops, {"resolve_jumps": True, "data_refs": False})
 
+        # Record CFG quality (full build completed)
+        try:
+            task_data = state.get_task(task_id)
+            cfg_errors = task_data.get("cfg_error_count", 0) if task_data else 0
+        except Exception:
+            cfg_errors = 0
+        try:
+            func_count = len(cfg.functions)
+        except Exception:
+            func_count = 0
+        state._cfg_quality = {
+            "status": "full",
+            "functions_discovered": func_count,
+            "errors_during_build": cfg_errors,
+            "timestamp": time.time(),
+        }
+
         # 4. Mark Complete
         state.update_task(
             task_id,
@@ -645,12 +794,19 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
     except (OSError, RuntimeError, ValueError) as e:
         logger.error("Background Angr analysis failed: %s: %s", type(e).__name__, e, exc_info=True)
-        state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200],
-                          progress_message=f"Failed: {str(e)[:200]}")  # H1-v11: truncate
+        # Salvage partial CFG if enough functions were discovered before the crash
+        if _try_salvage_partial(task_id, project, str(e)[:200], bridge):
+            pass  # Accepted as partial — don't mark FAILED
+        else:
+            state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200],
+                              progress_message=f"Failed: {str(e)[:200]}")
     except Exception as e:
         logger.error("Background Angr analysis failed unexpectedly: %s: %s", type(e).__name__, e, exc_info=True)
-        state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200],
-                          progress_message=f"Failed: {str(e)[:200]}")  # H1-v11: truncate
+        if _try_salvage_partial(task_id, project, str(e)[:200], bridge):
+            pass
+        else:
+            state.update_task(task_id, status=TASK_FAILED, error=str(e)[:200],
+                              progress_message=f"Failed: {str(e)[:200]}")
     finally:
         # Clean up cancel event and thread ref (mirrors _run_background_task_wrapper)
         if _session_state is not None:
@@ -658,18 +814,29 @@ def angr_background_worker(filepath: str, task_id: str, mode: str = "auto", arch
 
 
 def _handle_cfg_hard_timeout(task_id, project, cfg_timeout, filepath, bridge):
-    """Handle old-style hard CFG timeout (when soft timeout is disabled)."""
+    """Handle old-style hard CFG timeout (when soft timeout is disabled).
+
+    Accepts a partial CFG if enough functions were discovered.
+    """
     try:
         funcs_found = len(project.kb.functions)
     except Exception:
         funcs_found = 0
+
+    if funcs_found >= _CFG_PARTIAL_MIN:
+        _accept_partial_cfg(
+            task_id, project,
+            reason=f"hard timeout ({cfg_timeout}s)",
+            func_count=funcs_found,
+            error_count=0,
+            bridge=bridge,
+        )
+        return
+
     error_msg = (
         f"CFG build timed out after {cfg_timeout}s "
-        f"(discovered {funcs_found} functions before stalling). "
-        "Binary is likely packed/obfuscated. Try: auto_unpack_pe() → "
-        "try_all_unpackers() → qiling_dump_unpacked_binary(). "
-        "You can still decompile discovered functions — "
-        "decompile_function_with_angr() will build a local CFG."
+        f"(discovered {funcs_found} functions — too few for partial). "
+        "Binary may be packed. Try auto_unpack_pe()."
     )
     logger.warning("Background Angr CFG timed out after %ds for %s", cfg_timeout, filepath)
     state.update_task(

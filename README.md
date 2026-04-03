@@ -205,6 +205,7 @@ For other MCP clients, local Python installation, and detailed configuration, se
 | **[Claude Code Integration](docs/claude-code.md)** | Setup via CLI and JSON config; analysis and learning skills; typical workflows and example queries |
 | **[Configuration](docs/configuration.md)** | API keys, analysis cache, and command-line options |
 | **[Tools Reference](docs/tools-reference.md)** | Complete catalog of all 294 MCP tools organised by category |
+| **[VM-Protected Binaries](docs/vm-protected-binaries.md)** | Analysing VMProtect/Themida/Enigma binaries with Frida DBI scripts; four-stage pipeline |
 | **[Scenarios & Comparisons](docs/examples/scenarios.md)** | Seven real-world analysis walkthroughs; Arkana vs Ghidra, IDA Pro, CyberChef |
 | **[Architecture](docs/architecture.md)** | Package structure, design principles, pagination and result limits |
 | **[Security & Testing](docs/security.md)** | Path sandboxing, security measures, testing and CI/CD |

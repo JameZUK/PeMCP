@@ -23,7 +23,7 @@ _ASYNC_SAVE_INTERVAL = 30
 
 # Per-state lock is used for throttled async saves (state._async_save_lock).
 
-from arkana.constants import ENRICHMENT_MAX_DECOMPILE, ENRICHMENT_TIMEOUT
+from arkana.constants import ENRICHMENT_MAX_DECOMPILE, ENRICHMENT_TIMEOUT, MAX_ENRICHMENT_BLOCKS
 from arkana.state import (
     AnalyzerState, TASK_RUNNING, TASK_OVERTIME, TASK_COMPLETED, TASK_FAILED,
     set_current_state, get_current_state,
@@ -38,6 +38,7 @@ _ON_DEMAND_YIELD_TIMEOUT = 120
 # Environment overrides
 _AUTO_ENRICHMENT_ENABLED = os.environ.get("ARKANA_AUTO_ENRICHMENT", "1") != "0"
 _MAX_DECOMPILE = _safe_env_int("ARKANA_ENRICHMENT_MAX_DECOMPILE", ENRICHMENT_MAX_DECOMPILE, min_val=0)
+_MAX_ENRICHMENT_BLOCKS = _safe_env_int("ARKANA_MAX_ENRICHMENT_BLOCKS", MAX_ENRICHMENT_BLOCKS, min_val=10)
 
 TASK_ID = "auto-enrichment"
 
@@ -456,6 +457,7 @@ def _decompile_sweep(
     max_funcs = min(len(scored), _MAX_DECOMPILE)
     decompiled = 0
     failed = 0
+    skipped_large = 0
     last_save_time = time.time()
 
     for i, func_info in enumerate(scored[:max_funcs]):
@@ -484,6 +486,14 @@ def _decompile_sweep(
         # Skip if already cached (e.g. from a previous session)
         cache_key = _make_decompile_key(addr_int)
         if _get_cached_lines(cache_key) is not None:
+            continue
+
+        # Skip very large functions that can block angr's Decompiler for
+        # minutes (uninterruptible C extension call).  These can still be
+        # decompiled on-demand via decompile_function_with_angr.
+        block_count = func_info.get("blocks", 0)
+        if block_count > _MAX_ENRICHMENT_BLOCKS:
+            skipped_large += 1
             continue
 
         # Acquire decompile lock (with cancellation check)
@@ -542,7 +552,8 @@ def _decompile_sweep(
             state._decompile_lock.release()
 
     if decompiled > 0:
-        phases_completed.append(f"decompile_sweep({decompiled})")
+        suffix = f", {skipped_large} skipped (>{_MAX_ENRICHMENT_BLOCKS} blocks)" if skipped_large else ""
+        phases_completed.append(f"decompile_sweep({decompiled}{suffix})")
     if failed > 0:
         phases_failed.append(("decompile_partial", f"{failed} functions failed"))
 
