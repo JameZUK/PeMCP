@@ -190,3 +190,32 @@ to identify the missing API, then use `debug_stub_api` or IAT patching to add co
 | Binary with unresolved MSVCRT imports crashing at CRT init | IAT patching + code-cave stubs |
 | Extracting encrypted data from a function you can't call directly | Code patching: JMP to target + EB FE trap + memory read |
 | Multi-threaded binary where threads don't execute under emulation | Stub `CreateThread` + code-patch main flow into thread funcs |
+
+## VM-Protected Binaries — What Works and What Doesn't
+
+Commercial protectors (VMProtect, Themida, Enigma) apply multiple protection layers:
+
+```
+Layer 1: Anti-VM detection    ← anti_vm_bypass=True defeats this
+Layer 2: Unpacking/decryption ← Qiling partially handles (needs Windows DLLs)
+Layer 3: Code virtualization  ← NOT addressed (would need devirtualization)
+Layer 4: Original code        ← What we want to reach
+```
+
+**What `anti_vm_bypass=True` does:** Spoofs CPUID, RDTSC, and IN instruction results so the binary doesn't *detect* it's in a VM. This defeats Layer 1 only.
+
+**What it does NOT do:** Defeat the actual code virtualization (Layer 3). VM-protected code is converted to custom bytecode that runs on an embedded interpreter — emulation still executes the interpreter, not the original code.
+
+**Recommended workflow for VM-protected binaries:**
+
+1. `detect_vm_protection()` — characterise protector and active options
+2. `generate_frida_stalker_script(script_type="anti_vm")` — generate VM bypass script
+3. `generate_frida_stalker_script(script_type="coverage")` — generate coverage script
+4. `generate_frida_stalker_script(script_type="api_logger", apis=[...])` — generate API logger
+5. Run scripts on a **real Windows VM** with Frida to collect behavioral data
+6. `import_coverage_data(file_path)` — import collected coverage back into Arkana
+7. `analyze_instruction_trace(file_path)` — analyse collected instruction traces
+8. `get_coverage_summary()` — identify uncovered code paths
+9. Decompile uncovered functions to find hidden functionality
+
+Full emulation-based VM devirtualization is an unsolved research problem.

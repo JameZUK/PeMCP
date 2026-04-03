@@ -289,7 +289,7 @@ All angr tools that return lists support pagination via `limit` and `offset` par
 
 | Tool | Description |
 |---|---|
-| `emulate_binary_with_qiling` | Full OS emulation of PE/ELF/Mach-O binaries with behavioural report (API calls, file/registry/network activity). Cross-platform  - unlike Speakeasy (Windows-only), Qiling handles Linux ELF and macOS Mach-O as well. Use `trace_syscalls=True` for syscall-level tracing with optional `syscall_filter`, and `track_memory=True` for memory allocation tracking (detects RWX allocations, large allocations, and protection changes). Paginated (default limit 20). |
+| `emulate_binary_with_qiling` | Full OS emulation of PE/ELF/Mach-O binaries with behavioural report (API calls, file/registry/network activity). Cross-platform  - unlike Speakeasy (Windows-only), Qiling handles Linux ELF and macOS Mach-O as well. Use `trace_syscalls=True` for syscall-level tracing with optional `syscall_filter`, `track_memory=True` for memory allocation tracking, and `anti_vm_bypass=True` to spoof CPUID/RDTSC/VMware I/O port results (defeats anti-VM detection but NOT code virtualization — see Known Limitations). Paginated (default limit 20). |
 | `emulate_shellcode_with_qiling` | Multi-architecture shellcode emulation (x86, x64, ARM, ARM64, MIPS) with API/syscall capture. Paginated (default limit 20). |
 | `qiling_trace_execution` | Instruction-level execution tracing with addresses, sizes, and raw bytes for each executed instruction. Paginated (default limit 50). |
 | `qiling_hook_api_calls` | Hook specific APIs/syscalls to capture arguments and return values during emulation. Paginated (default limit 20). |
@@ -759,6 +759,7 @@ The following limitations have been identified through comprehensive testing. Th
 | `auto_unpack_pe` / `try_all_unpackers` | FSG-packed binaries may fail to unpack with Unipacker. Use Qiling-based unpacking (`qiling_dump_unpacked_binary`) or manual OEP recovery as fallback. |
 | Speakeasy / Qiling emulation | Complex packers with anti-emulation checks may cause emulation to stall or produce incomplete results. Timeouts and partial results are captured automatically. |
 | Debug sessions (`debug_*` tools) | Emulation fidelity limitations apply  - anti-emulation techniques, threading, and complex Windows APIs may produce incorrect results or cause the session to stall. Watchpoints add per-instruction overhead. Snapshots (`ql.save()`/`ql.restore()`) may not fully capture complex hook or callback state. Max 3 concurrent sessions, 30-minute idle timeout. |
+| Anti-VM bypass (`anti_vm_bypass=True`) | Defeats VM *detection* (CPUID hypervisor bit, RDTSC timing, VMware I/O port) but NOT code *virtualization* (custom bytecode interpreters used by VMProtect/Themida/Enigma). VM-protected binaries have 4 layers: (1) anti-VM detection → bypassed, (2) unpacking → partially handled, (3) code virtualization → NOT addressed, (4) original code. For Layer 3, use `generate_frida_stalker_script` to create scripts for real Windows execution, then `import_coverage_data`/`analyze_instruction_trace` to bring results back into Arkana. |
 
 ### External Dependencies
 
