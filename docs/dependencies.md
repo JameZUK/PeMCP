@@ -162,6 +162,13 @@ corresponding tools.
 Note: unipacker was previously in this group but is now installed in
 its own isolated venv (see section 1).
 
+### Optional analysis libraries
+
+| Package | Used by | Purpose |
+|---------|---------|---------|
+| **Triton** | `analyze_instruction_trace` | Symbolic trace analysis, expression simplification. Without Triton, the tool falls back to pure-Python trace statistics (instruction count, mnemonic frequency, unique addresses). Install: `pip install triton-library` |
+| **oletools** | `analyze_office_macros`, `detect_xlm_macros`, `analyze_ole_streams` | VBA/XLM macro extraction and OLE stream analysis for Office documents. Install: `pip install oletools` |
+
 ---
 
 ## 5. stringsifter pins

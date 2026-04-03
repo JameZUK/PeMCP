@@ -27,7 +27,9 @@ arkana/
 │   ├── capa.py                 # Capa integration
 │   ├── floss.py                # FLOSS integration (with Vivisect progress polling)
 │   ├── signatures.py           # PEiD/YARA scanning
-│   └── strings.py              # String utilities
+│   ├── strings.py              # String utilities
+│   ├── go_pclntab.py           # Go pclntab parser (Go 1.2-1.26+, pure-Python)
+│   └── go_types.py             # Go type descriptor parser (struct/interface/itab)
 ├── dashboard/                  # Web dashboard (Starlette + htmx + Jinja2)
 │   ├── app.py                  # ASGI app factory, routes, auth, SSE events
 │   ├── state_api.py            # Data extraction layer (reads AnalyzerState for views)
@@ -97,7 +99,7 @@ arkana/
     ├── tools_refinery_forensic.py  - Refinery forensic parsing (1 dispatched tool)
     ├── tools_context.py          - Context aggregation (1 tool)
     ├── tools_dashboard_exposed.py - Dashboard-exposed analysis (3 tools)
-    ├── tools_frida.py            - Frida script generation (3 tools)
+    ├── tools_frida.py            - Frida script generation (4 tools)
     ├── tools_vuln.py             - Vulnerability pattern detection (2 tools)
     ├── tools_dotnet_deobfuscate.py - .NET deobfuscation & decompilation (3 tools)
     ├── tools_batch.py            - Batch analysis operations
@@ -107,14 +109,18 @@ arkana/
     ├── tools_pe_forensic.py      - PE forensics (7 tools)
     ├── tools_pe_structure.py     - PE structure parsing
     ├── tools_threat_intel.py     - Threat intelligence & attribution (5 tools)
-    └── tools_warnings.py         - Analysis warning management (2 tools)
+    ├── tools_warnings.py         - Analysis warning management (2 tools)
+    ├── tools_coverage.py         - Code coverage import (2 tools)
+    ├── tools_trace_analysis.py   - Trace analysis & MBA detection (2 tools)
+    ├── _anti_vm_hooks.py         - Anti-VM bypass hook installation for Qiling emulation
+    └── _go_abi.py                - Go ABI detection and call instruction annotation
 ```
 
 ---
 
 ## Design Principles
 
-- **Modular Package**  - Clean `arkana/` package structure with 57 tool modules and separated concerns (parsers, MCP tools, CLI, configuration).
+- **Modular Package**  - Clean `arkana/` package structure with 65 MCP modules and separated concerns (parsers, MCP tools, CLI, configuration).
 - **Docker-First Design**  - No interactive prompts. Dependencies are managed via Docker, making it container and CI/CD ready.
 - **Single-File Analysis Context**  - The server holds one file in memory via `AnalyzerState`. All tools operate on this shared context. Use `open_file` and `close_file` to switch between files. Calling `open_file` on a new file without `close_file` is safe — all module-level caches (`_decompile_meta`, `_phase_caches`, dashboard caches, `result_cache`, analysis warnings) are cleared automatically to prevent cross-file data contamination.
 - **Thread-Safe State**  - Centralised `AnalyzerState` class with locking for concurrent access.

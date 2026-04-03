@@ -441,7 +441,7 @@ The Go binary functions purely as a **loader and decryptor**. The actual stealer
 
 This ACRStealer sample demonstrates a sophisticated evolution of the family: a **Go-compiled loader** with comprehensive anti-analysis that wraps an encrypted executable payload containing the actual stealer functionality. The custom 5-stage cipher (modular substitution, reversal, pair swap, subtraction, XOR) was fully reversed through systematic decompilation — from tracing the Go startup chain through pclntab parsing to identifying `main.main` at `0x481930` and the decryption function at `0x482980`.
 
-The analysis required no external tools or custom scripts — every step from acquisition through to cipher reversal was performed exclusively through Arkana's 289 MCP tools, demonstrating the platform's capability for **end-to-end malware analysis of non-trivial, actively-deployed threats**.
+The analysis required no external tools or custom scripts — every step from acquisition through to cipher reversal was performed exclusively through Arkana's 294 MCP tools, demonstrating the platform's capability for **end-to-end malware analysis of non-trivial, actively-deployed threats**.
 
 ---
 

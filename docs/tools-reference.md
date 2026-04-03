@@ -308,7 +308,7 @@ Interactive debugger built on Qiling, providing step-by-step emulation control w
 
 | Tool | Description |
 |---|---|
-| `debug_start` | Start an interactive debug session on the loaded binary. Spawns a persistent Qiling subprocess, pauses at entry point. `stub_crt` (default True) installs ~47 CRT initialization stubs (GetSystemTimeAsFileTime, GetCurrentProcessId, GetProcessHeap, critical sections, TLS/FLS, etc.). `stub_io` (default True) installs Win32 console API stubs to prevent crashes from printf/cout/cin. API tracing is enabled by default. Returns initial PC, registers, architecture, and stub/trace status. Max 3 concurrent sessions. |
+| `debug_start` | Start an interactive debug session on the loaded binary. Spawns a persistent Qiling subprocess, pauses at entry point. `stub_crt` (default True) installs ~47 CRT initialization stubs (GetSystemTimeAsFileTime, GetCurrentProcessId, GetProcessHeap, critical sections, TLS/FLS, etc.). `stub_io` (default True) installs Win32 console API stubs to prevent crashes from printf/cout/cin. `anti_vm_bypass` (default False) enables anti-VM detection bypass hooks (CPUID hypervisor bit spoofing, RDTSC timing normalisation, VMware I/O port masking). API tracing is enabled by default. Returns initial PC, registers, architecture, and stub/trace status. Max 3 concurrent sessions. |
 | `debug_stop` | Stop and destroy a debug session. Kills the subprocess and frees resources. |
 | `debug_status` | Check if a debug session is alive and return its current state (PC, status, instructions executed, architecture). |
 
@@ -717,7 +717,7 @@ Automated .NET deobfuscation via de4dot-cex and NETReactorSlayer, plus full C# s
 | `dotnet_deobfuscate` | Orchestrate .NET deobfuscation via external tools. Supports four methods: `auto` (detect obfuscator and choose best tool), `de4dot` (handles ~20 obfuscators including ConfuserEx), `reactor_slayer` (.NET Reactor specialist), and `detect_only`. Outputs a cleaned binary registered as an artifact. |
 | `dotnet_decompile` | C# source recovery via ILSpy CLI with pagination support. Two modes: stdout mode (returns paginated C# source lines, optionally filtered to a specific type) and project mode (writes `.csproj` + `.cs` files to a directory). |
 
-## Anti-Analysis & Obfuscation Detection (2 tools)
+## Anti-Analysis & Obfuscation Detection (3 tools)
 
 Detect control flow obfuscation techniques commonly used by commercial protectors (OLLVM, Themida, VMProtect, Code Virtualizer) and malware packers.
 
@@ -725,6 +725,7 @@ Detect control flow obfuscation techniques commonly used by commercial protector
 |---|---|
 | `detect_control_flow_flattening` | Analyse a function's CFG for control flow flattening (CFF) hallmarks: single-entry dispatcher block with high in-degree, state variable driving a switch/if-else chain, and real basic blocks routing back to the dispatcher. Returns confidence score, dispatcher address, state variable identification, and affected block count. |
 | `detect_opaque_predicates` | Identify always-true or always-false conditional branches using angr's constraint solver. Flags branches with only one feasible path, which are characteristic of dead-code insertions by obfuscators. Returns predicate locations with verdicts and solver confidence. |
+| `detect_vm_protection` | Detect VMProtect/Themida/Enigma/Code Virtualizer protection via section names, entropy, imports, and string signatures. Returns protector-specific option detection (Themida: anti_debug/api_wrapping/vm_code/string_encryption; VMProtect: virtualization/mutation/import_protection), import obfuscation score (0.0-1.0), and protector-specific analysis recommendations. Does NOT require angr. |
 
 ## Learner Progress Tracking (4 tools)
 

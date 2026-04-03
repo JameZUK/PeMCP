@@ -1,6 +1,6 @@
 # Arkana Tool Reference
 
-Complete catalog of all 289 MCP tools organized by use case.
+Complete catalog of all 294 MCP tools organized by use case.
 Source files: `arkana/mcp/tools_*.py`
 
 > **Address format:** All address/offset parameters accept both hex (`0x401000`) and decimal (`4198400`). Hex strings with a `0x` prefix are auto-detected via `int(x, 0)`.
@@ -165,7 +165,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | Tool | Use When | Key Parameters |
 |------|----------|----------------|
 | `emulate_function_execution` | Execute a single function with concrete args (background, timeout 300s, partial results on timeout: steps/stdout) | `address`, `args` |
-| `emulate_binary_with_qiling` | Full binary emulation with API tracking | `timeout`, `rootfs`, `trace_syscalls`, `syscall_filter`, `track_memory` |
+| `emulate_binary_with_qiling` | Full binary emulation with API tracking | `timeout`, `rootfs`, `trace_syscalls`, `syscall_filter`, `track_memory`, `anti_vm_bypass` |
 | `emulate_shellcode_with_qiling` | Shellcode emulation (x86/x64/ARM/MIPS) | `shellcode`, `arch` |
 | `qiling_trace_execution` | Detailed API call tracing during emulation | — |
 | `qiling_hook_api_calls` | Hook specific APIs in Qiling emulation | `api_names` |
@@ -184,7 +184,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `emulation_memory_map` | Get full memory map of the emulated process (regions, permissions, labels) | `session_id` |
 | `emulation_session_status` | List all active emulation inspect sessions | — |
 | `close_emulation_session` | Close an emulation session and release resources | `session_id` |
-| `debug_start` | Start interactive debug session — persistent Qiling subprocess, pauses at entry. `stub_crt` (default True) installs ~47 CRT stubs, `stub_io` (default True) installs console stubs | `rootfs_path`, `stub_crt`, `stub_io` |
+| `debug_start` | Start interactive debug session — persistent Qiling subprocess, pauses at entry. `stub_crt` (default True) installs ~47 CRT stubs, `stub_io` (default True) installs console stubs, `anti_vm_bypass` (default False) enables anti-VM hooks | `rootfs_path`, `stub_crt`, `stub_io`, `anti_vm_bypass` |
 | `debug_stop` | Stop and destroy a debug session | `session_id` |
 | `debug_status` | Check session liveness and current state | `session_id` |
 | `debug_step` | Step N instructions (default 1) | `count`, `session_id` |
@@ -388,6 +388,7 @@ specific instructions (e.g., `search="rdtsc|cpuid"` for anti-debug). Default
 | `find_code_caves` | Find executable gaps in code sections | — |
 | `detect_control_flow_flattening` | Detect CFF obfuscation patterns (dispatcher blocks, state vars, back-edges). Use when triage shows suspected obfuscation or abnormal control flow | `function_address` (optional), `min_confidence` (default 40), `limit` (default 20) |
 | `detect_opaque_predicates` | Detect opaque predicates via Z3 constraint solving — conditional branches where only one path is satisfiable | `function_address` (optional), `limit` (default 20) |
+| `detect_vm_protection` | Detect VMProtect/Themida/Enigma/Code Virtualizer protection. Returns protector-specific options, import obfuscation score (0.0-1.0), and recommendations. No angr required | — |
 
 ## PE Forensics & Detection Engineering
 
