@@ -166,11 +166,18 @@ def _parse_json_coverage(data: bytes) -> Dict[str, Any]:
             size = entry.get("size") or entry.get("length", 1)
             if addr is None:
                 continue
-            if isinstance(addr, str):
-                addr = int(addr, 16) if addr.startswith("0x") else int(addr)
-            if isinstance(size, str):
-                size = int(size, 16) if size.startswith("0x") else int(size)
-            blocks.append({"address": int(addr), "size": int(size)})
+            try:
+                if isinstance(addr, str):
+                    addr = int(addr, 16) if addr.startswith("0x") else int(addr)
+                elif not isinstance(addr, (int, float)):
+                    continue
+                if isinstance(size, str):
+                    size = int(size, 16) if size.startswith("0x") else int(size)
+                elif not isinstance(size, (int, float)):
+                    size = 1
+                blocks.append({"address": int(addr), "size": int(size)})
+            except (ValueError, TypeError, OverflowError):
+                continue
 
         modules = obj.get("modules", [])
 
@@ -278,25 +285,30 @@ def _overlay_coverage_on_functions(
     """
     from arkana.config import ANGR_AVAILABLE
 
-    # Build a set of covered address ranges for fast lookup
+    # Build a set of covered block start addresses for fast lookup.
+    # Only store block start addresses (not every byte) to bound memory.
+    _MAX_COVERED_ADDRS = 1_000_000
     covered_addrs = set()
     for block in blocks:
         addr = block["address"]
-        size = block.get("size", 1)
-        # Add the start address of each block (not every byte — too expensive)
         covered_addrs.add(addr)
-        # For blocks > 1 byte, also add aligned addresses within
-        if size > 1:
-            for offset in range(0, min(size, 256), 4):  # Sample at 4-byte intervals
-                covered_addrs.add(addr + offset)
+        if len(covered_addrs) >= _MAX_COVERED_ADDRS:
+            break
 
     # Overlay on angr CFG functions if available
+    _MAX_OVERLAY_FUNCTIONS = 50_000
     covered_functions = []
     uncovered_functions = []
+    covered_count = 0
+    uncovered_count = 0
 
     if ANGR_AVAILABLE and state.angr_cfg is not None:
         try:
+            func_iter = 0
             for addr, func in state.angr_cfg.functions.items():
+                func_iter += 1
+                if func_iter > _MAX_OVERLAY_FUNCTIONS:
+                    break
                 if func.is_simprocedure or func.is_syscall:
                     continue
                 # Check if any block in the function was covered
@@ -307,7 +319,6 @@ def _overlay_coverage_on_functions(
                             func_covered = True
                             break
                 except Exception:
-                    # Check function address directly
                     func_covered = addr in covered_addrs
 
                 entry = {
@@ -316,19 +327,23 @@ def _overlay_coverage_on_functions(
                     "size": func.size,
                 }
                 if func_covered:
-                    covered_functions.append(entry)
+                    covered_count += 1
+                    if len(covered_functions) < 50:
+                        covered_functions.append(entry)
                 else:
-                    uncovered_functions.append(entry)
+                    uncovered_count += 1
+                    if len(uncovered_functions) < 50:
+                        uncovered_functions.append(entry)
         except Exception as e:
             logger.debug("Coverage overlay failed: %s", e)
 
-    total = len(covered_functions) + len(uncovered_functions)
-    coverage_pct = round(100 * len(covered_functions) / total, 1) if total > 0 else 0
+    total = covered_count + uncovered_count
+    coverage_pct = round(100 * covered_count / total, 1) if total > 0 else 0
 
     return {
         "total_functions": total,
-        "covered_functions": len(covered_functions),
-        "uncovered_functions": len(uncovered_functions),
+        "covered_functions": covered_count,
+        "uncovered_functions": uncovered_count,
         "coverage_percent": coverage_pct,
         "top_uncovered": uncovered_functions[:50],
         "top_covered": covered_functions[:50],
@@ -390,7 +405,7 @@ async def import_coverage_data(
         with open(resolved, "rb") as f:
             data = f.read()
 
-        fmt = format.lower().strip()
+        fmt = format.lower().strip()  # noqa: A002 (shadows builtin, but is MCP API name)
         if fmt == "auto":
             fmt = _detect_coverage_format(data)
 

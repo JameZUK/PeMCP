@@ -15,6 +15,7 @@ Protocol:
     → {"action": "stop"}
     ← {"status": "ok"}
 """
+import hashlib
 import json
 import os
 import struct
@@ -2533,7 +2534,6 @@ def cmd_snapshot_diff(cmd):
                     if size <= 4_194_304:  # Only compare regions ≤ 4MB
                         try:
                             data = bytes(_ql.mem.read(start, size))
-                            import hashlib
                             regions_a[start] = (size, hashlib.md5(data).hexdigest())
                         except Exception:
                             pass

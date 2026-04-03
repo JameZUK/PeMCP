@@ -1,5 +1,16 @@
 """Frida JS template generation — pure data and string builders, no MCP dependency."""
+import re
 from typing import Dict, List, Optional, Any
+
+
+def _escape_js_string(s: str) -> str:
+    """Escape a string for safe interpolation into JS string literals."""
+    return s.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
+
+
+def _safe_js_identifier(s: str) -> str:
+    """Convert a string to a safe JS variable name."""
+    return re.sub(r'[^a-zA-Z0-9_]', '_', s)
 
 
 # =====================================================================
@@ -625,7 +636,7 @@ def generate_stalker_coverage_js(
         output_format = "drcov"
 
     mod_resolve = (
-        f'var targetMod = Process.getModuleByName("{target_module}");'
+        f'var targetMod = Process.getModuleByName("{_escape_js_string(target_module)}");'
         if target_module else
         "var targetMod = Process.enumerateModules()[0];"
     )
@@ -1222,12 +1233,14 @@ def generate_api_logger_js(
 
     for api_name in apis:
         sig = FRIDA_API_SIGNATURES.get(api_name)
-        resolve_expr = f'Module.getExportByName(null, "{api_name}")'
+        safe_name = _safe_js_identifier(api_name)
+        escaped_name = _escape_js_string(api_name)
+        resolve_expr = f'Module.getExportByName(null, "{escaped_name}")'
 
         lines.append(f"// Logger: {api_name}")
-        lines.append(f'var p_{api_name} = {resolve_expr};')
-        lines.append(f"if (p_{api_name}) {{")
-        lines.append(f"    Interceptor.attach(p_{api_name}, {{")
+        lines.append(f'var p_{safe_name} = {resolve_expr};')
+        lines.append(f"if (p_{safe_name}) {{")
+        lines.append(f"    Interceptor.attach(p_{safe_name}, {{")
 
         # onEnter
         lines.append("        onEnter: function(args) {")

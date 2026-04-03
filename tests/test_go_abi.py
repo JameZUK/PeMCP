@@ -295,8 +295,8 @@ class TestAnnotateGoCall(unittest.TestCase):
         ann = annotate_go_call("main.process", "stack", "x86",
                                go_version_hint="go1.16")
         self.assertIsNotNone(ann)
-        # 32-bit slots are 4 bytes
-        self.assertEqual(ann["params"][0]["stack_offset"], "[RSP+0x4]")
+        # 32-bit x86 uses ESP, 4-byte slots
+        self.assertEqual(ann["params"][0]["stack_offset"], "[ESP+0x4]")
 
     def test_with_type_info(self):
         type_info = {

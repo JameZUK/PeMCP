@@ -387,6 +387,9 @@ async def open_file(
         state._cached_dga_indicators = None
         state._cached_crypto_constants = None
         state._sandbox_report = None
+        state._cached_go_version = ""
+        state._cached_go_abi_detected = None
+        state._cached_coverage = None
         with state._notes_lock:
             state.notes = []
             state._notes_counter = 0
@@ -1025,6 +1028,9 @@ async def open_file(
         state._cached_dga_indicators = None
         state._cached_crypto_constants = None
         state._sandbox_report = None
+        state._cached_go_version = ""
+        state._cached_go_abi_detected = None
+        state._cached_coverage = None
         try:
             state.result_cache.clear()
         except Exception:

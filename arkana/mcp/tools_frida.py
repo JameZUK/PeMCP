@@ -22,6 +22,18 @@ from arkana.mcp._frida_templates import (
 )
 
 
+import re as _re
+
+# Allowed characters for Frida target names (API names, module names).
+# Prevents JS code injection via string literal breakout.
+_SAFE_TARGET_RE = _re.compile(r'^[a-zA-Z_][a-zA-Z0-9_.@#$:]*$')
+
+
+def _sanitize_js_string(value: str) -> str:
+    """Escape a string for safe interpolation into JS string literals."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
+
+
 def _validate_targets(targets: List[str]) -> List[str]:
     """Validate and sanitise hook target list."""
     if not targets:
@@ -37,6 +49,8 @@ def _validate_targets(targets: List[str]) -> List[str]:
             continue
         if len(t) > 256:
             raise ValueError(f"Target name too long ({len(t)} chars). Maximum is 256.")
+        if not _SAFE_TARGET_RE.match(t) and not t.startswith("0x"):
+            raise ValueError(f"Invalid target name: {t[:50]!r}. Must be alphanumeric/underscore (or hex address).")
         cleaned.append(t)
     if not cleaned:
         raise ValueError("No valid targets after validation.")

@@ -22,6 +22,7 @@ References:
 """
 
 import logging
+import re
 import struct
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -175,9 +176,10 @@ def _find_section(
     target_names: frozenset,
 ) -> Optional[Dict[str, Any]]:
     """Find a section by name from a list of section dicts."""
+    lower_names = {n.lower() for n in target_names}
     for sec in sections:
         name = sec.get("name", "")
-        if isinstance(name, str) and name.lower() in {n.lower() for n in target_names}:
+        if isinstance(name, str) and name.lower() in lower_names:
             return sec
     return None
 
@@ -240,7 +242,6 @@ def _detect_type_layout(
     ptr_size: int,
 ) -> _TypeLayout:
     """Create a _TypeLayout for the detected Go version."""
-    import re
     relative = False
     if go_version_hint:
         m = re.search(r'(\d+)\.(\d+)', go_version_hint)

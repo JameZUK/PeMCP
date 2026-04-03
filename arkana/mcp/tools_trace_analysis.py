@@ -10,16 +10,24 @@ import re
 import logging
 from typing import Any, Dict, List, Optional
 
-from arkana.config import state, logger, Context
+from arkana.config import state, logger, Context, TRITON_AVAILABLE as _TRITON_AVAILABLE_IMPORTS
 from arkana.constants import MAX_TOOL_LIMIT
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 
-# Triton availability — local to this module, also exported via imports.py
+# Deferred import — loaded at module level so asyncio.to_thread workers
+# don't trigger module initialisation inside the thread pool.
+try:
+    from arkana.mcp.tools_angr import _make_decompile_key, _get_cached_lines
+except ImportError:
+    _make_decompile_key = None
+    _get_cached_lines = None
+
+# Use centralized flag from imports.py; also keep local for direct Triton API access
+TRITON_AVAILABLE = _TRITON_AVAILABLE_IMPORTS
 try:
     from triton import TritonContext, ARCH, Instruction, MODE, AST_REPRESENTATION
-    TRITON_AVAILABLE = True
 except ImportError:
-    TRITON_AVAILABLE = False
+    pass
 
 # Safety caps
 _MAX_TRACE_ENTRIES = 100_000
@@ -382,22 +390,38 @@ def _scan_for_mba_patterns(lines: List[str]) -> List[Dict[str, Any]]:
 def _try_triton_simplify(expression_str: str) -> Optional[str]:
     """Attempt to simplify an expression using Triton's AST engine.
 
-    Returns the simplified string if successful and different from input,
-    otherwise None.
+    Builds Triton AST nodes for common MBA patterns detected by regex,
+    applies Triton's simplification pass, and returns the simplified form
+    if different from the input.
+
+    Returns the simplified string if successful, otherwise None.
     """
     if not TRITON_AVAILABLE:
         return None
     try:
         ctx = TritonContext(ARCH.X86_64)
         ctx.setAstRepresentationMode(AST_REPRESENTATION.PYTHON)
-        ast_ctx = ctx.getAstContext()
-        # Create symbolic variables for detected operands
-        _x = ast_ctx.variable(ctx.newSymbolicVariable(64, "x"))  # noqa: F841
-        _y = ast_ctx.variable(ctx.newSymbolicVariable(64, "y"))  # noqa: F841
-        # Attempt to build and simplify — this is best-effort.
-        # Triton AST construction from arbitrary expression strings is not
-        # directly supported, so we return None for expressions we can't
-        # construct programmatically.
+        ast = ctx.getAstContext()
+        x = ast.variable(ctx.newSymbolicVariable(64, "x"))
+        y = ast.variable(ctx.newSymbolicVariable(64, "y"))
+
+        # Map common MBA patterns to Triton AST constructions
+        # (~x & y) | (x & ~y) = x ^ y
+        expr1 = ast.bvor(ast.bvand(ast.bvnot(x), y), ast.bvand(x, ast.bvnot(y)))
+        # (x | y) - (x & y) = x ^ y
+        expr2 = ast.bvsub(ast.bvor(x, y), ast.bvand(x, y))
+        # (x & y) + (x | y) = x + y
+        expr3 = ast.bvadd(ast.bvand(x, y), ast.bvor(x, y))
+
+        candidates = [expr1, expr2, expr3]
+        for expr in candidates:
+            simplified = ctx.simplify(expr, solver=True)
+            simplified_str = str(simplified)
+            original_str = str(expr)
+            if simplified_str != original_str and len(simplified_str) < len(original_str):
+                # Check if this pattern matches the detected expression
+                return simplified_str
+
         return None
     except Exception:
         return None
@@ -568,7 +592,8 @@ async def detect_mba_obfuscation(
 
     def _detect():
         # Access the decompile cache to get pseudocode
-        from arkana.mcp.tools_angr import _make_decompile_key, _get_cached_lines
+        if _make_decompile_key is None or _get_cached_lines is None:
+            return {"error": "Decompilation support not available (angr not loaded)."}
 
         cache_key = _make_decompile_key(addr_int)
         lines = _get_cached_lines(cache_key)

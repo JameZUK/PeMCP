@@ -352,18 +352,23 @@ def _annotate_stack_abi(
     max_params: int,
 ) -> Dict[str, Any]:
     """Build annotation for Go stack-based ABI (pre-1.17 or 32-bit)."""
-    # Determine pointer size for stack slot calculation
+    # Determine pointer size and stack pointer register name
     arch_lower = str(arch).lower().strip()
-    if arch_lower in ("x86", "i386", "i686", "arm"):
+    if arch_lower in ("x86", "i386", "i686"):
         ptr_size = 4
+        sp_reg = "ESP"
+    elif arch_lower in ("arm",):
+        ptr_size = 4
+        sp_reg = "SP"
     else:
         ptr_size = 8
+        sp_reg = "RSP"
 
     params = []
     for i in range(max_params):
-        # First slot after return address: RSP+ptr_size, then +ptr_size each
+        # First slot after return address: SP+ptr_size, then +ptr_size each
         offset = (i + 1) * ptr_size
-        p = {"stack_offset": f"[RSP+{hex(offset)}]", "index": i}
+        p = {"stack_offset": f"[{sp_reg}+{hex(offset)}]", "index": i}
         if param_types and i < len(param_types):
             pt = param_types[i]
             if isinstance(pt, dict):
@@ -383,8 +388,8 @@ def _annotate_stack_abi(
         "params": params,
         "returns": returns,
         "note": (
-            f"Go {ver_str} stack ABI — all args on stack at [RSP+{hex(ptr_size)}], "
-            f"[RSP+{hex(2 * ptr_size)}], ... (slot size {ptr_size}B)"
+            f"Go {ver_str} stack ABI — all args on stack at [{sp_reg}+{hex(ptr_size)}], "
+            f"[{sp_reg}+{hex(2 * ptr_size)}], ... (slot size {ptr_size}B)"
         ),
     }
     return result

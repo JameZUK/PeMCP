@@ -99,7 +99,6 @@ _VM_PROCESS_NAMES = frozenset({
     "vmwareuser.exe",
     "vmtoolsd.exe",
     "vmacthlp.exe",
-    "vmwaretray.exe",
     # VirtualBox
     "vboxservice.exe",
     "vboxtray.exe",
@@ -283,7 +282,13 @@ def install_cpuid_bypass(
     Returns:
         True if the hook was installed, False on failure.
     """
-    def _cpuid_hook(ql_inst: "Any", address: int, size: int) -> None:
+    # Deferred hook pattern: pre-hook saves the CPUID leaf (EAX before
+    # execution), then installs a one-shot hook_address at the next
+    # instruction to modify registers AFTER CPUID has written its results.
+    cpuid_pending: Dict[str, Any] = {"leaf": None, "addr": 0}
+    cpuid_fixup_addrs: set = set()
+
+    def _cpuid_pre_hook(ql_inst: "Any", address: int, size: int) -> None:
         if size < 2:
             return
         try:
@@ -292,42 +297,47 @@ def install_cpuid_bypass(
             return
         if not insn_bytes.startswith(_CPUID_OPCODE):
             return
-
-        # Read EAX to determine which CPUID leaf is being queried
+        # Save leaf BEFORE cpuid overwrites EAX
         try:
-            eax = ql_inst.arch.regs.eax & 0xFFFFFFFF
+            cpuid_pending["leaf"] = ql_inst.arch.regs.eax & 0xFFFFFFFF
+            cpuid_pending["addr"] = address
+            next_addr = address + size
+            if next_addr not in cpuid_fixup_addrs:
+                cpuid_fixup_addrs.add(next_addr)
+                ql_inst.hook_address(_cpuid_fixup, next_addr)
         except Exception:
-            return
+            pass
 
-        if eax == 1:
-            # Feature flags leaf: clear hypervisor present bit in ECX
-            try:
+    def _cpuid_fixup(ql_inst: "Any") -> None:
+        """Fix CPUID results after the instruction has executed."""
+        try:
+            leaf = cpuid_pending.get("leaf")
+            orig_addr = cpuid_pending.get("addr", 0)
+            cpuid_pending["leaf"] = None
+            if leaf is None:
+                return
+            if leaf == 1:
                 ecx = ql_inst.arch.regs.ecx & 0xFFFFFFFF
                 if ecx & _CPUID_HYPERVISOR_BIT:
                     ql_inst.arch.regs.ecx = ecx & ~_CPUID_HYPERVISOR_BIT
                     _record_trigger(
-                        triggers, "cpuid", address,
+                        triggers, "cpuid", orig_addr,
                         "Cleared hypervisor-present bit (ECX.31) for CPUID leaf 1",
                     )
-            except Exception:
-                pass
-
-        elif eax == _CPUID_HYPERVISOR_VENDOR_LEAF:
-            # Hypervisor vendor leaf: zero out vendor string registers
-            try:
+            elif leaf == _CPUID_HYPERVISOR_VENDOR_LEAF:
                 ql_inst.arch.regs.ebx = 0
                 ql_inst.arch.regs.ecx = 0
                 ql_inst.arch.regs.edx = 0
                 _record_trigger(
-                    triggers, "cpuid", address,
+                    triggers, "cpuid", orig_addr,
                     "Zeroed hypervisor vendor string (EBX/ECX/EDX) for "
                     "CPUID leaf 0x40000000",
                 )
-            except Exception:
-                pass
+        except Exception:
+            pass
 
     try:
-        ql.hook_code(_cpuid_hook)
+        ql.hook_code(_cpuid_pre_hook)
         return True
     except Exception:
         return False
@@ -354,10 +364,13 @@ def install_rdtsc_bypass(
     Returns:
         True if the hook was installed, False on failure.
     """
-    # Mutable container for last TSC value (closure state)
+    # Deferred hook pattern: detect RDTSC pre-execution, apply spoofed
+    # values post-execution via one-shot hook_address.
     tsc_state = {"last_tsc": _RDTSC_INITIAL_TSC}
+    rdtsc_pending: Dict[str, Any] = {"active": False, "addr": 0}
+    rdtsc_fixup_addrs: set = set()
 
-    def _rdtsc_hook(ql_inst: "Any", address: int, size: int) -> None:
+    def _rdtsc_pre_hook(ql_inst: "Any", address: int, size: int) -> None:
         if size < 2:
             return
         try:
@@ -366,26 +379,37 @@ def install_rdtsc_bypass(
             return
         if not insn_bytes.startswith(_RDTSC_OPCODE):
             return
-
-        # Compute a deterministic but realistic delta from the address
-        # Using modular arithmetic keeps it in range without importing random
-        delta = _RDTSC_MIN_DELTA + (address % (_RDTSC_MAX_DELTA - _RDTSC_MIN_DELTA))
-        new_tsc = tsc_state["last_tsc"] + delta
-        tsc_state["last_tsc"] = new_tsc
-
-        # RDTSC stores result in EDX:EAX (high 32 bits : low 32 bits)
+        rdtsc_pending["active"] = True
+        rdtsc_pending["addr"] = address
         try:
+            next_addr = address + size
+            if next_addr not in rdtsc_fixup_addrs:
+                rdtsc_fixup_addrs.add(next_addr)
+                ql_inst.hook_address(_rdtsc_fixup, next_addr)
+        except Exception:
+            pass
+
+    def _rdtsc_fixup(ql_inst: "Any") -> None:
+        """Replace RDTSC result with spoofed timestamp."""
+        try:
+            if not rdtsc_pending.get("active"):
+                return
+            rdtsc_pending["active"] = False
+            orig_addr = rdtsc_pending.get("addr", 0)
+            delta = _RDTSC_MIN_DELTA + (orig_addr % (_RDTSC_MAX_DELTA - _RDTSC_MIN_DELTA))
+            new_tsc = tsc_state["last_tsc"] + delta
+            tsc_state["last_tsc"] = new_tsc
             ql_inst.arch.regs.eax = new_tsc & 0xFFFFFFFF
             ql_inst.arch.regs.edx = (new_tsc >> 32) & 0xFFFFFFFF
             _record_trigger(
-                triggers, "rdtsc", address,
+                triggers, "rdtsc", orig_addr,
                 f"Spoofed RDTSC: delta={delta}, TSC=0x{new_tsc:016x}",
             )
         except Exception:
             pass
 
     try:
-        ql.hook_code(_rdtsc_hook)
+        ql.hook_code(_rdtsc_pre_hook)
         return True
     except Exception:
         return False

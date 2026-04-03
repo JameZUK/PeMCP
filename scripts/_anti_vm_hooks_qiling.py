@@ -47,44 +47,47 @@ def install_anti_vm_hooks_qiling(ql, triggers):
     rdtsc_state = {"last_tsc": 0x100000000}
 
     # --- CPUID bypass ---
+    # Strategy: pre-hook saves the leaf number (EAX before CPUID), then
+    # installs a one-shot hook at the next instruction (address + size) to
+    # modify registers AFTER CPUID has written its results.
     try:
-        def _cpuid_hook(ql, address, size):
+        cpuid_pending = {"leaf": None, "addr": 0}
+        cpuid_fixup_hooks = set()  # Track installed one-shot addresses
+
+        def _cpuid_pre_hook(ql, address, size):
             try:
                 code = ql.mem.read(address, min(size, 4))
-                # CPUID = 0F A2
                 if len(code) >= 2 and code[0] == 0x0F and code[1] == 0xA2:
-                    # Will execute CPUID — we hook post-execution
-                    # by hooking the NEXT instruction
-                    pass
+                    # Save leaf number BEFORE cpuid overwrites EAX
+                    leaf = ql.arch.regs.rax & 0xFFFFFFFF if is_64 else ql.arch.regs.eax & 0xFFFFFFFF
+                    cpuid_pending["leaf"] = leaf
+                    cpuid_pending["addr"] = address
+                    # Install one-shot post-hook at next instruction
+                    next_addr = address + size
+                    if next_addr not in cpuid_fixup_hooks:
+                        cpuid_fixup_hooks.add(next_addr)
+                        ql.hook_address(_cpuid_fixup, next_addr)
             except Exception:
                 pass
 
-        def _cpuid_post_hook(ql, address, size):
-            """Check and fix CPUID results after execution."""
+        def _cpuid_fixup(ql):
+            """Fix CPUID results after the instruction has executed."""
             try:
-                code = ql.mem.read(address, min(size, 4))
-                if len(code) < 2 or code[0] != 0x0F or code[1] != 0xA2:
+                leaf = cpuid_pending.get("leaf")
+                orig_addr = cpuid_pending.get("addr", 0)
+                cpuid_pending["leaf"] = None
+                if leaf is None:
                     return
-
-                if is_64:
-                    eax = ql.arch.regs.rax & 0xFFFFFFFF
-                    ecx = ql.arch.regs.rcx
-                else:
-                    eax = ql.arch.regs.eax
-                    ecx = ql.arch.regs.ecx
-
-                # Leaf 1: clear hypervisor present bit (ECX bit 31)
-                if eax == 1 or (eax & 0xFFFFFFFF) == 1:
+                if leaf == 1:
+                    ecx = ql.arch.regs.rcx if is_64 else ql.arch.regs.ecx
                     if ecx & (1 << 31):
                         new_ecx = ecx & ~(1 << 31)
                         if is_64:
                             ql.arch.regs.rcx = new_ecx
                         else:
                             ql.arch.regs.ecx = new_ecx
-                        _record_trigger(triggers, "cpuid_hypervisor_bit", address)
-
-                # Leaf 0x40000000: zero hypervisor vendor string
-                if (eax & 0xFFFFFFFF) == 0x40000000:
+                        _record_trigger(triggers, "cpuid_hypervisor_bit", orig_addr)
+                elif leaf == 0x40000000:
                     if is_64:
                         ql.arch.regs.rbx = 0
                         ql.arch.regs.rcx = 0
@@ -93,39 +96,58 @@ def install_anti_vm_hooks_qiling(ql, triggers):
                         ql.arch.regs.ebx = 0
                         ql.arch.regs.ecx = 0
                         ql.arch.regs.edx = 0
-                    _record_trigger(triggers, "cpuid_vendor_string", address)
+                    _record_trigger(triggers, "cpuid_vendor_string", orig_addr)
             except Exception:
                 pass
 
-        ql.hook_code(_cpuid_post_hook)
+        ql.hook_code(_cpuid_pre_hook)
         installed.append("cpuid")
     except Exception as e:
         failed.append(f"cpuid: {e}")
 
     # --- RDTSC bypass ---
+    # Same strategy: detect RDTSC pre-execution, fix registers post-execution
+    # via one-shot hook_address at the next instruction.
     try:
-        def _rdtsc_hook(ql, address, size):
+        rdtsc_pending = {"active": False, "addr": 0}
+        rdtsc_fixup_hooks = set()
+
+        def _rdtsc_pre_hook(ql, address, size):
             try:
                 code = ql.mem.read(address, min(size, 4))
-                # RDTSC = 0F 31
                 if len(code) >= 2 and code[0] == 0x0F and code[1] == 0x31:
-                    # Spoof with small realistic delta
-                    delta = 100 + ((address & 0xFFF) % 4900)  # 100-5000 cycles, deterministic
-                    rdtsc_state["last_tsc"] += delta
-                    tsc = rdtsc_state["last_tsc"]
-                    low = tsc & 0xFFFFFFFF
-                    high = (tsc >> 32) & 0xFFFFFFFF
-                    if is_64:
-                        ql.arch.regs.rax = low
-                        ql.arch.regs.rdx = high
-                    else:
-                        ql.arch.regs.eax = low
-                        ql.arch.regs.edx = high
-                    _record_trigger(triggers, "rdtsc", address)
+                    rdtsc_pending["active"] = True
+                    rdtsc_pending["addr"] = address
+                    next_addr = address + size
+                    if next_addr not in rdtsc_fixup_hooks:
+                        rdtsc_fixup_hooks.add(next_addr)
+                        ql.hook_address(_rdtsc_fixup, next_addr)
             except Exception:
                 pass
 
-        ql.hook_code(_rdtsc_hook)
+        def _rdtsc_fixup(ql):
+            """Replace RDTSC result with spoofed timestamp."""
+            try:
+                if not rdtsc_pending.get("active"):
+                    return
+                rdtsc_pending["active"] = False
+                orig_addr = rdtsc_pending.get("addr", 0)
+                delta = 100 + ((orig_addr & 0xFFF) % 4900)
+                rdtsc_state["last_tsc"] += delta
+                tsc = rdtsc_state["last_tsc"]
+                low = tsc & 0xFFFFFFFF
+                high = (tsc >> 32) & 0xFFFFFFFF
+                if is_64:
+                    ql.arch.regs.rax = low
+                    ql.arch.regs.rdx = high
+                else:
+                    ql.arch.regs.eax = low
+                    ql.arch.regs.edx = high
+                _record_trigger(triggers, "rdtsc", orig_addr)
+            except Exception:
+                pass
+
+        ql.hook_code(_rdtsc_pre_hook)
         installed.append("rdtsc")
     except Exception as e:
         failed.append(f"rdtsc: {e}")
