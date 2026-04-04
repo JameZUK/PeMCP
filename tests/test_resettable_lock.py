@@ -231,11 +231,12 @@ class TestResettableLockConcurrent:
     def test_concurrent_acquire_after_reset(self):
         """Multiple threads compete for the lock after force_reset."""
         holder_ready = threading.Event()
+        holder_continue = threading.Event()
 
         def old_holder():
             self.lock.acquire()
             holder_ready.set()
-            time.sleep(1)  # Simulate long C call
+            holder_continue.wait(timeout=5)  # Wait for signal instead of sleep
             self.lock.release()
 
         old = threading.Thread(target=old_holder, daemon=True)
@@ -246,21 +247,30 @@ class TestResettableLockConcurrent:
 
         # Launch 3 threads that each try to acquire
         results = []
-        lock = threading.Lock()
+        results_lock = threading.Lock()
+        all_done = threading.Event()
+        done_count = [0]
 
         def competitor(name):
-            if self.lock.acquire(timeout=2):
-                with lock:
+            if self.lock.acquire(timeout=5):
+                with results_lock:
                     results.append(name)
-                time.sleep(0.01)
                 self.lock.release()
+            with results_lock:
+                done_count[0] += 1
+                if done_count[0] == 3:
+                    all_done.set()
 
         threads = [threading.Thread(target=competitor, args=(f"t{i}",)) for i in range(3)]
         for t in threads:
             t.start()
+
+        # Wait for all competitors to finish (event-based, not timeout-based)
+        all_done.wait(timeout=10)
+        holder_continue.set()  # Release old holder
         for t in threads:
-            t.join(timeout=5)
-        old.join(timeout=3)
+            t.join(timeout=2)
+        old.join(timeout=2)
 
         # All 3 should have acquired the lock
         assert len(results) == 3

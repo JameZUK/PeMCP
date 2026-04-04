@@ -42,6 +42,11 @@ class ResettableLock:
 
     def acquire(self, timeout=-1, blocking=True) -> bool:
         """Acquire the lock.  Same API as ``threading.Lock.acquire``."""
+        # Capture generation BEFORE acquiring to close the race window:
+        # if force_reset fires between _lock.acquire and _holder_gen write,
+        # we record the pre-reset generation, so our release() becomes a
+        # no-op (correct behaviour — we acquired under the old generation).
+        gen_at_acquire = self._generation
         if timeout == -1 and blocking:
             result = self._lock.acquire()
         elif not blocking:
@@ -50,7 +55,7 @@ class ResettableLock:
             result = self._lock.acquire(timeout=timeout)
         if result:
             with self._meta_lock:
-                self._holder_gen[threading.get_ident()] = self._generation
+                self._holder_gen[threading.get_ident()] = gen_at_acquire
         return result
 
     def release(self):
@@ -63,6 +68,10 @@ class ResettableLock:
                     self._lock.release()
                 except RuntimeError:
                     pass  # Already force-released
+            # Periodic cleanup: if holder_gen has grown (dead threads), prune
+            if len(self._holder_gen) > 10:
+                alive = {t.ident for t in threading.enumerate()}
+                self._holder_gen = {k: v for k, v in self._holder_gen.items() if k in alive}
 
     def force_reset(self):
         """Force-release and invalidate all current holders.
@@ -78,6 +87,7 @@ class ResettableLock:
                 self._lock.release()
             except RuntimeError:
                 pass  # Lock was not held
+
 
     def __repr__(self):
         return f"<ResettableLock gen={self._generation} holders={len(self._holder_gen)}>"
