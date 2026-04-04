@@ -261,25 +261,45 @@ generate_cti_report()
 
 ### Proxmox / QEMU / KVM
 
-One-line configuration change:
-
-```bash
-# On the Proxmox host:
-qm set <VMID> --cpu host,hidden=1
-```
-
-Or edit `/etc/pve/qemu-server/<VMID>.conf`:
+QEMU/KVM exposes many VM indicators beyond just CPUID. A complete stealth configuration requires multiple settings. Edit `/etc/pve/qemu-server/<VMID>.conf`:
 
 ```
+# Core anti-detection
 cpu: host,hidden=1
+balloon: 0
+agent: 0
+vmgenid: 0
+
+# Use non-VirtIO devices (VirtIO PCI vendor 0x1AF4 = Red Hat)
+scsihw: lsi
+vga: std
+net0: e1000=D4:BE:D9:12:34:56,bridge=vmbr0
+
+# QEMU args: ACPI + SMBIOS + disk spoofing
+args: -smbios type=0,vendor=Dell\ Inc.,version=1.14.0,date=10/20/2022,release=1.14,uefi=on -smbios type=1,manufacturer=Dell,product=Latitude-5520 -global scsi-hd.vendor=WDC -global scsi-hd.product=WD10EZEX -machine x-oem-id=ALASKA,x-oem-table-id=A_M_I___
 ```
 
-This tells KVM to:
-- Clear CPUID leaf 1 ECX bit 31 (hypervisor present)
-- Zero CPUID leaf 0x40000000 (hypervisor vendor string "KVMKVMKVM")
-- Hide the KVM paravirt interface
+**What each setting hides:**
 
-**Restart the VM after changing this setting.**
+| Setting | Hides |
+|---|---|
+| `cpu: host,hidden=1` | CPUID hypervisor bit, KVM vendor string |
+| `balloon: 0` | VirtIO balloon device |
+| `agent: 0` | QEMU guest agent channel |
+| `vmgenid: 0` | VM Generation ID ACPI device |
+| `scsihw: lsi` | VirtIO SCSI (replaces with real LSI chip emulation) |
+| `vga: std` | VirtIO GPU |
+| `net0: e1000=D4:BE:D9:...` | VirtIO NIC + QEMU MAC prefix (52:54:00) |
+| `-smbios type=0,...` | BIOS manufacturer, version (replaces "QEMU/Bochs") |
+| `-smbios type=1,...` | System manufacturer (replaces "QEMU") |
+| `-global scsi-hd.vendor=WDC` | Disk model (replaces "QEMU HARDDISK") |
+| `-machine x-oem-id=ALASKA` | ACPI OEM ID (replaces "BOCHS") |
+
+**Restart the VM after changing settings.**
+
+> **OVMF firmware branding**: Proxmox's OVMF firmware embeds "Proxmox distribution of EDK II" as a compile-time constant. This cannot be changed via QEMU arguments. Options: install vanilla Debian `ovmf` package, build custom `pve-edk2-firmware` from source, or use the [proxmox-ve-anti-detection](https://github.com/zhaodice/proxmox-ve-anti-detection) patched QEMU build. See [Remaining Indicators](#remaining-indicators) below.
+
+> **For deeper hardening** (device names, audio vendor IDs, EDID monitor info, USB device strings, RDTSC timing): the [proxmox-ve-anti-detection](https://github.com/zhaodice/proxmox-ve-anti-detection) project patches 60+ detection strings in the QEMU binary. Pre-built `.deb` packages are available for each Proxmox version.
 
 ### libvirt / virt-manager
 
@@ -358,10 +378,32 @@ Layers 1-11 are bypassed by the combination of hypervisor CPUID masking + Frida 
 
 | Protector | Minimum Setup | Full Bypass |
 |---|---|---|
-| **Themida/WinLicense 3.x** | CPUID hidden + Frida API hooks | + ScyllaHide for advanced anti-debug |
-| **VMProtect 3.x** | CPUID hidden + Frida API hooks | + Unlicense for memory dump |
+| **Themida/WinLicense 3.x** | CPUID hidden + Frida API hooks | Fully working (tested, 40 API calls captured) |
+| **VMProtect 3.x** | CPUID hidden + full Proxmox hardening + patched OVMF | Uses direct syscalls — API hooks alone insufficient. Needs [proxmox-ve-anti-detection](https://github.com/zhaodice/proxmox-ve-anti-detection) or custom OVMF build |
 | **Enigma Protector** | Frida API hooks (weaker VM detection) | Usually sufficient |
 | **Code Virtualizer** | Frida API hooks | Usually sufficient |
+
+### Remaining Indicators (Proxmox)
+
+Even with full configuration hardening, some indicators require patched QEMU or custom firmware:
+
+| Indicator | Source | Fix |
+|---|---|---|
+| "Proxmox distribution of EDK II" in BIOS version | OVMF firmware compile-time PCD | Build custom pve-edk2-firmware or install vanilla Debian `ovmf` |
+| VirtIO PCI vendor 0x1AF4 (Red Hat) | Any remaining VirtIO devices | Avoid VirtIO devices, or use patched QEMU |
+| "QEMU Monitor" in EDID display info | QEMU display emulation | `vga: none` with GPU passthrough, or patched QEMU |
+| "QEMU USB Tablet" in device names | QEMU input devices | Pass through real USB devices, or patched QEMU |
+| RDTSC timing anomalies | KVM VM-exit overhead | `hv_time` CPU flag (partial), or kernel RDTSC handler patch |
+| fw_cfg ACPI device "QEMU0002" | QEMU firmware config | Patched QEMU only |
+
+For the most thorough solution, use [zhaodice/proxmox-ve-anti-detection](https://github.com/zhaodice/proxmox-ve-anti-detection) which patches all of these in a single QEMU build. Pre-built packages available for Proxmox 8.x.
+
+### VMProtect vs Themida: Why VMProtect Is Harder
+
+Our testing revealed a fundamental difference:
+
+- **Themida** uses Windows API calls for VM detection (`GetSystemFirmwareTable`, `RegOpenKeyEx`, `GetAdaptersInfo`). Frida's API hooks intercept these successfully.
+- **VMProtect** makes **direct syscalls** — it has its own `syscall` instruction stubs that bypass ntdll.dll entirely. No usermode API hook can intercept these. VMProtect reads SMBIOS/ACPI data through raw `NtQuerySystemInformation` syscalls, finding VM strings that must be eliminated at the hypervisor level.
 
 ---
 
@@ -610,7 +652,8 @@ For teams with existing sandbox infrastructure, [CAPEv2](https://github.com/kevo
 
 ## Limitations
 
-- **Hypervisor configuration required** -- CPUID detection cannot be bypassed from userspace. You must configure your hypervisor to hide the hypervisor bit (`hidden=1` on Proxmox/KVM, `hypervisor.cpuid.v0 = FALSE` on VMware). Without this, the binary hangs during Themida's initialisation.
+- **Hypervisor configuration required** -- CPUID detection cannot be bypassed from userspace. You must configure your hypervisor to hide the hypervisor bit and spoof SMBIOS/ACPI data. Without this, binaries hang or exit during the protector's initialisation. See [Hypervisor Configuration](#hypervisor-configuration) for the full Proxmox setup.
+- **VMProtect direct syscalls** -- VMProtect makes direct `syscall` instructions that bypass ntdll.dll entirely. Frida's API hooks on ntdll functions never fire. VMProtect requires VM indicators to be eliminated at the hypervisor level (SMBIOS, ACPI, disk model, OVMF firmware branding). Proxmox's OVMF embeds "Proxmox distribution of EDK II" as a compile-time constant that cannot be changed via configuration — requires a custom firmware build or the [proxmox-ve-anti-detection](https://github.com/zhaodice/proxmox-ve-anti-detection) patched QEMU.
 - **Frida memory scanning** -- Themida scans process memory for Frida signatures. Standard spawn-mode injection works (the agent loads after Themida's memory scan), but frida-gadget sideloading via DLL proxy does not (the gadget is present during Themida's init). If spawn mode fails, you may need to build Frida from source with signature strings removed.
 - **Coverage vs timing** -- Frida's Stalker engine adds 10-100x overhead per basic block. Protectors with RDTSC timing checks (Themida, VMProtect) will detect this slowdown. Use API logging alone for timing-sensitive binaries.
 - **Code integrity checks** -- Themida's `SECheckCodeIntegrity()` verifies CRC checksums of code sections. Do not modify the binary's code sections (no import table patching, no CPUID byte patching). Use API hooks and hypervisor config instead.
