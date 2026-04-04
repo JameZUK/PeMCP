@@ -46,12 +46,19 @@ class _PartialCFG:
 
     def __init__(self, project):
         self.functions = project.kb.functions
-        self.model = None
+        self._model = None
         try:
-            self.model = project.kb.cfgs.get_most_accurate()
+            self._model = project.kb.cfgs.get_most_accurate()
         except Exception:
             pass
         self._partial = True
+
+    @property
+    def model(self):
+        """Return the CFG model, or None.  Tools that call cfg.model.X
+        should handle None gracefully (decompile_function_with_angr already
+        falls back to a local per-function CFG when model is None)."""
+        return self._model
 
     def __repr__(self):
         try:
@@ -110,11 +117,18 @@ def _try_salvage_partial(task_id, project, error_msg, bridge=None):
     if func_count < _CFG_PARTIAL_MIN:
         return False
 
+    # Try to get actual error count from task metadata
+    try:
+        task_data = state.get_task(task_id)
+        error_count = task_data.get("cfg_error_count", 0) if task_data else 0
+    except Exception:
+        error_count = 0
+
     _accept_partial_cfg(
         task_id, project,
         reason=f"exception after {func_count} funcs: {error_msg[:100]}",
         func_count=func_count,
-        error_count=0,
+        error_count=error_count,
         bridge=bridge,
     )
     return True

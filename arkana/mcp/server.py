@@ -228,8 +228,8 @@ _CACHE_SWEEP_CALLS = 50     # tool calls between sweeps
 def _collect_background_alerts(current_state) -> list:
     """Collect alerts for running and overtime background tasks."""
     alerts = []
+    now = time.time()
     try:
-        now = time.time()
         for tid in current_state.get_all_task_ids():
             task = current_state.get_task(tid)
             if not task:
@@ -273,7 +273,7 @@ def _collect_background_alerts(current_state) -> list:
     # Decompile lock force-reset alert (transient, 30s window)
     try:
         lock = current_state._decompile_lock
-        if hasattr(lock, '_last_force_reset') and lock._last_force_reset:
+        if lock._last_force_reset:
             age = now - lock._last_force_reset
             if age < 30:
                 alerts.append({
