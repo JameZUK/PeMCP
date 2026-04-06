@@ -72,6 +72,7 @@ from arkana.dashboard.state_api import (
     clear_bsim_db,
     index_current_binary,
     _BSIM_HEX64_RE,
+    get_settings_data,
 )
 
 from arkana.constants import DASHBOARD_THREAD_POOL_SIZE
@@ -475,6 +476,10 @@ def _create_routes(dashboard_token: str) -> list:
     def _render(template_name: str, context: dict = None) -> str:
         ctx = context or {}
         ctx.setdefault("nav_active", "")
+        # Inject dashboard theme into every template for base.html
+        if "dashboard_theme" not in ctx:
+            from arkana.user_config import get_dashboard_theme
+            ctx["dashboard_theme"] = get_dashboard_theme()
         return _jinja_env.get_template(template_name).render(**ctx)
 
     # --- Login ---
@@ -1540,6 +1545,63 @@ def _create_routes(dashboard_token: str) -> list:
         except Exception as exc:
             return _api_error_response("api_bsim_clear", exc)
 
+    # --- Settings page ---
+    async def page_settings(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return RedirectResponse("/dashboard/login", status_code=302)
+        data = await _dash_to_thread(get_settings_data)
+        ctx = {"nav_active": "settings", **data}
+        resp = HTMLResponse(_render("settings.html", ctx))
+        return _make_auth_response(request, dashboard_token, resp)
+
+    async def api_settings_get(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        try:
+            data = await _dash_to_thread(get_settings_data)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_settings_get", exc)
+
+    async def api_settings_post(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        from arkana.user_config import save_settings, SETTINGS_REGISTRY
+        try:
+            errors = await _dash_to_thread(save_settings, body)
+            # Check if any saved setting has restart=True
+            restart_keys = {s["key"] for s in SETTINGS_REGISTRY if s.get("restart")}
+            saved_keys = set(body.keys()) - set(errors.keys())
+            restart_required = bool(saved_keys & restart_keys)
+            return JSONResponse({
+                "status": "ok",
+                "saved": len(saved_keys),
+                "errors": errors,
+                "restart_required": restart_required,
+            })
+        except Exception as exc:
+            return _api_error_response("api_settings_post", exc)
+
+    async def api_settings_reset(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        from arkana.user_config import SETTINGS_REGISTRY, delete_config_value
+        try:
+            count = 0
+            for spec in SETTINGS_REGISTRY:
+                if await _dash_to_thread(delete_config_value, spec["key"]):
+                    count += 1
+            return JSONResponse({"status": "ok", "reset": count})
+        except Exception as exc:
+            return _api_error_response("api_settings_reset", exc)
+
     return [
         Route("/login", endpoint=login_page, methods=["GET"]),
         Route("/login", endpoint=login_post, methods=["POST"]),
@@ -1558,6 +1620,7 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/types", endpoint=_auth_page("types.html", "types", get_custom_types_data), methods=["GET"]),
         # New pages (Batch 4)
         Route("/similarity", endpoint=_auth_page("similarity.html", "similarity"), methods=["GET"]),
+        Route("/settings", endpoint=page_settings, methods=["GET"]),
         # API
         Route("/api/state", endpoint=api_state, methods=["GET"]),
         Route("/api/functions", endpoint=api_functions, methods=["GET"]),
@@ -1609,6 +1672,10 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/bsim/validate", endpoint=api_bsim_validate, methods=["POST"]),
         Route("/api/bsim/delete", endpoint=api_bsim_delete, methods=["POST"]),
         Route("/api/bsim/clear", endpoint=api_bsim_clear, methods=["POST"]),
+        # Settings API
+        Route("/api/settings", endpoint=api_settings_get, methods=["GET"]),
+        Route("/api/settings", endpoint=api_settings_post, methods=["POST"]),
+        Route("/api/settings/reset", endpoint=api_settings_reset, methods=["POST"]),
         # Partials
         Route("/partials/overview-stats", endpoint=partial_overview_stats, methods=["GET"]),
         Route("/partials/task-list", endpoint=partial_task_list, methods=["GET"]),

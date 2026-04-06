@@ -18,6 +18,12 @@ from arkana.config import pefile, logger
 def _safe_env_int(key: str, default: int, min_val: int | None = None, max_val: int | None = None) -> int:
     """Read an environment variable as int with fallback to *default*.
 
+    Resolution order:
+      1. Environment variable (key)
+      2. User config file (~/.arkana/config.json) — if the env var name is
+         registered in user_config._ENV_VAR_MAP
+      3. Hardcoded default
+
     Returns *default* when the variable is missing or its value cannot be
     converted to ``int`` (e.g. empty string, float notation, non-numeric
     text).  A warning is logged for invalid values so operators can notice
@@ -27,6 +33,9 @@ def _safe_env_int(key: str, default: int, min_val: int | None = None, max_val: i
     to the given range.
     """
     val = os.environ.get(key)
+    if val is None:
+        # Check user config file as middle layer
+        val = _config_lookup_by_env(key)
     if val is None:
         result = default
     else:
@@ -40,6 +49,37 @@ def _safe_env_int(key: str, default: int, min_val: int | None = None, max_val: i
     if max_val is not None and result > max_val:
         result = max_val
     return result
+
+
+# Reverse map: env var name -> config key.  Built lazily to avoid import
+# cycles (user_config imports nothing from utils).
+_env_to_config_key: dict | None = None
+
+
+def _config_lookup_by_env(env_key: str) -> str | None:
+    """Look up a user config value by its environment variable name."""
+    global _env_to_config_key
+    if _env_to_config_key is None:
+        try:
+            from arkana.user_config import _ENV_VAR_MAP, load_user_config  # noqa: F811
+            _env_to_config_key = {}
+            for cfg_key, env_vars in _ENV_VAR_MAP.items():
+                for ev in env_vars:
+                    _env_to_config_key[ev] = cfg_key
+        except ImportError:
+            _env_to_config_key = {}
+            return None
+
+    cfg_key = _env_to_config_key.get(env_key)
+    if cfg_key is None:
+        return None
+    try:
+        from arkana.user_config import load_user_config
+        config = load_user_config()
+        val = config.get(cfg_key)
+        return str(val) if val is not None else None
+    except Exception:
+        return None
 
 # Module-level shared executor for regex timeout protection.
 # Using a small pool avoids per-call thread creation/teardown overhead.

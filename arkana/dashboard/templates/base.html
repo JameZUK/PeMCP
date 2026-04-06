@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en"{% if dashboard_theme and dashboard_theme != 'crt' %} data-theme="{{ dashboard_theme }}"{% endif %}>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,6 +8,7 @@
     <meta name="csrf-token" content="{{ csrf_token }}">
     <title>{% block title %}Arkana Dashboard{% endblock %}</title>
     <link rel="stylesheet" href="/dashboard/static/crt.css">
+    <link rel="stylesheet" href="/dashboard/static/themes.css">
     <link rel="icon" href="/dashboard/static/logo_icon.svg" type="image/svg+xml">
 </head>
 <body>
@@ -33,6 +34,7 @@
             <a href="/dashboard/similarity" class="nav-link {% if nav_active == 'similarity' %}active{% endif %}">SIMILARITY</a>
             <a href="/dashboard/timeline" class="nav-link {% if nav_active == 'timeline' %}active{% endif %}">TIMELINE</a>
             <a href="/dashboard/notes" class="nav-link {% if nav_active == 'notes' %}active{% endif %}">NOTES</a>
+            <a href="/dashboard/settings" class="nav-link {% if nav_active == 'settings' %}active{% endif %}">SETTINGS</a>
         </div>
         <div class="nav-more-wrap" id="nav-more-wrap">
             <button class="nav-more-btn" id="nav-more-btn" aria-label="Show more navigation links">MORE <span class="nav-more-count" id="nav-more-count"></span>&#9662;</button>

@@ -4372,3 +4372,29 @@ def get_capabilities_summary_data() -> Dict[str, Any]:
         "capabilities": names[:20],
         "total": len(names),
     }
+
+
+# ---------------------------------------------------------------------------
+#  Settings
+# ---------------------------------------------------------------------------
+
+def get_settings_data() -> Dict[str, Any]:
+    """Return structured settings data for the settings page."""
+    from arkana.user_config import get_all_settings, get_dashboard_theme
+    from collections import OrderedDict
+
+    all_settings = get_all_settings()
+    current_theme = get_dashboard_theme()
+
+    # Group settings by group name (preserving insertion order)
+    groups: Dict[str, list] = OrderedDict()
+    for s in all_settings:
+        group = s["group"]
+        if group == "Appearance":
+            continue  # Theme is handled separately
+        groups.setdefault(group, []).append(s)
+
+    return {
+        "current_theme": current_theme,
+        "groups": groups,
+    }

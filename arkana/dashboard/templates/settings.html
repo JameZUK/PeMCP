@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Settings{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+    <div class="page-header">
+        <h1 class="glow">SETTINGS</h1>
+    </div>
+
+    <!-- Theme Selection -->
+    <div class="settings-section">
+        <h2>Appearance</h2>
+        <div class="theme-cards" id="theme-cards">
+            <!-- Dark themes -->
+            <div class="theme-card{% if current_theme == 'crt' %} active{% endif %}" data-theme-choice="crt">
+                <div class="theme-preview">
+                    <div class="theme-preview-swatch" style="background:#000d00"></div>
+                    <div class="theme-preview-swatch" style="background:#001200"></div>
+                    <div class="theme-preview-swatch" style="background:#001a00"></div>
+                    <div class="theme-preview-swatch" style="background:#00ff41"></div>
+                </div>
+                <div class="theme-card-name">CRT</div>
+                <div class="theme-card-desc">Retro green phosphor terminal with scanlines, vignette, and glow effects.</div>
+                <div class="theme-accent-row">
+                    <div class="theme-accent-dot" style="background:#00ff41" title="Primary"></div>
+                    <div class="theme-accent-dot" style="background:#ff4141" title="Danger"></div>
+                    <div class="theme-accent-dot" style="background:#ffaa00" title="Warning"></div>
+                    <div class="theme-accent-dot" style="background:#ccffcc" title="Highlight"></div>
+                </div>
+            </div>
+            <div class="theme-card{% if current_theme == 'professional' %} active{% endif %}" data-theme-choice="professional">
+                <div class="theme-preview">
+                    <div class="theme-preview-swatch" style="background:#12131a"></div>
+                    <div class="theme-preview-swatch" style="background:#1a1c25"></div>
+                    <div class="theme-preview-swatch" style="background:#242633"></div>
+                    <div class="theme-preview-swatch" style="background:#60a5fa"></div>
+                </div>
+                <div class="theme-card-name">Professional Dark</div>
+                <div class="theme-card-desc">Clean dark theme with blue accents. No effects. Crisp and readable.</div>
+                <div class="theme-accent-row">
+                    <div class="theme-accent-dot" style="background:#60a5fa" title="Primary"></div>
+                    <div class="theme-accent-dot" style="background:#f87171" title="Danger"></div>
+                    <div class="theme-accent-dot" style="background:#fbbf24" title="Warning"></div>
+                    <div class="theme-accent-dot" style="background:#e2e8f0" title="Highlight"></div>
+                </div>
+            </div>
+            <div class="theme-card{% if current_theme == 'midnight' %} active{% endif %}" data-theme-choice="midnight">
+                <div class="theme-preview">
+                    <div class="theme-preview-swatch" style="background:#0d1117"></div>
+                    <div class="theme-preview-swatch" style="background:#161b22"></div>
+                    <div class="theme-preview-swatch" style="background:#21262d"></div>
+                    <div class="theme-preview-swatch" style="background:#7dd3fc"></div>
+                </div>
+                <div class="theme-card-name">Midnight</div>
+                <div class="theme-card-desc">Deep dark with subtle blue undertone. Softer palette, easy on the eyes.</div>
+                <div class="theme-accent-row">
+                    <div class="theme-accent-dot" style="background:#7dd3fc" title="Primary"></div>
+                    <div class="theme-accent-dot" style="background:#fb7185" title="Danger"></div>
+                    <div class="theme-accent-dot" style="background:#f59e0b" title="Warning"></div>
+                    <div class="theme-accent-dot" style="background:#cbd5e1" title="Highlight"></div>
+                </div>
+            </div>
+            <div class="theme-card{% if current_theme == 'highcontrast' %} active{% endif %}" data-theme-choice="highcontrast">
+                <div class="theme-preview">
+                    <div class="theme-preview-swatch" style="background:#000000"></div>
+                    <div class="theme-preview-swatch" style="background:#0a0a0a"></div>
+                    <div class="theme-preview-swatch" style="background:#171717"></div>
+                    <div class="theme-preview-swatch" style="background:#5cb8ff"></div>
+                </div>
+                <div class="theme-card-name">High Contrast</div>
+                <div class="theme-card-desc">Pure black background, white text, bold accents. Maximum readability and WCAG AAA.</div>
+                <div class="theme-accent-row">
+                    <div class="theme-accent-dot" style="background:#5cb8ff" title="Primary"></div>
+                    <div class="theme-accent-dot" style="background:#ff6b6b" title="Danger"></div>
+                    <div class="theme-accent-dot" style="background:#ffd43b" title="Warning"></div>
+                    <div class="theme-accent-dot" style="background:#ffffff" title="Highlight"></div>
+                </div>
+            </div>
+            <!-- Light themes -->
+            <div class="theme-card{% if current_theme == 'light' %} active{% endif %}" data-theme-choice="light">
+                <div class="theme-preview">
+                    <div class="theme-preview-swatch" style="background:#f8f9fb"></div>
+                    <div class="theme-preview-swatch" style="background:#ffffff"></div>
+                    <div class="theme-preview-swatch" style="background:#f1f3f5"></div>
+                    <div class="theme-preview-swatch" style="background:#2563eb"></div>
+                </div>
+                <div class="theme-card-name">Light</div>
+                <div class="theme-card-desc">Clean light theme with cool tones. Professional and familiar.</div>
+                <div class="theme-accent-row">
+                    <div class="theme-accent-dot" style="background:#2563eb" title="Primary"></div>
+                    <div class="theme-accent-dot" style="background:#dc2626" title="Danger"></div>
+                    <div class="theme-accent-dot" style="background:#d97706" title="Warning"></div>
+                    <div class="theme-accent-dot" style="background:#1e293b" title="Text"></div>
+                </div>
+            </div>
+            <div class="theme-card{% if current_theme == 'lightwarm' %} active{% endif %}" data-theme-choice="lightwarm">
+                <div class="theme-preview">
+                    <div class="theme-preview-swatch" style="background:#faf8f5"></div>
+                    <div class="theme-preview-swatch" style="background:#ffffff"></div>
+                    <div class="theme-preview-swatch" style="background:#f5f0eb"></div>
+                    <div class="theme-preview-swatch" style="background:#b45309"></div>
+                </div>
+                <div class="theme-card-name">Light Warm</div>
+                <div class="theme-card-desc">Warm ivory tones with amber accents. Gentle on the eyes for long sessions.</div>
+                <div class="theme-accent-row">
+                    <div class="theme-accent-dot" style="background:#b45309" title="Primary"></div>
+                    <div class="theme-accent-dot" style="background:#dc2626" title="Danger"></div>
+                    <div class="theme-accent-dot" style="background:#b45309" title="Warning"></div>
+                    <div class="theme-accent-dot" style="background:#292524" title="Text"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Groups -->
+    {% for group_name, items in groups.items() %}
+    <div class="settings-section" data-settings-group="{{ group_name }}">
+        <h2>{{ group_name }}</h2>
+        <div class="settings-grid">
+            {% for s in items %}
+            <div class="setting-item" data-key="{{ s.key }}">
+                <div class="setting-label">
+                    {{ s.label }}
+                    {% if s.source == 'env' %}
+                    <span class="setting-override" title="Overridden by environment variable ${{ s.env_var }}">ENV</span>
+                    {% endif %}
+                </div>
+                <div class="setting-input-row">
+                    {% if s.type == 'int' %}
+                    <input type="number"
+                           name="{{ s.key }}"
+                           value="{{ s.current_value }}"
+                           min="{{ s.min }}"
+                           max="{{ s.max }}"
+                           data-default="{{ s.default }}"
+                           {% if s.source == 'env' %}disabled title="Overridden by ${{ s.env_var }}"{% endif %}>
+                    {% if s.unit %}
+                    <span class="setting-unit">{{ s.unit }}</span>
+                    {% endif %}
+                    {% elif s.type == 'bool' %}
+                    <label class="toggle-switch">
+                        <input type="checkbox"
+                               name="{{ s.key }}"
+                               data-default="{{ s.default }}"
+                               {% if s.current_value %}checked{% endif %}
+                               {% if s.source == 'env' %}disabled title="Overridden by ${{ s.env_var }}"{% endif %}>
+                        <span class="toggle-slider"></span>
+                    </label>
+                    {% endif %}
+                </div>
+                <div class="setting-default">
+                    {% if s.type == 'int' %}
+                    default: {{ s.default }}{{ s.unit }}
+                    {% elif s.type == 'bool' %}
+                    default: {{ 'on' if s.default == '1' else 'off' }}
+                    {% endif %}
+                    {% if s.description %} — {{ s.description }}{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+
+    <!-- Save / Reset -->
+    <div class="settings-actions">
+        <button class="btn-save" id="btn-save" type="button">Save Settings</button>
+        <button class="btn-reset" id="btn-reset-all" type="button">Reset All to Defaults</button>
+        <span class="save-status" id="save-status"></span>
+    </div>
+    <div class="restart-notice" id="restart-notice">
+        Some settings require a server restart to take effect. Restart the Arkana server to apply changes.
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/settings.js"></script>
+{% endblock %}
