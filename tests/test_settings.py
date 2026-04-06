@@ -12,6 +12,8 @@ from arkana.user_config import (
     get_all_settings,
     save_settings,
     reset_setting,
+    reset_all_settings,
+    _invalidate_theme_cache,
     VALID_THEMES,
     SETTINGS_REGISTRY,
     _SETTINGS_BY_KEY,
@@ -281,6 +283,78 @@ class TestResetSetting:
 
     def test_reset_nonexistent(self, config_dir):
         assert reset_setting("nonexistent") is False
+
+
+# ---------------------------------------------------------------------------
+#  reset_all_settings
+# ---------------------------------------------------------------------------
+
+class TestResetAllSettings:
+    def test_resets_all_registered_keys(self, config_dir):
+        save_user_config({
+            "angr_cfg_soft_timeout": "600",
+            "auto_enrichment": "0",
+            "dashboard_theme": "midnight",
+        })
+        count = reset_all_settings()
+        assert count == 3
+        config = load_user_config()
+        assert "angr_cfg_soft_timeout" not in config
+        assert "auto_enrichment" not in config
+        assert "dashboard_theme" not in config
+
+    def test_preserves_non_registry_keys(self, config_dir):
+        save_user_config({
+            "vt_api_key": "secret123",
+            "angr_cfg_soft_timeout": "600",
+        })
+        count = reset_all_settings()
+        assert count == 1  # only angr_cfg_soft_timeout is in SETTINGS_REGISTRY
+        config = load_user_config()
+        assert config["vt_api_key"] == "secret123"
+
+    def test_returns_zero_when_nothing_to_reset(self, config_dir):
+        count = reset_all_settings()
+        assert count == 0
+
+    def test_single_disk_write(self, config_dir, monkeypatch):
+        """reset_all_settings should do at most one save_user_config call."""
+        save_user_config({
+            "angr_cfg_soft_timeout": "600",
+            "auto_enrichment": "0",
+        })
+        call_count = [0]
+        original_save = save_user_config
+        def counting_save(cfg):
+            call_count[0] += 1
+            original_save(cfg)
+        monkeypatch.setattr("arkana.user_config.save_user_config", counting_save)
+        reset_all_settings()
+        assert call_count[0] == 1
+
+
+# ---------------------------------------------------------------------------
+#  Theme cache
+# ---------------------------------------------------------------------------
+
+class TestThemeCache:
+    def test_cache_returns_fresh_value_after_save(self, config_dir):
+        assert get_dashboard_theme() == "crt"
+        save_user_config({"dashboard_theme": "professional"})
+        # save_user_config invalidates cache, so next call sees new value
+        assert get_dashboard_theme() == "professional"
+
+    def test_invalidate_clears_cache(self, config_dir):
+        save_user_config({"dashboard_theme": "midnight"})
+        assert get_dashboard_theme() == "midnight"
+        # Manually write a different value without save_user_config
+        cfg_dir, cfg_file = config_dir
+        cfg_file.write_text('{"dashboard_theme": "light"}')
+        # Cache still returns old value
+        assert get_dashboard_theme() == "midnight"
+        # After invalidation, reads fresh
+        _invalidate_theme_cache()
+        assert get_dashboard_theme() == "light"
 
 
 # ---------------------------------------------------------------------------

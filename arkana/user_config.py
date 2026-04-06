@@ -8,6 +8,7 @@ import os
 import json
 import logging
 import tempfile
+import time
 
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -238,8 +239,10 @@ def save_user_config(config: Dict[str, Any]) -> None:
 
     Uses atomic write (temp file + rename) to prevent partial writes from
     corrupting the config file on crash or power loss.
+    Invalidates the theme cache so callers see the new value immediately.
     """
     _ensure_config_dir()
+    _invalidate_theme_cache()
     try:
         fd, tmp_path = tempfile.mkstemp(dir=str(CONFIG_FILE.parent), suffix='.tmp')
         try:
@@ -325,25 +328,37 @@ def get_masked_config() -> Dict[str, Any]:
     return masked
 
 
+# Theme cache: (value, timestamp).  Avoids reading config.json from disk
+# on every page render while still picking up changes within 2 seconds.
+_theme_cache: tuple = ("crt", 0.0)
+_THEME_CACHE_TTL = 2.0  # seconds
+
+
 def get_dashboard_theme() -> str:
-    """Return the current dashboard theme name (crt, professional, midnight)."""
+    """Return the current dashboard theme name, cached for 2s."""
+    global _theme_cache
+    now = time.monotonic()
+    cached_val, cached_at = _theme_cache
+    if now - cached_at < _THEME_CACHE_TTL:
+        return cached_val
     val = get_config_value("dashboard_theme")
-    if val and val in VALID_THEMES:
-        return val
-    return "crt"
+    result = val if val and val in VALID_THEMES else "crt"
+    _theme_cache = (result, now)
+    return result
 
 
-def get_setting_value(key: str) -> Any:
-    """Return the effective value for a registered setting.
+def _invalidate_theme_cache() -> None:
+    """Force the next ``get_dashboard_theme()`` call to re-read from disk."""
+    global _theme_cache
+    _theme_cache = ("crt", 0.0)
 
-    Resolution: env var > config.json > registry default.
-    Returns the value cast to the correct type (int for "int", str for others).
+
+def _resolve_setting(spec: Dict[str, Any], raw: Optional[str]) -> Any:
+    """Cast a raw string value to the correct type for *spec*.
+
+    Shared by ``get_setting_value`` (single key) and ``get_all_settings``
+    (bulk) so the casting logic lives in one place.
     """
-    spec = _SETTINGS_BY_KEY.get(key)
-    if not spec:
-        return get_config_value(key)
-
-    raw = get_config_value(key)
     if raw is not None:
         if spec["type"] == "int":
             try:
@@ -363,11 +378,28 @@ def get_setting_value(key: str) -> Any:
     return spec["default"]
 
 
+def get_setting_value(key: str) -> Any:
+    """Return the effective value for a registered setting.
+
+    Resolution: env var > config.json > registry default.
+    Returns the value cast to the correct type (int for "int", str for others).
+    """
+    spec = _SETTINGS_BY_KEY.get(key)
+    if not spec:
+        return get_config_value(key)
+
+    raw = get_config_value(key)
+    return _resolve_setting(spec, raw)
+
+
 def get_all_settings() -> List[Dict[str, Any]]:
     """Return all registered settings with current effective values and metadata.
 
     Each entry includes: key, label, group, type, default, current_value,
     source (env/config/default), env_override, unit, description, restart.
+
+    Loads the config file once and resolves all values in-memory to avoid
+    redundant disk reads (previously N+1 for N settings).
     """
     config = load_user_config()
     results = []
@@ -389,13 +421,16 @@ def get_all_settings() -> List[Dict[str, Any]]:
             entry["min"] = spec.get("min")
             entry["max"] = spec.get("max")
 
-        # Determine source and effective value
+        # Determine source and resolve effective value using the single
+        # config dict already loaded — no additional disk reads.
         env_vars = _ENV_VAR_MAP.get(key, ())
         env_override = None
+        raw = None
         for env_var in env_vars:
             env_val = os.getenv(env_var)
             if env_val:
                 env_override = env_var
+                raw = env_val
                 break
 
         if env_override:
@@ -403,10 +438,11 @@ def get_all_settings() -> List[Dict[str, Any]]:
             entry["env_var"] = env_override
         elif key in config:
             entry["source"] = "config"
+            raw = str(config[key])
         else:
             entry["source"] = "default"
 
-        entry["current_value"] = get_setting_value(key)
+        entry["current_value"] = _resolve_setting(spec, raw)
         results.append(entry)
     return results
 
@@ -423,14 +459,14 @@ def save_settings(settings: Dict[str, Any]) -> Dict[str, str]:
     for key, value in settings.items():
         spec = _SETTINGS_BY_KEY.get(key)
         if not spec:
-            errors[key] = f"Unknown setting: {key}"
+            errors[key] = f"Unknown setting: {str(key)[:50]}"
             continue
 
         if spec["type"] == "int":
             try:
                 int_val = int(value)
             except (ValueError, TypeError):
-                errors[key] = f"Expected integer, got: {value}"
+                errors[key] = f"Expected integer, got: {str(value)[:50]}"
                 continue
             if "min" in spec and int_val < spec["min"]:
                 errors[key] = f"Minimum value is {spec['min']}"
@@ -451,7 +487,7 @@ def save_settings(settings: Dict[str, Any]) -> Dict[str, str]:
         elif spec["type"] == "choice":
             str_val = str(value)
             if str_val not in spec.get("choices", []):
-                errors[key] = f"Invalid choice: {str_val}. Valid: {spec.get('choices', [])}"
+                errors[key] = f"Invalid choice: {str_val[:50]}. Valid: {spec.get('choices', [])}"
                 continue
             config[key] = str_val
 
@@ -459,7 +495,7 @@ def save_settings(settings: Dict[str, Any]) -> Dict[str, str]:
             config[key] = str(value)
 
     if not errors or len(errors) < len(settings):
-        save_user_config(config)
+        save_user_config(config)  # also invalidates theme cache
         logger.info("Saved %d settings to %s", len(settings) - len(errors), CONFIG_FILE)
 
     return errors
@@ -468,3 +504,20 @@ def save_settings(settings: Dict[str, Any]) -> Dict[str, str]:
 def reset_setting(key: str) -> bool:
     """Remove a setting from config.json, reverting to default. Returns True if existed."""
     return delete_config_value(key)
+
+
+def reset_all_settings() -> int:
+    """Remove all registered settings from config.json in a single load-save cycle.
+
+    Returns the number of keys that were actually removed.
+    """
+    config = load_user_config()
+    count = 0
+    for spec in SETTINGS_REGISTRY:
+        if spec["key"] in config:
+            del config[spec["key"]]
+            count += 1
+    if count:
+        save_user_config(config)  # also invalidates theme cache
+        logger.info("Reset %d settings to defaults in %s", count, CONFIG_FILE)
+    return count

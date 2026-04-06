@@ -68,6 +68,10 @@
                 },
                 body: JSON.stringify(settings)
             }).then(function (r) {
+                if (!r.ok) {
+                    _showStatus("Server error (" + r.status + ")", true);
+                    return Promise.reject("not ok");
+                }
                 return r.json();
             }).then(function (data) {
                 if (data.errors && Object.keys(data.errors).length > 0) {

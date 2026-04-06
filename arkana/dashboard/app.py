@@ -1592,12 +1592,9 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
             return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
-        from arkana.user_config import SETTINGS_REGISTRY, delete_config_value
+        from arkana.user_config import reset_all_settings
         try:
-            count = 0
-            for spec in SETTINGS_REGISTRY:
-                if await _dash_to_thread(delete_config_value, spec["key"]):
-                    count += 1
+            count = await _dash_to_thread(reset_all_settings)
             return JSONResponse({"status": "ok", "reset": count})
         except Exception as exc:
             return _api_error_response("api_settings_reset", exc)
