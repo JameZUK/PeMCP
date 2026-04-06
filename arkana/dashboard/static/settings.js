@@ -87,8 +87,8 @@
                         if (notice) notice.classList.add("visible");
                     }
                 }
-            }).catch(function () {
-                _showStatus("Network error", true);
+            }).catch(function (err) {
+                if (err !== "not ok") _showStatus("Network error", true);
             }).finally(function () {
                 btnSave.disabled = false;
                 btnSave.textContent = "SAVE SETTINGS";

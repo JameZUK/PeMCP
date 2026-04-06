@@ -357,7 +357,9 @@ def _resolve_setting(spec: Dict[str, Any], raw: Optional[str]) -> Any:
     """Cast a raw string value to the correct type for *spec*.
 
     Shared by ``get_setting_value`` (single key) and ``get_all_settings``
-    (bulk) so the casting logic lives in one place.
+    (bulk) so the casting logic lives in one place.  Always returns the
+    native Python type for the setting (int for "int", bool for "bool",
+    str for "choice"), even when falling back to the default.
     """
     if raw is not None:
         if spec["type"] == "int":
@@ -369,13 +371,22 @@ def _resolve_setting(spec: Dict[str, Any], raw: Optional[str]) -> Any:
                     val = min(spec["max"], val)
                 return val
             except (ValueError, TypeError):
-                return spec["default"]
-        if spec["type"] == "bool":
+                pass  # fall through to default
+        elif spec["type"] == "bool":
             return raw.lower() in ("1", "true", "yes", "on")
-        if spec["type"] == "choice":
+        elif spec["type"] == "choice":
             return raw if raw in spec.get("choices", []) else spec["default"]
-        return raw
-    return spec["default"]
+        else:
+            return raw
+
+    # Default path — cast to native type so callers (including Jinja2
+    # templates) get consistent types regardless of source.
+    default = spec["default"]
+    if spec["type"] == "int":
+        return default  # already int in registry
+    if spec["type"] == "bool":
+        return str(default).lower() in ("1", "true", "yes", "on")
+    return default
 
 
 def get_setting_value(key: str) -> Any:

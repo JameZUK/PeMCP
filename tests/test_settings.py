@@ -14,6 +14,7 @@ from arkana.user_config import (
     reset_setting,
     reset_all_settings,
     _invalidate_theme_cache,
+    _resolve_setting,
     VALID_THEMES,
     SETTINGS_REGISTRY,
     _SETTINGS_BY_KEY,
@@ -144,6 +145,12 @@ class TestGetSettingValue:
         save_user_config({"angr_cfg_soft_timeout": "999999"})
         val = get_setting_value("angr_cfg_soft_timeout")
         assert val == 86400  # max is 86400
+
+    def test_bool_default_returns_bool_type(self, config_dir):
+        """Bool defaults must return Python bool, not str '1'/'0'."""
+        val = get_setting_value("auto_enrichment")
+        assert val is True
+        assert isinstance(val, bool)
 
     def test_bool_setting_true(self, config_dir):
         save_user_config({"auto_enrichment": "1"})
@@ -355,6 +362,47 @@ class TestThemeCache:
         # After invalidation, reads fresh
         _invalidate_theme_cache()
         assert get_dashboard_theme() == "light"
+
+
+# ---------------------------------------------------------------------------
+#  _resolve_setting type consistency
+# ---------------------------------------------------------------------------
+
+class TestResolveSetting:
+    """Ensure _resolve_setting returns native types for both values and defaults."""
+
+    def test_bool_default_true_returns_bool(self):
+        spec = {"type": "bool", "default": "1"}
+        assert _resolve_setting(spec, None) is True
+
+    def test_bool_default_false_returns_bool(self):
+        spec = {"type": "bool", "default": "0"}
+        assert _resolve_setting(spec, None) is False
+
+    def test_bool_value_returns_bool(self):
+        spec = {"type": "bool", "default": "1"}
+        assert _resolve_setting(spec, "0") is False
+        assert _resolve_setting(spec, "true") is True
+
+    def test_int_default_returns_int(self):
+        spec = {"type": "int", "default": 900, "min": 30, "max": 86400}
+        result = _resolve_setting(spec, None)
+        assert result == 900
+        assert isinstance(result, int)
+
+    def test_int_invalid_falls_back_to_int_default(self):
+        spec = {"type": "int", "default": 900, "min": 30, "max": 86400}
+        result = _resolve_setting(spec, "not_a_number")
+        assert result == 900
+        assert isinstance(result, int)
+
+    def test_choice_default_returns_str(self):
+        spec = {"type": "choice", "default": "crt", "choices": ["crt", "dark"]}
+        assert _resolve_setting(spec, None) == "crt"
+
+    def test_choice_invalid_falls_back(self):
+        spec = {"type": "choice", "default": "crt", "choices": ["crt", "dark"]}
+        assert _resolve_setting(spec, "neon") == "crt"
 
 
 # ---------------------------------------------------------------------------
