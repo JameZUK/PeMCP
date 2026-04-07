@@ -98,6 +98,75 @@ async def _dash_to_thread(func, /, *args, **kwargs):
     return await loop.run_in_executor(_dashboard_executor, func_call)
 
 
+def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
+    """Search allowed sample directories for a file matching *sha256*.
+
+    Returns the absolute path of the first match, or "" if nothing is found.
+    Used by ``api_projects_open`` to materialise stub members from migrated
+    projects (where the binary copy never made it into the project's
+    binaries/ dir).
+
+    Search strategy:
+      1. Walk every configured ``state.allowed_paths`` directory.
+      2. Try a fast filename match first (basename equality).
+      3. Hash candidate files and compare against ``sha256``.
+      4. Bound the search to keep dashboard responsive: max 5 candidate
+         hashes per call, max 2000 file walks per directory.
+    """
+    import hashlib
+
+    if not sha256 or not original_filename:
+        return ""
+    allowed = list(getattr(state, "allowed_paths", None) or [])
+    if not allowed:
+        return ""
+    sha256 = sha256.lower()
+    target_basename = os.path.basename(original_filename).lower()
+
+    def _hash(path: Path) -> str:
+        h = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+        except OSError:
+            return ""
+        return h.hexdigest()
+
+    candidates: list = []
+    walked_total = 0
+    for root in allowed:
+        try:
+            root_path = Path(root)
+            if not root_path.is_dir():
+                continue
+            walked = 0
+            for entry in root_path.rglob("*"):
+                if walked > 2000:
+                    break
+                walked += 1
+                walked_total += 1
+                if not entry.is_file():
+                    continue
+                if entry.name.lower() == target_basename:
+                    # Filename match — promote to front of candidate list
+                    candidates.insert(0, entry)
+                elif walked_total < 200:
+                    # Only consider non-name-matching files within tight bound
+                    candidates.append(entry)
+        except OSError:
+            continue
+
+    # Hash up to 5 candidates (filename matches first)
+    for cand in candidates[:5]:
+        if _hash(cand) == sha256:
+            return str(cand.resolve())
+    return ""
+
+
 # --- Paths ---
 _DASHBOARD_DIR = Path(__file__).parent
 _TEMPLATES_DIR = _DASHBOARD_DIR / "templates"
@@ -1633,6 +1702,21 @@ def _create_routes(dashboard_token: str) -> list:
         except Exception as exc:
             return _api_error_response("api_projects_list", exc)
 
+    async def api_projects_detail(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        pid = request.query_params.get("project_id", "")[:64].strip()
+        if not pid:
+            return JSONResponse({"error": "project_id is required"}, status_code=400)
+        from arkana.dashboard.projects_api import get_project_detail_data
+        try:
+            data = await _dash_to_thread(get_project_detail_data, pid)
+            if data is None:
+                return JSONResponse({"error": f"Project {pid} not found"}, status_code=404)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_projects_detail", exc)
+
     async def api_projects_create(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
@@ -1755,10 +1839,38 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": f"Member {chosen[:12]} not in project"}, status_code=400)
         binary_path = member.copy_path
         if not binary_path or not os.path.isfile(binary_path):
-            return JSONResponse(
-                {"error": f"Binary file missing on disk: {binary_path}"},
-                status_code=409,
+            # Stub member (migrated project or deleted copy) — try to locate
+            # the original binary in allowed sample directories by sha256 +
+            # filename, then adopt it into the stub.
+            active_state = _get_active_state()
+            located = await _dash_to_thread(
+                _locate_binary_for_stub, active_state, chosen, member.original_filename
             )
+            if located:
+                try:
+                    await _dash_to_thread(proj.adopt_binary_into_stub, chosen, located)
+                    binary_path = member.copy_path
+                except Exception as exc:
+                    return JSONResponse(
+                        {"error": f"Failed to adopt located binary: {exc}"},
+                        status_code=500,
+                    )
+            if not binary_path or not os.path.isfile(binary_path):
+                return JSONResponse(
+                    {
+                        "error": (
+                            f"Binary '{member.original_filename}' ({chosen[:12]}) "
+                            f"is not available on disk. This project was migrated "
+                            f"from the old cache or the file was moved. Use the "
+                            f"MCP tool add_binary_to_project(project_id, file_path) "
+                            f"to point it at the binary, or re-open the original "
+                            f"file via open_file() to auto-adopt."
+                        ),
+                        "sha256": chosen,
+                        "original_filename": member.original_filename,
+                    },
+                    status_code=409,
+                )
         # Bind the project on the active state, then call open_file via the
         # MCP tool helper. We construct a minimal context shim — open_file
         # only uses ctx.info / ctx.warning / report_progress.
@@ -2105,6 +2217,7 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/projects", endpoint=page_projects, methods=["GET"]),
         Route("/api/projects", endpoint=api_projects_list, methods=["GET"]),
         Route("/api/projects", endpoint=api_projects_create, methods=["POST"]),
+        Route("/api/projects/detail", endpoint=api_projects_detail, methods=["GET"]),
         Route("/api/projects/rename", endpoint=api_projects_rename, methods=["POST"]),
         Route("/api/projects/tag", endpoint=api_projects_tag, methods=["POST"]),
         Route("/api/projects/delete", endpoint=api_projects_delete, methods=["POST"]),

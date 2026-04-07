@@ -2268,6 +2268,59 @@ button.btn-analysis:hover {
     .import-func-name { min-width: 120px; max-width: 200px; }
     .graph-minimap { display: none; }
     .graph-legend { bottom: 4px; left: 4px; }
+
+    /* Projects page: single-column grid, full-width buttons */
+    .projects-grid {
+        grid-template-columns: 1fr;
+        padding: 8px;
+        gap: 8px;
+    }
+    .project-card {
+        padding: 8px 10px;
+    }
+    .project-card-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .project-card-actions .btn {
+        width: 100%;
+        text-align: center;
+    }
+    .project-row {
+        font-size: 11px;
+        word-break: break-all;
+    }
+    .project-card-header {
+        flex-wrap: wrap;
+        gap: 4px;
+    }
+    .project-member-row {
+        font-size: 11px;
+    }
+    .member-actions .btn {
+        width: 100%;
+    }
+
+    /* Modal: full width on phones (default min-width: 360px overflows) */
+    .modal-content {
+        min-width: 0;
+        width: 92vw;
+        max-width: 92vw;
+        padding: 12px;
+    }
+
+    /* Importable archives + artifacts tables: enable horizontal scroll */
+    #importable-archives-list,
+    #artifacts-table {
+        display: block;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    /* Hide low-priority artifact columns on phones */
+    .col-tool, .col-time, .col-sha, .col-tags {
+        display: none;
+    }
+    .col-actions { white-space: normal; }
 }
 
 /* ========================================================================
@@ -3079,6 +3132,45 @@ button.view-toggle-btn.active {
     flex-wrap: wrap;
     border-top: 1px solid var(--primary-ghost);
     padding-top: 8px;
+}
+
+/* Project card expanded detail (member list) */
+.project-card-detail {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dotted var(--primary-ghost);
+}
+.project-members {
+    background: rgba(0, 0, 0, 0.25);
+    padding: 6px 8px;
+}
+.project-member-list {
+    list-style: none;
+    padding: 0;
+    margin: 6px 0 0 0;
+    max-height: 240px;
+    overflow-y: auto;
+}
+.project-member-row {
+    padding: 6px 4px;
+    border-bottom: 1px dotted var(--primary-ghost);
+}
+.project-member-row:last-child {
+    border-bottom: none;
+}
+.member-head {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+    margin-bottom: 2px;
+}
+.member-meta {
+    margin-bottom: 4px;
+}
+.member-actions {
+    display: flex;
+    gap: 4px;
 }
 
 .badge-success {

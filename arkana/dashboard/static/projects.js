@@ -70,9 +70,13 @@
                   "</div>" +
                   '<div class="project-card-actions">' +
                     '<button class="btn btn-sm btn-primary" data-action="open" data-project-id="' + escapeHtml(p.id) + '" type="button">OPEN</button>' +
+                    '<button class="btn btn-sm" data-action="expand" data-project-id="' + escapeHtml(p.id) + '" type="button">FILES ▼</button>' +
                     '<button class="btn btn-sm" data-action="rename" data-project-id="' + escapeHtml(p.id) + '" type="button">RENAME</button>' +
                     '<button class="btn btn-sm" data-action="tag" data-project-id="' + escapeHtml(p.id) + '" type="button">TAGS</button>' +
                     '<button class="btn btn-sm btn-danger" data-action="delete" data-project-id="' + escapeHtml(p.id) + '" type="button">DELETE</button>' +
+                  "</div>" +
+                  '<div class="project-card-detail hidden" data-detail-for="' + escapeHtml(p.id) + '">' +
+                    '<div class="project-detail-loading dim fs-11">Loading members...</div>' +
                   "</div>" +
                 "</div>"
             );
@@ -106,6 +110,17 @@
         return d.toLocaleDateString();
     }
 
+    // Format any [data-epoch] elements rendered server-side. Called on
+    // initial load (server-rendered cards have raw epoch in their text)
+    // and after any reloadGrid() (client renders pre-formatted strings).
+    function formatEpochSpans(root) {
+        var nodes = (root || document).querySelectorAll("[data-epoch]");
+        for (var i = 0; i < nodes.length; i++) {
+            var ep = nodes[i].getAttribute("data-epoch");
+            if (ep) nodes[i].textContent = formatRelative(ep);
+        }
+    }
+
     // -----------------------------------------------------------------
     //  Action dispatch (delegated)
     // -----------------------------------------------------------------
@@ -113,28 +128,99 @@
         var btn = e.target.closest("[data-action]");
         if (!btn) return;
         var action = btn.getAttribute("data-action");
+        // Member-open buttons carry their own data-sha — route them first.
+        if (action === "open-member") {
+            e.preventDefault();
+            var mpid = btn.getAttribute("data-project-id");
+            var msha = btn.getAttribute("data-sha");
+            if (mpid && msha) openProject(mpid, msha);
+            return;
+        }
         var pid = btn.getAttribute("data-project-id");
         if (!pid) return;
         e.preventDefault();
         if (action === "open") return openProject(pid);
+        if (action === "expand") return toggleDetail(pid, btn);
         if (action === "rename") return renameProject(pid, btn);
         if (action === "tag") return tagProject(pid);
         if (action === "delete") return deleteProject(pid, btn);
     });
 
-    function openProject(pid) {
+    function toggleDetail(pid, btn) {
+        var card = grid.querySelector('.project-card[data-project-id="' + pid + '"]');
+        if (!card) return;
+        var detail = card.querySelector('.project-card-detail[data-detail-for="' + pid + '"]');
+        if (!detail) return;
+        if (!detail.classList.contains("hidden")) {
+            detail.classList.add("hidden");
+            if (btn) btn.textContent = "FILES ▼";
+            return;
+        }
+        detail.classList.remove("hidden");
+        if (btn) btn.textContent = "FILES ▲";
+        detail.innerHTML = '<div class="project-detail-loading dim fs-11">Loading members...</div>';
+        fetchJSON("/dashboard/api/projects/detail?project_id=" + encodeURIComponent(pid)).then(function (data) {
+            if (data.error) throw new Error(data.error);
+            detail.innerHTML = renderMembers(pid, data);
+        }).catch(function (e) {
+            detail.innerHTML = '<div class="dim fs-11">Failed to load: ' + escapeHtml(e.message) + "</div>";
+        });
+    }
+
+    function renderMembers(pid, p) {
+        var members = p.members || [];
+        if (!members.length) {
+            return '<div class="dim fs-11">This project has no member binaries.</div>';
+        }
+        var rows = members.map(function (m) {
+            var name = m.filename || "(unnamed)";
+            var sha8 = (m.sha256 || "").slice(0, 12);
+            var sizeKb = m.size ? (m.size / 1024).toFixed(1) + " KB" : "—";
+            var mode = m.mode ? String(m.mode).toUpperCase() : "";
+            var badges = "";
+            if (m.is_primary) badges += '<span class="badge badge-success">PRIMARY</span> ';
+            if (m.is_last_active) badges += '<span class="badge badge-dim">LAST ACTIVE</span> ';
+            if (!m.present) badges += '<span class="badge badge-dim" title="Binary file not copied into the project yet">STUB</span> ';
+            return (
+                '<li class="project-member-row">' +
+                  '<div class="member-head">' +
+                    '<span class="mono">' + escapeHtml(name) + "</span> " +
+                    (mode ? '<span class="badge badge-dim">' + escapeHtml(mode) + "</span> " : "") +
+                    badges +
+                  "</div>" +
+                  '<div class="member-meta dim fs-11">' +
+                    '<span class="mono">' + escapeHtml(sha8) + "</span> · " +
+                    '<span>' + sizeKb + "</span>" +
+                  "</div>" +
+                  '<div class="member-actions">' +
+                    '<button class="btn btn-sm btn-primary" data-action="open-member" data-project-id="' + escapeHtml(pid) + '" data-sha="' + escapeHtml(m.sha256 || "") + '" type="button">OPEN</button>' +
+                  "</div>" +
+                "</li>"
+            );
+        }).join("");
+        return (
+            '<div class="project-members">' +
+              '<div class="fs-11 dim">' + members.length + ' member binary(s)</div>' +
+              '<ul class="project-member-list">' + rows + "</ul>" +
+            "</div>"
+        );
+    }
+
+    function openProject(pid, sha256) {
         // Read the project's saved last_tab from the data attribute on the
         // card so we can land the user back where they left off.
         var lastTab = "";
         var card = grid.querySelector('.project-card[data-project-id="' + pid + '"]');
         if (card) lastTab = card.getAttribute("data-last-tab") || "";
+        var body = { project_id: pid };
+        if (sha256) body.binary_sha256 = sha256;
         fetchJSON("/dashboard/api/projects/open", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
                 "X-CSRF-Token": getCsrfToken(),
             },
-            body: JSON.stringify({ project_id: pid }),
+            body: JSON.stringify(body),
         }).then(function (resp) {
             if (resp.error) throw new Error(resp.error);
             showToast("Project opened — loading binary...", "success");
@@ -376,6 +462,8 @@
     if (rescanBtn) rescanBtn.addEventListener("click", loadArchives);
     // Load on page load
     loadArchives();
+    // Format any server-rendered [data-epoch] spans on the initial page.
+    formatEpochSpans(document);
 
     // Defensive global toast helper in case dashboard.js hasn't installed
     // one yet on this page.
