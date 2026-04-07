@@ -25,12 +25,66 @@
     </div>
 </div>
 
+{% set _active_id = data.active_project_id if data else '' %}
+{% set _active_proj = none %}
+{% if data and data.projects and _active_id %}
+    {% for _p in data.projects %}{% if _p.id == _active_id %}{% set _active_proj = _p %}{% endif %}{% endfor %}
+{% endif %}
+<div class="panel active-project-panel{% if not _active_proj %} hidden{% endif %}" id="active-project-panel">
+    <div class="panel-header">ACTIVE PROJECT</div>
+    <div id="active-project-banner">
+    {% if _active_proj %}
+        {% with p=_active_proj %}
+        <div class="project-card active"
+             data-project-id="{{ p.id }}"
+             data-project-name="{{ p.name }}"
+             {% if p.last_tab %}data-last-tab="{{ p.last_tab }}"{% endif %}>
+            <div class="project-card-header">
+                <span class="project-name" data-action="rename" data-project-id="{{ p.id }}">{{ p.name }}</span>
+                <span class="badge badge-success">ACTIVE</span>
+            </div>
+            <div class="project-card-body">
+                <div class="project-row">
+                    <span class="dim">Primary:</span>
+                    <span class="mono">{{ p.primary_filename or '(none)' }}</span>
+                    {% if p.primary_mode %}<span class="badge badge-dim">{{ p.primary_mode|upper }}</span>{% endif %}
+                </div>
+                <div class="project-row">
+                    <span class="dim">Members:</span>
+                    <span>{{ p.member_count }}</span>
+                </div>
+                <div class="project-row">
+                    <span class="dim">Last opened:</span>
+                    <span class="mono fs-11" data-epoch="{{ p.last_opened }}">{{ p.last_opened }}</span>
+                </div>
+                {% if p.tags %}
+                <div class="project-row">
+                    {% for t in p.tags %}<span class="badge badge-tag">{{ t }}</span>{% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            <div class="project-card-actions">
+                <button class="btn btn-sm btn-primary" data-action="open" data-project-id="{{ p.id }}" type="button">OPEN</button>
+                <button class="btn btn-sm" data-action="expand" data-project-id="{{ p.id }}" type="button">FILES ▼</button>
+                <button class="btn btn-sm" data-action="rename" data-project-id="{{ p.id }}" type="button">RENAME</button>
+                <button class="btn btn-sm" data-action="tag" data-project-id="{{ p.id }}" type="button">TAGS</button>
+                <button class="btn btn-sm btn-danger" data-action="delete" data-project-id="{{ p.id }}" type="button">DELETE</button>
+            </div>
+            <div class="project-card-detail hidden" data-detail-for="{{ p.id }}">
+                <div class="project-detail-loading dim fs-11">Loading members...</div>
+            </div>
+        </div>
+        {% endwith %}
+    {% endif %}
+    </div>
+</div>
+
 <div class="panel">
     <div class="panel-header">ALL PROJECTS</div>
     <div class="projects-grid" id="projects-grid">
         {% if data and data.projects %}
-            {% for p in data.projects %}
-            <div class="project-card{% if p.id == data.active_project_id %} active{% endif %}"
+            {% for p in data.projects if p.id != _active_id %}
+            <div class="project-card{% if p.id == _active_id %} active{% endif %}"
                  data-project-id="{{ p.id }}"
                  data-project-name="{{ p.name }}"
                  {% if p.last_tab %}data-last-tab="{{ p.last_tab }}"{% endif %}>

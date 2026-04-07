@@ -1,15 +1,9 @@
-{% if data.active_tool or data.active_tools or data.background_tasks or data.resource_usage %}
+{# Resource usage (CPU/MEM/THR) is rendered in the top nav by dashboard.js
+   handleStateUpdate() — moved out of this partial so the values get as much
+   room as they need on the right edge of the nav without competing with
+   tab buttons. The status bar still shows active tools + background tasks. #}
+{% if data.active_tool or data.active_tools or data.background_tasks %}
 <div class="global-status-inner">
-    {% if data.resource_usage %}
-    <div class="gs-item gs-resource">
-        <span class="badge {% if data.resource_usage.memory_level == 'critical' %}badge-failed{% elif data.resource_usage.memory_level == 'high' %}badge-overtime{% else %}badge-dim{% endif %}">MEM</span>
-        <span class="gs-tool-name">{{ data.resource_usage.rss_mb | round(0) | int }} MB</span>
-        <span class="badge badge-dim">CPU</span>
-        <span class="gs-tool-name">{{ data.resource_usage.cpu_percent | round(1) }}%</span>
-        <span class="badge badge-dim">THR</span>
-        <span class="gs-tool-name">{{ data.resource_usage.thread_count }}</span>
-    </div>
-    {% endif %}
     {% if data.active_tools and data.active_tools | length > 1 %}
     {# Multiple concurrent tools — show badges only (progress is shared/ambiguous) #}
     <div class="gs-item gs-active-tool">

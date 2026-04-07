@@ -284,6 +284,26 @@ function showToast(message, type) {
             }
         }
 
+        // Render resource usage (CPU/MEM/THR) on the right side of the
+        // top nav. Pulled out of the global-status partial so the values
+        // get as much room as they need without competing with tabs.
+        var resEl = document.getElementById('nav-resources');
+        var ru = data.resource_usage;
+        if (resEl && ru) {
+            var memLevel = ru.memory_level || 'normal';
+            var memBadge = memLevel === 'critical' ? 'badge-failed'
+                : memLevel === 'high' ? 'badge-overtime' : 'badge-dim';
+            resEl.innerHTML =
+                '<span class="badge ' + memBadge + '">MEM</span>' +
+                '<span class="nav-res-value mono">' + Math.round(ru.rss_mb || 0) + '&nbsp;MB</span>' +
+                '<span class="badge badge-dim">CPU</span>' +
+                '<span class="nav-res-value mono">' + (ru.cpu_percent || 0).toFixed(1) + '%</span>' +
+                '<span class="badge badge-dim">THR</span>' +
+                '<span class="nav-res-value mono">' + (ru.thread_count || 0) + '</span>';
+        } else if (resEl) {
+            resEl.innerHTML = '';
+        }
+
         // Toast: tool completed
         var currentTool = data.active_tool || null;
         if (lastActiveTool && !currentTool) {

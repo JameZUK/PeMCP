@@ -27,6 +27,8 @@
     // ====================================================================
     //  Top-level tab switching
     // ====================================================================
+    var _projectsForCompareLoaded = false;
+
     function switchTab(tab) {
         var tabs = document.querySelectorAll(".sim-tab");
         for (var i = 0; i < tabs.length; i++) {
@@ -34,6 +36,7 @@
         }
         document.getElementById("tab-similarity").classList.toggle("d-none", tab !== "similarity");
         document.getElementById("tab-diff").classList.toggle("d-none", tab !== "diff");
+        document.getElementById("tab-projects").classList.toggle("d-none", tab !== "projects");
         document.getElementById("tab-database").classList.toggle("d-none", tab !== "database");
 
         // Lazy-load data for tabs on first visit
@@ -44,6 +47,10 @@
         if (tab === "database" && !_dbListLoaded) {
             _dbListLoaded = true;
             loadIndexedBinaries();
+        }
+        if (tab === "projects" && !_projectsForCompareLoaded) {
+            _projectsForCompareLoaded = true;
+            loadProjectsForCompare();
         }
     }
 
@@ -155,11 +162,33 @@
     // --- Sorting helpers ---
     var _triageSortKeys = {
         binary: function (r) { return (r.binary_filename || "").toLowerCase(); },
+        project: function (r) {
+            var ps = r.projects || [];
+            return ps.length ? (ps[0].name || "").toLowerCase() : "\uffff";
+        },
         shared: function (r) { return r.shared_function_count || 0; },
         overlap: function (r) { return r.shared_function_ratio || 0; },
         avg_sim: function (r) { return r.avg_similarity || 0; },
         confidence: function (r) { return r.avg_confidence || 0; }
     };
+
+    function _renderProjectsCell(projects) {
+        // Render the project membership column. A binary may belong to >1
+        // project; show the first as a badge with the rest as +N.
+        var ps = projects || [];
+        if (!ps.length) return "<span class=\"dim fs-11\">—</span>";
+        var first = ps[0];
+        var name = first.name || "";
+        var truncated = name.length > 40 ? name.slice(0, 38) + "\u2026" : name;
+        var html = "<span class=\"badge badge-tag\" title=\"" +
+            escapeHtml(name) + "\">" + escapeHtml(truncated) + "</span>";
+        if (ps.length > 1) {
+            var rest = ps.slice(1).map(function (p) { return p.name; }).join("\n");
+            html += " <span class=\"badge badge-dim\" title=\"" + escapeHtml(rest) +
+                "\">+" + (ps.length - 1) + "</span>";
+        }
+        return html;
+    }
 
     function sortTriageBy(col) {
         if (_triageSort === col) {
@@ -185,7 +214,7 @@
 
         if (!_triageResults.length) {
             document.getElementById("bsim-triage-tbody").innerHTML =
-                "<tr><td colspan=\"7\" class=\"empty-msg\">No matches found. " +
+                "<tr><td colspan=\"8\" class=\"empty-msg\">No matches found. " +
                 (data.total_functions_analyzed ? data.total_functions_analyzed + " functions analyzed." : "") +
                 "</td></tr>";
             return;
@@ -220,6 +249,7 @@
                 html += " <span class=\"badge badge-tool\">LIB</span>";
             }
             html += "</td>";
+            html += "<td>" + _renderProjectsCell(r.projects) + "</td>";
             html += "<td class=\"mono\">" + r.shared_function_count + "</td>";
             html += "<td><div class=\"bsim-overlap-bar\"><div class=\"bsim-overlap-fill\" style=\"width:" +
                 Math.min(overlapPct, 100) + "%\"></div><span class=\"bsim-overlap-text\">" +
@@ -232,7 +262,7 @@
             // Match detail row (expanded or hidden)
             html += "<tr class=\"bsim-match-detail-row" + (isExpanded ? "" : " d-none") +
                 "\" id=\"bsim-detail-" + escapeHtml(r.binary_sha256) + "\">" +
-                "<td colspan=\"7\"><div class=\"bsim-match-detail\">" +
+                "<td colspan=\"8\"><div class=\"bsim-match-detail\">" +
                 (isExpanded && _matchCache[r.binary_sha256] ? _matchCache[r.binary_sha256].html : "Loading...") +
                 "</div></td></tr>";
         }
@@ -699,6 +729,10 @@
     // --- DB table sort keys ---
     var _dbSortKeys = {
         name: function (b) { return (b.filename || "").toLowerCase(); },
+        project: function (b) {
+            var ps = b.projects || [];
+            return ps.length ? (ps[0].name || "").toLowerCase() : "\uffff";
+        },
         arch: function (b) { return (b.architecture || "").toLowerCase(); },
         functions: function (b) { return b.function_count || 0; },
         source: function (b) { return (b.source || "").toLowerCase(); },
@@ -710,7 +744,7 @@
             _dbSortAsc = !_dbSortAsc;
         } else {
             _dbSort = col;
-            _dbSortAsc = (col === "name" || col === "arch" || col === "source");
+            _dbSortAsc = (col === "name" || col === "arch" || col === "source" || col === "project");
         }
         _updateSortArrows("bsim-db-table", "db", _dbSort, _dbSortAsc);
         _paintDbRows();
@@ -721,7 +755,7 @@
             .then(function (data) {
                 if (data.error) {
                     document.getElementById("bsim-db-tbody").innerHTML =
-                        "<tr><td colspan=\"6\" class=\"empty-msg\">" + escapeHtml(data.error) + "</td></tr>";
+                        "<tr><td colspan=\"7\" class=\"empty-msg\">" + escapeHtml(data.error) + "</td></tr>";
                     return;
                 }
                 _dbBinaries = data.binaries || [];
@@ -730,7 +764,7 @@
             })
             .catch(function () {
                 document.getElementById("bsim-db-tbody").innerHTML =
-                    "<tr><td colspan=\"6\" class=\"empty-msg\">Failed to load.</td></tr>";
+                    "<tr><td colspan=\"7\" class=\"empty-msg\">Failed to load.</td></tr>";
             });
     }
 
@@ -746,7 +780,7 @@
             return 0;
         });
         if (!sorted.length) {
-            tbody.innerHTML = "<tr><td colspan=\"6\" class=\"empty-msg\">No binaries indexed.</td></tr>";
+            tbody.innerHTML = "<tr><td colspan=\"7\" class=\"empty-msg\">No binaries indexed.</td></tr>";
             return;
         }
         var html = "";
@@ -757,6 +791,7 @@
                 "<span class=\"badge badge-dim\">USER</span>";
             html += "<tr>";
             html += "<td class=\"mono\">" + escapeHtml(b.filename || "") + "</td>";
+            html += "<td>" + _renderProjectsCell(b.projects) + "</td>";
             html += "<td>" + escapeHtml(b.architecture || "") + "</td>";
             html += "<td class=\"mono\">" + (b.function_count || 0) + "</td>";
             html += "<td>" + sourceLabel + "</td>";
@@ -926,4 +961,201 @@
         }
     })
     .catch(function () { /* silently ignore — user can click RUN TRIAGE */ });
+
+    // ====================================================================
+    //  TAB: PROJECTS COMPARE
+    // ====================================================================
+
+    var _projCompareResults = null;
+    var _projCompareSort = "jaccard";
+    var _projCompareSortAsc = false;
+
+    function loadProjectsForCompare() {
+        var selA = document.getElementById("proj-compare-a");
+        var selB = document.getElementById("proj-compare-b");
+        if (!selA || !selB) return;
+        fetchJSON("/dashboard/api/projects?sort_by=name").then(function (data) {
+            var projs = (data && data.projects) || [];
+            var optsHtml = '<option value="">— select —</option>';
+            for (var i = 0; i < projs.length; i++) {
+                var p = projs[i];
+                optsHtml += '<option value="' + escapeHtml(p.id) + '">' +
+                    escapeHtml(p.name) + ' (' + (p.member_count || 0) + ')</option>';
+            }
+            selA.innerHTML = optsHtml;
+            selB.innerHTML = optsHtml;
+            // Default project A to the active project (if any) so the
+            // common "compare current project against another" workflow
+            // is one click instead of two.
+            var st = window._arkanaState || {};
+            var active = st.active_project;
+            if (active && active.id && !active.scratch) {
+                selA.value = active.id;
+            }
+            updateCompareButtonState();
+        }).catch(function () {
+            selA.innerHTML = '<option value="">(failed to load projects)</option>';
+            selB.innerHTML = '<option value="">(failed to load projects)</option>';
+        });
+    }
+
+    function updateCompareButtonState() {
+        var btn = document.getElementById("proj-compare-run-btn");
+        if (!btn) return;
+        var a = document.getElementById("proj-compare-a").value;
+        var b = document.getElementById("proj-compare-b").value;
+        btn.disabled = !(a && b && a !== b);
+    }
+
+    function runProjectCompare() {
+        var a = document.getElementById("proj-compare-a").value;
+        var b = document.getElementById("proj-compare-b").value;
+        var thrEl = document.getElementById("proj-compare-threshold");
+        var threshold = parseFloat(thrEl && thrEl.value) || 0.7;
+        if (!a || !b || a === b) return;
+        var btn = document.getElementById("proj-compare-run-btn");
+        var spin = document.getElementById("proj-compare-spinner");
+        btn.disabled = true;
+        spin.classList.remove("d-none");
+        document.getElementById("proj-compare-error").classList.add("d-none");
+
+        var url = "/dashboard/api/bsim/compare-projects?project_a=" +
+            encodeURIComponent(a) + "&project_b=" + encodeURIComponent(b) +
+            "&threshold=" + encodeURIComponent(threshold);
+        fetchJSON(url).then(function (data) {
+            spin.classList.add("d-none");
+            updateCompareButtonState();
+            if (data.error) {
+                showProjectCompareError(data.error);
+                return;
+            }
+            _projCompareResults = data;
+            renderProjectCompare(data);
+        }).catch(function (err) {
+            spin.classList.add("d-none");
+            updateCompareButtonState();
+            showProjectCompareError(err.message);
+        });
+    }
+
+    function showProjectCompareError(msg) {
+        var panel = document.getElementById("proj-compare-error");
+        var body = document.getElementById("proj-compare-error-msg");
+        body.textContent = msg || "Comparison failed.";
+        panel.classList.remove("d-none");
+    }
+
+    function renderProjectCompare(data) {
+        var summaryPanel = document.getElementById("proj-compare-summary-panel");
+        var summary = document.getElementById("proj-compare-summary");
+        var ag = data.aggregate || {};
+        var html = "<div class=\"compare-summary-grid\">" +
+            "<div><span class=\"dim\">Project A:</span> <strong>" +
+                escapeHtml(data.project_a.name) + "</strong> (" + data.project_a.member_count + " members)</div>" +
+            "<div><span class=\"dim\">Project B:</span> <strong>" +
+                escapeHtml(data.project_b.name) + "</strong> (" + data.project_b.member_count + " members)</div>" +
+            "<div><span class=\"dim\">Indexed pairs:</span> <strong>" +
+                ag.indexed_pair_count + " / " + ag.pair_count + "</strong></div>" +
+            "<div><span class=\"dim\">Total shared functions:</span> <strong>" +
+                ag.total_shared + "</strong></div>" +
+            "<div><span class=\"dim\">Avg jaccard:</span> <strong>" +
+                ag.avg_jaccard.toFixed(3) + "</strong></div>" +
+            "<div><span class=\"dim\">Max jaccard:</span> <strong>" +
+                ag.max_jaccard.toFixed(3) + "</strong></div>" +
+            "<div><span class=\"dim\">Avg similarity:</span> <strong>" +
+                ag.avg_similarity.toFixed(3) + "</strong></div>" +
+            "</div>";
+        summary.innerHTML = html;
+        summaryPanel.classList.remove("d-none");
+
+        // Unindexed members hint
+        var unPanel = document.getElementById("proj-compare-unindexed-panel");
+        var unBody = document.getElementById("proj-compare-unindexed");
+        var un = data.unindexed_members || [];
+        if (un.length) {
+            var lines = un.slice(0, 50).map(function (m) {
+                return "<li><span class=\"mono\">" + escapeHtml(m.filename) +
+                    "</span> in <em>" + escapeHtml(m.project) + "</em></li>";
+            }).join("");
+            unBody.innerHTML = "These members are not in the BSim DB and were skipped:" +
+                "<ul class=\"member-list\">" + lines + "</ul>" +
+                (un.length > 50 ? "<div class=\"dim\">… and " + (un.length - 50) + " more</div>" : "");
+            unPanel.classList.remove("d-none");
+        } else {
+            unPanel.classList.add("d-none");
+        }
+
+        _paintProjCompareRows();
+    }
+
+    var _projCompareSortKeys = {
+        jaccard: function (p) { return p.jaccard || 0; },
+        shared: function (p) { return p.shared_function_count || 0; },
+        avg_sim: function (p) { return p.avg_similarity || 0; }
+    };
+
+    function _paintProjCompareRows() {
+        var data = _projCompareResults;
+        if (!data) return;
+        var pairs = (data.pairs || []).slice();
+        var keyFn = _projCompareSortKeys[_projCompareSort] || _projCompareSortKeys.jaccard;
+        var asc = _projCompareSortAsc;
+        pairs.sort(function (a, b) {
+            var va = keyFn(a), vb = keyFn(b);
+            if (va < vb) return asc ? -1 : 1;
+            if (va > vb) return asc ? 1 : -1;
+            return 0;
+        });
+
+        document.getElementById("proj-compare-count").textContent = pairs.length;
+        var tbody = document.getElementById("proj-compare-tbody");
+        if (!pairs.length) {
+            tbody.innerHTML = "<tr><td colspan=\"6\" class=\"empty-msg\">No pairs to compare.</td></tr>";
+            return;
+        }
+        var rows = pairs.map(function (p) {
+            var statusBadge;
+            if (p.available) {
+                var jaccard = p.jaccard || 0;
+                var simClass = jaccard >= 0.5 ? "bsim-sim-high" :
+                              jaccard >= 0.2 ? "bsim-sim-med" : "bsim-sim-low";
+                statusBadge = "<span class=\"badge badge-clean\">OK</span>";
+                return "<tr>" +
+                    "<td class=\"mono fs-11\" title=\"" + escapeHtml(p.a_sha256) + "\">" +
+                        escapeHtml(p.a_filename) + "</td>" +
+                    "<td class=\"mono fs-11\" title=\"" + escapeHtml(p.b_sha256) + "\">" +
+                        escapeHtml(p.b_filename) + "</td>" +
+                    "<td class=\"mono " + simClass + "\">" + jaccard.toFixed(3) + "</td>" +
+                    "<td class=\"mono\">" + (p.shared_function_count || 0) + "</td>" +
+                    "<td class=\"mono\">" + (p.avg_similarity || 0).toFixed(3) + "</td>" +
+                    "<td>" + statusBadge + "</td>" +
+                "</tr>";
+            }
+            return "<tr class=\"dim\">" +
+                "<td class=\"mono fs-11\">" + escapeHtml(p.a_filename) + "</td>" +
+                "<td class=\"mono fs-11\">" + escapeHtml(p.b_filename) + "</td>" +
+                "<td class=\"mono\">—</td><td class=\"mono\">—</td><td class=\"mono\">—</td>" +
+                "<td><span class=\"badge badge-dim\" title=\"" +
+                    escapeHtml(p.error || "") + "\">SKIPPED</span></td>" +
+            "</tr>";
+        }).join("");
+        tbody.innerHTML = rows;
+    }
+
+    document.getElementById("proj-compare-a").addEventListener("change", updateCompareButtonState);
+    document.getElementById("proj-compare-b").addEventListener("change", updateCompareButtonState);
+    document.getElementById("proj-compare-run-btn").addEventListener("click", runProjectCompare);
+    document.getElementById("proj-compare-table").addEventListener("click", function (e) {
+        var th = e.target.closest("th.sortable[data-table='proj-compare']");
+        if (!th) return;
+        var col = th.dataset.sort;
+        if (_projCompareSort === col) {
+            _projCompareSortAsc = !_projCompareSortAsc;
+        } else {
+            _projCompareSort = col;
+            _projCompareSortAsc = false;
+        }
+        _updateSortArrows("proj-compare-table", "proj-compare", _projCompareSort, _projCompareSortAsc);
+        _paintProjCompareRows();
+    });
 })();

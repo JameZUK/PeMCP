@@ -1034,6 +1034,177 @@ def list_indexed_binaries(db_path: Optional[Path] = None) -> List[Dict[str, Any]
         conn.close()
 
 
+def is_binary_indexed(sha256: str, db_path: Optional[Path] = None) -> bool:
+    """Quick check whether *sha256* has any rows in the BSim DB."""
+    db = db_path or get_db_path()
+    if not db.exists():
+        return False
+    sha256 = sha256.lower()
+    conn = _get_connection(db)
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM binaries WHERE sha256 = ? LIMIT 1", (sha256,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def compare_indexed_binaries(
+    sha_a: str,
+    sha_b: str,
+    threshold: float = BSIM_DEFAULT_THRESHOLD,
+    metrics: str = "combined",
+    top_match_limit: int = 50,
+    db_path: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Compare two BSim-indexed binaries function-by-function from the DB.
+
+    For each non-trivial function in *sha_a*, finds the best-scoring
+    function from *sha_b* via ``compute_similarity`` (no angr project
+    required — features are reconstructed from the DB rows). Aggregates
+    the results into a per-pair similarity report suitable for the
+    project comparison view.
+
+    Returns
+    -------
+    dict with keys:
+      - ``available``: bool — both binaries are indexed
+      - ``error``: str — present only when one or both binaries are missing
+      - ``binary_a`` / ``binary_b``: ``{sha256, filename, function_count}``
+      - ``shared_function_count``: int — A→B matches above threshold
+      - ``jaccard``: float — |shared| / |union(A, B)|
+      - ``avg_similarity``: float — mean of best-match scores
+      - ``top_matches``: list of ``{a_addr, a_name, b_addr, b_name, score}``
+    """
+    db = db_path or get_db_path()
+    if not db.exists():
+        return {"available": False, "error": "BSim DB does not exist"}
+
+    sha_a = sha_a.lower()
+    sha_b = sha_b.lower()
+    if sha_a == sha_b:
+        return {"available": False, "error": "Cannot compare a binary against itself"}
+
+    conn = _get_connection(db)
+    try:
+        # Pull metadata for both binaries upfront so we can short-circuit
+        # cleanly if either is unindexed.
+        meta = {}
+        for sha in (sha_a, sha_b):
+            row = conn.execute(
+                "SELECT sha256, filename, function_count, architecture "
+                "FROM binaries WHERE sha256 = ? LIMIT 1",
+                (sha,),
+            ).fetchone()
+            if row is None:
+                return {
+                    "available": False,
+                    "error": f"Binary {sha[:12]} is not indexed in BSim DB",
+                    "missing_sha256": sha,
+                }
+            meta[sha] = dict(row)
+
+        # Pull all functions for each binary in one shot.
+        def _load_funcs(sha: str) -> List[Dict[str, Any]]:
+            cur = conn.execute(
+                "SELECT f.* FROM functions f "
+                "JOIN binaries b ON f.binary_id = b.id "
+                "WHERE b.sha256 = ?",
+                (sha,),
+            )
+            out = []
+            for row in cur:
+                feats = _row_to_features(row)
+                feats["_addr_int"] = int(row["address"])
+                feats["_block_count"] = int(row["block_count"] or 0)
+                feats["_instr_count"] = int(row["instruction_count"] or 0)
+                out.append(feats)
+            return out
+
+        funcs_a = _load_funcs(sha_a)
+        funcs_b = _load_funcs(sha_b)
+    finally:
+        conn.close()
+
+    if not funcs_a or not funcs_b:
+        return {
+            "available": True,
+            "binary_a": meta[sha_a],
+            "binary_b": meta[sha_b],
+            "shared_function_count": 0,
+            "jaccard": 0.0,
+            "avg_similarity": 0.0,
+            "top_matches": [],
+            "note": "One or both binaries have no indexed functions",
+        }
+
+    # For each function in A, find the best-scoring counterpart in B.
+    # Pre-bucket B by block count for cheap O(1) shortlist filtering before
+    # the expensive feature scoring.
+    b_by_blocks: Dict[int, List[Dict[str, Any]]] = {}
+    for fb in funcs_b:
+        b_by_blocks.setdefault(fb["_block_count"], []).append(fb)
+
+    pair_scores: List[Dict[str, Any]] = []
+    score_key = metrics if metrics else "combined"
+
+    for fa in funcs_a:
+        fa_blocks = fa["_block_count"]
+        # Block-count tolerance: allow ±50% or absolute ±2 (whichever wider)
+        lo = max(0, min(fa_blocks // 2, fa_blocks - 2))
+        hi = max(fa_blocks * 2, fa_blocks + 2)
+        candidates: List[Dict[str, Any]] = []
+        for bk in range(lo, hi + 1):
+            bucket = b_by_blocks.get(bk)
+            if bucket:
+                candidates.extend(bucket)
+        if not candidates:
+            continue
+        best = None
+        best_score = 0.0
+        for fb in candidates:
+            scores = compute_similarity(fa, fb, metrics=score_key)
+            score = scores.get(score_key, scores.get("combined", 0.0))
+            if score > best_score:
+                best_score = score
+                best = (fb, scores)
+        if best is None or best_score < threshold:
+            continue
+        fb, scores = best
+        pair_scores.append({
+            "a_address": hex(fa["_addr_int"]),
+            "a_name": fa.get("name") or f"sub_{fa['_addr_int']:x}",
+            "b_address": hex(fb["_addr_int"]),
+            "b_name": fb.get("name") or f"sub_{fb['_addr_int']:x}",
+            "score": round(best_score, 4),
+            "scores": {k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
+        })
+
+    pair_scores.sort(key=lambda p: p["score"], reverse=True)
+
+    total_a = len(funcs_a)
+    total_b = len(funcs_b)
+    shared = len(pair_scores)
+    union = max(total_a + total_b - shared, 1)
+    jaccard = shared / union if union else 0.0
+    avg_sim = (sum(p["score"] for p in pair_scores) / shared) if shared else 0.0
+
+    return {
+        "available": True,
+        "binary_a": meta[sha_a],
+        "binary_b": meta[sha_b],
+        "threshold": threshold,
+        "metrics": score_key,
+        "shared_function_count": shared,
+        "jaccard": round(jaccard, 4),
+        "avg_similarity": round(avg_sim, 4),
+        "total_functions_a": total_a,
+        "total_functions_b": total_b,
+        "top_matches": pair_scores[:top_match_limit],
+    }
+
+
 def _safe_json_loads(raw, default):
     """Parse JSON with fallback to *default* on decode errors."""
     if not raw:

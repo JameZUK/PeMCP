@@ -194,14 +194,46 @@ body {
 }
 
 .nav-filename {
-    margin-left: 8px;
+    /* Sits on the LEFT now (right after .nav-brand). Wider cap and a hard
+       ellipsis so long auto-generated project names truncate cleanly
+       without pushing the tabs to the right. */
+    margin-right: 16px;
     font-size: 11px;
     letter-spacing: 1px;
-    max-width: 200px;
+    max-width: 320px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+.nav-resources {
+    /* Resource block sits on the far RIGHT of the nav (last flex item).
+       ``.nav-links`` is ``flex: 1 1 0`` so it absorbs all slack and pushes
+       us against the right edge automatically — no margin-auto needed.
+       flex-shrink: 0 keeps the values from being squeezed when the nav
+       overflows; long project names hide via ``.nav-filename`` truncation
+       instead. */
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 12px;
     flex-shrink: 0;
+    font-size: 11px;
+    white-space: nowrap;
+}
+.nav-resources .badge {
+    padding: 1px 5px;
+    font-size: 9px;
+    letter-spacing: 1px;
+}
+.nav-res-value {
+    margin-right: 6px;
+    color: var(--primary);
+}
+.nav-res-value:last-child {
+    margin-right: 0;
 }
 
 .sse-disconnect {
@@ -2246,7 +2278,10 @@ button.btn-analysis:hover {
     .nav-title { font-size: 13px; letter-spacing: 1px; }
     .nav-search input { width: 100px; }
     .nav-search input:focus-visible { width: 140px; }
+    /* Hide filename and resource block on phones — both compete with tab
+       buttons for the very limited horizontal space. */
     .nav-filename { display: none; }
+    .nav-resources { display: none; }
     .stats-grid { grid-template-columns: 1fr; }
     .stats-grid-sm { grid-template-columns: 1fr; }
     .file-identity-name { flex-direction: column; gap: 4px; }
@@ -3094,6 +3129,40 @@ button.view-toggle-btn.active {
     gap: 12px;
     padding: 12px;
 }
+
+/* Pinned active-project banner: full-width row above the project grid so
+   the user always sees which project they're working in without scanning
+   for the green border. */
+.active-project-panel {
+    border-color: var(--primary);
+}
+.active-project-panel .panel-header {
+    background: var(--primary);
+    color: #000;
+    letter-spacing: 1px;
+}
+#active-project-banner {
+    padding: 12px;
+}
+#active-project-banner .project-card {
+    /* Full-width row, brighter than the grid cells. */
+    width: 100%;
+    border: 2px solid var(--primary);
+    background: rgba(0, 60, 0, 0.25);
+    box-shadow: 0 0 12px var(--primary-glow, rgba(0, 255, 0, 0.4));
+    padding: 14px 16px;
+}
+#active-project-banner .project-card-header {
+    margin-bottom: 10px;
+}
+#active-project-banner .project-name {
+    font-size: 14px;
+    color: var(--primary);
+}
+#active-project-banner .project-card-actions {
+    /* Buttons stay one row on a wide banner */
+    flex-wrap: wrap;
+}
 .project-card {
     border: 1px solid var(--primary-ghost);
     background: rgba(0, 0, 0, 0.3);
@@ -3203,6 +3272,14 @@ button.view-toggle-btn.active {
     font-size: 10px;
     font-weight: bold;
 }
+/* Project comparison summary grid (Similarity → PROJECTS sub-tab) */
+.compare-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px 16px;
+    font-size: 12px;
+}
+
 .badge-opening {
     background: rgba(255, 200, 0, 0.2);
     border: 1px solid rgba(255, 200, 0, 0.7);

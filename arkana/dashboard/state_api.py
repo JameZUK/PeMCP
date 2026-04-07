@@ -3294,8 +3294,52 @@ def get_bsim_db_stats() -> Dict[str, Any]:
         conn.close()
 
 
+def _project_membership_for_shas(sha256_list: List[str]) -> Dict[str, List[Dict[str, str]]]:
+    """Build a {sha256: [{id, name}, ...]} map for the given sha256s.
+
+    Used to enrich BSim results with the projects each indexed binary
+    belongs to. Snapshots ``project_manager.list()`` once and walks every
+    project's members dict in O(P*M) — much cheaper than calling
+    ``lookup_by_sha`` per row when you already have a batch of sha256s.
+    Returns an empty dict if the projects layer is unavailable.
+    """
+    if not sha256_list:
+        return {}
+    try:
+        from arkana.projects import project_manager
+    except ImportError:
+        return {}
+    wanted = {s.lower() for s in sha256_list if s}
+    if not wanted:
+        return {}
+    out: Dict[str, List[Dict[str, str]]] = {sha: [] for sha in wanted}
+    try:
+        projects = project_manager.list(sort_by="name")
+    except Exception:
+        return out
+    for proj in projects:
+        try:
+            with proj._lock:
+                member_shas = list(proj.manifest.members.keys())
+                pid = proj.manifest.id
+                pname = proj.manifest.name
+        except Exception:
+            continue
+        for sha in member_shas:
+            sha_l = (sha or "").lower()
+            if sha_l in wanted:
+                out.setdefault(sha_l, []).append({"id": pid, "name": pname})
+    return out
+
+
 def get_bsim_indexed_binaries() -> Dict[str, Any]:
-    """List all indexed binaries in the BSim DB for the DATABASE tab."""
+    """List all indexed binaries in the BSim DB for the DATABASE tab.
+
+    Each row is enriched with a ``projects`` field listing every project
+    that contains the binary as a member, so the dashboard can show
+    "which project does this signature belong to" without an extra
+    round-trip per row.
+    """
     try:
         from arkana.mcp._bsim_features import list_indexed_binaries
     except ImportError:
@@ -3303,6 +3347,11 @@ def get_bsim_indexed_binaries() -> Dict[str, Any]:
 
     try:
         binaries = list_indexed_binaries()
+        sha_list = [b.get("sha256", "") for b in binaries if b.get("sha256")]
+        membership = _project_membership_for_shas(sha_list)
+        for b in binaries:
+            sha = (b.get("sha256") or "").lower()
+            b["projects"] = membership.get(sha, [])
         return {"binaries": binaries, "total": len(binaries)}
     except Exception:
         logger.debug("BSim list binaries failed", exc_info=True)
@@ -3443,6 +3492,13 @@ def get_bsim_triage_data(cache_only: bool = False) -> Dict[str, Any]:
     results.sort(key=lambda r: r.get("avg_similarity", 0) * r.get("avg_confidence", 0) * r.get("shared_function_count", 0), reverse=True)
     results = results[:20]
 
+    # Enrich each match with the projects (if any) that contain its binary
+    # — lets the dashboard show "this match is in project X" without an
+    # extra per-row API call. Single batched lookup over all sha256s.
+    membership = _project_membership_for_shas([r["binary_sha256"] for r in results])
+    for r in results:
+        r["projects"] = membership.get((r["binary_sha256"] or "").lower(), [])
+
     result = {
         "available": True,
         "binary": os.path.basename(st.filepath) if st.filepath else "",
@@ -3485,6 +3541,168 @@ def get_bsim_triage_function_matches(binary_sha256: str) -> Dict[str, Any]:
                     }
 
     return {"available": False, "error": "No cached triage data for this binary"}
+
+
+def get_project_comparison_data(project_a_id: str,
+                                project_b_id: str,
+                                threshold: float = 0.7,
+                                top_match_limit: int = 30) -> Dict[str, Any]:
+    """Compare every member of *project_a_id* against every member of *project_b_id*.
+
+    For each ``(member_a, member_b)`` pair where both binaries are indexed
+    in the BSim DB, runs ``compare_indexed_binaries`` and returns a matrix
+    of pair-level similarity scores plus a project-level aggregate.
+
+    Used by the new "PROJECTS" sub-tab on the Similarity page so users can
+    quickly see "does my loader project share code with my payload project?"
+    without manually opening each binary in turn.
+
+    Returns
+    -------
+    dict with:
+      - ``available``: bool
+      - ``project_a`` / ``project_b``: ``{id, name, member_count}``
+      - ``pairs``: list of per-pair comparison rows
+      - ``aggregate``: {pair_count, indexed_pair_count, total_shared,
+                        avg_jaccard, avg_similarity, max_jaccard}
+      - ``unindexed_members``: list of {sha256, filename, project} for
+        members that aren't in the BSim DB (so the UI can prompt the user
+        to index them).
+    """
+    if project_a_id == project_b_id:
+        return {"available": False, "error": "Pick two different projects"}
+    try:
+        from arkana.projects import project_manager
+    except ImportError:
+        return {"available": False, "error": "projects module unavailable"}
+    try:
+        from arkana.mcp._bsim_features import (
+            compare_indexed_binaries, is_binary_indexed,
+        )
+    except ImportError:
+        return {"available": False, "error": "BSim module unavailable"}
+
+    proj_a = project_manager.get(project_a_id)
+    proj_b = project_manager.get(project_b_id)
+    if proj_a is None:
+        return {"available": False, "error": f"Project {project_a_id} not found"}
+    if proj_b is None:
+        return {"available": False, "error": f"Project {project_b_id} not found"}
+
+    # Snapshot members under each project's lock so we have stable lists
+    # for the duration of the comparison.
+    def _snapshot(project) -> List[Dict[str, Any]]:
+        with project._lock:
+            return [
+                {"sha256": sha, "filename": d.get("original_filename") or "(unnamed)"}
+                for sha, d in project.manifest.members.items()
+            ]
+
+    members_a = _snapshot(proj_a)
+    members_b = _snapshot(proj_b)
+    if not members_a or not members_b:
+        return {
+            "available": True,
+            "project_a": {"id": proj_a.id, "name": proj_a.name, "member_count": len(members_a)},
+            "project_b": {"id": proj_b.id, "name": proj_b.name, "member_count": len(members_b)},
+            "pairs": [],
+            "aggregate": {
+                "pair_count": 0, "indexed_pair_count": 0, "total_shared": 0,
+                "avg_jaccard": 0.0, "avg_similarity": 0.0, "max_jaccard": 0.0,
+            },
+            "unindexed_members": [],
+        }
+
+    # Pre-compute index status so we can short-circuit pair lookups and
+    # build the unindexed-member hint list in one place.
+    indexed_a = {m["sha256"]: is_binary_indexed(m["sha256"]) for m in members_a}
+    indexed_b = {m["sha256"]: is_binary_indexed(m["sha256"]) for m in members_b}
+    unindexed: List[Dict[str, str]] = []
+    for m in members_a:
+        if not indexed_a.get(m["sha256"]):
+            unindexed.append({
+                "sha256": m["sha256"], "filename": m["filename"],
+                "project": proj_a.name,
+            })
+    for m in members_b:
+        if not indexed_b.get(m["sha256"]):
+            unindexed.append({
+                "sha256": m["sha256"], "filename": m["filename"],
+                "project": proj_b.name,
+            })
+
+    pairs: List[Dict[str, Any]] = []
+    indexed_pair_count = 0
+    total_shared = 0
+    sum_jaccard = 0.0
+    sum_similarity = 0.0
+    max_jaccard = 0.0
+    for ma in members_a:
+        for mb in members_b:
+            entry = {
+                "a_sha256": ma["sha256"],
+                "a_filename": ma["filename"],
+                "b_sha256": mb["sha256"],
+                "b_filename": mb["filename"],
+                "available": False,
+                "shared_function_count": 0,
+                "jaccard": 0.0,
+                "avg_similarity": 0.0,
+            }
+            if not indexed_a.get(ma["sha256"]) or not indexed_b.get(mb["sha256"]):
+                entry["error"] = "one or both binaries not indexed"
+                pairs.append(entry)
+                continue
+            try:
+                result = compare_indexed_binaries(
+                    ma["sha256"], mb["sha256"],
+                    threshold=threshold,
+                    top_match_limit=top_match_limit,
+                )
+            except Exception as exc:
+                logger.debug("project comparison failed for pair", exc_info=True)
+                entry["error"] = f"comparison failed: {exc}"
+                pairs.append(entry)
+                continue
+            if not result.get("available"):
+                entry["error"] = result.get("error", "comparison unavailable")
+                pairs.append(entry)
+                continue
+            entry["available"] = True
+            entry["shared_function_count"] = result.get("shared_function_count", 0)
+            entry["jaccard"] = result.get("jaccard", 0.0)
+            entry["avg_similarity"] = result.get("avg_similarity", 0.0)
+            entry["total_functions_a"] = result.get("total_functions_a", 0)
+            entry["total_functions_b"] = result.get("total_functions_b", 0)
+            entry["top_matches"] = result.get("top_matches", [])
+            indexed_pair_count += 1
+            total_shared += entry["shared_function_count"]
+            sum_jaccard += entry["jaccard"]
+            sum_similarity += entry["avg_similarity"]
+            if entry["jaccard"] > max_jaccard:
+                max_jaccard = entry["jaccard"]
+            pairs.append(entry)
+
+    pairs.sort(key=lambda p: (p["jaccard"], p["shared_function_count"]), reverse=True)
+    avg_jaccard = (sum_jaccard / indexed_pair_count) if indexed_pair_count else 0.0
+    avg_similarity = (sum_similarity / indexed_pair_count) if indexed_pair_count else 0.0
+
+    return {
+        "available": True,
+        "project_a": {"id": proj_a.id, "name": proj_a.name, "member_count": len(members_a)},
+        "project_b": {"id": proj_b.id, "name": proj_b.name, "member_count": len(members_b)},
+        "threshold": threshold,
+        "pairs": pairs,
+        "aggregate": {
+            "pair_count": len(pairs),
+            "indexed_pair_count": indexed_pair_count,
+            "total_shared": total_shared,
+            "avg_jaccard": round(avg_jaccard, 4),
+            "avg_similarity": round(avg_similarity, 4),
+            "max_jaccard": round(max_jaccard, 4),
+        },
+        "unindexed_members": unindexed,
+    }
 
 
 def get_bsim_db_health() -> Dict[str, Any]:

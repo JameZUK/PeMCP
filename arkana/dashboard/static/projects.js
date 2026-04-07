@@ -35,52 +35,84 @@
         });
     }
 
+    function _buildProjectCardHtml(p, activeId) {
+        var tags = (p.tags || []).map(function (t) {
+            return '<span class="badge badge-tag">' + escapeHtml(t) + "</span>";
+        }).join("");
+        var lastOpened = p.last_opened ? formatRelative(p.last_opened) : "—";
+        var primary = p.primary_filename || "(none)";
+        var modeBadge = p.primary_mode
+            ? '<span class="badge badge-dim">' + escapeHtml(String(p.primary_mode).toUpperCase()) + "</span>"
+            : "";
+        var activeBadge = (p.id === activeId)
+            ? '<span class="badge badge-success">ACTIVE</span>'
+            : "";
+        var cardClass = "project-card" + (p.id === activeId ? " active" : "");
+        var lastTabAttr = p.last_tab ? ' data-last-tab="' + escapeHtml(p.last_tab) + '"' : "";
+        return (
+            '<div class="' + cardClass + '" data-project-id="' + escapeHtml(p.id) + '" data-project-name="' + escapeHtml(p.name) + '"' + lastTabAttr + '>' +
+              '<div class="project-card-header">' +
+                '<span class="project-name" data-action="rename" data-project-id="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + "</span>" +
+                activeBadge +
+              "</div>" +
+              '<div class="project-card-body">' +
+                '<div class="project-row"><span class="dim">Primary:</span> <span class="mono">' + escapeHtml(primary) + "</span> " + modeBadge + "</div>" +
+                '<div class="project-row"><span class="dim">Members:</span> ' + p.member_count + "</div>" +
+                '<div class="project-row"><span class="dim">Last opened:</span> <span class="mono fs-11">' + escapeHtml(lastOpened) + "</span></div>" +
+                (tags ? '<div class="project-row">' + tags + "</div>" : "") +
+              "</div>" +
+              '<div class="project-card-actions">' +
+                '<button class="btn btn-sm btn-primary" data-action="open" data-project-id="' + escapeHtml(p.id) + '" type="button">OPEN</button>' +
+                '<button class="btn btn-sm" data-action="expand" data-project-id="' + escapeHtml(p.id) + '" type="button">FILES ▼</button>' +
+                '<button class="btn btn-sm" data-action="rename" data-project-id="' + escapeHtml(p.id) + '" type="button">RENAME</button>' +
+                '<button class="btn btn-sm" data-action="tag" data-project-id="' + escapeHtml(p.id) + '" type="button">TAGS</button>' +
+                '<button class="btn btn-sm btn-danger" data-action="delete" data-project-id="' + escapeHtml(p.id) + '" type="button">DELETE</button>' +
+              "</div>" +
+              '<div class="project-card-detail hidden" data-detail-for="' + escapeHtml(p.id) + '">' +
+                '<div class="project-detail-loading dim fs-11">Loading members...</div>' +
+              "</div>" +
+            "</div>"
+        );
+    }
+
     function renderGrid(data) {
         var projects = data.projects || [];
         var activeId = data.active_project_id || "";
-        if (!projects.length) {
+
+        // Pin the active project to a dedicated full-width banner above the
+        // grid so the user immediately sees which project they're working
+        // in. Filter it out of the regular grid so it doesn't appear twice.
+        var activeBannerEl = document.getElementById("active-project-banner");
+        var activePanelEl = document.getElementById("active-project-panel");
+        if (activeBannerEl && activePanelEl) {
+            var activeProject = null;
+            if (activeId) {
+                for (var ai = 0; ai < projects.length; ai++) {
+                    if (projects[ai].id === activeId) {
+                        activeProject = projects[ai];
+                        break;
+                    }
+                }
+            }
+            if (activeProject) {
+                activeBannerEl.innerHTML = _buildProjectCardHtml(activeProject, activeId);
+                activePanelEl.classList.remove("hidden");
+            } else {
+                activeBannerEl.innerHTML = "";
+                activePanelEl.classList.add("hidden");
+            }
+        }
+        var others = activeId ? projects.filter(function (p) { return p.id !== activeId; }) : projects;
+
+        if (!others.length && !activeId) {
             grid.innerHTML = '<div class="empty-msg">No projects yet. Open a binary and add a note to get started.</div>';
             return;
         }
-        var html = projects.map(function (p) {
-            var tags = (p.tags || []).map(function (t) {
-                return '<span class="badge badge-tag">' + escapeHtml(t) + "</span>";
-            }).join("");
-            var lastOpened = p.last_opened ? formatRelative(p.last_opened) : "—";
-            var primary = p.primary_filename || "(none)";
-            var modeBadge = p.primary_mode
-                ? '<span class="badge badge-dim">' + escapeHtml(String(p.primary_mode).toUpperCase()) + "</span>"
-                : "";
-            var activeBadge = (p.id === activeId)
-                ? '<span class="badge badge-success">ACTIVE</span>'
-                : "";
-            var cardClass = "project-card" + (p.id === activeId ? " active" : "");
-            var lastTabAttr = p.last_tab ? ' data-last-tab="' + escapeHtml(p.last_tab) + '"' : "";
-            return (
-                '<div class="' + cardClass + '" data-project-id="' + escapeHtml(p.id) + '" data-project-name="' + escapeHtml(p.name) + '"' + lastTabAttr + '>' +
-                  '<div class="project-card-header">' +
-                    '<span class="project-name" data-action="rename" data-project-id="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + "</span>" +
-                    activeBadge +
-                  "</div>" +
-                  '<div class="project-card-body">' +
-                    '<div class="project-row"><span class="dim">Primary:</span> <span class="mono">' + escapeHtml(primary) + "</span> " + modeBadge + "</div>" +
-                    '<div class="project-row"><span class="dim">Members:</span> ' + p.member_count + "</div>" +
-                    '<div class="project-row"><span class="dim">Last opened:</span> <span class="mono fs-11">' + escapeHtml(lastOpened) + "</span></div>" +
-                    (tags ? '<div class="project-row">' + tags + "</div>" : "") +
-                  "</div>" +
-                  '<div class="project-card-actions">' +
-                    '<button class="btn btn-sm btn-primary" data-action="open" data-project-id="' + escapeHtml(p.id) + '" type="button">OPEN</button>' +
-                    '<button class="btn btn-sm" data-action="expand" data-project-id="' + escapeHtml(p.id) + '" type="button">FILES ▼</button>' +
-                    '<button class="btn btn-sm" data-action="rename" data-project-id="' + escapeHtml(p.id) + '" type="button">RENAME</button>' +
-                    '<button class="btn btn-sm" data-action="tag" data-project-id="' + escapeHtml(p.id) + '" type="button">TAGS</button>' +
-                    '<button class="btn btn-sm btn-danger" data-action="delete" data-project-id="' + escapeHtml(p.id) + '" type="button">DELETE</button>' +
-                  "</div>" +
-                  '<div class="project-card-detail hidden" data-detail-for="' + escapeHtml(p.id) + '">' +
-                    '<div class="project-detail-loading dim fs-11">Loading members...</div>' +
-                  "</div>" +
-                "</div>"
-            );
-        }).join("");
+        if (!others.length) {
+            grid.innerHTML = '<div class="empty-msg dim">No other projects.</div>';
+            return;
+        }
+        var html = others.map(function (p) { return _buildProjectCardHtml(p, activeId); }).join("");
         grid.innerHTML = html;
     }
 

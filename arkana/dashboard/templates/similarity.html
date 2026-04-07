@@ -10,6 +10,7 @@
     <div class="sim-mode-tabs" id="sim-mode-tabs">
         <button class="sim-tab active" data-tab="similarity">SIMILARITY</button>
         <button class="sim-tab" data-tab="diff">DIFF</button>
+        <button class="sim-tab" data-tab="projects">PROJECTS</button>
         <button class="sim-tab" data-tab="database">DATABASE</button>
     </div>
 </div>
@@ -39,6 +40,7 @@
                     <tr>
                         <th></th>
                         <th class="sortable" data-sort="binary" data-table="triage">BINARY <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="project" data-table="triage">PROJECT <span class="sort-arrow"></span></th>
                         <th class="sortable active" data-sort="shared" data-table="triage">SHARED <span class="sort-arrow">&#9660;</span></th>
                         <th class="sortable" data-sort="overlap" data-table="triage">OVERLAP <span class="sort-arrow"></span></th>
                         <th class="sortable" data-sort="avg_sim" data-table="triage">AVG SIM <span class="sort-arrow"></span></th>
@@ -47,7 +49,7 @@
                     </tr>
                 </thead>
                 <tbody id="bsim-triage-tbody">
-                    <tr><td colspan="7" class="empty-msg">No triage results. Click RUN TRIAGE to compare against the signature database.</td></tr>
+                    <tr><td colspan="8" class="empty-msg">No triage results. Click RUN TRIAGE to compare against the signature database.</td></tr>
                 </tbody>
             </table>
         </div>
@@ -129,7 +131,76 @@
     </div>
 </div>
 
-<!-- ============ TAB 3: DATABASE ============ -->
+<!-- ============ TAB 3: PROJECTS COMPARE ============ -->
+<div id="tab-projects" class="d-none">
+
+    <div class="panel">
+        <div class="panel-header">COMPARE TWO PROJECTS</div>
+        <div class="p-10 dim fs-11">
+            For every binary in project A, every binary in project B is compared
+            function-by-function via the BSim signature DB. Both binaries must be
+            indexed (use the SIMILARITY tab → INDEX button to add the current binary).
+        </div>
+        <div class="filter-bar">
+            <div class="filter-group">
+                <label>PROJECT A:</label>
+                <select id="proj-compare-a" class="diff-path-input">
+                    <option value="">— select —</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>PROJECT B:</label>
+                <select id="proj-compare-b" class="diff-path-input">
+                    <option value="">— select —</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label>THRESHOLD:</label>
+                <input type="number" id="proj-compare-threshold" min="0.5" max="1.0" step="0.05" value="0.7" class="w-60 mono">
+            </div>
+            <button class="btn" id="proj-compare-run-btn" disabled>COMPARE</button>
+            <span id="proj-compare-spinner" class="dim d-none">Comparing...</span>
+        </div>
+    </div>
+
+    <div id="proj-compare-summary-panel" class="panel d-none">
+        <div class="panel-header">SUMMARY</div>
+        <div id="proj-compare-summary" class="p-10"></div>
+    </div>
+
+    <div id="proj-compare-unindexed-panel" class="panel d-none">
+        <div class="panel-header">UNINDEXED MEMBERS</div>
+        <div id="proj-compare-unindexed" class="p-10 dim fs-11"></div>
+    </div>
+
+    <div class="panel">
+        <div class="panel-header">PAIRWISE RESULTS <span id="proj-compare-count" class="badge badge-dim">0</span></div>
+        <div class="table-wrap">
+            <table class="data-table" id="proj-compare-table">
+                <thead>
+                    <tr>
+                        <th>PROJECT A BINARY</th>
+                        <th>PROJECT B BINARY</th>
+                        <th class="sortable active" data-sort="jaccard" data-table="proj-compare">JACCARD <span class="sort-arrow">&#9660;</span></th>
+                        <th class="sortable" data-sort="shared" data-table="proj-compare">SHARED <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-sort="avg_sim" data-table="proj-compare">AVG SIM <span class="sort-arrow"></span></th>
+                        <th>STATUS</th>
+                    </tr>
+                </thead>
+                <tbody id="proj-compare-tbody">
+                    <tr><td colspan="6" class="empty-msg">Pick two projects and click COMPARE.</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="proj-compare-error" class="panel d-none">
+        <div class="panel-header badge-danger">ERROR</div>
+        <div id="proj-compare-error-msg" class="p-10"></div>
+    </div>
+</div>
+
+<!-- ============ TAB 4: DATABASE ============ -->
 <div id="tab-database" class="d-none">
 
     <div class="panel">
@@ -145,6 +216,7 @@
                 <thead>
                     <tr>
                         <th class="sortable active" data-sort="name" data-table="db">NAME <span class="sort-arrow">&#9660;</span></th>
+                        <th class="sortable" data-sort="project" data-table="db">PROJECT <span class="sort-arrow"></span></th>
                         <th class="sortable" data-sort="arch" data-table="db">ARCH <span class="sort-arrow"></span></th>
                         <th class="sortable" data-sort="functions" data-table="db">FUNCTIONS <span class="sort-arrow"></span></th>
                         <th class="sortable" data-sort="source" data-table="db">SOURCE <span class="sort-arrow"></span></th>
@@ -153,7 +225,7 @@
                     </tr>
                 </thead>
                 <tbody id="bsim-db-tbody">
-                    <tr><td colspan="6" class="empty-msg">Loading...</td></tr>
+                    <tr><td colspan="7" class="empty-msg">Loading...</td></tr>
                 </tbody>
             </table>
         </div>

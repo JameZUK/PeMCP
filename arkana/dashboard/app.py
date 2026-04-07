@@ -73,6 +73,7 @@ from arkana.dashboard.state_api import (
     index_current_binary,
     _BSIM_HEX64_RE,
     get_settings_data,
+    get_project_comparison_data,
 )
 from arkana.dashboard.projects_api import (
     get_projects_list_data,
@@ -1780,6 +1781,34 @@ def _create_routes(dashboard_token: str) -> list:
         except Exception as exc:
             return _api_error_response("api_bsim_clear", exc)
 
+    async def api_bsim_compare_projects(request: Request) -> Response:
+        """Compare every member of project_a against every member of project_b
+        function-by-function via the BSim DB. Used by the new PROJECTS sub-tab
+        on the Similarity page."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        pa = (request.query_params.get("project_a") or "").strip()[:64]
+        pb = (request.query_params.get("project_b") or "").strip()[:64]
+        if not pa or not pb:
+            return JSONResponse(
+                {"error": "project_a and project_b are required"},
+                status_code=400,
+            )
+        try:
+            threshold = float(request.query_params.get("threshold", "0.7"))
+        except ValueError:
+            threshold = 0.7
+        threshold = max(0.0, min(threshold, 1.0))
+        try:
+            data = await _dash_to_thread(
+                get_project_comparison_data, pa, pb, threshold,
+            )
+            if not data.get("available") and data.get("error"):
+                return JSONResponse(data, status_code=400)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_bsim_compare_projects", exc)
+
     # --- Settings page ---
     async def page_settings(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
@@ -2399,6 +2428,7 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/bsim/validate", endpoint=api_bsim_validate, methods=["POST"]),
         Route("/api/bsim/delete", endpoint=api_bsim_delete, methods=["POST"]),
         Route("/api/bsim/clear", endpoint=api_bsim_clear, methods=["POST"]),
+        Route("/api/bsim/compare-projects", endpoint=api_bsim_compare_projects, methods=["GET"]),
         # Settings API
         Route("/api/settings", endpoint=api_settings_get, methods=["GET"]),
         Route("/api/settings", endpoint=api_settings_post, methods=["POST"]),
