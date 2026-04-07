@@ -1,0 +1,16 @@
+{
+  "name": "Arkana",
+  "version": "0.1.0",
+  "description": "Arkana - Your entire malware analysis lab, behind one AI prompt. 250+ MCP tools for binary analysis with Claude Code or other MCP",
+  "author": {
+    "name": "JameZUK",
+    "url": "https://github.com/JameZUK"
+  },
+  "homepage": "https://github.com/JameZUK/Arkana",
+  "repository": "https://github.com/JameZUK/Arkana",
+  "keywords": [
+    "mcp",
+    "codex"
+  ],
+  "mcpServers": "./.mcp.json"
+}
