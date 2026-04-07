@@ -3674,6 +3674,11 @@ def get_project_comparison_data(project_a_id: str,
             entry["avg_similarity"] = result.get("avg_similarity", 0.0)
             entry["total_functions_a"] = result.get("total_functions_a", 0)
             entry["total_functions_b"] = result.get("total_functions_b", 0)
+            # matched_a/matched_b counts are how the UI surfaces asymmetric
+            # collapses (e.g. "20 A funcs collapsed onto 1 B func"). Without
+            # forwarding them here they end up as None on every pair row.
+            entry["matched_a_count"] = result.get("matched_a_count", 0)
+            entry["matched_b_count"] = result.get("matched_b_count", 0)
             entry["top_matches"] = result.get("top_matches", [])
             indexed_pair_count += 1
             total_shared += entry["shared_function_count"]
