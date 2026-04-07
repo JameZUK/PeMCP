@@ -7,10 +7,14 @@ return JSON-serialisable dicts ready for the Starlette route handlers in
 """
 from __future__ import annotations
 
+import gzip
+import json
 import logging
 import os
+import tarfile
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from arkana.projects import project_manager, ScratchProject
 from arkana.state import get_current_state
@@ -18,8 +22,16 @@ from arkana.state import get_current_state
 logger = logging.getLogger("Arkana")
 
 
-def _project_card(project) -> Dict[str, Any]:
-    """Return a card-shaped summary of a project for the projects grid."""
+def _project_card_summary(project) -> Dict[str, Any]:
+    """Return a lightweight project summary for the projects grid.
+
+    Excludes the per-member breakdown — the grid only displays primary
+    filename, member count, and tags. Use ``_project_card_detail`` for the
+    expandable view that needs the full member list. This split halves the
+    payload size of ``GET /api/projects`` and avoids per-member presence
+    checks (which would each acquire ``Project._lock`` and ``stat()`` the
+    copy path).
+    """
     m = project.manifest
     primary = m.members.get(m.primary_sha256 or "", {}) if m.primary_sha256 else {}
     last_active = m.members.get(m.last_active_sha256 or "", {}) if m.last_active_sha256 else {}
@@ -37,32 +49,61 @@ def _project_card(project) -> Dict[str, Any]:
         "last_active_filename": last_active.get("original_filename"),
         "last_tab": (m.dashboard_state or {}).get("last_tab", ""),
         "member_count": len(m.members),
-        "members": [
-            {
-                "sha256": sha,
-                "filename": d.get("original_filename"),
-                "size": d.get("size", 0),
-                "mode": d.get("mode", "unknown"),
-                "added_at": d.get("added_at", 0.0),
-                "present": project.member_present(sha),
-                "is_primary": (sha == m.primary_sha256),
-                "is_last_active": (sha == m.last_active_sha256),
-            }
-            for sha, d in m.members.items()
-        ],
     }
+
+
+def _project_card_detail(project) -> Dict[str, Any]:
+    """Return the full project card including a per-member breakdown.
+
+    Snapshots the members dict and presence map under a single ``project._lock``
+    acquisition so the per-member ``stat()`` calls happen exactly once each
+    rather than re-locking per iteration.
+    """
+    summary = _project_card_summary(project)
+    # Snapshot members under one lock acquisition. ``member_present`` is
+    # batched into a single pass instead of N separate locked calls.
+    with project._lock:
+        members_snapshot = list(project.manifest.members.items())
+        primary_sha = project.manifest.primary_sha256
+        last_active_sha = project.manifest.last_active_sha256
+    presence_map: Dict[str, bool] = {}
+    for sha, d in members_snapshot:
+        cp = d.get("copy_path") or ""
+        presence_map[sha] = bool(cp) and os.path.isfile(cp)
+    summary["members"] = [
+        {
+            "sha256": sha,
+            "filename": d.get("original_filename"),
+            "size": d.get("size", 0),
+            "mode": d.get("mode", "unknown"),
+            "added_at": d.get("added_at", 0.0),
+            "present": presence_map.get(sha, False),
+            "is_primary": (sha == primary_sha),
+            "is_last_active": (sha == last_active_sha),
+        }
+        for sha, d in members_snapshot
+    ]
+    return summary
+
+
+# Backwards-compat alias — older code/tests imported _project_card.
+_project_card = _project_card_detail
 
 
 def get_projects_list_data(filter: str = "", tag: str = "",
                            sort_by: str = "last_opened") -> Dict[str, Any]:
-    """Return all projects (filtered/sorted) plus the active project's id."""
+    """Return all projects (filtered/sorted) plus the active project's id.
+
+    Returns *summaries* (no per-member breakdown). Use ``get_project_detail_data``
+    when the user expands a project card to see its members.
+    """
     projects = project_manager.list(
         filter=filter or "",
         tag=tag or None,
         sort_by=sort_by or "last_opened",
     )
-    state = get_current_state()
-    active = state.get_active_project() if hasattr(state, "get_active_project") else None
+    st = get_current_state()
+    active = st.get_active_project() if hasattr(st, "get_active_project") else None
     active_id = None
     active_scratch = False
     if active is not None:
@@ -72,7 +113,7 @@ def get_projects_list_data(filter: str = "", tag: str = "",
             active_id = active.id
 
     return {
-        "projects": [_project_card(p) for p in projects],
+        "projects": [_project_card_summary(p) for p in projects],
         "total_count": len(projects),
         "active_project_id": active_id,
         "active_scratch": active_scratch,
@@ -81,17 +122,17 @@ def get_projects_list_data(filter: str = "", tag: str = "",
 
 
 def get_project_detail_data(project_id: str) -> Optional[Dict[str, Any]]:
-    """Return full detail for a single project."""
+    """Return full detail for a single project (including member list)."""
     proj = project_manager.get(project_id)
     if proj is None:
         return None
-    return _project_card(proj)
+    return _project_card_detail(proj)
 
 
 def get_active_project_data() -> Dict[str, Any]:
     """Report whatever project is currently bound to state."""
-    state = get_current_state()
-    active = state.get_active_project() if hasattr(state, "get_active_project") else None
+    st = get_current_state()
+    active = st.get_active_project() if hasattr(st, "get_active_project") else None
     if active is None:
         return {"active": False, "scratch": False, "project": None}
     if getattr(active, "is_scratch", False):
@@ -109,13 +150,13 @@ def get_active_project_data() -> Dict[str, Any]:
                 ],
             },
         }
-    return {"active": True, "scratch": False, "project": _project_card(active)}
+    return {"active": True, "scratch": False, "project": _project_card_detail(active)}
 
 
 def create_project_data(name: str, tags: Optional[List[str]] = None) -> Dict[str, Any]:
     """Create a new (empty) project. Used by the dashboard "New project" button."""
     proj = project_manager.create(name=name, name_locked=True, tags=tags or [])
-    return {"status": "success", "project": _project_card(proj)}
+    return {"status": "success", "project": _project_card_summary(proj)}
 
 
 def rename_project_data(project_id: str, new_name: str) -> Dict[str, Any]:
@@ -124,7 +165,7 @@ def rename_project_data(project_id: str, new_name: str) -> Dict[str, Any]:
     if proj is None:
         return {"error": f"Project {project_id} not found"}
     project_manager.rename(proj, new_name)
-    return {"status": "success", "project": _project_card(proj)}
+    return {"status": "success", "project": _project_card_summary(proj)}
 
 
 def tag_project_data(project_id: str, add: Optional[List[str]] = None,
@@ -141,7 +182,7 @@ def tag_project_data(project_id: str, add: Optional[List[str]] = None,
             proj.add_tags(add, replace=False)
         if remove:
             proj.remove_tags(remove)
-    return {"status": "success", "project": _project_card(proj)}
+    return {"status": "success", "project": _project_card_summary(proj)}
 
 
 def delete_project_data(project_id: str) -> Dict[str, Any]:
@@ -149,15 +190,15 @@ def delete_project_data(project_id: str) -> Dict[str, Any]:
     proj = project_manager.get(project_id)
     if proj is None:
         return {"error": f"Project {project_id} not found"}
-    state = get_current_state()
-    active = state.get_active_project() if hasattr(state, "get_active_project") else None
+    st = get_current_state()
+    active = st.get_active_project() if hasattr(st, "get_active_project") else None
     if active is proj:
         try:
-            state.flush_overlay()
+            st.flush_overlay()
         except Exception:
             pass
         try:
-            state.unbind_project()
+            st.unbind_project()
         except Exception:
             pass
     project_manager.delete(proj)
@@ -173,7 +214,7 @@ def set_primary_binary_data(project_id: str, sha256: str) -> Dict[str, Any]:
         proj.set_primary(sha256)
     except ValueError as e:
         return {"error": str(e)}
-    return {"status": "success", "project": _project_card(proj)}
+    return {"status": "success", "project": _project_card_summary(proj)}
 
 
 def list_importable_archives() -> Dict[str, Any]:
@@ -187,7 +228,7 @@ def list_importable_archives() -> Dict[str, Any]:
     based on filename — exact match against existing project names).
     """
     candidates: List[Path] = []
-    seen_paths: set = set()
+    seen_paths: Set[str] = set()
 
     for env_var in ("ARKANA_EXPORT_DIR", "ARKANA_HOST_EXPORT", "ARKANA_OUTPUT"):
         env_dir = os.environ.get(env_var)
@@ -214,12 +255,14 @@ def list_importable_archives() -> Dict[str, Any]:
                     continue
                 seen_paths.add(rp)
                 stem = f.name.replace(".arkana_project.tar.gz", "").replace(".pemcp_project.tar.gz", "")
+                # One stat() call covers both size and mtime.
+                st = f.stat()
                 archives.append({
                     "name": f.name,
                     "stem": stem,
                     "path": rp,
-                    "size": f.stat().st_size,
-                    "mtime": f.stat().st_mtime,
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
                     "likely_imported": stem.lower() in existing_names,
                 })
         except OSError as e:
@@ -237,22 +280,18 @@ def import_archive_data(archive_path: str) -> Dict[str, Any]:
     extracted as a sync helper for the dashboard route. Both v1 (legacy
     single-binary) and v2 (project-level) archive formats are supported.
     """
-    from pathlib import Path as _P
-    from arkana.state import get_current_state
-    state = get_current_state()
-    abs_path = str(_P(archive_path).resolve())
-    state.check_path_allowed(abs_path)
+    st = get_current_state()
+    abs_path = str(Path(archive_path).resolve())
+    st.check_path_allowed(abs_path)
     if not os.path.isfile(abs_path):
         return {"error": f"Archive not found: {abs_path}"}
-    # Peek at the manifest to determine version
-    import tarfile, json as _json, gzip as _gz
     try:
         with tarfile.open(abs_path, "r:gz") as tf:
             try:
                 mf = tf.extractfile("manifest.json")
                 if mf is None:
                     return {"error": "Archive missing manifest.json"}
-                top_manifest = _json.loads(mf.read().decode("utf-8"))
+                top_manifest = json.loads(mf.read().decode("utf-8"))
             except KeyError:
                 return {"error": "Archive missing manifest.json"}
             export_version = top_manifest.get("export_version", 1)
@@ -268,8 +307,8 @@ def import_archive_data(archive_path: str) -> Dict[str, Any]:
                     af = tf.extractfile("analysis.json.gz")
                     if af is None:
                         return {"error": "v1 archive missing analysis.json.gz"}
-                    wrapper_bytes = _gz.decompress(af.read())
-                    wrapper = _json.loads(wrapper_bytes.decode("utf-8"))
+                    wrapper_bytes = gzip.decompress(af.read())
+                    wrapper = json.loads(wrapper_bytes.decode("utf-8"))
                 except Exception as e:
                     return {"error": f"v1 archive read failed: {e}"}
                 sha256 = top_manifest.get("sha256") or wrapper.get("_cache_meta", {}).get("sha256")
@@ -303,7 +342,7 @@ def import_archive_data(archive_path: str) -> Dict[str, Any]:
                     sha256=sha256,
                     original_filename=original_filename,
                     copy_path=str(stub_path),
-                    added_at=__import__("time").time(),
+                    added_at=time.time(),
                     size=int(top_manifest.get("original_file_size") or 0),
                     mode=top_manifest.get("mode", "unknown"),
                 )

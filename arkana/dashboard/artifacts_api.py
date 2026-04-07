@@ -46,10 +46,33 @@ def get_artifacts_list_data(filter: str = "", kind: str = "",
                             source_tool: str = "", tag: str = "",
                             sort_by: str = "created_at",
                             limit: int = 500) -> Dict[str, Any]:
-    """Return filtered + sorted artifacts plus aggregate counts."""
-    state = get_current_state()
-    artifacts = state.get_all_artifacts_snapshot() if hasattr(state, "get_all_artifacts_snapshot") else []
+    """Return filtered + sorted artifacts plus aggregate counts.
 
+    Snapshots the artifact list exactly once and derives both the filtered
+    view and the facet aggregation from that single snapshot — avoids two
+    deep-copies under ``_artifacts_lock`` per dashboard poll.
+    """
+    st = get_current_state()
+    full: List[Dict[str, Any]] = (
+        st.get_all_artifacts_snapshot()
+        if hasattr(st, "get_all_artifacts_snapshot") else []
+    )
+
+    # Aggregate counts for the filter sidebar — computed from the unfiltered
+    # snapshot so the facets always reflect the whole library.
+    kinds_count: Dict[str, int] = {}
+    tools_count: Dict[str, int] = {}
+    tags_count: Dict[str, int] = {}
+    for a in full:
+        k = a.get("kind") or "file"
+        kinds_count[k] = kinds_count.get(k, 0) + 1
+        t = a.get("source_tool") or ""
+        if t:
+            tools_count[t] = tools_count.get(t, 0) + 1
+        for tag_name in (a.get("tags") or []):
+            tags_count[tag_name] = tags_count.get(tag_name, 0) + 1
+
+    artifacts = list(full)  # shallow alias — filter operations build new lists
     if kind:
         artifacts = [a for a in artifacts if (a.get("kind") or "file") == kind]
     if source_tool:
@@ -68,7 +91,6 @@ def get_artifacts_list_data(filter: str = "", kind: str = "",
             or f in (a.get("detected_type") or "").lower()
         ]
 
-    # Sorting
     if sort_by == "name":
         artifacts.sort(key=lambda a: os.path.basename(a.get("path", "")).lower())
     elif sort_by == "size":
@@ -83,20 +105,6 @@ def get_artifacts_list_data(filter: str = "", kind: str = "",
     total = len(artifacts)
     limit = max(1, min(int(limit), 5000))
     artifacts = artifacts[:limit]
-
-    # Aggregate counts for the filter sidebar
-    full = state.get_all_artifacts_snapshot() if hasattr(state, "get_all_artifacts_snapshot") else []
-    kinds_count: Dict[str, int] = {}
-    tools_count: Dict[str, int] = {}
-    tags_count: Dict[str, int] = {}
-    for a in full:
-        k = a.get("kind") or "file"
-        kinds_count[k] = kinds_count.get(k, 0) + 1
-        t = a.get("source_tool") or ""
-        if t:
-            tools_count[t] = tools_count.get(t, 0) + 1
-        for tag_name in (a.get("tags") or []):
-            tags_count[tag_name] = tags_count.get(tag_name, 0) + 1
 
     return {
         "artifacts": [_artifact_row(a) for a in artifacts],
@@ -116,8 +124,8 @@ def get_artifacts_list_data(filter: str = "", kind: str = "",
 
 def get_artifact_detail(artifact_id: str) -> Optional[Dict[str, Any]]:
     """Return full detail for a single artifact, including directory members."""
-    state = get_current_state()
-    for art in state.get_all_artifacts_snapshot():
+    st = get_current_state()
+    for art in st.get_all_artifacts_snapshot():
         if art.get("id") == artifact_id:
             row = _artifact_row(art)
             # Include the full members list for directory bundles
@@ -133,8 +141,8 @@ def update_artifact_metadata_data(artifact_id: str, *,
                                   notes: Optional[str] = None,
                                   replace_tags: bool = False) -> Dict[str, Any]:
     """Update curatable metadata on an artifact."""
-    state = get_current_state()
-    updated = state.update_artifact_metadata(
+    st = get_current_state()
+    updated = st.update_artifact_metadata(
         artifact_id,
         description=description,
         tags=tags,
@@ -148,18 +156,18 @@ def update_artifact_metadata_data(artifact_id: str, *,
 
 def delete_artifact_data(artifact_id: str) -> Dict[str, Any]:
     """Delete an artifact registration (does NOT delete the file on disk)."""
-    state = get_current_state()
-    if state.delete_artifact(artifact_id):
+    st = get_current_state()
+    if st.delete_artifact(artifact_id):
         return {"status": "success", "artifact_id": artifact_id}
     return {"error": f"Artifact {artifact_id} not found"}
 
 
 def bulk_delete_artifacts(artifact_ids: List[str]) -> Dict[str, Any]:
     """Delete multiple artifacts at once. Returns per-id status."""
-    state = get_current_state()
+    st = get_current_state()
     results = {}
     for aid in artifact_ids:
-        results[aid] = state.delete_artifact(aid)
+        results[aid] = st.delete_artifact(aid)
     return {
         "status": "success",
         "deleted_count": sum(1 for v in results.values() if v),
@@ -170,10 +178,10 @@ def bulk_delete_artifacts(artifact_ids: List[str]) -> Dict[str, Any]:
 def bulk_tag_artifacts(artifact_ids: List[str], tags: List[str],
                        replace_tags: bool = False) -> Dict[str, Any]:
     """Apply tags to multiple artifacts at once."""
-    state = get_current_state()
+    st = get_current_state()
     updated = 0
     for aid in artifact_ids:
-        result = state.update_artifact_metadata(
+        result = st.update_artifact_metadata(
             aid, tags=tags, replace_tags=replace_tags,
         )
         if result is not None:
@@ -189,8 +197,8 @@ def get_artifact_file_for_download(artifact_id: str) -> Optional[Dict[str, Any]]
     for zipping on the fly within the size cap. The data layer just supplies
     the path and size info.
     """
-    state = get_current_state()
-    for art in state.get_all_artifacts_snapshot():
+    st = get_current_state()
+    for art in st.get_all_artifacts_snapshot():
         if art.get("id") == artifact_id:
             path = art.get("path") or ""
             if not path or not os.path.exists(path):

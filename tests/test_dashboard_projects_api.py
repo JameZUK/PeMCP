@@ -363,3 +363,325 @@ class TestImportableArchives:
         assert "stealc_a1b2c3d4.arkana_project.tar.gz" in names
         assert "emotet_xyz.pemcp_project.tar.gz" in names
         assert "not_an_archive.txt" not in names
+
+
+# ---------------------------------------------------------------------------
+#  _locate_binary_for_stub (used by api_projects_open to recover migrated stubs)
+# ---------------------------------------------------------------------------
+
+class TestLocateBinaryForStub:
+    """Verify the dashboard helper that finds a binary on disk by sha256
+    when a project member's copy_path is missing (migrated stub case)."""
+
+    def _hash(self, data: bytes) -> str:
+        import hashlib
+        return hashlib.sha256(data).hexdigest()
+
+    def test_returns_empty_when_no_roots(self):
+        from arkana.dashboard.app import _locate_binary_for_stub
+
+        class S:
+            allowed_paths = None
+            samples_path = None
+
+        assert _locate_binary_for_stub(S(), "a" * 64, "x.bin") == ""
+
+    def test_returns_empty_for_blank_inputs(self, tmp_path):
+        from arkana.dashboard.app import _locate_binary_for_stub
+
+        class S:
+            allowed_paths = [str(tmp_path)]
+            samples_path = None
+
+        assert _locate_binary_for_stub(S(), "", "x.bin") == ""
+        assert _locate_binary_for_stub(S(), "a" * 64, "") == ""
+        assert _locate_binary_for_stub(S(), "a" * 64, "/") == ""
+
+    def test_finds_via_samples_path_root(self, tmp_path):
+        """When allowed_paths is None (stdio mode), samples_path is the
+        only hint — verify the helper still finds files there."""
+        from arkana.dashboard.app import _locate_binary_for_stub
+        data = b"hello arkana"
+        f = tmp_path / "loader.exe"
+        f.write_bytes(data)
+
+        class S:
+            allowed_paths = None
+            samples_path = str(tmp_path)
+
+        result = _locate_binary_for_stub(S(), self._hash(data), "loader.exe")
+        assert result == str(f.resolve())
+
+    def test_finds_in_subdirectory(self, tmp_path):
+        from arkana.dashboard.app import _locate_binary_for_stub
+        sub = tmp_path / "Protect" / "themida"
+        sub.mkdir(parents=True)
+        data = b"\xde\xad\xbe\xef" * 100
+        f = sub / "sample.exe"
+        f.write_bytes(data)
+
+        class S:
+            allowed_paths = None
+            samples_path = str(tmp_path)
+
+        assert _locate_binary_for_stub(S(), self._hash(data), "sample.exe") == str(f.resolve())
+
+    def test_filename_match_but_different_content_rejected(self, tmp_path):
+        """If a file has the right name but the wrong sha256, it must NOT
+        be returned — the hash check is the source of truth."""
+        from arkana.dashboard.app import _locate_binary_for_stub
+        wrong = tmp_path / "sample.exe"
+        wrong.write_bytes(b"wrong content")
+
+        class S:
+            allowed_paths = None
+            samples_path = str(tmp_path)
+
+        assert _locate_binary_for_stub(S(), "0" * 64, "sample.exe") == ""
+
+    def test_finds_renamed_file_by_hash(self, tmp_path):
+        """If the target filename doesn't exist but a content match does,
+        the helper falls back to hashing the first few non-name files."""
+        from arkana.dashboard.app import _locate_binary_for_stub
+        data = b"renamed binary content"
+        f = tmp_path / "different_name.exe"
+        f.write_bytes(data)
+
+        class S:
+            allowed_paths = None
+            samples_path = str(tmp_path)
+
+        result = _locate_binary_for_stub(S(), self._hash(data), "original_name.exe")
+        assert result == str(f.resolve())
+
+    def test_allowed_paths_takes_precedence(self, tmp_path):
+        """Path-sandboxed deployments rely on allowed_paths — verify those
+        are searched in addition to samples_path."""
+        from arkana.dashboard.app import _locate_binary_for_stub
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        data = b"abc123"
+        f = a / "x.bin"
+        f.write_bytes(data)
+
+        class S:
+            allowed_paths = [str(a)]
+            samples_path = str(b)  # different dir
+
+        assert _locate_binary_for_stub(S(), self._hash(data), "x.bin") == str(f.resolve())
+
+    def test_export_dir_env_var_searched(self, tmp_path, monkeypatch):
+        """Extracted artefacts often live in the export dir — verify the
+        helper picks up ARKANA_EXPORT_DIR even when not in samples_path."""
+        from arkana.dashboard.app import _locate_binary_for_stub
+        export = tmp_path / "out"
+        export.mkdir()
+        data = b"extracted payload"
+        f = export / "payload.bin"
+        f.write_bytes(data)
+        monkeypatch.setenv("ARKANA_EXPORT_DIR", str(export))
+
+        class S:
+            allowed_paths = None
+            samples_path = None
+
+        assert _locate_binary_for_stub(S(), self._hash(data), "payload.bin") == str(f.resolve())
+
+    def test_skips_oversized_files(self, tmp_path, monkeypatch):
+        """Files above the size cap should not be hashed (defends against
+        accidentally hashing 10GB ISOs)."""
+        from arkana.dashboard import app as app_mod
+        from arkana.dashboard.app import _locate_binary_for_stub
+        f = tmp_path / "huge.bin"
+        f.write_bytes(b"x" * 1024)
+        monkeypatch.setattr(app_mod, "_LOCATE_MAX_FILE_BYTES", 100)
+
+        class S:
+            allowed_paths = None
+            samples_path = str(tmp_path)
+
+        # Even though the filename matches, the size cap blocks hashing
+        # so the helper returns "" rather than reading the file.
+        assert _locate_binary_for_stub(S(), "0" * 64, "huge.bin") == ""
+
+    def test_walked_cap_bounds_search(self, tmp_path, monkeypatch):
+        """The walked-entry cap protects against pathological trees."""
+        from arkana.dashboard import app as app_mod
+        from arkana.dashboard.app import _locate_binary_for_stub
+        # Tighten the cap and create a few files past it
+        monkeypatch.setattr(app_mod, "_LOCATE_MAX_WALK", 3)
+        for i in range(10):
+            (tmp_path / f"f{i}.bin").write_bytes(b"x")
+
+        class S:
+            allowed_paths = None
+            samples_path = str(tmp_path)
+
+        # Search must terminate without raising even though entries > cap
+        result = _locate_binary_for_stub(S(), "0" * 64, "missing.bin")
+        assert result == ""
+
+
+# ---------------------------------------------------------------------------
+#  V2 archive importer safety (path traversal, size caps, member caps)
+# ---------------------------------------------------------------------------
+
+class TestImportProjectV2Safety:
+    """Verify _import_project_v2 blocks malicious archive contents."""
+
+    def _build_archive(self, path: str, members: list) -> None:
+        """Build a tar.gz with the given (name, data, member_type) entries."""
+        import io
+        import tarfile
+        with tarfile.open(path, "w:gz") as tar:
+            for entry in members:
+                name = entry["name"]
+                data = entry.get("data", b"")
+                info = tarfile.TarInfo(name=name)
+                info.size = len(data)
+                if entry.get("type") == "dir":
+                    info.type = tarfile.DIRTYPE
+                    info.size = 0
+                tar.addfile(info, io.BytesIO(data))
+
+    def test_path_traversal_blocked(self, manager, tmp_path):
+        """A member with .. components escaping project/ must be rejected."""
+        import json as _json
+        from arkana.mcp.tools_export import _import_project_v2
+        arch = tmp_path / "evil.tar.gz"
+        self._build_archive(str(arch), [
+            {"name": "manifest.json", "data": _json.dumps({"export_version": 2}).encode()},
+            {"name": "project/foo/../../../etc/pwned", "data": b"bad"},
+        ])
+        with pytest.raises(RuntimeError, match="escapes project root|Unsafe archive"):
+            _import_project_v2(str(arch), {"export_version": 2, "project_name": "evil"})
+
+    def test_absolute_path_blocked(self, manager, tmp_path):
+        import json as _json
+        from arkana.mcp.tools_export import _import_project_v2
+        arch = tmp_path / "abs.tar.gz"
+        self._build_archive(str(arch), [
+            {"name": "manifest.json", "data": _json.dumps({"export_version": 2}).encode()},
+            {"name": "/etc/passwd", "data": b"root:x:0:0"},
+        ])
+        with pytest.raises(RuntimeError, match="absolute path"):
+            _import_project_v2(str(arch), {"export_version": 2, "project_name": "abs"})
+
+    def test_per_member_size_cap(self, manager, tmp_path, monkeypatch):
+        """A single oversized member exceeding the per-file cap must be rejected."""
+        import json as _json
+        from arkana.mcp import tools_export
+        from arkana.mcp.tools_export import _import_project_v2
+        monkeypatch.setattr(tools_export, "_MAX_V2_MEMBER_BYTES", 32)  # 32 byte cap
+        arch = tmp_path / "huge_member.tar.gz"
+        self._build_archive(str(arch), [
+            {"name": "manifest.json", "data": _json.dumps({"export_version": 2}).encode()},
+            {"name": "project/manifest.json", "data": b"{}"},
+            {"name": "project/big.bin", "data": b"x" * 1024},  # 1 KB > 32 B cap
+        ])
+        with pytest.raises(RuntimeError, match="per-file size cap"):
+            _import_project_v2(str(arch), {"export_version": 2, "project_name": "huge"})
+
+    def test_total_size_cap(self, manager, tmp_path, monkeypatch):
+        """The cumulative member size cap must trigger before extraction completes."""
+        import json as _json
+        from arkana.mcp import tools_export
+        from arkana.mcp.tools_export import _import_project_v2
+        monkeypatch.setattr(tools_export, "_MAX_V2_ARCHIVE_BYTES", 256)  # 256 byte total
+        arch = tmp_path / "total.tar.gz"
+        members = [
+            {"name": "manifest.json", "data": _json.dumps({"export_version": 2}).encode()},
+            {"name": "project/manifest.json", "data": b"{}"},
+        ]
+        for i in range(20):
+            members.append({"name": f"project/f{i}.bin", "data": b"x" * 64})
+        self._build_archive(str(arch), members)
+        with pytest.raises(RuntimeError, match="total size cap"):
+            _import_project_v2(str(arch), {"export_version": 2, "project_name": "total"})
+
+    def test_member_count_cap(self, manager, tmp_path, monkeypatch):
+        """Too many members in a single archive must be rejected."""
+        import json as _json
+        from arkana.mcp import tools_export
+        from arkana.mcp.tools_export import _import_project_v2
+        monkeypatch.setattr(tools_export, "_MAX_V2_ARCHIVE_MEMBERS", 5)
+        arch = tmp_path / "many.tar.gz"
+        members = [
+            {"name": "manifest.json", "data": _json.dumps({"export_version": 2}).encode()},
+        ]
+        for i in range(20):
+            members.append({"name": f"project/f{i}.bin", "data": b"x"})
+        self._build_archive(str(arch), members)
+        with pytest.raises(RuntimeError, match="member cap"):
+            _import_project_v2(str(arch), {"export_version": 2, "project_name": "many"})
+
+    def test_symlink_member_blocked(self, manager, tmp_path):
+        import io
+        import json as _json
+        import tarfile
+        from arkana.mcp.tools_export import _import_project_v2
+        arch = tmp_path / "symlink.tar.gz"
+        with tarfile.open(str(arch), "w:gz") as tar:
+            mf = _json.dumps({"export_version": 2}).encode()
+            info = tarfile.TarInfo("manifest.json")
+            info.size = len(mf)
+            tar.addfile(info, io.BytesIO(mf))
+            sym = tarfile.TarInfo("project/payload")
+            sym.type = tarfile.SYMTYPE
+            sym.linkname = "/etc/passwd"
+            tar.addfile(sym)
+        with pytest.raises(RuntimeError, match="unsafe entry"):
+            _import_project_v2(str(arch), {"export_version": 2, "project_name": "sym"})
+
+    def test_partial_extract_cleaned_up(self, manager, tmp_path):
+        """A failed extraction must remove the partial new_root directory."""
+        import json as _json
+        from arkana.mcp.tools_export import _import_project_v2
+        from arkana.projects import PROJECTS_DIR
+        before = set(PROJECTS_DIR.iterdir()) if PROJECTS_DIR.exists() else set()
+        arch = tmp_path / "fail.tar.gz"
+        self._build_archive(str(arch), [
+            {"name": "manifest.json", "data": _json.dumps({"export_version": 2}).encode()},
+            {"name": "project/foo/../../../etc/x", "data": b"bad"},
+        ])
+        with pytest.raises(RuntimeError):
+            _import_project_v2(str(arch), {"export_version": 2, "project_name": "fail"})
+        after = set(PROJECTS_DIR.iterdir()) if PROJECTS_DIR.exists() else set()
+        # No new project directory should remain on disk
+        assert after == before
+
+
+# ---------------------------------------------------------------------------
+#  PROJECT_NAME_RE — ASCII-only enforcement (security: confusable names)
+# ---------------------------------------------------------------------------
+
+class TestProjectNameRegex:
+    """The project name regex must reject unicode confusables that allowed
+    visual spoofing across find_by_name dedup."""
+
+    def test_ascii_alpha_accepted(self):
+        from arkana.constants import PROJECT_NAME_RE
+        assert PROJECT_NAME_RE.match("my_project")
+        assert PROJECT_NAME_RE.match("ProjectFoo-1.2")
+        assert PROJECT_NAME_RE.match("a b c")
+
+    def test_unicode_word_chars_rejected(self):
+        """Cyrillic 'а' (U+0430) is visually identical to ASCII 'a' but
+        previously matched ``\\w``."""
+        from arkana.constants import PROJECT_NAME_RE
+        assert PROJECT_NAME_RE.match("foo\u0430") is None  # cyrillic a
+        assert PROJECT_NAME_RE.match("project\u202e") is None  # RTL override
+        assert PROJECT_NAME_RE.match("\uff21\uff22") is None  # fullwidth A B
+
+    def test_path_separators_rejected(self):
+        from arkana.constants import PROJECT_NAME_RE
+        assert PROJECT_NAME_RE.match("foo/bar") is None
+        assert PROJECT_NAME_RE.match("foo\\bar") is None
+        assert PROJECT_NAME_RE.match("foo:bar") is None
+
+    def test_length_cap(self):
+        from arkana.constants import PROJECT_NAME_RE
+        assert PROJECT_NAME_RE.match("a" * 100)
+        assert PROJECT_NAME_RE.match("a" * 101) is None

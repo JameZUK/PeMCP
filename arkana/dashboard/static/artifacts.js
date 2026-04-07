@@ -327,8 +327,15 @@
     if (sortSelect) sortSelect.addEventListener("change", reload);
 
     // Auto-refresh every 10s so background-tool-generated artifacts appear
-    // without manual reload.
-    setInterval(reload, 10000);
+    // without manual reload. Skip the poll while the tab is hidden so a
+    // backgrounded session doesn't keep hammering the server forever, and
+    // refresh once on return so the user sees up-to-date data immediately.
+    setInterval(function () {
+        if (document.visibilityState === "visible") reload();
+    }, 10000);
+    document.addEventListener("visibilitychange", function () {
+        if (document.visibilityState === "visible") reload();
+    });
 
     if (typeof window.showToast !== "function") {
         window.showToast = function (msg) { console.log("[arkana]", msg); };

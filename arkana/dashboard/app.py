@@ -13,7 +13,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 from starlette.applications import Starlette
@@ -74,6 +74,29 @@ from arkana.dashboard.state_api import (
     _BSIM_HEX64_RE,
     get_settings_data,
 )
+from arkana.dashboard.projects_api import (
+    get_projects_list_data,
+    get_project_detail_data,
+    create_project_data,
+    rename_project_data,
+    tag_project_data,
+    delete_project_data,
+    set_primary_binary_data,
+    list_importable_archives,
+    import_archive_data,
+    save_dashboard_state,
+)
+from arkana.dashboard.artifacts_api import (
+    get_artifacts_list_data,
+    get_artifact_detail,
+    update_artifact_metadata_data,
+    delete_artifact_data,
+    bulk_delete_artifacts,
+    bulk_tag_artifacts,
+    get_artifact_file_for_download,
+)
+from arkana.projects import project_manager
+from arkana.mcp.tools_pe import open_file as _open_file_tool
 
 from arkana.constants import DASHBOARD_THREAD_POOL_SIZE
 from arkana.utils import _safe_env_int
@@ -98,37 +121,170 @@ async def _dash_to_thread(func, /, *args, **kwargs):
     return await loop.run_in_executor(_dashboard_executor, func_call)
 
 
+_LOCATE_MAX_HASH = 8         # never hash more than this many candidates per call
+_LOCATE_MAX_WALK = 20000     # cap directory walks (defends against pathological trees)
+_LOCATE_HASH_CHUNK = 1 << 20  # 1 MiB streaming hash chunk
+_LOCATE_MAX_FILE_BYTES = 512 * 1024 * 1024  # don't hash candidates above this size
+
+# Bulk-action caps for /api/artifacts/bulk — defend against authenticated
+# CPU DoS where a huge id/tag list multiplies into N×N work under lock.
+_MAX_BULK_ARTIFACT_IDS = 500
+_MAX_BULK_ARTIFACT_TAGS = 50
+
+# /api/projects/dashboard-state value caps. Per-key type and size budget so
+# repeated calls cannot grow the manifest unbounded.
+_DASHBOARD_STATE_VALUE_BUDGET = {
+    "last_tab": (str, 80),
+    "hex_offset": (int, None),
+    "last_function_address": (str, 64),
+    "functions_scroll": (int, None),
+    "callgraph_layout": (dict, 4096),
+}
+
+
+def _build_directory_tarball(src_path: str, arcname: str) -> str:
+    """Build a tar.gz of *src_path* into a NamedTemporaryFile and return its path.
+
+    Streams via tarfile rather than buffering bytes in memory. Caller is
+    responsible for unlinking the result (use ``_unlink_quiet`` as a
+    BackgroundTask). Symlinks are NOT followed.
+    """
+    import tarfile
+    import tempfile as _tempfile
+    fd = _tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
+    tmp_path = fd.name
+    fd.close()
+    try:
+        with tarfile.open(tmp_path, mode="w:gz", dereference=False) as tf:
+            tf.add(src_path, arcname=arcname, recursive=True)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return tmp_path
+
+
+def _unlink_quiet(path: str) -> None:
+    """Best-effort unlink — used as a BackgroundTask after FileResponse."""
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+class _NoopCtx:
+    """Stand-in for FastMCP's Context when calling MCP tools from the dashboard.
+
+    ``open_file`` only invokes ``ctx.info`` / ``ctx.warning`` / ``ctx.error`` /
+    ``ctx.report_progress`` — noop async methods satisfy the interface.
+    """
+    async def info(self, *args, **kwargs): pass
+    async def warning(self, *args, **kwargs): pass
+    async def error(self, *args, **kwargs): pass
+    async def report_progress(self, *args, **kwargs): pass
+
+
+def _resolve_project_member(project, chosen_sha: str) -> Dict[str, Any]:
+    """Resolve a project member + presence check under one lock acquisition.
+
+    Returns a dict with:
+      - ``member``: the ProjectMember dataclass (or None on lookup failure)
+      - ``binary_path``: absolute path on disk (or "")
+      - ``present``: bool — whether the file exists on disk right now
+      - ``error``: str — present only if sha256 validation failed
+
+    Used by ``api_projects_open`` to avoid doing the stat() + lock dance on
+    the async event loop.
+    """
+    try:
+        member = project.get_member(chosen_sha) if hasattr(project, "get_member") else None
+    except ValueError as exc:
+        return {"error": str(exc), "member": None, "binary_path": "", "present": False}
+    if member is None:
+        return {"member": None, "binary_path": "", "present": False}
+    path = member.copy_path or ""
+    return {
+        "member": member,
+        "binary_path": path,
+        "present": bool(path) and os.path.isfile(path),
+    }
+
+
 def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
-    """Search allowed sample directories for a file matching *sha256*.
+    """Search known sample directories for a file matching *sha256*.
 
     Returns the absolute path of the first match, or "" if nothing is found.
     Used by ``api_projects_open`` to materialise stub members from migrated
-    projects (where the binary copy never made it into the project's
+    projects (where the binary copy was never copied into the project's
     binaries/ dir).
 
-    Search strategy:
-      1. Walk every configured ``state.allowed_paths`` directory.
-      2. Try a fast filename match first (basename equality).
-      3. Hash candidate files and compare against ``sha256``.
-      4. Bound the search to keep dashboard responsive: max 5 candidate
-         hashes per call, max 2000 file walks per directory.
+    Search strategy (in order):
+      1. Try ``samples_path / original_filename`` directly.
+      2. Walk ``state.allowed_paths`` (if configured) and ``state.samples_path``
+         (the most common case for stdio mode), looking for filename matches
+         first, then any other files within the walk cap.
+      3. Hash up to ``_LOCATE_MAX_HASH`` candidates (filename matches first)
+         and return the first sha256 match.
+
+    Bounds: ``_LOCATE_MAX_WALK`` directory entries scanned per call,
+    ``_LOCATE_MAX_HASH`` files hashed, ``_LOCATE_MAX_FILE_BYTES`` per file.
     """
     import hashlib
 
     if not sha256 or not original_filename:
         return ""
-    allowed = list(getattr(state, "allowed_paths", None) or [])
-    if not allowed:
-        return ""
     sha256 = sha256.lower()
-    target_basename = os.path.basename(original_filename).lower()
+    target_basename = os.path.basename(original_filename)
+    if not target_basename:
+        return ""
+    target_lower = target_basename.lower()
+
+    # Build search roots from state — both allowed_paths (path sandbox) and
+    # samples_path (the explicit "where my samples live" hint).
+    roots: List[Path] = []
+    seen_roots: set = set()
+
+    def _add_root(p: object) -> None:
+        if not p:
+            return
+        try:
+            rp = Path(str(p)).resolve()
+        except (OSError, ValueError):
+            return
+        key = str(rp)
+        if key in seen_roots:
+            return
+        if not rp.is_dir():
+            return
+        seen_roots.add(key)
+        roots.append(rp)
+
+    for p in (getattr(state, "allowed_paths", None) or []):
+        _add_root(p)
+    _add_root(getattr(state, "samples_path", None))
+    # Also probe well-known export/output dirs — extracted artifacts (e.g.
+    # decrypted payloads) often live here, and migrated projects sometimes
+    # reference them as their primary binary.
+    for env_var in ("ARKANA_EXPORT_DIR", "ARKANA_HOST_EXPORT", "ARKANA_OUTPUT"):
+        _add_root(os.environ.get(env_var))
+
+    if not roots:
+        return ""
 
     def _hash(path: Path) -> str:
+        try:
+            st = path.stat()
+            if st.st_size > _LOCATE_MAX_FILE_BYTES:
+                return ""
+        except OSError:
+            return ""
         h = hashlib.sha256()
         try:
             with open(path, "rb") as f:
                 while True:
-                    chunk = f.read(1024 * 1024)
+                    chunk = f.read(_LOCATE_HASH_CHUNK)
                     if not chunk:
                         break
                     h.update(chunk)
@@ -136,32 +292,48 @@ def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
             return ""
         return h.hexdigest()
 
-    candidates: list = []
-    walked_total = 0
-    for root in allowed:
+    # Fast path: direct filename hit at the root of any search dir
+    for root in roots:
+        direct = root / target_basename
         try:
-            root_path = Path(root)
-            if not root_path.is_dir():
-                continue
-            walked = 0
-            for entry in root_path.rglob("*"):
-                if walked > 2000:
-                    break
+            if direct.is_file() and _hash(direct) == sha256:
+                return str(direct.resolve())
+        except OSError:
+            pass
+
+    # Walked search: prioritise filename matches, then collect other files
+    # up to the cap so a sha256 hit can still find a renamed binary.
+    name_hits: List[Path] = []
+    others: List[Path] = []
+    walked = 0
+    for root in roots:
+        if walked >= _LOCATE_MAX_WALK:
+            break
+        try:
+            for entry in root.rglob("*"):
                 walked += 1
-                walked_total += 1
-                if not entry.is_file():
+                if walked >= _LOCATE_MAX_WALK:
+                    break
+                try:
+                    if not entry.is_file():
+                        continue
+                except OSError:
                     continue
-                if entry.name.lower() == target_basename:
-                    # Filename match — promote to front of candidate list
-                    candidates.insert(0, entry)
-                elif walked_total < 200:
-                    # Only consider non-name-matching files within tight bound
-                    candidates.append(entry)
+                if entry.name.lower() == target_lower:
+                    name_hits.append(entry)
+                elif len(others) < _LOCATE_MAX_HASH:
+                    # Only keep enough non-matching candidates that we could
+                    # hash if no name hits were found.
+                    others.append(entry)
         except OSError:
             continue
 
-    # Hash up to 5 candidates (filename matches first)
-    for cand in candidates[:5]:
+    # Hash filename matches first, then fall back to a few non-matching
+    # files (handles renames). Bounded by _LOCATE_MAX_HASH total hashes.
+    candidates = name_hits[:_LOCATE_MAX_HASH]
+    if len(candidates) < _LOCATE_MAX_HASH:
+        candidates.extend(others[: _LOCATE_MAX_HASH - len(candidates)])
+    for cand in candidates:
         if _hash(cand) == sha256:
             return str(cand.resolve())
     return ""
@@ -741,14 +913,8 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "invalid status"}, status_code=400)
         st = _get_active_state()
         st.set_triage_status(address, status)
-        # Persist to cache
-        sha = (st.pe_data or {}).get("file_hashes", {}).get("sha256")
-        if sha:
-            try:
-                from arkana.config import analysis_cache
-                analysis_cache.update_session_data(sha, triage_status=st.get_all_triage_snapshot())
-            except (OSError, IOError, KeyError):
-                pass
+        # User state lives in the project overlay (flushed by close_file /
+        # the background flush thread); no cache wrapper write needed.
         return JSONResponse({"ok": True, "address": address, "status": status})
 
     async def api_decompile_get(request: Request) -> Response:
@@ -1675,7 +1841,6 @@ def _create_routes(dashboard_token: str) -> list:
     async def page_projects(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return RedirectResponse("/dashboard/login", status_code=302)
-        from arkana.dashboard.projects_api import get_projects_list_data
         try:
             data = await _dash_to_thread(get_projects_list_data)
         except Exception:
@@ -1688,7 +1853,6 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_projects_list(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        from arkana.dashboard.projects_api import get_projects_list_data
         filter_q = request.query_params.get("filter", "")[:200]
         tag = request.query_params.get("tag", "")[:80]
         sort_by = request.query_params.get("sort_by", "last_opened")
@@ -1708,7 +1872,6 @@ def _create_routes(dashboard_token: str) -> list:
         pid = request.query_params.get("project_id", "")[:64].strip()
         if not pid:
             return JSONResponse({"error": "project_id is required"}, status_code=400)
-        from arkana.dashboard.projects_api import get_project_detail_data
         try:
             data = await _dash_to_thread(get_project_detail_data, pid)
             if data is None:
@@ -1731,7 +1894,6 @@ def _create_routes(dashboard_token: str) -> list:
         tags = body.get("tags") or []
         if not isinstance(tags, list):
             return JSONResponse({"error": "tags must be a list"}, status_code=400)
-        from arkana.dashboard.projects_api import create_project_data
         try:
             data = await _dash_to_thread(create_project_data, name, tags)
             return JSONResponse(data)
@@ -1752,7 +1914,6 @@ def _create_routes(dashboard_token: str) -> list:
         new_name = (body.get("new_name") or "").strip()
         if not pid or not new_name:
             return JSONResponse({"error": "project_id and new_name are required"}, status_code=400)
-        from arkana.dashboard.projects_api import rename_project_data
         try:
             data = await _dash_to_thread(rename_project_data, pid, new_name)
             if "error" in data:
@@ -1779,7 +1940,6 @@ def _create_routes(dashboard_token: str) -> list:
         replace = bool(body.get("replace", False))
         if not isinstance(add, list) or not isinstance(remove, list):
             return JSONResponse({"error": "add/remove must be lists"}, status_code=400)
-        from arkana.dashboard.projects_api import tag_project_data
         try:
             data = await _dash_to_thread(tag_project_data, pid, add, remove, replace)
             if "error" in data:
@@ -1802,7 +1962,6 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": "project_id is required"}, status_code=400)
         if not confirm:
             return JSONResponse({"error": "confirm=true required"}, status_code=400)
-        from arkana.dashboard.projects_api import delete_project_data
         try:
             data = await _dash_to_thread(delete_project_data, pid)
             if "error" in data:
@@ -1825,8 +1984,6 @@ def _create_routes(dashboard_token: str) -> list:
         binary_sha = (body.get("binary_sha256") or "").strip().lower()
         if not pid:
             return JSONResponse({"error": "project_id is required"}, status_code=400)
-        from arkana.projects import project_manager
-        from arkana.mcp.tools_pe import open_file as _open_file_tool
 
         proj = await _dash_to_thread(project_manager.get, pid)
         if proj is None:
@@ -1834,11 +1991,18 @@ def _create_routes(dashboard_token: str) -> list:
         chosen = binary_sha or proj.manifest.last_active_sha256 or proj.manifest.primary_sha256
         if not chosen:
             return JSONResponse({"error": "Project has no binaries"}, status_code=400)
-        member = proj.get_member(chosen) if hasattr(proj, "get_member") else None
+
+        # Member resolution + stat happen in the worker pool to keep the
+        # event loop free. Handles ValueError from sha256 validation cleanly.
+        resolved = await _dash_to_thread(_resolve_project_member, proj, chosen)
+        if resolved.get("error"):
+            return JSONResponse({"error": resolved["error"]}, status_code=400)
+        member = resolved["member"]
         if member is None:
             return JSONResponse({"error": f"Member {chosen[:12]} not in project"}, status_code=400)
-        binary_path = member.copy_path
-        if not binary_path or not os.path.isfile(binary_path):
+        binary_path = resolved["binary_path"]
+
+        if not resolved["present"]:
             # Stub member (migrated project or deleted copy) — try to locate
             # the original binary in allowed sample directories by sha256 +
             # filename, then adopt it into the stub.
@@ -1855,7 +2019,7 @@ def _create_routes(dashboard_token: str) -> list:
                         {"error": f"Failed to adopt located binary: {exc}"},
                         status_code=500,
                     )
-            if not binary_path or not os.path.isfile(binary_path):
+            if not binary_path or not await _dash_to_thread(os.path.isfile, binary_path):
                 return JSONResponse(
                     {
                         "error": (
@@ -1871,17 +2035,12 @@ def _create_routes(dashboard_token: str) -> list:
                     },
                     status_code=409,
                 )
+
         # Bind the project on the active state, then call open_file via the
-        # MCP tool helper. We construct a minimal context shim — open_file
-        # only uses ctx.info / ctx.warning / report_progress.
+        # MCP tool helper. The module-level _NoopCtx satisfies the tool's
+        # ctx.info/warning/error/report_progress interface.
         active_state = _get_active_state()
         active_state.bind_project(proj)
-
-        class _NoopCtx:
-            async def info(self, *a, **k): pass
-            async def warning(self, *a, **k): pass
-            async def error(self, *a, **k): pass
-            async def report_progress(self, *a, **k): pass
 
         try:
             result = await _open_file_tool(_NoopCtx(), binary_path, force_switch=True)
@@ -1901,7 +2060,6 @@ def _create_routes(dashboard_token: str) -> list:
         sha = (body.get("sha256") or "").strip().lower()
         if not pid or not sha:
             return JSONResponse({"error": "project_id and sha256 required"}, status_code=400)
-        from arkana.dashboard.projects_api import set_primary_binary_data
         try:
             data = await _dash_to_thread(set_primary_binary_data, pid, sha)
             if "error" in data:
@@ -1914,7 +2072,6 @@ def _create_routes(dashboard_token: str) -> list:
         """List .arkana_project.tar.gz files in known output directories."""
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        from arkana.dashboard.projects_api import list_importable_archives
         try:
             data = await _dash_to_thread(list_importable_archives)
             return JSONResponse(data)
@@ -1933,7 +2090,6 @@ def _create_routes(dashboard_token: str) -> list:
         path = (body.get("path") or "").strip()
         if not path:
             return JSONResponse({"error": "path is required"}, status_code=400)
-        from arkana.dashboard.projects_api import import_archive_data
         try:
             data = await _dash_to_thread(import_archive_data, path)
             if "error" in data:
@@ -1943,7 +2099,11 @@ def _create_routes(dashboard_token: str) -> list:
             return _api_error_response("api_projects_import_archive", exc)
 
     async def api_projects_dashboard_state(request: Request) -> Response:
-        """Persist a small piece of dashboard state into the project manifest."""
+        """Persist a small piece of dashboard state into the project manifest.
+
+        Per-key type and size validation defends against repeated calls
+        growing the manifest unbounded (every value lands in JSON on disk).
+        """
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         if not _validate_csrf(request):
@@ -1956,7 +2116,34 @@ def _create_routes(dashboard_token: str) -> list:
         value = body.get("value")
         if not pid or not key:
             return JSONResponse({"error": "project_id and key required"}, status_code=400)
-        from arkana.dashboard.projects_api import save_dashboard_state
+        budget = _DASHBOARD_STATE_VALUE_BUDGET.get(key)
+        if budget is None:
+            return JSONResponse({"error": f"unknown dashboard_state key: {key}"},
+                                status_code=400)
+        expected_type, max_size = budget
+        if not isinstance(value, expected_type):
+            return JSONResponse(
+                {"error": f"value for '{key}' must be {expected_type.__name__}"},
+                status_code=400,
+            )
+        if expected_type is str and max_size and len(value) > max_size:
+            return JSONResponse(
+                {"error": f"value for '{key}' exceeds {max_size} chars"},
+                status_code=400,
+            )
+        if expected_type is dict and max_size:
+            try:
+                serialised = json.dumps(value)
+            except (TypeError, ValueError):
+                return JSONResponse(
+                    {"error": f"value for '{key}' is not JSON-serialisable"},
+                    status_code=400,
+                )
+            if len(serialised) > max_size:
+                return JSONResponse(
+                    {"error": f"value for '{key}' exceeds {max_size} bytes"},
+                    status_code=400,
+                )
         try:
             data = await _dash_to_thread(save_dashboard_state, pid, key, value)
             if "error" in data:
@@ -1972,7 +2159,6 @@ def _create_routes(dashboard_token: str) -> list:
     async def page_artifacts(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return RedirectResponse("/dashboard/login", status_code=302)
-        from arkana.dashboard.artifacts_api import get_artifacts_list_data
         try:
             data = await _dash_to_thread(get_artifacts_list_data)
         except Exception:
@@ -1985,7 +2171,6 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_artifacts_list(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        from arkana.dashboard.artifacts_api import get_artifacts_list_data
         qs = request.query_params
         try:
             data = await _dash_to_thread(
@@ -2004,7 +2189,6 @@ def _create_routes(dashboard_token: str) -> list:
     async def api_artifacts_detail(request: Request) -> Response:
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        from arkana.dashboard.artifacts_api import get_artifact_detail
         aid = request.query_params.get("id", "")
         if not aid:
             return JSONResponse({"error": "id required"}, status_code=400)
@@ -2027,7 +2211,6 @@ def _create_routes(dashboard_token: str) -> list:
         aid = (body.get("id") or "").strip()
         if not aid:
             return JSONResponse({"error": "id required"}, status_code=400)
-        from arkana.dashboard.artifacts_api import update_artifact_metadata_data
         try:
             data = await _dash_to_thread(
                 update_artifact_metadata_data,
@@ -2054,7 +2237,6 @@ def _create_routes(dashboard_token: str) -> list:
         aid = (body.get("id") or "").strip()
         if not aid:
             return JSONResponse({"error": "id required"}, status_code=400)
-        from arkana.dashboard.artifacts_api import delete_artifact_data
         try:
             data = await _dash_to_thread(delete_artifact_data, aid)
             if "error" in data:
@@ -2076,8 +2258,14 @@ def _create_routes(dashboard_token: str) -> list:
         ids = body.get("ids") or []
         if not isinstance(ids, list) or not ids:
             return JSONResponse({"error": "ids must be a non-empty list"}, status_code=400)
+        # Defend against authenticated CPU DoS — each id triggers an O(n)
+        # snapshot copy of the artifact list under lock.
+        if len(ids) > _MAX_BULK_ARTIFACT_IDS:
+            return JSONResponse(
+                {"error": f"too many ids (max {_MAX_BULK_ARTIFACT_IDS})"},
+                status_code=400,
+            )
         if op == "delete":
-            from arkana.dashboard.artifacts_api import bulk_delete_artifacts
             try:
                 data = await _dash_to_thread(bulk_delete_artifacts, ids)
                 return JSONResponse(data)
@@ -2088,7 +2276,11 @@ def _create_routes(dashboard_token: str) -> list:
             replace = bool(body.get("replace_tags", False))
             if not isinstance(tags, list) or not tags:
                 return JSONResponse({"error": "tags must be a non-empty list"}, status_code=400)
-            from arkana.dashboard.artifacts_api import bulk_tag_artifacts
+            if len(tags) > _MAX_BULK_ARTIFACT_TAGS:
+                return JSONResponse(
+                    {"error": f"too many tags (max {_MAX_BULK_ARTIFACT_TAGS})"},
+                    status_code=400,
+                )
             try:
                 data = await _dash_to_thread(bulk_tag_artifacts, ids, tags, replace)
                 return JSONResponse(data)
@@ -2098,10 +2290,17 @@ def _create_routes(dashboard_token: str) -> list:
             return JSONResponse({"error": f"Unknown op: {op}"}, status_code=400)
 
     async def api_artifacts_download(request: Request) -> Response:
-        """Stream a single artifact file to the client."""
+        """Stream a single artifact file to the client.
+
+        Directory artifacts are tarballed in a worker thread to avoid blocking
+        the event loop while gzip-compressing large bundles. The tarball is
+        written to a NamedTemporaryFile and cleaned up via a BackgroundTask
+        after the response finishes.
+        """
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        from arkana.dashboard.artifacts_api import get_artifact_file_for_download
+        from starlette.responses import FileResponse
+        from starlette.background import BackgroundTask
         aid = request.query_params.get("id", "")
         if not aid:
             return JSONResponse({"error": "id required"}, status_code=400)
@@ -2112,30 +2311,21 @@ def _create_routes(dashboard_token: str) -> list:
             if "error" in meta:
                 return JSONResponse(meta, status_code=404)
             if meta.get("kind") == "directory":
-                # Stream the directory as a tar.gz on the fly
-                import io as _io
-                import tarfile as _tar
-                buf = _io.BytesIO()
-                with _tar.open(fileobj=buf, mode="w:gz") as tf:
-                    tf.add(meta["path"], arcname=meta["filename"])
-                buf.seek(0)
-                from starlette.responses import StreamingResponse
-                return StreamingResponse(
-                    iter([buf.getvalue()]),
-                    media_type="application/gzip",
-                    headers={
-                        "Content-Disposition": f'attachment; filename="{meta["filename"]}.tar.gz"',
-                        "Cache-Control": "no-store",
-                    },
-                )
-            else:
-                from starlette.responses import FileResponse
+                tmp_path = await _dash_to_thread(_build_directory_tarball,
+                                                 meta["path"], meta["filename"])
                 return FileResponse(
-                    meta["path"],
-                    filename=meta["filename"],
-                    media_type="application/octet-stream",
+                    tmp_path,
+                    filename=f'{meta["filename"]}.tar.gz',
+                    media_type="application/gzip",
                     headers={"Cache-Control": "no-store"},
+                    background=BackgroundTask(_unlink_quiet, tmp_path),
                 )
+            return FileResponse(
+                meta["path"],
+                filename=meta["filename"],
+                media_type="application/octet-stream",
+                headers={"Cache-Control": "no-store"},
+            )
         except Exception as exc:
             return _api_error_response("api_artifacts_download", exc)
 

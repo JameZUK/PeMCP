@@ -1,10 +1,18 @@
 /* Arkana Dashboard — htmx config + SSE handler + toast notifications */
 
-// Global HTML escape helper — used by functions.js, strings.js, and this file
+// Global HTML escape helper — used by functions.js, strings.js, and this file.
+// MUST escape both element and attribute contexts: the textContent→innerHTML
+// trick only handles &, <, > so values containing " or ' would break out of
+// data-*="..." or value="..." attributes. Replace all five characters
+// explicitly to keep both contexts safe.
 function escapeHtml(s) {
-    var d = document.createElement('div');
-    d.textContent = s;
-    return d.innerHTML;
+    if (s === null || s === undefined) return '';
+    return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 // CSRF token helper — reads from <meta name="csrf-token">
