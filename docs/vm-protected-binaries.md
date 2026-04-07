@@ -502,7 +502,7 @@ Binary format used by DynamoRIO. Each entry records a basic block address and si
 **API logger JSON** (one event per line):
 
 ```json
-{"api": "CreateFileW", "call_index": 16, "args": {"file": "C:\\ProgramData\\rtpeskt"}, "retval": "0x348", "timestamp": "2026-04-04T13:34:49.930Z"}
+{"api": "CreateFileW", "call_index": 16, "args": {"file": "C:\\ProgramData\\<themida_tempfile>"}, "retval": "0x348", "timestamp": "2026-04-04T13:34:49.930Z"}
 ```
 
 ### Troubleshooting Frida
@@ -632,7 +632,7 @@ From 40 API calls alone, we can reconstruct the binary's execution:
 
 1. **Calls 1-5**: Themida loads DLLs for anti-analysis (user32, advapi32, shell32, SETUPAPI, Iphlpapi)
 2. **Calls 6-15**: Dynamic API resolution -- SetLastError, GetLastError, IsUserAnAdmin, CM_Get_Device_IDA, GetAdaptersInfo -- preparation for VM detection checks
-3. **Calls 16-17**: Themida temp file `C:\ProgramData\rtpeskt` created/accessed
+3. **Calls 16-17**: Themida temp file in `C:\ProgramData\` created/accessed (random name per build)
 4. **Calls 18-32**: Code unpacking -- VirtualProtect changing memory to RWX at binary addresses (0x140000000 range), VirtualAlloc for new regions -- Themida decrypting the original code
 5. **Calls 33-40**: Rust runtime initialisation -- SetThreadDescription, VirtualProtect on ntdll ranges, anti-debug checks (all bypassed)
 
@@ -655,9 +655,9 @@ All binaries are 64-bit Rust console applications calling these 10 operations in
 5. `GetDiskFreeSpaceExW("C:\\")`
 6. `SHGetKnownFolderPath(FOLDERID_Documents)`
 7. `GetSystemInfo`
-8. `RegCreateKeyExW` + `RegSetValueExW` (`HKCU\Software\EmeritaDemo`)
+8. `RegCreateKeyExW` + `RegSetValueExW` (`HKCU\Software\TestDemo`)
 9. `RegOpenKeyExW` + `RegQueryValueExW`
-10. `CreateFileW` + `WriteFile` + `ReadFile` (`emerita_demo.txt`)
+10. `CreateFileW` + `WriteFile` + `ReadFile` (`test_demo.txt`)
 
 Each binary wraps these operations in its protector's VM/mutation markers. Two additional binaries (`Themida_Protected_Rust.exe` and `vmprotect_rust.vmp.exe`) use the same protectors but with different source code and protection options.
 
@@ -678,7 +678,7 @@ Arkana tools used: `open_file`, `get_triage_report`, `detect_vm_protection`, `ru
 
 | Protector | Entropy | Imports (DLLs/funcs) | Import Obfuscation | Protector ID'd | Rust Detected | Source Strings Visible | Dev Identity Leaked |
 |---|---|---|---|---|---|---|---|
-| **Code Virtualizer** | 6.82 | 14 / 98 | 0.00 | No | Partial | Yes (all) | Yes (`ChadM`) |
+| **Code Virtualizer** | 6.82 | 14 / 98 | 0.00 | No | Partial | Yes (all) | Yes (build username) |
 | **Enigma** | 7.99 | 17 / 20 | 0.60 | **Enigma** (90%) | No | No | No |
 | **Obsidium** | 7.98 | 4 / 4 | 0.92 | No | No | No | No |
 | **VMProtect** | 7.77 | 14 / 14 | 0.72 | No | No | No | No |
@@ -687,7 +687,7 @@ Arkana tools used: `open_file`, `get_triage_report`, `detect_vm_protection`, `ru
 
 **Key static findings:**
 
-- **Code Virtualizer** uses a "stealth mode" that only virtualises marked code regions. Everything else — imports, strings, Rust panic handlers, Cargo dependency paths, rustc commit hash, developer username — survives intact. Import obfuscation score: 0.00.
+- **Code Virtualizer** uses a "stealth mode" that only virtualises marked code regions. Everything else — imports, strings, Rust panic handlers, Cargo dependency paths, rustc commit hash, build environment username — survives intact. Import obfuscation score: 0.00.
 - **VXLang** is the most aggressive: only 1 import from 1 DLL. No strings, no Rust markers. Import obfuscation: 0.98.
 - **Enigma** and **WinLicense** self-identify via strings (`enigmaprotector.com` URLs) and section names (`.winlice`), respectively.
 - All protectors except Code Virtualizer successfully hide Rust origin (panic handlers, mangled symbols, cargo paths).
