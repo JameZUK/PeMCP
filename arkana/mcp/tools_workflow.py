@@ -321,8 +321,52 @@ async def auto_name_sample(
 
     pe_data = state.pe_data or {}
     triage = getattr(state, '_cached_triage', None) or {}
+    notes = state.get_notes()
+    file_size_fallback = None
+    try:
+        file_size_fallback = os.path.getsize(state.filepath) if state.filepath else None
+    except OSError:
+        file_size_fallback = None
 
-    parts = []
+    info = _build_sample_slug(
+        pe_data=pe_data,
+        triage=triage,
+        notes=notes,
+        file_size_fallback=file_size_fallback,
+    )
+    return {
+        "suggested_name": info["filename"],
+        "parts": info["parts"],
+    }
+
+
+def _build_sample_slug(
+    pe_data: Dict[str, Any],
+    triage: Dict[str, Any],
+    notes: List[Dict[str, Any]],
+    *,
+    file_size_fallback: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Pure helper for descriptive sample naming.
+
+    Returns a dict with:
+        slug:     descriptive name **without** file extension (suitable for
+                  use as a project name — e.g. "stealer_packed_persistence")
+        filename: slug + appropriate file extension (used by auto_name_sample)
+        parts:    structured breakdown of the components used
+        binary_class, malware_type, capabilities, c2, packed, risk_level
+
+    Inputs:
+        pe_data: state.pe_data (or empty dict)
+        triage: state._cached_triage (or empty dict)
+        notes: state.get_notes() output (or empty list)
+        file_size_fallback: optional fallback when triage's file_info is empty
+    """
+    pe_data = pe_data or {}
+    triage = triage or {}
+    notes = notes or []
+
+    parts: List[str] = []
 
     # --- Binary type from PE headers (lightweight classification) ---
     mode = pe_data.get("mode", "unknown")
@@ -384,7 +428,6 @@ async def auto_name_sample(
                         break
 
     # --- Malware classification from notes ---
-    notes = state.get_notes()
     classification_keywords = {
         "ransomware": "ransom", "keylogger": "keylog", "backdoor": "backdoor",
         "dropper": "dropper", "loader": "loader", "worm": "worm",
@@ -472,10 +515,7 @@ async def auto_name_sample(
     file_info = triage.get("file_info", {})
     file_size = file_info.get("file_size") if isinstance(file_info, dict) else None
     if not file_size:
-        try:
-            file_size = os.path.getsize(state.filepath) if state.filepath else None
-        except OSError:
-            file_size = None
+        file_size = file_size_fallback
     if isinstance(file_size, (int, float)):
         if file_size > 10_000_000:
             parts.append("large")
@@ -504,13 +544,15 @@ async def auto_name_sample(
         sha = hashes.get("sha256", "unknown")[:8]
         parts.append(f"sample_{sha}")
 
-    suggested_name = "_".join(parts) + file_ext
+    slug = "_".join(parts)
     # Sanitize: remove characters that aren't filename-safe
-    suggested_name = re.sub(r'[^\w\-.]', '_', suggested_name)
-    suggested_name = re.sub(r'_+', '_', suggested_name).strip('_')
+    slug = re.sub(r'[^\w\-.]', '_', slug)
+    slug = re.sub(r'_+', '_', slug).strip('_')
+    filename = slug + file_ext if slug else f"sample{file_ext}"
 
     return {
-        "suggested_name": suggested_name,
+        "slug": slug,
+        "filename": filename,
         "parts": {
             "binary_class": binary_class or "unknown",
             "malware_type": found_type or "unknown",

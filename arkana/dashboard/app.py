@@ -1599,6 +1599,434 @@ def _create_routes(dashboard_token: str) -> list:
         except Exception as exc:
             return _api_error_response("api_settings_reset", exc)
 
+    # ----------------------------------------------------------------------
+    #  Projects (Phase 2 — PROJECTS tab)
+    # ----------------------------------------------------------------------
+
+    async def page_projects(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return RedirectResponse("/dashboard/login", status_code=302)
+        from arkana.dashboard.projects_api import get_projects_list_data
+        try:
+            data = await _dash_to_thread(get_projects_list_data)
+        except Exception:
+            logger.debug("page_projects: data load failed", exc_info=True)
+            data = {"projects": [], "total_count": 0, "active_project_id": None}
+        ctx = {"nav_active": "projects", "data": data}
+        resp = HTMLResponse(_render("projects.html", ctx))
+        return _make_auth_response(request, dashboard_token, resp)
+
+    async def api_projects_list(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        from arkana.dashboard.projects_api import get_projects_list_data
+        filter_q = request.query_params.get("filter", "")[:200]
+        tag = request.query_params.get("tag", "")[:80]
+        sort_by = request.query_params.get("sort_by", "last_opened")
+        if sort_by not in ("last_opened", "name", "created_at"):
+            sort_by = "last_opened"
+        try:
+            data = await _dash_to_thread(
+                get_projects_list_data, filter=filter_q, tag=tag, sort_by=sort_by,
+            )
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_projects_list", exc)
+
+    async def api_projects_create(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        name = (body.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"error": "name is required"}, status_code=400)
+        tags = body.get("tags") or []
+        if not isinstance(tags, list):
+            return JSONResponse({"error": "tags must be a list"}, status_code=400)
+        from arkana.dashboard.projects_api import create_project_data
+        try:
+            data = await _dash_to_thread(create_project_data, name, tags)
+            return JSONResponse(data)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as exc:
+            return _api_error_response("api_projects_create", exc)
+
+    async def api_projects_rename(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        pid = (body.get("project_id") or "").strip()
+        new_name = (body.get("new_name") or "").strip()
+        if not pid or not new_name:
+            return JSONResponse({"error": "project_id and new_name are required"}, status_code=400)
+        from arkana.dashboard.projects_api import rename_project_data
+        try:
+            data = await _dash_to_thread(rename_project_data, pid, new_name)
+            if "error" in data:
+                return JSONResponse(data, status_code=400)
+            return JSONResponse(data)
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        except Exception as exc:
+            return _api_error_response("api_projects_rename", exc)
+
+    async def api_projects_tag(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        pid = (body.get("project_id") or "").strip()
+        if not pid:
+            return JSONResponse({"error": "project_id is required"}, status_code=400)
+        add = body.get("add") or []
+        remove = body.get("remove") or []
+        replace = bool(body.get("replace", False))
+        if not isinstance(add, list) or not isinstance(remove, list):
+            return JSONResponse({"error": "add/remove must be lists"}, status_code=400)
+        from arkana.dashboard.projects_api import tag_project_data
+        try:
+            data = await _dash_to_thread(tag_project_data, pid, add, remove, replace)
+            if "error" in data:
+                return JSONResponse(data, status_code=400)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_projects_tag", exc)
+
+    async def api_projects_delete(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        pid = (body.get("project_id") or "").strip()
+        confirm = bool(body.get("confirm", False))
+        if not pid:
+            return JSONResponse({"error": "project_id is required"}, status_code=400)
+        if not confirm:
+            return JSONResponse({"error": "confirm=true required"}, status_code=400)
+        from arkana.dashboard.projects_api import delete_project_data
+        try:
+            data = await _dash_to_thread(delete_project_data, pid)
+            if "error" in data:
+                return JSONResponse(data, status_code=404)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_projects_delete", exc)
+
+    async def api_projects_open(request: Request) -> Response:
+        """Switch the active project to *project_id* and load *binary_sha256*
+        (or last-active / primary)."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        pid = (body.get("project_id") or "").strip()
+        binary_sha = (body.get("binary_sha256") or "").strip().lower()
+        if not pid:
+            return JSONResponse({"error": "project_id is required"}, status_code=400)
+        from arkana.projects import project_manager
+        from arkana.mcp.tools_pe import open_file as _open_file_tool
+
+        proj = await _dash_to_thread(project_manager.get, pid)
+        if proj is None:
+            return JSONResponse({"error": f"Project {pid} not found"}, status_code=404)
+        chosen = binary_sha or proj.manifest.last_active_sha256 or proj.manifest.primary_sha256
+        if not chosen:
+            return JSONResponse({"error": "Project has no binaries"}, status_code=400)
+        member = proj.get_member(chosen) if hasattr(proj, "get_member") else None
+        if member is None:
+            return JSONResponse({"error": f"Member {chosen[:12]} not in project"}, status_code=400)
+        binary_path = member.copy_path
+        if not binary_path or not os.path.isfile(binary_path):
+            return JSONResponse(
+                {"error": f"Binary file missing on disk: {binary_path}"},
+                status_code=409,
+            )
+        # Bind the project on the active state, then call open_file via the
+        # MCP tool helper. We construct a minimal context shim — open_file
+        # only uses ctx.info / ctx.warning / report_progress.
+        active_state = _get_active_state()
+        active_state.bind_project(proj)
+
+        class _NoopCtx:
+            async def info(self, *a, **k): pass
+            async def warning(self, *a, **k): pass
+            async def error(self, *a, **k): pass
+            async def report_progress(self, *a, **k): pass
+
+        try:
+            result = await _open_file_tool(_NoopCtx(), binary_path, force_switch=True)
+            return JSONResponse({"status": "success", "open_result": result})
+        except Exception as exc:
+            return _api_error_response("api_projects_open", exc)
+
+    async def api_projects_set_primary(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        pid = (body.get("project_id") or "").strip()
+        sha = (body.get("sha256") or "").strip().lower()
+        if not pid or not sha:
+            return JSONResponse({"error": "project_id and sha256 required"}, status_code=400)
+        from arkana.dashboard.projects_api import set_primary_binary_data
+        try:
+            data = await _dash_to_thread(set_primary_binary_data, pid, sha)
+            if "error" in data:
+                return JSONResponse(data, status_code=400)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_projects_set_primary", exc)
+
+    async def api_projects_importable_archives(request: Request) -> Response:
+        """List .arkana_project.tar.gz files in known output directories."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        from arkana.dashboard.projects_api import list_importable_archives
+        try:
+            data = await _dash_to_thread(list_importable_archives)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_projects_importable_archives", exc)
+
+    async def api_projects_import_archive(request: Request) -> Response:
+        """Import a single archive into a new project."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        path = (body.get("path") or "").strip()
+        if not path:
+            return JSONResponse({"error": "path is required"}, status_code=400)
+        from arkana.dashboard.projects_api import import_archive_data
+        try:
+            data = await _dash_to_thread(import_archive_data, path)
+            if "error" in data:
+                return JSONResponse(data, status_code=400)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_projects_import_archive", exc)
+
+    async def api_projects_dashboard_state(request: Request) -> Response:
+        """Persist a small piece of dashboard state into the project manifest."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        pid = (body.get("project_id") or "").strip()
+        key = (body.get("key") or "").strip()
+        value = body.get("value")
+        if not pid or not key:
+            return JSONResponse({"error": "project_id and key required"}, status_code=400)
+        from arkana.dashboard.projects_api import save_dashboard_state
+        try:
+            data = await _dash_to_thread(save_dashboard_state, pid, key, value)
+            if "error" in data:
+                return JSONResponse(data, status_code=400)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_projects_dashboard_state", exc)
+
+    # ----------------------------------------------------------------------
+    #  Artifacts (Phase 2 — ARTIFACTS tab)
+    # ----------------------------------------------------------------------
+
+    async def page_artifacts(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return RedirectResponse("/dashboard/login", status_code=302)
+        from arkana.dashboard.artifacts_api import get_artifacts_list_data
+        try:
+            data = await _dash_to_thread(get_artifacts_list_data)
+        except Exception:
+            logger.debug("page_artifacts: data load failed", exc_info=True)
+            data = {"artifacts": [], "total_count": 0, "facets": {"kinds": [], "tools": [], "tags": []}}
+        ctx = {"nav_active": "artifacts", "data": data}
+        resp = HTMLResponse(_render("artifacts.html", ctx))
+        return _make_auth_response(request, dashboard_token, resp)
+
+    async def api_artifacts_list(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        from arkana.dashboard.artifacts_api import get_artifacts_list_data
+        qs = request.query_params
+        try:
+            data = await _dash_to_thread(
+                get_artifacts_list_data,
+                filter=qs.get("filter", "")[:200],
+                kind=qs.get("kind", ""),
+                source_tool=qs.get("tool", "")[:80],
+                tag=qs.get("tag", "")[:80],
+                sort_by=qs.get("sort", "created_at"),
+                limit=int(qs.get("limit", "500") or "500"),
+            )
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_artifacts_list", exc)
+
+    async def api_artifacts_detail(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        from arkana.dashboard.artifacts_api import get_artifact_detail
+        aid = request.query_params.get("id", "")
+        if not aid:
+            return JSONResponse({"error": "id required"}, status_code=400)
+        try:
+            data = await _dash_to_thread(get_artifact_detail, aid)
+            if data is None:
+                return JSONResponse({"error": "artifact not found"}, status_code=404)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_artifacts_detail", exc)
+
+    async def api_artifacts_update(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        aid = (body.get("id") or "").strip()
+        if not aid:
+            return JSONResponse({"error": "id required"}, status_code=400)
+        from arkana.dashboard.artifacts_api import update_artifact_metadata_data
+        try:
+            data = await _dash_to_thread(
+                update_artifact_metadata_data,
+                aid,
+                description=body.get("description"),
+                tags=body.get("tags"),
+                notes=body.get("notes"),
+                replace_tags=bool(body.get("replace_tags", False)),
+            )
+            if "error" in data:
+                return JSONResponse(data, status_code=404)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_artifacts_update", exc)
+
+    async def api_artifacts_delete(request: Request) -> Response:
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        aid = (body.get("id") or "").strip()
+        if not aid:
+            return JSONResponse({"error": "id required"}, status_code=400)
+        from arkana.dashboard.artifacts_api import delete_artifact_data
+        try:
+            data = await _dash_to_thread(delete_artifact_data, aid)
+            if "error" in data:
+                return JSONResponse(data, status_code=404)
+            return JSONResponse(data)
+        except Exception as exc:
+            return _api_error_response("api_artifacts_delete", exc)
+
+    async def api_artifacts_bulk(request: Request) -> Response:
+        """Bulk operations: tag or delete a list of artifacts."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        if not _validate_csrf(request):
+            return JSONResponse({"error": "CSRF validation failed"}, status_code=403)
+        body, err = await _parse_json_body(request)
+        if err:
+            return err
+        op = (body.get("op") or "").strip()
+        ids = body.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return JSONResponse({"error": "ids must be a non-empty list"}, status_code=400)
+        if op == "delete":
+            from arkana.dashboard.artifacts_api import bulk_delete_artifacts
+            try:
+                data = await _dash_to_thread(bulk_delete_artifacts, ids)
+                return JSONResponse(data)
+            except Exception as exc:
+                return _api_error_response("api_artifacts_bulk_delete", exc)
+        elif op == "tag":
+            tags = body.get("tags") or []
+            replace = bool(body.get("replace_tags", False))
+            if not isinstance(tags, list) or not tags:
+                return JSONResponse({"error": "tags must be a non-empty list"}, status_code=400)
+            from arkana.dashboard.artifacts_api import bulk_tag_artifacts
+            try:
+                data = await _dash_to_thread(bulk_tag_artifacts, ids, tags, replace)
+                return JSONResponse(data)
+            except Exception as exc:
+                return _api_error_response("api_artifacts_bulk_tag", exc)
+        else:
+            return JSONResponse({"error": f"Unknown op: {op}"}, status_code=400)
+
+    async def api_artifacts_download(request: Request) -> Response:
+        """Stream a single artifact file to the client."""
+        if not _is_authenticated(request, dashboard_token):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        from arkana.dashboard.artifacts_api import get_artifact_file_for_download
+        aid = request.query_params.get("id", "")
+        if not aid:
+            return JSONResponse({"error": "id required"}, status_code=400)
+        try:
+            meta = await _dash_to_thread(get_artifact_file_for_download, aid)
+            if meta is None:
+                return JSONResponse({"error": "artifact not found"}, status_code=404)
+            if "error" in meta:
+                return JSONResponse(meta, status_code=404)
+            if meta.get("kind") == "directory":
+                # Stream the directory as a tar.gz on the fly
+                import io as _io
+                import tarfile as _tar
+                buf = _io.BytesIO()
+                with _tar.open(fileobj=buf, mode="w:gz") as tf:
+                    tf.add(meta["path"], arcname=meta["filename"])
+                buf.seek(0)
+                from starlette.responses import StreamingResponse
+                return StreamingResponse(
+                    iter([buf.getvalue()]),
+                    media_type="application/gzip",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{meta["filename"]}.tar.gz"',
+                        "Cache-Control": "no-store",
+                    },
+                )
+            else:
+                from starlette.responses import FileResponse
+                return FileResponse(
+                    meta["path"],
+                    filename=meta["filename"],
+                    media_type="application/octet-stream",
+                    headers={"Cache-Control": "no-store"},
+                )
+        except Exception as exc:
+            return _api_error_response("api_artifacts_download", exc)
+
     return [
         Route("/login", endpoint=login_page, methods=["GET"]),
         Route("/login", endpoint=login_post, methods=["POST"]),
@@ -1673,6 +2101,26 @@ def _create_routes(dashboard_token: str) -> list:
         Route("/api/settings", endpoint=api_settings_get, methods=["GET"]),
         Route("/api/settings", endpoint=api_settings_post, methods=["POST"]),
         Route("/api/settings/reset", endpoint=api_settings_reset, methods=["POST"]),
+        # Projects (Phase 2)
+        Route("/projects", endpoint=page_projects, methods=["GET"]),
+        Route("/api/projects", endpoint=api_projects_list, methods=["GET"]),
+        Route("/api/projects", endpoint=api_projects_create, methods=["POST"]),
+        Route("/api/projects/rename", endpoint=api_projects_rename, methods=["POST"]),
+        Route("/api/projects/tag", endpoint=api_projects_tag, methods=["POST"]),
+        Route("/api/projects/delete", endpoint=api_projects_delete, methods=["POST"]),
+        Route("/api/projects/open", endpoint=api_projects_open, methods=["POST"]),
+        Route("/api/projects/set-primary", endpoint=api_projects_set_primary, methods=["POST"]),
+        Route("/api/projects/dashboard-state", endpoint=api_projects_dashboard_state, methods=["POST"]),
+        Route("/api/projects/importable-archives", endpoint=api_projects_importable_archives, methods=["GET"]),
+        Route("/api/projects/import-archive", endpoint=api_projects_import_archive, methods=["POST"]),
+        # Artifacts (Phase 2)
+        Route("/artifacts", endpoint=page_artifacts, methods=["GET"]),
+        Route("/api/artifacts", endpoint=api_artifacts_list, methods=["GET"]),
+        Route("/api/artifacts/detail", endpoint=api_artifacts_detail, methods=["GET"]),
+        Route("/api/artifacts/update", endpoint=api_artifacts_update, methods=["POST"]),
+        Route("/api/artifacts/delete", endpoint=api_artifacts_delete, methods=["POST"]),
+        Route("/api/artifacts/bulk", endpoint=api_artifacts_bulk, methods=["POST"]),
+        Route("/api/artifacts/download", endpoint=api_artifacts_download, methods=["GET"]),
         # Partials
         Route("/partials/overview-stats", endpoint=partial_overview_stats, methods=["GET"]),
         Route("/partials/task-list", endpoint=partial_task_list, methods=["GET"]),

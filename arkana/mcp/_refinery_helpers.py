@@ -7,10 +7,15 @@ import hashlib
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from arkana.config import state, REFINERY_AVAILABLE
-from arkana.constants import MAX_ARTIFACT_FILE_SIZE
+from arkana.constants import (
+    MAX_ARTIFACT_FILE_SIZE,
+    MAX_ARTIFACT_DIR_MEMBERS,
+    MAX_ARTIFACT_DIR_SIZE,
+    ARTIFACT_DIR_DEPTH_LIMIT,
+)
 from arkana.mcp._format_helpers import _check_lib
 from arkana.mcp._input_helpers import _parse_int_param
 
@@ -178,6 +183,30 @@ def _detect_file_type(data: bytes) -> Optional[str]:
     return None
 
 
+def _adopt_into_active_project(abs_path: str, sha256: str, *, is_dir: bool = False) -> Optional[str]:
+    """If an active on-disk project is bound, copy/link the artifact into it.
+
+    Returns the new in-project path, or None if no real project is active
+    (scratch projects don't yet have a disk presence). Failures are logged
+    and degrade gracefully — the artifact stays at its original location.
+    """
+    try:
+        project = state.get_active_project() if hasattr(state, "get_active_project") else None
+    except Exception:
+        project = None
+    if project is None or getattr(project, "is_scratch", False):
+        return None
+    try:
+        if is_dir:
+            new_path = project.adopt_artifact_directory(abs_path, sha256)
+        else:
+            new_path = project.adopt_artifact_file(abs_path, sha256)
+        return str(new_path)
+    except Exception as e:
+        logger.warning("Failed to adopt artifact into project: %s", e)
+        return None
+
+
 def _write_output_and_register_artifact(
     output_path: str,
     data: bytes,
@@ -187,7 +216,10 @@ def _write_output_and_register_artifact(
     """Write bytes to disk and register as a session artifact.
 
     Validates the path against allowed paths, computes hashes, detects
-    file type, and registers the artifact in state.
+    file type, and registers the artifact in state. When an on-disk project
+    is bound to the current state, the file is also adopted into the
+    project's artifacts/ directory so the project remains self-contained
+    even if the original output_path is deleted later.
 
     Returns a metadata dict with path, size, hashes, and detected_type.
     """
@@ -217,16 +249,27 @@ def _write_output_and_register_artifact(
     Path(abs_path).write_bytes(data)
     logger.info("Artifact written: %s (%d bytes, type=%s)", abs_path, len(data), detected_type)
 
+    # Adopt into the active on-disk project (if any). The path used for the
+    # artifact registration is the in-project copy when adoption succeeds,
+    # so reopening the project doesn't depend on the original output_path.
+    project_path = _adopt_into_active_project(abs_path, sha256, is_dir=False)
+    registered_path = project_path or abs_path
+
     # Register in state — clean up the file if registration fails
     try:
         artifact = state.register_artifact(
-            path=abs_path,
+            path=registered_path,
             sha256=sha256,
             md5=md5,
             size=len(data),
             source_tool=source_tool,
             description=description,
             detected_type=detected_type,
+            original_path=abs_path,
+            project_relative=(
+                os.path.relpath(project_path, str(Path(project_path).parent.parent.parent))
+                if project_path else None
+            ),
         )
     except Exception:
         try:
@@ -236,10 +279,130 @@ def _write_output_and_register_artifact(
         raise
 
     return {
-        "path": abs_path,
+        "path": registered_path,
+        "original_path": abs_path,
         "size": len(data),
         "sha256": sha256,
         "md5": md5,
         "detected_type": detected_type,
         "artifact_id": artifact["id"],
+    }
+
+
+def _register_artifact_directory(
+    source_dir: str,
+    source_tool: str,
+    description: str,
+) -> Dict[str, Any]:
+    """Register a directory tree as a single ``kind='directory'`` artifact.
+
+    Walks *source_dir* recursively (depth-capped), validates against per-member
+    and total-size limits, computes per-member sha256+size, and adopts the tree
+    into the active project's artifacts/ directory if one is bound.
+
+    No symlinks allowed (rejected for safety). Returns artifact metadata.
+    """
+    src = Path(source_dir).resolve()
+    if not src.is_dir():
+        raise RuntimeError(f"Not a directory: {source_dir}")
+    state.check_path_allowed(str(src))
+
+    members: List[Dict[str, Any]] = []
+    total_size = 0
+    member_sha = hashlib.sha256()  # rolling hash of (relative_path + sha256) for the bundle id
+
+    for root, dirs, files in os.walk(src, followlinks=False):
+        root_path = Path(root)
+        depth = len(root_path.relative_to(src).parts)
+        if depth > ARTIFACT_DIR_DEPTH_LIMIT:
+            # Prevent descending further; clear dirs in-place
+            dirs[:] = []
+            continue
+        for d in list(dirs):
+            full = root_path / d
+            if full.is_symlink():
+                raise RuntimeError(
+                    f"Symlinked subdirectory rejected for safety: {full}"
+                )
+        for fname in files:
+            full = root_path / fname
+            if full.is_symlink():
+                raise RuntimeError(f"Symlinked file rejected for safety: {full}")
+            try:
+                size = full.stat().st_size
+            except OSError as e:
+                logger.warning("Skipping unreadable file %s: %s", full, e)
+                continue
+            if size > MAX_ARTIFACT_FILE_SIZE:
+                raise RuntimeError(
+                    f"Member {full.name} exceeds per-file artifact limit "
+                    f"({size / (1024*1024):.1f} MB > "
+                    f"{MAX_ARTIFACT_FILE_SIZE // (1024*1024)} MB)"
+                )
+            if total_size + size > MAX_ARTIFACT_DIR_SIZE:
+                raise RuntimeError(
+                    f"Directory artifact total size would exceed "
+                    f"{MAX_ARTIFACT_DIR_SIZE // (1024*1024)} MB. "
+                    "Reduce the bundle or increase ARKANA_MAX_ARTIFACT_DIR_SIZE."
+                )
+            if len(members) >= MAX_ARTIFACT_DIR_MEMBERS:
+                raise RuntimeError(
+                    f"Directory artifact exceeds {MAX_ARTIFACT_DIR_MEMBERS} member limit. "
+                    "Split into smaller directories."
+                )
+            # Hash the member
+            h = hashlib.sha256()
+            with open(full, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    h.update(chunk)
+            member_hash = h.hexdigest()
+            rel = str(full.relative_to(src))
+            members.append({
+                "relative": rel,
+                "size": size,
+                "sha256": member_hash,
+            })
+            total_size += size
+            member_sha.update(rel.encode("utf-8"))
+            member_sha.update(member_hash.encode("utf-8"))
+
+    if not members:
+        raise RuntimeError(f"Directory {source_dir} contains no files")
+
+    bundle_sha256 = member_sha.hexdigest()
+    bundle_md5 = hashlib.md5(bundle_sha256.encode("utf-8"), usedforsecurity=False).hexdigest()
+
+    project_path = _adopt_into_active_project(str(src), bundle_sha256, is_dir=True)
+    registered_path = project_path or str(src)
+
+    artifact = state.register_artifact(
+        path=registered_path,
+        sha256=bundle_sha256,
+        md5=bundle_md5,
+        size=total_size,
+        source_tool=source_tool,
+        description=description,
+        detected_type="directory",
+        kind="directory",
+        original_path=str(src),
+        project_relative=(
+            os.path.relpath(project_path, str(Path(project_path).parent.parent.parent))
+            if project_path else None
+        ),
+        members=members,
+    )
+
+    return {
+        "path": registered_path,
+        "original_path": str(src),
+        "size": total_size,
+        "sha256": bundle_sha256,
+        "md5": bundle_md5,
+        "detected_type": "directory",
+        "artifact_id": artifact["id"],
+        "member_count": len(members),
+        "members": members[:20],  # preview only
     }

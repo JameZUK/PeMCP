@@ -9,6 +9,7 @@ import re
 import shutil
 import tarfile
 import tempfile
+import time
 
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -43,6 +44,164 @@ _MAX_ANALYSIS_DECOMPRESSED_SIZE = 256 * 1024 * 1024
 _SAFE_FILENAME_RE = re.compile(r'[^a-zA-Z0-9._\-]')
 
 
+# ---------------------------------------------------------------------------
+#  v2 project-level export/import (multi-binary, project-aware)
+# ---------------------------------------------------------------------------
+
+EXPORT_VERSION_V2 = 2
+EXPORT_VERSION_V1 = 1
+
+
+def _export_project_v2(project, output_path: str) -> Dict[str, Any]:
+    """Tar+gzip a project's directory tree as a v2 archive.
+
+    Layout inside the tarball:
+        manifest.json                       (top-level wrapper, has export_version=2)
+        project/manifest.json               (the project's own manifest)
+        project/binaries/...                (binary copies)
+        project/artifacts/...               (artifact files / directories)
+        project/overlay/{sha256}.json.gz    (per-binary overlays)
+    """
+    abs_output = str(Path(output_path).resolve())
+    state.check_path_allowed(abs_output)
+
+    if not output_path.endswith(PROJECT_EXTENSION):
+        if output_path.endswith(".tar.gz"):
+            abs_output = abs_output[:-7] + PROJECT_EXTENSION
+        else:
+            abs_output = abs_output + PROJECT_EXTENSION
+
+    output_dir = os.path.dirname(abs_output)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+    project_root = project.root  # ~/.arkana/projects/{id}/
+    if not project_root.is_dir():
+        raise RuntimeError(f"Project directory missing: {project_root}")
+
+    # Top-level wrapping manifest
+    top_manifest = {
+        "arkana_version": ARKANA_VERSION,
+        "export_version": EXPORT_VERSION_V2,
+        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "project_id": project.id,
+        "project_name": project.name,
+        "member_count": len(project.manifest.members),
+        "tags": list(project.manifest.tags),
+    }
+
+    with tarfile.open(abs_output, "w:gz") as tar:
+        manifest_bytes = json.dumps(top_manifest, indent=2).encode("utf-8")
+        info = tarfile.TarInfo(name="manifest.json")
+        info.size = len(manifest_bytes)
+        tar.addfile(info, io.BytesIO(manifest_bytes))
+        # Add the entire project directory under "project/"
+        tar.add(str(project_root), arcname="project", recursive=True)
+
+    archive_size = os.path.getsize(abs_output)
+    return {
+        "status": "success",
+        "archive_path": abs_output,
+        "archive_size_kb": round(archive_size / 1024, 1),
+        "export_version": EXPORT_VERSION_V2,
+        "project_id": project.id,
+        "project_name": project.name,
+        "member_count": len(project.manifest.members),
+    }
+
+
+def _import_project_v2(abs_path: str, top_manifest: Dict[str, Any]) -> Dict[str, Any]:
+    """Unpack a v2 archive into a new project under ~/.arkana/projects/.
+
+    The new project gets a fresh ID (we never overwrite an existing project,
+    even if the archive's project_id collides with one on disk). The original
+    name is preserved if available, with a collision-suffix if needed.
+    """
+    from arkana.projects import (
+        project_manager, Project, ProjectManifest,
+        PROJECTS_DIR, _new_project_id, _validate_project_name,
+    )
+
+    archive_name = top_manifest.get("project_name") or "imported_project"
+    try:
+        base_name = _validate_project_name(archive_name)
+    except ValueError:
+        base_name = "imported_project"
+
+    new_id = _new_project_id()
+    while project_manager.get(new_id) is not None:
+        new_id = _new_project_id()
+    new_root = PROJECTS_DIR / new_id
+    new_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    with tarfile.open(abs_path, "r:gz") as tar:
+        for member in tar.getmembers():
+            if (member.issym() or member.islnk() or member.isblk()
+                    or member.ischr() or member.isfifo()):
+                raise RuntimeError(
+                    f"[import_project] Archive contains unsafe entry: '{member.name}'"
+                )
+            norm = os.path.normpath(member.name)
+            if (member.name.startswith("/") or norm.startswith("/")
+                    or norm.startswith("..") or norm.startswith(os.sep + "..")):
+                raise RuntimeError(
+                    f"[import_project] Unsafe archive member: '{member.name}'"
+                )
+        # Extract project/ contents into new_root, stripping the "project/" prefix
+        for member in tar.getmembers():
+            if not member.name.startswith("project/"):
+                continue
+            relative = member.name[len("project/"):]
+            if not relative:
+                continue
+            target = new_root / relative
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True, mode=0o700)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            extracted = tar.extractfile(member)
+            if extracted is None:
+                continue
+            with open(target, "wb") as f:
+                shutil.copyfileobj(extracted, f)
+
+    # Load the extracted manifest, rewrite id+name to avoid collisions, and
+    # register the project with the manager.
+    manifest_path = new_root / "manifest.json"
+    if not manifest_path.is_file():
+        shutil.rmtree(new_root, ignore_errors=True)
+        raise RuntimeError("[import_project] Archive missing project/manifest.json")
+    with open(manifest_path, "r", encoding="utf-8") as f:
+        proj_manifest_data = json.load(f)
+    proj_manifest_data["id"] = new_id
+    name = base_name
+    counter = 2
+    while project_manager.find_by_name(name):
+        name = f"{base_name}_{counter}"
+        counter += 1
+    proj_manifest_data["name"] = name
+    proj_manifest_data["created_at"] = time.time()
+    proj_manifest_data["last_opened"] = time.time()
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(proj_manifest_data, f, indent=2)
+
+    project = Project(ProjectManifest.from_dict(proj_manifest_data), new_root)
+    with project_manager._lock:
+        project_manager._projects[new_id] = project
+        project_manager._save_index()
+
+    return {
+        "status": "success",
+        "import_version": EXPORT_VERSION_V2,
+        "project_id": new_id,
+        "project_name": name,
+        "member_count": len(project.manifest.members),
+        "hint": (
+            f"Project imported as '{name}'. Call open_project('{name}') to load it."
+        ),
+    }
+
+
 @tool_decorator
 async def export_project(
     ctx: Context,
@@ -67,6 +226,15 @@ async def export_project(
     Returns:
         A dictionary with export status, archive path, and size.
     """
+    # v2 path: when an on-disk project is active, archive the entire project
+    # tree (multi-binary, all overlays, all artifacts).
+    try:
+        active = state.get_active_project() if hasattr(state, "get_active_project") else None
+    except Exception:
+        active = None
+    if active is not None and not getattr(active, "is_scratch", False):
+        return _export_project_v2(active, output_path)
+
     _check_pe_loaded("export_project")
 
     # Ensure output path ends with proper extension
@@ -235,6 +403,22 @@ async def import_project(
         raise RuntimeError(f"[import_project] Archive not found: {abs_path}")
 
     await ctx.info(f"Importing project archive: {abs_path}")
+
+    # v2 detection: peek at the top-level manifest.json to check export_version.
+    # v2 archives wrap an entire project tree; v1 archives are single-binary
+    # session exports. We dispatch early so the v1 logic stays unchanged.
+    try:
+        with tarfile.open(abs_path, "r:gz") as _peek:
+            try:
+                _mf_member = _peek.extractfile("manifest.json")
+                if _mf_member is not None:
+                    _peek_manifest = json.loads(_mf_member.read().decode("utf-8"))
+                    if isinstance(_peek_manifest, dict) and _peek_manifest.get("export_version") == EXPORT_VERSION_V2:
+                        return _import_project_v2(abs_path, _peek_manifest)
+            except KeyError:
+                pass
+    except (tarfile.TarError, json.JSONDecodeError, OSError) as _peek_err:
+        logger.debug("import_project: v2 peek failed (will try v1): %s", _peek_err)
 
     manifest = None
     wrapper = None

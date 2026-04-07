@@ -692,6 +692,11 @@ function renderSimTab(container, addr) {
 function navigateToFunction(addr) {
     var tbody = document.getElementById('func-tbody');
     if (!tbody) return;
+    // Persist last-visited function to project manifest (best-effort, no-op
+    // when no on-disk project is active).
+    if (typeof window.saveDashboardState === "function") {
+        window.saveDashboardState("last_function_address", addr);
+    }
     // Find the row with this address
     var targetRow = tbody.querySelector('tr[data-addr="' + CSS.escape(addr) + '"]');
     if (targetRow) {

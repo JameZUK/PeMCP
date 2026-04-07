@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Artifacts{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">ARTIFACTS</h1>
+    <span class="dim">{{ data.total_count if data else 0 }} artifact(s)</span>
+</div>
+
+<div class="panel">
+    <div class="panel-header">FILTERS</div>
+    <div class="filter-bar">
+        <input type="text" id="artifacts-filter" class="input-search"
+               placeholder="Search name, description, tag, type..."
+               value="{{ data.filters.filter if data and data.filters else '' }}">
+        <select id="artifacts-kind" class="input-search">
+            <option value="">All kinds</option>
+            <option value="file">File</option>
+            <option value="directory">Directory</option>
+        </select>
+        <select id="artifacts-tool" class="input-search">
+            <option value="">All tools</option>
+        </select>
+        <select id="artifacts-tag" class="input-search">
+            <option value="">All tags</option>
+        </select>
+        <select id="artifacts-sort" class="input-search">
+            <option value="created_at">Recently created</option>
+            <option value="modified_at">Recently modified</option>
+            <option value="name">Name</option>
+            <option value="size">Size</option>
+            <option value="source_tool">Source tool</option>
+        </select>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">
+        ARTIFACTS
+        <span class="badge badge-dim" id="artifacts-count">{{ data.filtered_count if data else 0 }}</span>
+        <span class="bulk-actions" id="bulk-actions">
+            <button class="btn btn-sm" type="button" id="btn-bulk-tag" disabled>BULK TAG</button>
+            <button class="btn btn-sm btn-danger" type="button" id="btn-bulk-delete" disabled>BULK DELETE</button>
+        </span>
+    </div>
+    <table class="data-table" id="artifacts-table">
+        <thead>
+            <tr>
+                <th class="col-check"><input type="checkbox" id="select-all"></th>
+                <th class="col-icon">Type</th>
+                <th class="col-name" data-sort="name">Name</th>
+                <th class="col-desc">Description</th>
+                <th class="col-size" data-sort="size">Size</th>
+                <th class="col-tool" data-sort="source_tool">Source</th>
+                <th class="col-time" data-sort="created_at">Created</th>
+                <th class="col-time" data-sort="modified_at">Modified</th>
+                <th class="col-sha">SHA256</th>
+                <th class="col-tags">Tags</th>
+                <th class="col-actions">Actions</th>
+            </tr>
+        </thead>
+        <tbody id="artifacts-tbody">
+            {% if data and data.artifacts %}
+                {% for a in data.artifacts %}
+                <tr class="artifact-row" data-artifact-id="{{ a.id }}" data-kind="{{ a.kind }}">
+                    <td class="col-check"><input type="checkbox" class="artifact-select" data-artifact-id="{{ a.id }}"></td>
+                    <td class="col-icon">{% if a.kind == 'directory' %}📁{% else %}📄{% endif %}</td>
+                    <td class="col-name mono">{{ a.name }}</td>
+                    <td class="col-desc">{{ a.description }}</td>
+                    <td class="col-size mono">{{ a.size }}</td>
+                    <td class="col-tool fs-11">{{ a.source_tool }}</td>
+                    <td class="col-time mono fs-11">{{ a.created_at[:19] if a.created_at else '' }}</td>
+                    <td class="col-time mono fs-11">{{ a.modified_at[:19] if a.modified_at else '' }}</td>
+                    <td class="col-sha mono fs-11">{{ a.short_sha }}</td>
+                    <td class="col-tags">
+                        {% for t in a.tags %}<span class="badge badge-tag">{{ t }}</span>{% endfor %}
+                    </td>
+                    <td class="col-actions">
+                        <button class="btn btn-sm" data-action="expand" data-artifact-id="{{ a.id }}" type="button">▼</button>
+                        <button class="btn btn-sm" data-action="download" data-artifact-id="{{ a.id }}" type="button">⬇</button>
+                        <button class="btn btn-sm btn-danger" data-action="delete" data-artifact-id="{{ a.id }}" type="button">×</button>
+                    </td>
+                </tr>
+                <tr class="artifact-detail hidden" data-detail-for="{{ a.id }}">
+                    <td colspan="11">
+                        <div class="artifact-detail-body" data-artifact-id="{{ a.id }}">Loading...</div>
+                    </td>
+                </tr>
+                {% endfor %}
+            {% else %}
+                <tr><td colspan="11"><div class="empty-msg">No artifacts yet. Tools that extract files (refinery, payload, crypto, dotnet, frida) will populate this list automatically.</div></td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/artifacts.js"></script>
+{% endblock %}

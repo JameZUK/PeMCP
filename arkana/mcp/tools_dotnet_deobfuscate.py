@@ -26,7 +26,10 @@ from arkana.config import (
 )
 from arkana.mcp.server import tool_decorator, _check_mcp_response_size
 from arkana.mcp._format_helpers import _get_filepath
-from arkana.mcp._refinery_helpers import _write_output_and_register_artifact
+from arkana.mcp._refinery_helpers import (
+    _write_output_and_register_artifact,
+    _register_artifact_directory,
+)
 from arkana.constants import (
     DOTNET_DEOBFUSCATE_TIMEOUT, DOTNET_DECOMPILE_TIMEOUT,
     DOTNET_DECOMPILE_MAX_OUTPUT_LINES, MAX_TOOL_LIMIT,
@@ -833,13 +836,31 @@ async def dotnet_decompile(
                 rel = os.path.relpath(os.path.join(root, fn), output_dir)
                 files.append(rel)
 
-        return {
+        # Register the output directory as a single bundle artifact so it
+        # appears in the dashboard's artifacts panel and is preserved with
+        # the active project (if any).
+        artifact_meta: Optional[Dict[str, Any]] = None
+        if files:
+            try:
+                artifact_meta = await asyncio.to_thread(
+                    _register_artifact_directory,
+                    output_dir,
+                    "dotnet_decompile",
+                    f"ilspycmd decompiled project for {os.path.basename(target)}",
+                )
+            except Exception as e:
+                logger.warning("dotnet_decompile: directory artifact registration failed: %s", e)
+
+        result: Dict[str, Any] = {
             "mode": "project",
             "output_dir": output_dir,
             "files": files[:100],
             "file_count": len(files),
             "note": "Use Read tool to inspect individual .cs files" if files else "No output files generated",
         }
+        if artifact_meta is not None:
+            result["artifact"] = artifact_meta
+        return result
     else:
         # Stdout mode — return paginated C# source
         await ctx.info("Decompiling .NET assembly to C#")

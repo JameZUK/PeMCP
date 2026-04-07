@@ -32,6 +32,8 @@ CORE_MODULES = [
     "arkana.mcp.tools_learning",
     "arkana.mcp.tools_macro",
     "arkana.mcp.tools_sandbox",
+    "arkana.mcp.tools_projects",
+    "arkana.mcp.tools_artifacts",
 ]
 
 # Common analysis tools — registered for ANY binary format.

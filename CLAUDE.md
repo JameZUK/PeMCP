@@ -115,11 +115,42 @@ ruff check arkana/ tests/ \
 
 Port 8082, auto-starts. Access URL logged at startup with token query parameter.
 
-Pages: Overview, Functions (sortable, triage, XREF panel, code search, symbol tree), Call Graph (Cytoscape.js, dagre), Sections (entropy heatmap), Imports, Hex View (infinite scroll), Strings (FLOSS detail, sifter scores), CAPA, MITRE, Types (struct/enum editor), Similarity (BSim triage + BinDiff, DB management), Timeline, Notes.
+Pages: **Projects** (card grid + importable archives panel), Overview, Functions (sortable, triage, XREF panel, code search, symbol tree), Call Graph (Cytoscape.js, dagre), Sections (entropy heatmap), Imports, Hex View (infinite scroll, restores hex_offset from project), Strings (FLOSS detail, sifter scores), CAPA, MITRE, Types (struct/enum editor), Similarity (BSim triage + BinDiff, DB management), Timeline, Notes, **Artifacts** (sortable table with bulk actions, expand-row for details, 10s polling).
 
-Global status bar shows active tool + background tasks, 3s htmx refresh, collapses when idle. Triage flags persisted to cache.
+Global status bar shows active tool + background tasks, 3s htmx refresh, collapses when idle. Triage flags persisted to cache. Active project shown in nav as `▶ {project_name} / {active_binary}` when bound.
 
-**CSP**: `script-src 'self'`, no inline scripts. Event delegation with `data-*` attributes. `fetchJSON()` shared helper. `Cache-Control: no-store` on non-static responses. Dedicated thread pool (`_dash_to_thread()`, 4 threads, env: `ARKANA_DASHBOARD_THREADS`). Diff path validation includes samples directory containment. Callgraph capped at 5K edges. Code search capped at 500 chars. Responsive nav overflow. Functions scroll preservation on enrichment reloads.
+**CSP**: `script-src 'self'`, no inline scripts. Event delegation with `data-*` attributes. `fetchJSON()` shared helper. `Cache-Control: no-store` on non-static responses. Dedicated thread pool (`_dash_to_thread()`, 4 threads, env: `ARKANA_DASHBOARD_THREADS`). Diff path validation includes samples directory containment. Callgraph capped at 5K edges. Code search capped at 500 chars. Responsive nav overflow. Functions scroll preservation on enrichment reloads. Persisted dashboard state (last_tab, hex_offset, last_function_address) saved into the active project's manifest via `saveDashboardState()` JS helper.
+
+## Projects
+
+A "project" is a named multi-binary investigation container backed by `~/.arkana/projects/{project_id}/`. Sits *on top* of the SHA256 cache:
+
+- **Cache** (`~/.arkana/cache/`) — derived analysis only (PE headers, triage heuristics, IOCs, MITRE mapping, enrichment results). Read-only; regeneratable from the binary.
+- **Project overlay** (`~/.arkana/projects/{id}/overlay/{sha256}.json.gz`) — user-mutable state per binary: notes, artifacts, renames, custom types, triage flags, coverage, sandbox reports. Two projects can contain the same binary with independent overlays.
+
+**Layout**:
+```
+~/.arkana/projects/
+├── index.json                 # {project_id: {name, last_opened, primary_sha256, ...}}
+└── {project_id}/              # uuid4().hex[:16]
+    ├── manifest.json          # name, members, primary, tags, dashboard_state, last_active_sha
+    ├── binaries/              # copies of member binaries (hardlinked when same FS)
+    ├── artifacts/             # adopted artifact files + directory bundles
+    └── overlay/{sha256}.json.gz  # per-binary user state
+```
+
+**Active project lives on `state.active_project`** — `Project` (real, on-disk) or `ScratchProject` (in-memory, promoted on first state mutation). Per-session isolation comes for free via `StateProxy`. `state.bind_project()` / `state.unbind_project()` / `state.flush_overlay()` are the binding API.
+
+**Lazy promotion**: `open_file()` always creates a project context. If the binary's sha256 is a member of any existing project (most-recently-opened wins on multi-match), bind to it. Otherwise create a `ScratchProject` (in-memory, no disk presence). On the first state mutation (`add_note`, `register_artifact`, `rename_function`, `set_triage_status`, `create_struct/enum`), `state._maybe_promote_scratch()` calls `project_manager.promote_scratch()` which:
+1. Allocates a project ID and creates `~/.arkana/projects/{id}/`.
+2. Calls `_build_sample_slug()` (extracted from `auto_name_sample`) for a descriptive name like `stealer_packed_persistence_a3f9c211`. Falls back to `{filename_stem}_{sha8}` when enrichment hasn't run.
+3. Copies the binary into `binaries/`, writes the manifest, flushes the current overlay.
+
+**MCP tools**: `tools_projects.py` (11 tools — list, create, open, current, rename, tag, delete, add_binary, remove_binary, set_primary, close), `tools_artifacts.py` (3 tools — list, update_metadata, delete). Both registered in `CORE_MODULES` in `tool_registry.py`.
+
+**Artifact storage**: every `_write_output_and_register_artifact` call adopts the file into the active project's `artifacts/` dir (hardlink when same filesystem, copy otherwise). The artifact's `path` is rewritten to the in-project location; `original_path` is retained for traceability. `_register_artifact_directory()` does the same for directory bundles (depth-capped, no symlinks, member/size-limit-enforced). Used by `tools_dotnet_deobfuscate`, `tools_refinery_extract`, `tools_refinery_dotnet`, `tools_payload`.
+
+**Cache wrapper format v2**: bumped from 1 → 2. v2 wrappers omit user-mutable fields (notes/artifacts/renames/types/triage_status/coverage/sandbox). v1 wrappers still readable by `cache.get()` for the migration path. `cache.update_session_data()` is a no-op on v2 wrappers but retained for legacy callers. Migration runs once at `ProjectManager.__init__` time when `~/.arkana/projects/index.json` is missing — extracts user state from each v1 wrapper into a project (tagged `migrated`) with a stub member, re-writes the wrapper as v2. Idempotent. Per-entry try/except — never crashes startup.
 
 ## Docker
 

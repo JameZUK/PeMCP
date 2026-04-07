@@ -16,6 +16,7 @@ from arkana.mcp._refinery_helpers import (
     _require_refinery, _bytes_to_hex, _safe_decode,
     _get_file_data, _get_data_from_hex_or_file,
     _write_output_and_register_artifact,
+    _register_artifact_directory,
     _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
 )
 
@@ -26,7 +27,12 @@ async def _write_multi_file_artifacts(
     raw_items: List[bytes],
     tool_name: str,
 ) -> List[Dict[str, Any]]:
-    """Write multiple extracted files to a directory and register as artifacts."""
+    """Write multiple extracted files to a directory and register as artifacts.
+
+    Each file is written individually for backward compat, **and** the
+    enclosing directory is registered as a single ``kind='directory'``
+    bundle artifact so the dashboard can show the bundle as one row.
+    """
     from pathlib import Path
     state.check_path_allowed(str(Path(output_dir).resolve()))
     os.makedirs(output_dir, exist_ok=True)
@@ -57,6 +63,16 @@ async def _write_multi_file_artifacts(
             f"Extracted: {name} ({len(raw)} bytes)",
         )
         artifacts.append(artifact_meta)
+    # Bundle artifact (best-effort — failures don't break the per-file path).
+    try:
+        bundle_meta = await asyncio.to_thread(
+            _register_artifact_directory,
+            output_dir, tool_name,
+            f"{tool_name} extracted {len(artifacts)} file(s) to {os.path.basename(output_dir)}",
+        )
+        artifacts.append({"_bundle": True, **bundle_meta})
+    except Exception as e:
+        logger.debug("Bundle artifact registration skipped: %s", e)
     return artifacts
 
 

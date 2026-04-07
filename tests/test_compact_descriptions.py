@@ -91,8 +91,12 @@ def test_compact_lines_under_max_length():
 
 
 def test_tool_count_sanity():
-    """Sanity check: we should find approximately 284 tools."""
+    """Sanity check: we should find approximately 308 tools.
+
+    Bumped after Phase 2 (PROJECTS feature) added 14 new tools:
+    11 in tools_projects.py + 3 in tools_artifacts.py.
+    """
     tools = list(_find_tool_functions())
     # Allow some flexibility for tools being added/removed
-    assert len(tools) >= 280, f"Expected ~284 tools, found only {len(tools)}"
-    assert len(tools) <= 300, f"Expected ~284 tools, found {len(tools)}"
+    assert len(tools) >= 280, f"Expected ~308 tools, found only {len(tools)}"
+    assert len(tools) <= 320, f"Expected ~308 tools, found {len(tools)}"

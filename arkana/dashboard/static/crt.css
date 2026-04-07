@@ -3028,3 +3028,169 @@ button.view-toggle-btn.active {
     padding-left: 8px;
     margin-bottom: 2px;
 }
+
+/* ----------------------------------------------------------------------
+ *  Phase 2 — PROJECTS + ARTIFACTS pages
+ * ---------------------------------------------------------------------- */
+
+.projects-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+    padding: 12px;
+}
+.project-card {
+    border: 1px solid var(--primary-ghost);
+    background: rgba(0, 0, 0, 0.3);
+    padding: 10px 12px;
+    transition: border-color 0.15s;
+}
+.project-card:hover {
+    border-color: var(--primary);
+}
+.project-card.active {
+    border-color: var(--primary);
+    box-shadow: 0 0 8px var(--primary-glow, rgba(0, 255, 0, 0.3));
+}
+.project-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+.project-name {
+    font-weight: bold;
+    color: var(--primary);
+    cursor: pointer;
+}
+.project-name:hover {
+    text-decoration: underline;
+}
+.project-card-body {
+    margin-bottom: 8px;
+}
+.project-row {
+    margin: 4px 0;
+    font-size: 12px;
+}
+.project-card-actions {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--primary-ghost);
+    padding-top: 8px;
+}
+
+.badge-success {
+    background: var(--primary);
+    color: #000;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: bold;
+}
+.badge-tag {
+    background: rgba(0, 200, 200, 0.2);
+    border: 1px solid rgba(0, 200, 200, 0.5);
+    color: #0cc;
+    padding: 1px 6px;
+    font-size: 10px;
+    margin-right: 4px;
+}
+
+/* Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal.hidden {
+    display: none;
+}
+.modal-content {
+    background: #000;
+    border: 1px solid var(--primary);
+    padding: 16px;
+    min-width: 360px;
+    max-width: 90vw;
+}
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--primary-ghost);
+    padding-bottom: 8px;
+}
+.modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.modal-body label {
+    font-size: 11px;
+    margin-top: 6px;
+}
+.modal-body input {
+    width: 100%;
+}
+.modal-error {
+    color: #f44;
+    font-size: 11px;
+    margin-top: 6px;
+}
+.modal-error.hidden {
+    display: none;
+}
+.modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 12px;
+    border-top: 1px solid var(--primary-ghost);
+    padding-top: 8px;
+}
+
+/* Artifacts table extras */
+.bulk-actions {
+    float: right;
+    display: inline-flex;
+    gap: 4px;
+}
+.col-check { width: 30px; }
+.col-icon { width: 30px; }
+.col-actions { white-space: nowrap; }
+.artifact-detail-content {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 12px;
+    border-left: 2px solid var(--primary);
+}
+.detail-section {
+    margin: 6px 0;
+}
+.detail-section pre {
+    background: rgba(0, 0, 0, 0.5);
+    padding: 8px;
+    margin: 4px 0;
+    overflow-x: auto;
+}
+.member-list {
+    max-height: 240px;
+    overflow-y: auto;
+    list-style: none;
+    padding: 0;
+    margin: 4px 0;
+}
+.member-list li {
+    padding: 2px 0;
+    border-bottom: 1px dotted var(--primary-ghost);
+}
+.hidden {
+    display: none !important;
+}

@@ -17,6 +17,7 @@ from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_respo
 from arkana.mcp._refinery_helpers import (
     _require_refinery, _safe_decode, _bytes_to_hex, _hex_to_bytes,
     _get_file_data, _write_output_and_register_artifact,
+    _register_artifact_directory,
     _MAX_INPUT_SIZE_LARGE as _MAX_INPUT_SIZE,
     _MAX_OUTPUT_ITEMS,
 )
@@ -344,5 +345,16 @@ async def refinery_dotnet(
                 f"Extracted .NET {op}: {name} ({len(raw)} bytes)",
             )
             artifacts.append(artifact_meta)
+        # Bundle the directory as a single kind="directory" artifact too,
+        # so the dashboard ARTIFACTS panel shows it as one row instead of N.
+        try:
+            bundle = await asyncio.to_thread(
+                _register_artifact_directory,
+                output_path, "refinery_dotnet",
+                f"refinery_dotnet {op} extracted {len(artifacts)} item(s)",
+            )
+            artifacts.append({"_bundle": True, **bundle})
+        except Exception as e:
+            logger.debug("Bundle artifact registration skipped: %s", e)
         response["artifacts"] = artifacts
     return await _check_mcp_response_size(ctx, response, "refinery_dotnet")

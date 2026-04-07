@@ -166,6 +166,7 @@
 
     // --- Scroll listener ---
     var _scrollDebounce = null;
+    var _persistDebounce = null;
     scrollContainer.addEventListener("scroll", function () {
         if (!_initialized) return;
         if (_scrollDebounce) return;
@@ -184,6 +185,13 @@
                 loadEarlier();
             }
         }, 50);
+        // Persist hex_offset to project manifest (debounced 1s, best-effort)
+        if (_persistDebounce) clearTimeout(_persistDebounce);
+        _persistDebounce = setTimeout(function () {
+            if (typeof window.saveDashboardState === "function") {
+                window.saveDashboardState("hex_offset", _renderedStart);
+            }
+        }, 1000);
     }, {passive: true});
 
     // --- Jump-to controls ---
@@ -212,12 +220,21 @@
     }, {passive: true});
 
     // --- Initial load ---
+    // Priority: explicit ?offset= URL param > restored hex_offset from
+    // active project's dashboard_state > start at 0.
     var params = new URLSearchParams(window.location.search);
     var initOffset = params.get("offset");
     if (initOffset) {
         offsetInput.value = initOffset;
         jumpTo(parseOffset(initOffset));
     } else {
-        jumpTo(0);
+        var st = window._arkanaState || {};
+        var dashState = (st.active_project && st.active_project.dashboard_state) || {};
+        var savedOffset = dashState.hex_offset;
+        if (savedOffset && Number(savedOffset) > 0) {
+            jumpTo(Number(savedOffset));
+        } else {
+            jumpTo(0);
+        }
     }
 })();

@@ -932,10 +932,32 @@ def get_overview_data() -> Dict[str, Any]:
     except Exception:
         resource_usage = None
 
+    # Active project context (Phase 2: PROJECTS feature)
+    active_project_info = None
+    try:
+        _proj = st.get_active_project() if hasattr(st, "get_active_project") else None
+        if _proj is not None:
+            _dash_state = {}
+            try:
+                manifest = getattr(_proj, "manifest", None)
+                if manifest is not None:
+                    _dash_state = dict(getattr(manifest, "dashboard_state", {}) or {})
+            except Exception:
+                _dash_state = {}
+            active_project_info = {
+                "id": getattr(_proj, "id", None),
+                "name": getattr(_proj, "name", None),
+                "scratch": bool(getattr(_proj, "is_scratch", False)),
+                "dashboard_state": _dash_state,
+            }
+    except Exception:
+        active_project_info = None
+
     result = {
         "file_loaded": filepath is not None,
         "filename": filename,
         "filepath": os.path.basename(filepath) if filepath else None,
+        "active_project": active_project_info,
         "format": fmt,
         "mode": mode,
         "sha256": hashes.get("sha256"),

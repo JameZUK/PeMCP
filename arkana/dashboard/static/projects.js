@@ -1,0 +1,385 @@
+/* Arkana Dashboard — Projects page interactions
+ *
+ * CSP-safe: no inline scripts, all handlers attached via event delegation
+ * on data-action attributes. Uses the global fetchJSON, getCsrfToken,
+ * escapeHtml, and showToast helpers from dashboard.js.
+ */
+(function () {
+    "use strict";
+
+    var grid = document.getElementById("projects-grid");
+    if (!grid) return;
+
+    var filterInput = document.getElementById("projects-filter");
+    var tagSelect = document.getElementById("projects-tag-filter");
+    var sortSelect = document.getElementById("projects-sort");
+    var newBtn = document.getElementById("btn-new-project");
+
+    var debounceTimer = null;
+
+    // -----------------------------------------------------------------
+    //  Data load + render
+    // -----------------------------------------------------------------
+    function reloadGrid() {
+        var params = new URLSearchParams();
+        if (filterInput && filterInput.value) params.set("filter", filterInput.value);
+        if (tagSelect && tagSelect.value) params.set("tag", tagSelect.value);
+        if (sortSelect && sortSelect.value) params.set("sort_by", sortSelect.value);
+        var url = "/dashboard/api/projects" + (params.toString() ? "?" + params : "");
+
+        fetchJSON(url).then(function (data) {
+            renderGrid(data);
+            updateTagFilter(data);
+        }).catch(function (e) {
+            showToast("Failed to load projects: " + e.message, "error");
+        });
+    }
+
+    function renderGrid(data) {
+        var projects = data.projects || [];
+        var activeId = data.active_project_id || "";
+        if (!projects.length) {
+            grid.innerHTML = '<div class="empty-msg">No projects yet. Open a binary and add a note to get started.</div>';
+            return;
+        }
+        var html = projects.map(function (p) {
+            var tags = (p.tags || []).map(function (t) {
+                return '<span class="badge badge-tag">' + escapeHtml(t) + "</span>";
+            }).join("");
+            var lastOpened = p.last_opened ? formatRelative(p.last_opened) : "—";
+            var primary = p.primary_filename || "(none)";
+            var modeBadge = p.primary_mode
+                ? '<span class="badge badge-dim">' + escapeHtml(String(p.primary_mode).toUpperCase()) + "</span>"
+                : "";
+            var activeBadge = (p.id === activeId)
+                ? '<span class="badge badge-success">ACTIVE</span>'
+                : "";
+            var cardClass = "project-card" + (p.id === activeId ? " active" : "");
+            var lastTabAttr = p.last_tab ? ' data-last-tab="' + escapeHtml(p.last_tab) + '"' : "";
+            return (
+                '<div class="' + cardClass + '" data-project-id="' + escapeHtml(p.id) + '" data-project-name="' + escapeHtml(p.name) + '"' + lastTabAttr + '>' +
+                  '<div class="project-card-header">' +
+                    '<span class="project-name" data-action="rename" data-project-id="' + escapeHtml(p.id) + '">' + escapeHtml(p.name) + "</span>" +
+                    activeBadge +
+                  "</div>" +
+                  '<div class="project-card-body">' +
+                    '<div class="project-row"><span class="dim">Primary:</span> <span class="mono">' + escapeHtml(primary) + "</span> " + modeBadge + "</div>" +
+                    '<div class="project-row"><span class="dim">Members:</span> ' + p.member_count + "</div>" +
+                    '<div class="project-row"><span class="dim">Last opened:</span> <span class="mono fs-11">' + escapeHtml(lastOpened) + "</span></div>" +
+                    (tags ? '<div class="project-row">' + tags + "</div>" : "") +
+                  "</div>" +
+                  '<div class="project-card-actions">' +
+                    '<button class="btn btn-sm btn-primary" data-action="open" data-project-id="' + escapeHtml(p.id) + '" type="button">OPEN</button>' +
+                    '<button class="btn btn-sm" data-action="rename" data-project-id="' + escapeHtml(p.id) + '" type="button">RENAME</button>' +
+                    '<button class="btn btn-sm" data-action="tag" data-project-id="' + escapeHtml(p.id) + '" type="button">TAGS</button>' +
+                    '<button class="btn btn-sm btn-danger" data-action="delete" data-project-id="' + escapeHtml(p.id) + '" type="button">DELETE</button>' +
+                  "</div>" +
+                "</div>"
+            );
+        }).join("");
+        grid.innerHTML = html;
+    }
+
+    function updateTagFilter(data) {
+        if (!tagSelect) return;
+        var seen = {};
+        (data.projects || []).forEach(function (p) {
+            (p.tags || []).forEach(function (t) { seen[t] = true; });
+        });
+        var current = tagSelect.value;
+        var keep = '<option value="">All tags</option>';
+        Object.keys(seen).sort().forEach(function (t) {
+            keep += '<option value="' + escapeHtml(t) + '"' + (t === current ? " selected" : "") + ">" + escapeHtml(t) + "</option>";
+        });
+        tagSelect.innerHTML = keep;
+    }
+
+    function formatRelative(epoch) {
+        if (!epoch) return "—";
+        var d = new Date(Number(epoch) * 1000);
+        var now = Date.now();
+        var diff = now - d.getTime();
+        if (diff < 60000) return "just now";
+        if (diff < 3600000) return Math.floor(diff / 60000) + " min ago";
+        if (diff < 86400000) return Math.floor(diff / 3600000) + " hr ago";
+        if (diff < 7 * 86400000) return Math.floor(diff / 86400000) + " days ago";
+        return d.toLocaleDateString();
+    }
+
+    // -----------------------------------------------------------------
+    //  Action dispatch (delegated)
+    // -----------------------------------------------------------------
+    grid.addEventListener("click", function (e) {
+        var btn = e.target.closest("[data-action]");
+        if (!btn) return;
+        var action = btn.getAttribute("data-action");
+        var pid = btn.getAttribute("data-project-id");
+        if (!pid) return;
+        e.preventDefault();
+        if (action === "open") return openProject(pid);
+        if (action === "rename") return renameProject(pid, btn);
+        if (action === "tag") return tagProject(pid);
+        if (action === "delete") return deleteProject(pid, btn);
+    });
+
+    function openProject(pid) {
+        // Read the project's saved last_tab from the data attribute on the
+        // card so we can land the user back where they left off.
+        var lastTab = "";
+        var card = grid.querySelector('.project-card[data-project-id="' + pid + '"]');
+        if (card) lastTab = card.getAttribute("data-last-tab") || "";
+        fetchJSON("/dashboard/api/projects/open", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": getCsrfToken(),
+            },
+            body: JSON.stringify({ project_id: pid }),
+        }).then(function (resp) {
+            if (resp.error) throw new Error(resp.error);
+            showToast("Project opened — loading binary...", "success");
+            // Resolve target URL: dashboard/<last_tab>, falling back to overview.
+            var target = "/dashboard/";
+            if (lastTab && lastTab !== "overview" && lastTab !== "projects") {
+                target = "/dashboard/" + lastTab;
+            }
+            // Short delay so overlay restoration completes server-side first.
+            setTimeout(function () { window.location.href = target; }, 800);
+        }).catch(function (e) {
+            showToast("Open failed: " + e.message, "error");
+        });
+    }
+
+    function renameProject(pid, btn) {
+        var card = btn.closest(".project-card");
+        var current = card ? card.getAttribute("data-project-name") : "";
+        var newName = window.prompt("New project name:", current || "");
+        if (!newName || newName === current) return;
+        fetchJSON("/dashboard/api/projects/rename", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": getCsrfToken(),
+            },
+            body: JSON.stringify({ project_id: pid, new_name: newName }),
+        }).then(function (resp) {
+            if (resp.error) throw new Error(resp.error);
+            showToast("Renamed", "success");
+            reloadGrid();
+        }).catch(function (e) {
+            showToast("Rename failed: " + e.message, "error");
+        });
+    }
+
+    function tagProject(pid) {
+        var card = grid.querySelector('.project-card[data-project-id="' + pid + '"]');
+        var existing = card ? Array.from(card.querySelectorAll(".badge-tag")).map(function (el) { return el.textContent; }) : [];
+        var input = window.prompt(
+            "Tags (comma-separated):",
+            existing.join(", ")
+        );
+        if (input === null) return;
+        var tags = input.split(",").map(function (t) { return t.trim(); }).filter(Boolean);
+        fetchJSON("/dashboard/api/projects/tag", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": getCsrfToken(),
+            },
+            body: JSON.stringify({ project_id: pid, add: tags, replace: true }),
+        }).then(function (resp) {
+            if (resp.error) throw new Error(resp.error);
+            showToast("Tags updated", "success");
+            reloadGrid();
+        }).catch(function (e) {
+            showToast("Tag update failed: " + e.message, "error");
+        });
+    }
+
+    function deleteProject(pid, btn) {
+        var card = btn.closest(".project-card");
+        var name = card ? card.getAttribute("data-project-name") : pid;
+        if (!window.confirm("Delete project '" + name + "'? This cannot be undone.")) return;
+        fetchJSON("/dashboard/api/projects/delete", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": getCsrfToken(),
+            },
+            body: JSON.stringify({ project_id: pid, confirm: true }),
+        }).then(function (resp) {
+            if (resp.error) throw new Error(resp.error);
+            showToast("Deleted", "success");
+            reloadGrid();
+        }).catch(function (e) {
+            showToast("Delete failed: " + e.message, "error");
+        });
+    }
+
+    // -----------------------------------------------------------------
+    //  New-project modal
+    // -----------------------------------------------------------------
+    var modal = document.getElementById("modal-new-project");
+    if (newBtn && modal) {
+        newBtn.addEventListener("click", function () {
+            modal.classList.remove("hidden");
+            var nameInput = document.getElementById("new-project-name");
+            if (nameInput) nameInput.focus();
+        });
+        modal.addEventListener("click", function (e) {
+            var btn = e.target.closest("[data-action='close-modal']");
+            if (btn) {
+                modal.classList.add("hidden");
+                clearNewProjectError();
+            }
+        });
+        var confirmBtn = document.getElementById("btn-create-project-confirm");
+        if (confirmBtn) {
+            confirmBtn.addEventListener("click", function () {
+                var nameInput = document.getElementById("new-project-name");
+                var tagsInput = document.getElementById("new-project-tags");
+                var name = (nameInput && nameInput.value || "").trim();
+                if (!name) {
+                    showNewProjectError("Name is required");
+                    return;
+                }
+                var tags = (tagsInput && tagsInput.value || "")
+                    .split(",")
+                    .map(function (t) { return t.trim(); })
+                    .filter(Boolean);
+                fetchJSON("/dashboard/api/projects", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-CSRF-Token": getCsrfToken(),
+                    },
+                    body: JSON.stringify({ name: name, tags: tags }),
+                }).then(function (resp) {
+                    if (resp.error) throw new Error(resp.error);
+                    modal.classList.add("hidden");
+                    if (nameInput) nameInput.value = "";
+                    if (tagsInput) tagsInput.value = "";
+                    clearNewProjectError();
+                    showToast("Project created", "success");
+                    reloadGrid();
+                }).catch(function (e) {
+                    showNewProjectError(e.message);
+                });
+            });
+        }
+    }
+
+    function showNewProjectError(msg) {
+        var el = document.getElementById("new-project-error");
+        if (el) {
+            el.textContent = msg;
+            el.classList.remove("hidden");
+        }
+    }
+    function clearNewProjectError() {
+        var el = document.getElementById("new-project-error");
+        if (el) {
+            el.textContent = "";
+            el.classList.add("hidden");
+        }
+    }
+
+    // -----------------------------------------------------------------
+    //  Filter / sort change handlers
+    // -----------------------------------------------------------------
+    function debouncedReload() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(reloadGrid, 200);
+    }
+    if (filterInput) filterInput.addEventListener("input", debouncedReload);
+    if (tagSelect) tagSelect.addEventListener("change", reloadGrid);
+    if (sortSelect) sortSelect.addEventListener("change", reloadGrid);
+
+    // -----------------------------------------------------------------
+    //  Importable archives panel
+    // -----------------------------------------------------------------
+    var archivesList = document.getElementById("importable-archives-list");
+    var archivesCount = document.getElementById("importable-archives-count");
+    var rescanBtn = document.getElementById("btn-rescan-archives");
+
+    function loadArchives() {
+        if (!archivesList) return;
+        fetchJSON("/dashboard/api/projects/importable-archives").then(function (data) {
+            renderArchives(data);
+        }).catch(function (e) {
+            archivesList.innerHTML = '<div class="empty-msg dim">Failed to scan: ' + escapeHtml(e.message) + '</div>';
+        });
+    }
+
+    function renderArchives(data) {
+        var archives = (data && data.archives) || [];
+        if (archivesCount) {
+            archivesCount.textContent = archives.length ? "(" + archives.length + " found)" : "";
+        }
+        if (!archives.length) {
+            archivesList.innerHTML = '<div class="empty-msg dim">No archives found in output directories.</div>';
+            return;
+        }
+        var html = '<table class="data-table data-table-sm"><thead><tr>' +
+            '<th>Name</th><th>Size</th><th>Modified</th><th>Status</th><th>Action</th>' +
+            '</tr></thead><tbody>';
+        archives.forEach(function (a) {
+            var sizeKb = (a.size / 1024).toFixed(1) + " KB";
+            var dt = new Date(Number(a.mtime) * 1000).toLocaleString();
+            var statusBadge = a.likely_imported
+                ? '<span class="badge badge-dim">likely imported</span>'
+                : '<span class="badge badge-tag">new</span>';
+            html += '<tr>' +
+                '<td class="mono fs-11">' + escapeHtml(a.name) + '</td>' +
+                '<td class="mono fs-11">' + sizeKb + '</td>' +
+                '<td class="fs-11">' + escapeHtml(dt) + '</td>' +
+                '<td>' + statusBadge + '</td>' +
+                '<td><button class="btn btn-sm btn-primary" data-action="import-archive" data-path="' + escapeHtml(a.path) + '" type="button">IMPORT</button></td>' +
+                '</tr>';
+        });
+        html += '</tbody></table>';
+        archivesList.innerHTML = html;
+    }
+
+    if (archivesList) {
+        archivesList.addEventListener("click", function (e) {
+            var btn = e.target.closest("[data-action='import-archive']");
+            if (!btn) return;
+            e.preventDefault();
+            var path = btn.getAttribute("data-path");
+            if (!path) return;
+            btn.disabled = true;
+            btn.textContent = "...";
+            fetchJSON("/dashboard/api/projects/import-archive", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-CSRF-Token": getCsrfToken(),
+                },
+                body: JSON.stringify({ path: path }),
+            }).then(function (resp) {
+                if (resp.error) throw new Error(resp.error);
+                if (resp.status === "already_imported") {
+                    showToast("Already imported as " + resp.project_name, "info");
+                } else {
+                    showToast("Imported as " + resp.project_name, "success");
+                }
+                reloadGrid();
+                loadArchives();
+            }).catch(function (err) {
+                showToast("Import failed: " + err.message, "error");
+                btn.disabled = false;
+                btn.textContent = "IMPORT";
+            });
+        });
+    }
+    if (rescanBtn) rescanBtn.addEventListener("click", loadArchives);
+    // Load on page load
+    loadArchives();
+
+    // Defensive global toast helper in case dashboard.js hasn't installed
+    // one yet on this page.
+    if (typeof window.showToast !== "function") {
+        window.showToast = function (msg) { console.log("[arkana]", msg); };
+    }
+})();

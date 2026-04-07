@@ -23,6 +23,9 @@ __all__ = [
     "YARA_COMMUNITY_ZIP_URL", "YARA_COMMUNITY_SUBDIR",
     "BSIM_DB_DIR", "BSIM_DEFAULT_THRESHOLD", "BSIM_BACKGROUND_TIMEOUT",
     "MAX_ARTIFACT_FILE_SIZE", "MAX_TOTAL_ARTIFACT_EXPORT_SIZE",
+    "MAX_ARTIFACT_DIR_MEMBERS", "MAX_ARTIFACT_DIR_SIZE", "ARTIFACT_DIR_DEPTH_LIMIT",
+    "PROJECTS_DIR", "MAX_PROJECT_NAME_LEN", "PROJECT_NAME_RE",
+    "MAX_PROJECTS", "MAX_BINARIES_PER_PROJECT", "PROJECT_ID_LEN",
     "MAX_BATCH_RENAMES",
     "MAX_STRUCT_FIELDS", "MAX_ENUM_VALUES",
     "MAX_BATCH_DECOMPILE", "BATCH_DECOMPILE_PER_FUNCTION_TIMEOUT",
@@ -157,6 +160,21 @@ BSIM_AUTO_INDEX = True  # Auto-index into signature DB during enrichment (env: A
 # --- Artifact Limits ---
 MAX_ARTIFACT_FILE_SIZE = 100 * 1024 * 1024        # 100 MB per artifact
 MAX_TOTAL_ARTIFACT_EXPORT_SIZE = 50 * 1024 * 1024  # 50 MB total in exports
+MAX_ARTIFACT_DIR_MEMBERS = 1000                    # max files inside a directory artifact
+MAX_ARTIFACT_DIR_SIZE = 256 * 1024 * 1024          # 256 MB total per directory artifact
+ARTIFACT_DIR_DEPTH_LIMIT = 10                      # max recursion depth when walking directory artifacts
+
+# --- Projects ---
+import re as _re
+try:
+    PROJECTS_DIR = Path.home() / ".arkana" / "projects"
+except RuntimeError:
+    PROJECTS_DIR = Path("/tmp") / ".arkana" / "projects"
+PROJECT_ID_LEN = 16                                # uuid4().hex[:16]
+MAX_PROJECT_NAME_LEN = 100
+PROJECT_NAME_RE = _re.compile(r"^[\w\-. ]{1,100}$")
+MAX_PROJECTS = 1000
+MAX_BINARIES_PER_PROJECT = 50
 
 # --- Rename / Annotation Limits ---
 MAX_BATCH_RENAMES = 50

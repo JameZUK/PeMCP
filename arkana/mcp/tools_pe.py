@@ -332,26 +332,21 @@ async def open_file(
 
     # Close any previously loaded file — use atomic reset methods
     if state.pe_object or state.filepath:
-        # Persist session data from previous file before clearing state
+        # Persist user-mutable state to the active project's overlay before
+        # clearing state. Real projects flush; scratch projects are simply
+        # discarded if no mutations have promoted them to disk yet.
         _prev_sha = None
         try:
             if state.pe_data:
                 _prev_sha = (state.pe_data or {}).get("file_hashes", {}).get("sha256")
         except Exception:
             pass
-        if _prev_sha:
-            try:
-                analysis_cache.update_session_data(
-                    _prev_sha,
-                    notes=state.get_all_notes_snapshot(),
-                    tool_history=state.get_tool_history_snapshot(),
-                    artifacts=state.get_all_artifacts_snapshot(),
-                    renames=state.get_all_renames_snapshot(),
-                    custom_types=state.get_all_types_snapshot(),
-                    triage_status=state.get_all_triage_snapshot(),
-                )
-            except Exception as _save_err:
-                logger.warning("Failed to persist session data before file switch: %s", _save_err)
+        try:
+            _prev_project = state.get_active_project()
+            if _prev_project is not None and not getattr(_prev_project, "is_scratch", False):
+                state.flush_overlay()
+        except Exception as _save_err:
+            logger.warning("Failed to flush project overlay before file switch: %s", _save_err)
         # Cancel all background tasks (angr + non-angr) on file switch
         state.cancel_all_background_tasks()
         # Cancel any running enrichment from the previous file
@@ -407,6 +402,10 @@ async def open_file(
         with state._types_lock:
             state.custom_types = {"structs": {}, "enums": {}}
         state.previous_session_history = []
+        # Project context handling: keep the project bound only if the *new*
+        # binary is also a member of it. We don't yet know the new sha256
+        # at this point — defer the bind/unbind decision until after the
+        # hash is computed below.
         # Clear module-level caches keyed by _state_uuid to prevent
         # cross-file data contamination when switching files without close_file()
         try:
@@ -459,6 +458,77 @@ async def open_file(
             return data, hashlib.sha256(data).hexdigest()
 
         _raw_file_data, _file_sha256 = await asyncio.to_thread(_read_and_hash)
+
+        # --- Resolve project context for this binary ---
+        # Project resolution happens here (after hashing, before cache lookup)
+        # so that the active project is bound BEFORE state mutation hooks fire
+        # for any restored data. Resolution priority:
+        #   1. If state already has a non-scratch project containing this
+        #      sha256, keep it bound (multi-binary in-project switch).
+        #   2. Else if any other project contains this sha256, bind to the
+        #      most recently opened of those.
+        #   3. Else create a ScratchProject (in-memory) — promoted to disk
+        #      on the first state mutation via state._maybe_promote_scratch.
+        try:
+            from arkana.projects import project_manager, ScratchProject
+            _resolved_project = None
+            _current_project = state.get_active_project()
+            if (_current_project is not None
+                    and not getattr(_current_project, "is_scratch", False)
+                    and hasattr(_current_project, "has_member")
+                    and _current_project.has_member(_file_sha256)):
+                _resolved_project = _current_project
+            else:
+                _matches = project_manager.lookup_by_sha(_file_sha256)
+                if _matches:
+                    _matches.sort(key=lambda p: p.manifest.last_opened, reverse=True)
+                    _resolved_project = _matches[0]
+            if _resolved_project is None:
+                # No existing project owns this binary — start a scratch one.
+                _scratch = ScratchProject()
+                _scratch.add_member(
+                    sha256=_file_sha256,
+                    original_filename=os.path.basename(abs_path),
+                    source_path=abs_path,
+                    size=len(_raw_file_data),
+                    mode=mode,
+                )
+                state.bind_project(_scratch)
+            else:
+                # If switching projects, unbind the old one (overlay was
+                # already flushed in the cleanup phase above).
+                if _current_project is not None and _current_project is not _resolved_project:
+                    state.unbind_project()
+                # Adopt the binary into the project (no-op if already a real
+                # member with a present file). This handles migrated stub
+                # members and the rare case of a binary that vanished from
+                # the project's binaries/ directory.
+                try:
+                    if _resolved_project.has_member(_file_sha256):
+                        if not _resolved_project.member_present(_file_sha256):
+                            _resolved_project.adopt_binary_into_stub(_file_sha256, abs_path)
+                    else:
+                        project_manager.add_binary(
+                            _resolved_project, abs_path,
+                            declared_sha256=_file_sha256,
+                            declared_size=len(_raw_file_data),
+                            mode=mode,
+                        )
+                except Exception as _adopt_err:
+                    logger.warning(
+                        "Project: failed to adopt binary into project %s: %s",
+                        _resolved_project.id, _adopt_err,
+                    )
+                state.bind_project(_resolved_project)
+                _resolved_project.set_last_active(_file_sha256)
+                _resolved_project.touch_last_opened()
+        except Exception as _proj_err:
+            logger.warning("Project resolution failed: %s", _proj_err, exc_info=True)
+            # If project resolution fails entirely, proceed without a project.
+            try:
+                state.unbind_project()
+            except Exception:
+                pass
 
         # --- Format detection (uses raw bytes, no redundant file open) ---
         if mode == "auto":
@@ -524,45 +594,9 @@ async def open_file(
                         )
                     _loaded_from_cache = True
 
-                    # Restore notes, previous session history, artifacts, renames, and types from cache
-                    # H2-v8: Acquire respective locks to prevent concurrent readers from
-                    # seeing partial state during cache restore.
-                    session_meta = analysis_cache.get_session_metadata(_file_sha256)
-                    if session_meta:
-                        with state._notes_lock:
-                            state.notes = session_meta.get("notes", [])
-                            # Restore counter to max suffix + 1 to prevent ID collisions
-                            # Note IDs are formatted as "n_{timestamp}_{counter}"
-                            if state.notes:
-                                max_suffix = 0
-                                for n in state.notes:
-                                    nid = n.get("id", "")
-                                    if isinstance(nid, str) and "_" in nid:
-                                        try:
-                                            max_suffix = max(max_suffix, int(nid.rsplit("_", 1)[-1]))
-                                        except (ValueError, IndexError):
-                                            pass
-                                state._notes_counter = max_suffix + 1
-                        state.previous_session_history = session_meta.get("tool_history", [])[:MAX_TOOL_HISTORY]  # M3-v11: bound
-                        with state._artifacts_lock:
-                            state.artifacts = session_meta.get("artifacts", [])
-                            # Restore counter to max ID suffix + 1 to prevent ID collisions
-                            if state.artifacts:
-                                max_art_suffix = 0
-                                for a in state.artifacts:
-                                    aid = a.get("id", "")
-                                    if isinstance(aid, str) and "_" in aid:
-                                        try:
-                                            max_art_suffix = max(max_art_suffix, int(aid.rsplit("_", 1)[-1]))
-                                        except (ValueError, IndexError):
-                                            pass
-                                state._artifacts_counter = max_art_suffix + 1
-                        with state._renames_lock:
-                            state.renames = session_meta.get("renames", {"functions": {}, "variables": {}, "labels": {}})
-                        with state._types_lock:
-                            state.custom_types = session_meta.get("custom_types", {"structs": {}, "enums": {}})
-                        with state._triage_lock:
-                            state.triage_status = session_meta.get("triage_status", {})
+                    # Project overlay restoration is performed once for both
+                    # cache-hit and fresh-load paths just before the result
+                    # dict is built (search for "load project overlay").
 
                     # Restore cached enrichment data from pe_data → state attrs,
                     # then remove from pe_data to avoid in-memory duplication.
@@ -902,6 +936,19 @@ async def open_file(
             start_enrichment(_gcs())
             await ctx.info("Background auto-enrichment started. Use check_task_status('auto-enrichment') to monitor.")
 
+        # Restore user-mutable state (notes, artifacts, renames, types, triage,
+        # coverage, sandbox report) from the active project's overlay for this
+        # binary's sha256. Runs once for both cache-hit and fresh-load paths.
+        # state.apply_overlay acquires the appropriate locks internally.
+        try:
+            _proj = state.get_active_project()
+            if _proj is not None and not getattr(_proj, "is_scratch", False):
+                _overlay = _proj.load_overlay(_file_sha256)
+                if _overlay:
+                    state.apply_overlay(_overlay)
+        except Exception as _ov_err:
+            logger.warning("Failed to load project overlay: %s", _ov_err)
+
         await ctx.report_progress(100, 100)
         await ctx.info(f"File loaded successfully: {abs_path}")
 
@@ -1085,18 +1132,15 @@ async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]
     # Cancel any running enrichment before clearing state
     state._enrichment_cancel.set()
 
-    # Persist notes, tool history, and artifacts to cache before clearing state
-    sha = (state.pe_data or {}).get("file_hashes", {}).get("sha256") if state.pe_data else None
-    if sha:
-        analysis_cache.update_session_data(
-            sha,
-            notes=state.get_all_notes_snapshot(),
-            tool_history=state.get_tool_history_snapshot(),
-            artifacts=state.get_all_artifacts_snapshot(),
-            renames=state.get_all_renames_snapshot(),
-            custom_types=state.get_all_types_snapshot(),
-            triage_status=state.get_all_triage_snapshot(),
-        )
+    # Flush user-mutable state to the active project's overlay before
+    # clearing state. Real projects flush; scratch projects are simply
+    # discarded if no mutations promoted them to disk.
+    try:
+        _proj = state.get_active_project()
+        if _proj is not None and not getattr(_proj, "is_scratch", False):
+            state.flush_overlay()
+    except Exception as _flush_err:
+        logger.warning("Failed to flush project overlay on close: %s", _flush_err)
 
     # Clean up debug sessions before clearing state
     try:
@@ -1134,6 +1178,10 @@ async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]
     state.clear_custom_types()
     state.clear_triage()
     state.previous_session_history = []
+    try:
+        state.unbind_project()
+    except Exception:
+        pass
 
     # Clear cached enrichment data to prevent stale cross-file data
     state._cached_triage = None

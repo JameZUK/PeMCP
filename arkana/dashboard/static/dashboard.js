@@ -21,6 +21,31 @@ function fetchJSON(url, options) {
     });
 }
 
+// Persist a small piece of dashboard state into the active project's
+// manifest. Allowed keys (server-side whitelist): last_tab, hex_offset,
+// last_function_address, functions_scroll, callgraph_layout. No-ops if
+// no project is active or the active project is scratch.
+//
+// Pages call this on user navigation/scroll/etc. so reopening a project
+// can land the user back where they left off.
+function saveDashboardState(key, value) {
+    var st = window._arkanaState || {};
+    var proj = st.active_project;
+    if (!proj || !proj.id || proj.scratch) return;
+    fetch('/dashboard/api/projects/dashboard-state', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-CSRF-Token': getCsrfToken(),
+        },
+        body: JSON.stringify({
+            project_id: proj.id,
+            key: key,
+            value: value,
+        }),
+    }).catch(function() { /* best-effort, never block UI */ });
+}
+
 // Apply data-width attributes as inline styles (for CSP-compliant dynamic widths)
 function applyDataWidths(root) {
     (root || document).querySelectorAll('[data-width]').forEach(function(el) {
@@ -31,6 +56,20 @@ function applyDataWidths(root) {
 document.addEventListener('DOMContentLoaded', function() {
     applyDataWidths();
     _initNavOverflow();
+    // Persist last_tab from the active nav link, so reopening a project
+    // can route the user back to whichever tab they last visited.
+    // Wait briefly so window._arkanaState (populated by SSE state poll) is
+    // available — saveDashboardState no-ops if no project is bound.
+    setTimeout(function () {
+        var active = document.querySelector('.nav-link.active');
+        if (!active) return;
+        var href = active.getAttribute('href') || '';
+        // Slugify: /dashboard/foo → 'foo', /dashboard/ → 'overview'
+        var slug = href.replace(/^\/dashboard\/?/, '') || 'overview';
+        if (typeof window.saveDashboardState === 'function') {
+            window.saveDashboardState('last_tab', slug);
+        }
+    }, 1500);
 });
 document.addEventListener('htmx:afterSwap', function(e) { applyDataWidths(e.detail.target); });
 
@@ -190,11 +229,21 @@ function showToast(message, type) {
     }
 
     function handleStateUpdate(data) {
-        // Update nav filename indicator
+        // Cache state on window so saveDashboardState() can find the active
+        // project without an extra round-trip.
+        window._arkanaState = data;
+        // Update nav filename indicator. When an on-disk project is bound,
+        // prefix the filename with "▶ {project_name} / " so the user always
+        // sees which project they're working in.
         var fnEl = document.getElementById('nav-filename');
         if (fnEl) {
             var oldText = fnEl.textContent;
-            fnEl.textContent = data.filename || '';
+            var label = data.filename || '';
+            var proj = data.active_project;
+            if (proj && proj.name && !proj.scratch) {
+                label = '\u25B6 ' + proj.name + (label ? ' / ' + label : '');
+            }
+            fnEl.textContent = label;
             // Re-run nav overflow detection when filename changes
             if (fnEl.textContent !== oldText && window._navRedistribute) {
                 window._navRedistribute();

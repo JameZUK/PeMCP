@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Arkana — Projects{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="glow">PROJECTS</h1>
+    <span class="dim">{{ data.total_count if data else 0 }} project(s)</span>
+</div>
+
+<div class="panel">
+    <div class="panel-header">FILTERS</div>
+    <div class="filter-bar">
+        <input type="text" id="projects-filter" class="input-search"
+               placeholder="Search name or tag..."
+               value="{{ data.filters.filter if data and data.filters else '' }}">
+        <select id="projects-tag-filter" class="input-search">
+            <option value="">All tags</option>
+        </select>
+        <select id="projects-sort" class="input-search">
+            <option value="last_opened">Recently opened</option>
+            <option value="name">Name</option>
+            <option value="created_at">Recently created</option>
+        </select>
+        <button class="btn btn-primary" id="btn-new-project" type="button">+ New project</button>
+    </div>
+</div>
+
+<div class="panel">
+    <div class="panel-header">ALL PROJECTS</div>
+    <div class="projects-grid" id="projects-grid">
+        {% if data and data.projects %}
+            {% for p in data.projects %}
+            <div class="project-card{% if p.id == data.active_project_id %} active{% endif %}"
+                 data-project-id="{{ p.id }}"
+                 data-project-name="{{ p.name }}"
+                 {% if p.last_tab %}data-last-tab="{{ p.last_tab }}"{% endif %}>
+                <div class="project-card-header">
+                    <span class="project-name" data-action="rename" data-project-id="{{ p.id }}">{{ p.name }}</span>
+                    {% if p.id == data.active_project_id %}
+                    <span class="badge badge-success">ACTIVE</span>
+                    {% endif %}
+                </div>
+                <div class="project-card-body">
+                    <div class="project-row">
+                        <span class="dim">Primary:</span>
+                        <span class="mono">{{ p.primary_filename or '(none)' }}</span>
+                        {% if p.primary_mode %}<span class="badge badge-dim">{{ p.primary_mode|upper }}</span>{% endif %}
+                    </div>
+                    <div class="project-row">
+                        <span class="dim">Members:</span>
+                        <span>{{ p.member_count }}</span>
+                    </div>
+                    <div class="project-row">
+                        <span class="dim">Last opened:</span>
+                        <span class="mono fs-11" data-epoch="{{ p.last_opened }}">{{ p.last_opened }}</span>
+                    </div>
+                    {% if p.tags %}
+                    <div class="project-row">
+                        {% for t in p.tags %}
+                        <span class="badge badge-tag">{{ t }}</span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="project-card-actions">
+                    <button class="btn btn-sm btn-primary" data-action="open" data-project-id="{{ p.id }}" type="button">OPEN</button>
+                    <button class="btn btn-sm" data-action="rename" data-project-id="{{ p.id }}" type="button">RENAME</button>
+                    <button class="btn btn-sm" data-action="tag" data-project-id="{{ p.id }}" type="button">TAGS</button>
+                    <button class="btn btn-sm btn-danger" data-action="delete" data-project-id="{{ p.id }}" type="button">DELETE</button>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="empty-msg">
+                No projects yet. Open a binary and add a note (or click <strong>+ New project</strong>) to get started.
+            </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="panel" id="importable-archives-panel">
+    <div class="panel-header">
+        IMPORTABLE ARCHIVES
+        <span class="dim fs-11" id="importable-archives-count"></span>
+        <button class="btn btn-sm" type="button" id="btn-rescan-archives" style="float:right">RESCAN</button>
+    </div>
+    <div id="importable-archives-list">
+        <div class="empty-msg dim">Scanning output directories…</div>
+    </div>
+</div>
+
+<!-- Modal: New project -->
+<div class="modal hidden" id="modal-new-project">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>NEW PROJECT</h3>
+            <button class="btn btn-sm" type="button" data-action="close-modal" data-modal="modal-new-project">×</button>
+        </div>
+        <div class="modal-body">
+            <label class="dim">Project name</label>
+            <input type="text" id="new-project-name" class="input-search" placeholder="my_investigation">
+            <label class="dim">Tags (comma-separated)</label>
+            <input type="text" id="new-project-tags" class="input-search" placeholder="malware, stealer">
+            <div class="modal-error hidden" id="new-project-error"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn" type="button" data-action="close-modal" data-modal="modal-new-project">Cancel</button>
+            <button class="btn btn-primary" type="button" id="btn-create-project-confirm">CREATE</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/dashboard/static/projects.js"></script>
+{% endblock %}

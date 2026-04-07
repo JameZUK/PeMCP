@@ -300,13 +300,21 @@ class TestSha256Validation:
 # ---------------------------------------------------------------------------
 
 class TestCacheUpdateSessionData:
-    def test_update_notes(self, cache, sample_pe_data):
+    """Cache wrapper v2: user-mutable state lives in project overlays, not the
+    cache. ``update_session_data`` no-ops on v2 wrappers (returns True silently),
+    and ``get_session_metadata`` returns empty fields. Legacy v1 wrappers are
+    only encountered during the migration path in ProjectManager._migrate_*."""
+
+    def test_update_v2_wrapper_is_noop(self, cache, sample_pe_data):
         sha = "a" * 64
         cache.put(sha, sample_pe_data, "/test.exe")
+        # Returns True (silently no-ops) for v2 wrappers
         assert cache.update_session_data(sha, notes=[{"id": "n1", "text": "test"}]) is True
+        # And the wrapper carries no user-state fields
         meta = cache.get_session_metadata(sha)
-        assert len(meta["notes"]) == 1
-        assert meta["notes"][0]["id"] == "n1"
+        assert meta is not None
+        assert meta["notes"] == []
+        assert meta["_cache_format_version"] == 2
 
     def test_update_nonexistent_entry(self, cache):
         assert cache.update_session_data("b" * 64, notes=[]) is False

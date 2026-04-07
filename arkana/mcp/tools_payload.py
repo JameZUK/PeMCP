@@ -15,6 +15,7 @@ from arkana.mcp._progress_bridge import ProgressBridge
 from arkana.mcp._refinery_helpers import (
     _get_data_from_hex_or_file, _bytes_to_hex, _safe_decode,
     _write_output_and_register_artifact,
+    _register_artifact_directory,
 )
 
 
@@ -220,6 +221,15 @@ async def extract_steganography(
                 f"Steganographic payload: {findings[i].get('type', 'unknown')} ({len(raw)} bytes)",
             )
             artifacts.append(artifact_meta)
+        try:
+            bundle = await asyncio.to_thread(
+                _register_artifact_directory,
+                output_path, "extract_steganography",
+                f"Steganographic payloads ({len(artifacts)} extracted)",
+            )
+            artifacts.append({"_bundle": True, **bundle})
+        except Exception as e:
+            logger.debug("Bundle artifact registration skipped: %s", e)
         response["artifacts"] = artifacts
 
     return await _check_mcp_response_size(ctx, response, "extract_steganography")
@@ -468,6 +478,15 @@ async def parse_custom_container(
                 f"Container chunk {i} ({len(raw)} bytes)",
             )
             artifacts.append(artifact_meta)
+        try:
+            bundle = await asyncio.to_thread(
+                _register_artifact_directory,
+                output_path, "parse_custom_container",
+                f"Custom container chunks ({len(artifacts)} extracted)",
+            )
+            artifacts.append({"_bundle": True, **bundle})
+        except Exception as e:
+            logger.debug("Bundle artifact registration skipped: %s", e)
         response["artifacts"] = artifacts
 
     return await _check_mcp_response_size(ctx, response, "parse_custom_container")

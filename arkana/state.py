@@ -283,6 +283,13 @@ class AnalyzerState:
         # Emulation Inspect Sessions (managed by tools_emulate_inspect._EmulationSessionManager)
         self._emulation_manager = None  # Lazily created _EmulationSessionManager
 
+        # Active project binding. ``Project`` (real, on-disk) or
+        # ``ScratchProject`` (in-memory, promoted on first state mutation).
+        # None when no file has been opened yet. See ``arkana/projects.py``.
+        self.active_project: Optional[Any] = None
+        self._project_lock = threading.RLock()
+        self._overlay_dirty: bool = False
+
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Thread-safe read of a background task."""
         with self._task_lock:
@@ -483,7 +490,9 @@ class AnalyzerState:
                 note["evidence"] = list(evidence)[:MAX_HYPOTHESIS_EVIDENCE] if evidence else []
                 note["superseded_by"] = None
             self.notes.append(note)
-            return dict(note)
+            result = dict(note)
+        self._maybe_promote_scratch()
+        return result
 
     def get_notes(self, category: Optional[str] = None,
                   address: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -613,26 +622,104 @@ class AnalyzerState:
 
     def register_artifact(self, path: str, sha256: str, md5: str,
                           size: int, source_tool: str, description: str,
-                          detected_type: Optional[str] = None) -> Dict[str, Any]:
-        """Thread-safe artifact registration. Returns the new artifact dict."""
+                          detected_type: Optional[str] = None,
+                          *,
+                          kind: str = "file",
+                          original_path: Optional[str] = None,
+                          project_relative: Optional[str] = None,
+                          members: Optional[List[Dict[str, Any]]] = None,
+                          tags: Optional[List[str]] = None,
+                          notes: str = "") -> Dict[str, Any]:
+        """Thread-safe artifact registration. Returns the new artifact dict.
+
+        Schema fields:
+            id, path, sha256, md5, size, source_tool, description, detected_type,
+            kind ('file'|'directory'), original_path, project_relative,
+            tags, notes, created_at, modified_at.
+            For kind='directory': members[] (list of {relative, size, sha256}),
+            member_count, total_size.
+        """
         now = datetime.datetime.now(datetime.timezone.utc)
+        now_iso = now.isoformat()
         with self._artifacts_lock:
             if len(self.artifacts) >= MAX_ARTIFACTS:
                 raise RuntimeError(f"Artifacts limit reached ({MAX_ARTIFACTS}). Clear old artifacts before registering new ones.")
             self._artifacts_counter += 1
             artifact: Dict[str, Any] = {
                 "id": f"art_{int(now.timestamp() * 1000000)}_{self._artifacts_counter}",
+                "kind": kind,
                 "path": path,
+                "original_path": original_path or path,
+                "project_relative": project_relative,
                 "sha256": sha256,
                 "md5": md5,
                 "size": size,
                 "source_tool": source_tool,
                 "description": description,
                 "detected_type": detected_type,
-                "created_at": now.isoformat(),
+                "tags": list(tags or []),
+                "notes": notes or "",
+                "created_at": now_iso,
+                "modified_at": now_iso,
             }
+            if kind == "directory":
+                mlist = list(members or [])
+                artifact["members"] = mlist
+                artifact["member_count"] = len(mlist)
+                artifact["total_size"] = sum(int(m.get("size", 0)) for m in mlist)
             self.artifacts.append(artifact)
-            return dict(artifact)
+            result = dict(artifact)
+        self._maybe_promote_scratch()
+        return result
+
+    def update_artifact_metadata(self, artifact_id: str, *,
+                                 description: Optional[str] = None,
+                                 tags: Optional[List[str]] = None,
+                                 notes: Optional[str] = None,
+                                 replace_tags: bool = False) -> Optional[Dict[str, Any]]:
+        """Thread-safe partial update of artifact metadata.
+
+        - description: replaces if not None
+        - tags: appended (deduped) unless replace_tags=True, in which case replaces
+        - notes: replaces if not None
+        Updates modified_at timestamp on any change. Returns the updated dict
+        or None if not found.
+        """
+        if description is None and tags is None and notes is None:
+            return None
+        with self._artifacts_lock:
+            for art in self.artifacts:
+                if art.get("id") == artifact_id:
+                    if description is not None:
+                        art["description"] = description
+                    if notes is not None:
+                        art["notes"] = notes
+                    if tags is not None:
+                        if replace_tags:
+                            art["tags"] = list(dict.fromkeys(tags))
+                        else:
+                            existing = list(art.get("tags") or [])
+                            seen = set(existing)
+                            for t in tags:
+                                if t not in seen:
+                                    existing.append(t)
+                                    seen.add(t)
+                            art["tags"] = existing
+                    art["modified_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+                    updated = dict(art)
+                    self._maybe_promote_scratch()
+                    return updated
+        return None
+
+    def delete_artifact(self, artifact_id: str) -> bool:
+        """Thread-safe artifact removal by ID. Returns True if found and removed."""
+        with self._artifacts_lock:
+            for i, art in enumerate(self.artifacts):
+                if art.get("id") == artifact_id:
+                    self.artifacts.pop(i)
+                    self._maybe_promote_scratch()
+                    return True
+        return False
 
     def get_artifacts(self, source_tool: Optional[str] = None) -> List[Dict[str, Any]]:
         """Thread-safe filtered read of artifacts. Returns copies."""
@@ -666,7 +753,9 @@ class AnalyzerState:
             if addr not in self.renames["functions"] and len(self.renames["functions"]) >= MAX_RENAMES:
                 raise ValueError(f"Maximum rename limit ({MAX_RENAMES}) reached for functions")
             self.renames["functions"][addr] = new_name
-            return {"address": addr, "new_name": new_name, "type": "function"}
+            entry = {"address": addr, "new_name": new_name, "type": "function"}
+        self._maybe_promote_scratch()
+        return entry
 
     def rename_variable(self, func_addr: str, old_name: str, new_name: str) -> Dict[str, Any]:
         """Thread-safe variable rename within function scope."""
@@ -681,7 +770,9 @@ class AnalyzerState:
             if faddr not in self.renames["variables"]:
                 self.renames["variables"][faddr] = {}
             self.renames["variables"][faddr][old_name] = new_name
-            return {"function_address": faddr, "old_name": old_name, "new_name": new_name, "type": "variable"}
+            entry = {"function_address": faddr, "old_name": old_name, "new_name": new_name, "type": "variable"}
+        self._maybe_promote_scratch()
+        return entry
 
     def add_label(self, address: str, name: str, category: str = "general") -> Dict[str, Any]:
         """Thread-safe label creation at an address."""
@@ -691,7 +782,9 @@ class AnalyzerState:
             if addr not in self.renames["labels"] and len(self.renames["labels"]) >= MAX_RENAMES:
                 raise ValueError(f"Maximum rename limit ({MAX_RENAMES}) reached for labels")
             self.renames["labels"][addr] = {"name": name, "category": category, "created_at": now}
-            return {"address": addr, "name": name, "category": category, "type": "label"}
+            entry = {"address": addr, "name": name, "category": category, "type": "label"}
+        self._maybe_promote_scratch()
+        return entry
 
     def get_renames(self, rename_type: Optional[str] = None) -> Dict[str, Any]:
         """Thread-safe deep read of renames, optionally filtered by type."""
@@ -713,12 +806,16 @@ class AnalyzerState:
         addr = address.lower()
         with self._renames_lock:
             if rename_type == "function":
-                return self.renames["functions"].pop(addr, None) is not None
+                removed = self.renames["functions"].pop(addr, None) is not None
             elif rename_type == "variable":
-                return self.renames["variables"].pop(addr, None) is not None
+                removed = self.renames["variables"].pop(addr, None) is not None
             elif rename_type == "label":
-                return self.renames["labels"].pop(addr, None) is not None
-            return False
+                removed = self.renames["labels"].pop(addr, None) is not None
+            else:
+                removed = False
+        if removed:
+            self._maybe_promote_scratch()
+        return removed
 
     def get_all_renames_snapshot(self) -> Dict[str, Any]:
         """Thread-safe snapshot for cache persistence."""
@@ -757,7 +854,9 @@ class AnalyzerState:
                 "size": size,
                 "created_at": now,
             }
-            return {"name": name, "fields": fields, "size": size, "type": "struct", "created_at": now}
+            entry = {"name": name, "fields": fields, "size": size, "type": "struct", "created_at": now}
+        self._maybe_promote_scratch()
+        return entry
 
     def create_enum(self, name: str, values: dict, size: int = 4) -> Dict[str, Any]:
         """Thread-safe enum creation. Returns the enum definition."""
@@ -768,7 +867,9 @@ class AnalyzerState:
                 "size": size,
                 "created_at": now,
             }
-            return {"name": name, "values": values, "size": size, "type": "enum", "created_at": now}
+            entry = {"name": name, "values": values, "size": size, "type": "enum", "created_at": now}
+        self._maybe_promote_scratch()
+        return entry
 
     def get_custom_type(self, name: str) -> Optional[Dict[str, Any]]:
         """Thread-safe lookup of a custom type by name."""
@@ -813,11 +914,15 @@ class AnalyzerState:
         with self._types_lock:
             if name in self.custom_types["structs"]:
                 del self.custom_types["structs"][name]
-                return True
-            if name in self.custom_types["enums"]:
+                removed = True
+            elif name in self.custom_types["enums"]:
                 del self.custom_types["enums"][name]
-                return True
-        return False
+                removed = True
+            else:
+                removed = False
+        if removed:
+            self._maybe_promote_scratch()
+        return removed
 
     def get_all_types_snapshot(self) -> Dict[str, Any]:
         """Thread-safe snapshot for cache persistence (deep copies mutable nested data)."""
@@ -856,7 +961,9 @@ class AnalyzerState:
             if len(self.triage_status) >= MAX_TRIAGE_STATUS and addr not in self.triage_status:
                 raise ValueError(f"Maximum triage status limit ({MAX_TRIAGE_STATUS}) reached")
             self.triage_status[addr] = status
-            return {"address": addr, "status": status}
+            entry = {"address": addr, "status": status}
+        self._maybe_promote_scratch()
+        return entry
 
     def get_triage_status(self, address: Optional[str] = None) -> Any:
         """Thread-safe read of triage status."""
@@ -1027,6 +1134,234 @@ class AnalyzerState:
         # Set cancel events outside the lock — worker finally blocks acquire it
         for cancel in cancel_events:
             cancel.set()
+
+    # ------------------------------------------------------------------
+    #  Project binding & overlay
+    # ------------------------------------------------------------------
+
+    def bind_project(self, project: Any) -> None:
+        """Bind *project* to this state. Replaces any existing binding."""
+        with self._project_lock:
+            self.active_project = project
+            self._overlay_dirty = False
+
+    def unbind_project(self) -> None:
+        """Clear the active project binding without flushing."""
+        with self._project_lock:
+            self.active_project = None
+            self._overlay_dirty = False
+
+    def get_active_project(self) -> Optional[Any]:
+        """Thread-safe read of the active project."""
+        with self._project_lock:
+            return self.active_project
+
+    def mark_overlay_dirty(self) -> None:
+        """Mark the user-mutable overlay as having unsaved changes."""
+        with self._project_lock:
+            self._overlay_dirty = True
+
+    def is_overlay_dirty(self) -> bool:
+        with self._project_lock:
+            return self._overlay_dirty
+
+    def snapshot_overlay(self) -> Dict[str, Any]:
+        """Return a snapshot of all user-mutable state for persistence to a project overlay.
+
+        Includes notes, tool history, artifacts, renames, custom types, triage
+        flags, coverage data, and any imported sandbox report. Excludes derived
+        analysis (cached enrichment, PE headers, CFG) — that lives in the
+        SHA256 cache.
+        """
+        return {
+            "notes": self.get_all_notes_snapshot(),
+            "tool_history": self.get_tool_history_snapshot(),
+            "artifacts": self.get_all_artifacts_snapshot(),
+            "renames": self.get_all_renames_snapshot(),
+            "custom_types": self.get_all_types_snapshot(),
+            "triage_status": self.get_all_triage_snapshot(),
+            "_cached_coverage": self._cached_coverage,
+            "_sandbox_report": self._sandbox_report,
+        }
+
+    def apply_overlay(self, overlay: Dict[str, Any]) -> None:
+        """Restore user-mutable state from an overlay dict.
+
+        Acquires per-field locks to prevent concurrent readers from seeing
+        partial state during restoration. Counter values are recomputed from
+        the highest existing ID suffix to prevent collisions on subsequent
+        creates. The ``_overlay_meta`` key (if present) is ignored.
+        """
+        if not overlay:
+            return
+
+        # Notes
+        notes = overlay.get("notes") or []
+        with self._notes_lock:
+            self.notes = list(notes)
+            max_suffix = 0
+            for n in self.notes:
+                nid = n.get("id", "")
+                if isinstance(nid, str) and "_" in nid:
+                    try:
+                        max_suffix = max(max_suffix, int(nid.rsplit("_", 1)[-1]))
+                    except (ValueError, IndexError):
+                        pass
+            self._notes_counter = max_suffix
+
+        # Tool history → previous_session_history (per existing convention
+        # in tools_pe.open_file: restored history isn't appended to the
+        # current session deque, it's surfaced separately).
+        history = overlay.get("tool_history") or []
+        if history:
+            self.previous_session_history = list(history)[:MAX_TOOL_HISTORY]
+
+        # Artifacts
+        artifacts = overlay.get("artifacts") or []
+        with self._artifacts_lock:
+            self.artifacts = list(artifacts)
+            max_art_suffix = 0
+            for a in self.artifacts:
+                aid = a.get("id", "")
+                if isinstance(aid, str) and "_" in aid:
+                    try:
+                        max_art_suffix = max(max_art_suffix, int(aid.rsplit("_", 1)[-1]))
+                    except (ValueError, IndexError):
+                        pass
+            self._artifacts_counter = max_art_suffix
+
+        # Renames
+        renames = overlay.get("renames")
+        if isinstance(renames, dict):
+            with self._renames_lock:
+                self.renames = {
+                    "functions": dict(renames.get("functions") or {}),
+                    "variables": {k: dict(v) for k, v in (renames.get("variables") or {}).items()},
+                    "labels": {k: dict(v) for k, v in (renames.get("labels") or {}).items()},
+                }
+
+        # Custom types
+        types = overlay.get("custom_types")
+        if isinstance(types, dict):
+            with self._types_lock:
+                self.custom_types = {
+                    "structs": dict(types.get("structs") or {}),
+                    "enums": dict(types.get("enums") or {}),
+                }
+
+        # Triage flags
+        triage = overlay.get("triage_status")
+        if isinstance(triage, dict):
+            with self._triage_lock:
+                self.triage_status = dict(triage)
+
+        # Coverage / sandbox
+        if overlay.get("_cached_coverage") is not None:
+            self._cached_coverage = overlay["_cached_coverage"]
+        if overlay.get("_sandbox_report") is not None:
+            self._sandbox_report = overlay["_sandbox_report"]
+
+        with self._project_lock:
+            self._overlay_dirty = False
+
+    def _maybe_promote_scratch(self) -> None:
+        """Promote ``self.active_project`` if it is currently a ScratchProject.
+
+        Called from mutation methods (add_note, register_artifact, rename_*,
+        set_triage_status, create_struct, create_enum) immediately *after* the
+        mutation succeeds. Marks the overlay dirty regardless of whether
+        promotion fired (real projects also need their dirty flag set).
+
+        Promotion failures degrade gracefully: the mutation has already
+        succeeded in memory and a warning is logged. The next mutation will
+        retry promotion. The state's data is never lost.
+        """
+        with self._project_lock:
+            self._overlay_dirty = True
+            project = self.active_project
+            if project is None:
+                return
+            # Real projects: nothing more to do — flush is handled by the
+            # background save loop or close_file.
+            if not getattr(project, "is_scratch", False):
+                return
+
+        # Lazy import to avoid circular dependencies at module load time.
+        try:
+            from arkana.projects import project_manager
+        except ImportError:
+            logger.warning("projects module unavailable; cannot promote scratch project")
+            return
+
+        # Build a name for the new project. First try the descriptive
+        # auto_name_sample helper (uses pe_data + triage + notes); if that
+        # comes back empty (enrichment hasn't run yet), fall back to
+        # filename_stem + sha8.
+        try:
+            scratch = project
+            primary_sha = scratch.primary_sha256
+            suggested = None
+            if primary_sha and primary_sha in scratch.members:
+                member = scratch.members[primary_sha]
+                # Try the rich auto-name helper first
+                try:
+                    from arkana.mcp.tools_workflow import _build_sample_slug
+                    info = _build_sample_slug(
+                        pe_data=self.pe_data or {},
+                        triage=self._cached_triage or {},
+                        notes=self.get_notes(),
+                        file_size_fallback=member.size or None,
+                    )
+                    rich_slug = info.get("slug") or ""
+                    # _build_sample_slug returns "sample_<sha8>" when there's
+                    # no signal. We want to fall through to filename-based
+                    # naming in that case so the project name is recognisable.
+                    if rich_slug and not rich_slug.startswith("sample_"):
+                        # Sanitise to fit PROJECT_NAME_RE
+                        import re as _re
+                        rich_slug = _re.sub(r"[^\w\-. ]", "_", rich_slug)[:80]
+                        suggested = f"{rich_slug}_{primary_sha[:8]}"
+                except Exception:
+                    suggested = None
+                if not suggested:
+                    stem = os.path.splitext(member.original_filename)[0] or "sample"
+                    import re as _re
+                    stem = _re.sub(r"[^\w\-. ]", "_", stem)[:80]
+                    suggested = f"{stem}_{primary_sha[:8]}"
+            real_project = project_manager.promote_scratch(scratch, suggested_name=suggested)
+        except Exception as e:
+            logger.warning("Failed to promote scratch project: %s", e, exc_info=True)
+            return
+
+        with self._project_lock:
+            self.active_project = real_project
+            # Snapshot of current state goes straight to the new overlay so
+            # nothing is lost between scratch existence and the next flush.
+            try:
+                if real_project.manifest.last_active_sha256:
+                    overlay = self.snapshot_overlay()
+                    real_project.save_overlay(real_project.manifest.last_active_sha256, overlay)
+                    self._overlay_dirty = False
+            except Exception as e:
+                logger.warning("Failed to flush overlay after promotion: %s", e, exc_info=True)
+
+    def flush_overlay(self) -> bool:
+        """Persist current overlay to the active project (if any). Returns True on flush."""
+        with self._project_lock:
+            project = self.active_project
+            if project is None or getattr(project, "is_scratch", False):
+                return False
+            sha = project.manifest.last_active_sha256
+            if not sha:
+                return False
+            try:
+                overlay = self.snapshot_overlay()
+                project.save_overlay(sha, overlay)
+                self._overlay_dirty = False
+                return True
+            except Exception as e:
+                logger.warning("Failed to flush overlay for %s: %s", sha[:12], e)
+                return False
 
     def close_pe(self):
         with self._pe_lock:

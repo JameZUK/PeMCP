@@ -43,7 +43,13 @@ except RuntimeError:
     CACHE_DIR = Path("/tmp") / ".arkana" / "cache"
 META_FILE = CACHE_DIR / "meta.json"
 DEFAULT_MAX_CACHE_SIZE_MB = 500
-CACHE_FORMAT_VERSION = 1
+# v2 (Arkana projects): user-mutable state (notes, artifacts, renames,
+# custom_types, triage_status) lives in project overlays, not the cache.
+# v1 wrappers are still readable by ``get()`` and are migrated to v2 +
+# projects on first run by ``arkana.projects.ProjectManager``.
+CACHE_FORMAT_VERSION = 2
+# Versions accepted by ``get()`` (backward compat with v1 during migration).
+_CACHE_FORMAT_READABLE = {1, 2}
 
 
 _SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
@@ -216,7 +222,7 @@ class AnalysisCache:
         # --- Validate cache metadata (no lock needed, local data) ---
         cmeta = wrapper.get("_cache_meta", {})
 
-        if cmeta.get("cache_format_version") != CACHE_FORMAT_VERSION:
+        if cmeta.get("cache_format_version") not in _CACHE_FORMAT_READABLE:
             logger.info("Cache format mismatch for %s..., ignoring.", sha256[:12])
             return None
 
@@ -294,11 +300,16 @@ class AnalysisCache:
         """
         Store a ``pe_data`` dict in the cache.  Returns True on success.
 
-        Optionally includes session notes, tool history, and artifacts
-        alongside the analysis data.  The gzip compression runs outside
-        the lock to avoid blocking concurrent callers during the
-        (potentially slow) compression step.
+        v2 cache format: user-mutable state (notes, artifacts, renames,
+        custom types, triage flags) is **not** stored here — it lives in
+        project overlays. The user-state parameters are accepted for
+        backward compatibility but ignored when writing v2 wrappers.
+        The gzip compression runs outside the lock to avoid blocking
+        concurrent callers during the (potentially slow) compression step.
         """
+        # Suppress unused-arg warnings for the now-ignored user-state params.
+        del notes, tool_history, artifacts, renames, custom_types, triage_status
+
         if not self.enabled:
             return False
 
@@ -323,12 +334,6 @@ class AnalysisCache:
                 ],
             },
             "pe_data": {k: v for k, v in pe_data.items() if k != "filepath"},
-            "notes": notes or [],
-            "tool_history": tool_history or [],
-            "artifacts": artifacts or [],
-            "renames": renames or {"functions": {}, "variables": {}, "labels": {}},
-            "custom_types": custom_types or {"structs": {}, "enums": {}},
-            "triage_status": triage_status or {},
         }
 
         # Write compressed JSON OUTSIDE the lock — this can be slow for
@@ -368,56 +373,14 @@ class AnalysisCache:
             logger.error("Cache serialization error for %s...: %s", sha256[:12], e)
             return False
 
-        _SESSION_FIELDS = ("notes", "tool_history", "artifacts", "renames", "custom_types", "triage_status")
-
+        # v2 cache: user state lives in project overlays, not the cache
+        # wrapper, so there is no session-data merge race to worry about.
+        # Concurrent put() calls just race on the final atomic replace,
+        # which is the intended last-writer-wins semantics for derived data.
         with self._lock:
             try:
-                # Check if session data was updated during our write
-                try:
-                    current_mtime = entry_path.stat().st_mtime if entry_path.exists() else None
-                except OSError:
-                    current_mtime = None
-
-                if current_mtime is not None and current_mtime != pre_write_mtime:
-                    # Session data was updated during our write — merge it
-                    try:
-                        with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                            on_disk = json.load(f)
-                        with gzip.open(tmp, "rt", encoding="utf-8") as f:
-                            our_data = json.load(f)
-                        for field in _SESSION_FIELDS:
-                            if field in on_disk:
-                                our_data[field] = on_disk[field]
-                        # Write merged data to a NEW temp file (not tmp itself)
-                        # to avoid corrupting tmp if the write fails mid-way.
-                        merge_fd = tempfile.NamedTemporaryFile(
-                            dir=str(entry_dir), suffix='.tmp', delete=False,
-                        )
-                        merge_tmp = Path(merge_fd.name)
-                        try:
-                            merge_fd.close()
-                            with gzip.open(merge_tmp, "wt", encoding="utf-8") as gz:
-                                json.dump(our_data, gz)
-                            # Replace the original tmp with the merged version
-                            merge_tmp.replace(tmp)
-                        except Exception:
-                            merge_tmp.unlink(missing_ok=True)
-                            raise
-                    except Exception as e:
-                        # Merge failed — keep the on-disk version (which has session data)
-                        # rather than clobbering it with our unmerged analysis-only data.
-                        logger.warning(
-                            "Failed to merge session data during cache put: %s. "
-                            "Keeping existing on-disk entry to preserve session data.", e
-                        )
-                        tmp.unlink(missing_ok=True)
-                        tmp = None  # signal to skip replace
-
-                if tmp is None:
-                    # Merge failed — on-disk entry preserved with session data.
-                    # Skip metadata update since we didn't write a new entry.
-                    return True
-
+                # pre_write_mtime kept for log/diagnostic purposes only.
+                _ = pre_write_mtime
                 tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
 
                 file_size = entry_path.stat().st_size
@@ -512,10 +475,13 @@ class AnalysisCache:
     # ------------------------------------------------------------------
 
     def get_session_metadata(self, sha256: str) -> Optional[Dict[str, Any]]:
-        """Read notes and tool_history from a cache entry without loading pe_data.
+        """Read user-mutable state from a cache entry without loading pe_data.
 
-        Returns ``{"notes": [...], "tool_history": [...]}`` or ``None`` on
-        miss / error.
+        v2 cache wrappers do **not** contain user state (it lives in project
+        overlays). This method only returns non-empty data when the on-disk
+        wrapper is v1 — used by the migration path in
+        ``arkana.projects.ProjectManager`` to extract legacy state into
+        project overlays. Returns ``None`` on miss / read error.
         """
         if not self.enabled:
             return None
@@ -534,6 +500,7 @@ class AnalysisCache:
             return None
 
         return {
+            "_cache_format_version": (wrapper.get("_cache_meta") or {}).get("cache_format_version"),
             "notes": wrapper.get("notes", []),
             "tool_history": wrapper.get("tool_history", []),
             "artifacts": wrapper.get("artifacts", []),
@@ -549,16 +516,30 @@ class AnalysisCache:
                             renames: Optional[dict] = None,
                             custom_types: Optional[dict] = None,
                             triage_status: Optional[dict] = None) -> bool:
-        """Update notes, tool_history, artifacts, renames, custom_types, and/or triage_status for an existing cache entry.
+        """**DEPRECATED for v2.** Update user-mutable state for an existing entry.
 
-        Reads the gzip wrapper, replaces the specified keys, and writes
-        it back atomically.  Returns True on success.
+        v2 cache: user state is stored in project overlays via
+        ``Project.save_overlay``, not in the cache wrapper. This method is a
+        no-op when the wrapper is v2 and is retained only so that legacy
+        callers (and the v1 migration path) keep working.
         """
         if not self.enabled:
             return False
 
         sha256 = _validate_sha256(sha256)
         entry_path = self._entry_path(sha256)
+        if not entry_path.exists():
+            return False
+        # Quick peek: v2 wrappers don't carry user state, so we no-op silently.
+        # Only v1 wrappers (legacy) need the read-modify-write cycle below.
+        try:
+            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
+                head = json.load(f)
+            cmeta = (head.get("_cache_meta") or {}) if isinstance(head, dict) else {}
+            if cmeta.get("cache_format_version") == CACHE_FORMAT_VERSION:
+                return True
+        except (gzip.BadGzipFile, json.JSONDecodeError, OSError):
+            return False
 
         # Hold lock through the full read-modify-write cycle to prevent
         # concurrent updates from clobbering each other (e.g. add_note +
