@@ -236,10 +236,29 @@ function showToast(message, type) {
         }
     }
 
+    var lastActiveProjectId = null;
+
     function handleStateUpdate(data) {
         // Cache state on window so saveDashboardState() can find the active
         // project without an extra round-trip.
+        var prevState = window._arkanaState;
         window._arkanaState = data;
+
+        // Detect active-project transition. The backend's bind_project()
+        // happens many seconds before the new binary's filepath/sha256 are
+        // updated by open_file_tool — during that window the SSE state is a
+        // hybrid: new project + old filename. We surface the transition with
+        // an "(opening…)" tag and notify subscribers (e.g. projects.js's
+        // card grid) that the active id changed.
+        var proj = data.active_project;
+        var newProjId = proj ? (proj.id || null) : null;
+        if (newProjId !== lastActiveProjectId) {
+            document.dispatchEvent(new CustomEvent('arkana-active-project-changed', {
+                detail: {previous: lastActiveProjectId, current: newProjId},
+            }));
+            lastActiveProjectId = newProjId;
+        }
+
         // Update nav filename indicator. When an on-disk project is bound,
         // prefix the filename with "▶ {project_name} / " so the user always
         // sees which project they're working in.
@@ -247,7 +266,14 @@ function showToast(message, type) {
         if (fnEl) {
             var oldText = fnEl.textContent;
             var label = data.filename || '';
-            var proj = data.active_project;
+            // Transition window: openProject() in projects.js sets this flag
+            // when the user clicks OPEN; cleared on the post-redirect page
+            // load. While set, we hide the stale filename so the nav reads
+            // "▶ new_project (opening…)" instead of the misleading
+            // "▶ new_project / old_binary.exe".
+            if (window._arkanaOpening && proj && proj.id) {
+                label = '(opening\u2026)';
+            }
             if (proj && proj.name && !proj.scratch) {
                 label = '\u25B6 ' + proj.name + (label ? ' / ' + label : '');
             }

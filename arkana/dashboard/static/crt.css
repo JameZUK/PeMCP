@@ -3088,6 +3088,8 @@ button.view-toggle-btn.active {
 
 .projects-grid {
     display: grid;
+    /* Min 280px, max 1fr — but each cell is also constrained by min-width: 0
+       below so its flex children (the header) can shrink and wrap. */
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 12px;
     padding: 12px;
@@ -3097,6 +3099,11 @@ button.view-toggle-btn.active {
     background: rgba(0, 0, 0, 0.3);
     padding: 10px 12px;
     transition: border-color 0.15s;
+    /* Without min-width: 0 the grid item refuses to shrink below its
+       intrinsic content width, which causes long auto-generated project
+       names to push the card past its grid track. */
+    min-width: 0;
+    overflow: hidden;
 }
 .project-card:hover {
     border-color: var(--primary);
@@ -3108,16 +3115,30 @@ button.view-toggle-btn.active {
 .project-card-header {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;  /* badge top-aligned when name wraps to 2+ lines */
+    gap: 6px;
     margin-bottom: 8px;
+    min-width: 0;  /* allow flex children to shrink below content width */
 }
 .project-name {
     font-weight: bold;
     color: var(--primary);
     cursor: pointer;
+    /* Auto-generated slugs (e.g. "gui_packed_miner_antidbg_..._f841ed51")
+       can run 80+ chars with no whitespace. Wrap at any character so the
+       name stays inside the card rather than overflowing horizontally. */
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: 1.25;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 .project-name:hover {
     text-decoration: underline;
+}
+.project-card-header .badge {
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 .project-card-body {
     margin-bottom: 8px;
@@ -3125,6 +3146,8 @@ button.view-toggle-btn.active {
 .project-row {
     margin: 4px 0;
     font-size: 12px;
+    /* Long primary filenames also need to wrap rather than overflow. */
+    overflow-wrap: anywhere;
 }
 .project-card-actions {
     display: flex;
@@ -3179,6 +3202,19 @@ button.view-toggle-btn.active {
     padding: 1px 6px;
     font-size: 10px;
     font-weight: bold;
+}
+.badge-opening {
+    background: rgba(255, 200, 0, 0.2);
+    border: 1px solid rgba(255, 200, 0, 0.7);
+    color: #fc0;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: bold;
+    animation: opening-pulse 1.2s ease-in-out infinite;
+}
+@keyframes opening-pulse {
+    0%, 100% { opacity: 0.6; }
+    50%      { opacity: 1.0; }
 }
 .badge-tag {
     background: rgba(0, 200, 200, 0.2);

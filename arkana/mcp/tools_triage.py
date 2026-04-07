@@ -1878,9 +1878,10 @@ def _auto_save_triage_notes(triage_report: Dict[str, Any],
 
     ``full_suspicious_imports`` should be the pre-pagination list so that
     CRITICAL imports beyond the page limit are still captured in notes.
-    """
-    from arkana.mcp.tools_notes import _persist_notes_to_cache
 
+    Notes are persisted via the project overlay flush daemon — the cache
+    wrapper v2 strips user state, so no explicit cache write is needed.
+    """
     # Check if triage notes already exist (idempotent)
     existing = state.get_notes(category="tool_result")
     if any(n.get("content", "").startswith("Triage:") for n in existing):
@@ -1964,8 +1965,6 @@ def _auto_save_triage_notes(triage_report: Dict[str, Any],
                 category="tool_result",
                 tool_name="get_triage_report",
             )
-
-    _persist_notes_to_cache()
 
 
 # ===================================================================

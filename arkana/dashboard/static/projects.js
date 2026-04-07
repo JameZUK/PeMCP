@@ -206,12 +206,58 @@
         );
     }
 
+    var OPEN_REDIRECT_DELAY_MS = 800;
+
+    function applyOptimisticActive(pid) {
+        // Move the .active marker (and OPENING badge) to the clicked card
+        // immediately so the user gets visual feedback. The real source of
+        // truth re-applies on the next reloadGrid() — backend SSE drives the
+        // arkana-active-project-changed event we listen for below.
+        var allCards = grid.querySelectorAll(".project-card");
+        for (var i = 0; i < allCards.length; i++) {
+            var c = allCards[i];
+            var cpid = c.getAttribute("data-project-id");
+            // Strip any prior OPENING/ACTIVE badge from sibling cards
+            var existingBadge = c.querySelector(".badge-opening, .badge-success");
+            if (cpid === pid) {
+                c.classList.add("active");
+                if (existingBadge) existingBadge.remove();
+                var header = c.querySelector(".project-card-header");
+                if (header) {
+                    var b = document.createElement("span");
+                    b.className = "badge badge-opening";
+                    b.textContent = "OPENING\u2026";
+                    header.appendChild(b);
+                }
+                // Disable buttons on the clicked card to prevent double-clicks.
+                var btns = c.querySelectorAll(".project-card-actions button");
+                for (var j = 0; j < btns.length; j++) {
+                    btns[j].disabled = true;
+                }
+            } else {
+                c.classList.remove("active");
+                if (existingBadge && existingBadge.classList.contains("badge-success")) {
+                    existingBadge.remove();
+                }
+            }
+        }
+    }
+
     function openProject(pid, sha256) {
         // Read the project's saved last_tab from the data attribute on the
         // card so we can land the user back where they left off.
         var lastTab = "";
         var card = grid.querySelector('.project-card[data-project-id="' + pid + '"]');
         if (card) lastTab = card.getAttribute("data-last-tab") || "";
+
+        // Optimistic UI: shift the active marker to the clicked card *now*
+        // so the user doesn't see the old project highlighted while the
+        // backend's open_file_tool churns through triage/CFG.
+        applyOptimisticActive(pid);
+        // Tell the nav handler in dashboard.js to render "(opening…)"
+        // instead of the stale filename until the new binary loads.
+        window._arkanaOpening = true;
+
         var body = { project_id: pid };
         if (sha256) body.binary_sha256 = sha256;
         fetchJSON("/dashboard/api/projects/open", {
@@ -230,11 +276,26 @@
                 target = "/dashboard/" + lastTab;
             }
             // Short delay so overlay restoration completes server-side first.
-            setTimeout(function () { window.location.href = target; }, 800);
+            setTimeout(function () { window.location.href = target; }, OPEN_REDIRECT_DELAY_MS);
         }).catch(function (e) {
+            // Roll back optimistic state so the user can retry without
+            // a stale OPENING badge stuck on the failed card.
+            window._arkanaOpening = false;
+            reloadGrid();
             showToast("Open failed: " + e.message, "error");
         });
     }
+
+    // When the SSE-fed dashboard.js notices the active project actually
+    // changed on the backend, refresh our card grid so badges and the
+    // "▶ ACTIVE" indicator land on the correct card. Also clear the
+    // _arkanaOpening flag so the nav stops showing "(opening…)".
+    document.addEventListener("arkana-active-project-changed", function () {
+        window._arkanaOpening = false;
+        // The redirect target may already be loading; harmless to reload
+        // grid in either case.
+        reloadGrid();
+    });
 
     function renameProject(pid, btn) {
         var card = btn.closest(".project-card");

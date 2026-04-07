@@ -592,14 +592,8 @@ def _auto_note_sweep(state: AnalyzerState, generation: int = 0) -> None:
         except Exception as e:
             logger.debug("Enrichment: auto_note failed for %s: %s", addr_hex, e)
 
-    if noted:
-        # Persist notes to cache
-        try:
-            from arkana.mcp.tools_notes import _persist_notes_to_cache
-            _persist_notes_to_cache()
-        except Exception:
-            logger.debug("Enrichment: note cache persistence failed", exc_info=True)
-
+    # Notes are persisted via the project overlay flush daemon — no
+    # explicit cache write needed (cache wrapper v2 strips user state).
     logger.debug("Enrichment: auto-noted %d functions", noted)
 
 
