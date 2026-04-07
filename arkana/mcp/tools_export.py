@@ -40,6 +40,11 @@ _MAX_IMPORT_DIR_SIZE = _safe_env_int("ARKANA_MAX_IMPORT_DIR_SIZE_MB", _safe_env_
 # Maximum decompressed analysis.json.gz size (256 MB)
 _MAX_ANALYSIS_DECOMPRESSED_SIZE = 256 * 1024 * 1024
 
+# v2 archive limits — defends against decompression bombs / zip bombs
+_MAX_V2_ARCHIVE_BYTES = _safe_env_int("ARKANA_MAX_PROJECT_ARCHIVE_MB", 4096) * 1024 * 1024  # 4 GB total
+_MAX_V2_ARCHIVE_MEMBERS = _safe_env_int("ARKANA_MAX_PROJECT_ARCHIVE_MEMBERS", 50000)
+_MAX_V2_MEMBER_BYTES = _safe_env_int("ARKANA_MAX_PROJECT_ARCHIVE_MEMBER_MB", 1024) * 1024 * 1024  # 1 GB per file
+
 # Regex for sanitizing binary filenames
 _SAFE_FILENAME_RE = re.compile(r'[^a-zA-Z0-9._\-]')
 
@@ -133,37 +138,81 @@ def _import_project_v2(abs_path: str, top_manifest: Dict[str, Any]) -> Dict[str,
         new_id = _new_project_id()
     new_root = PROJECTS_DIR / new_id
     new_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Resolved root is the canonical containment anchor — every extracted
+    # target path must stay strictly underneath it after .resolve().
+    new_root_resolved = new_root.resolve()
 
-    with tarfile.open(abs_path, "r:gz") as tar:
-        for member in tar.getmembers():
-            if (member.issym() or member.islnk() or member.isblk()
-                    or member.ischr() or member.isfifo()):
-                raise RuntimeError(
-                    f"[import_project] Archive contains unsafe entry: '{member.name}'"
-                )
-            norm = os.path.normpath(member.name)
-            if (member.name.startswith("/") or norm.startswith("/")
-                    or norm.startswith("..") or norm.startswith(os.sep + "..")):
-                raise RuntimeError(
-                    f"[import_project] Unsafe archive member: '{member.name}'"
-                )
-        # Extract project/ contents into new_root, stripping the "project/" prefix
-        for member in tar.getmembers():
-            if not member.name.startswith("project/"):
-                continue
-            relative = member.name[len("project/"):]
-            if not relative:
-                continue
-            target = new_root / relative
-            if member.isdir():
-                target.mkdir(parents=True, exist_ok=True, mode=0o700)
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            extracted = tar.extractfile(member)
-            if extracted is None:
-                continue
-            with open(target, "wb") as f:
-                shutil.copyfileobj(extracted, f)
+    try:
+        with tarfile.open(abs_path, "r:gz") as tar:
+            total_bytes = 0
+            member_count = 0
+            for member in tar:  # iterates once, streaming — cheaper than getmembers()
+                member_count += 1
+                if member_count > _MAX_V2_ARCHIVE_MEMBERS:
+                    raise RuntimeError(
+                        f"[import_project] Archive exceeds member cap "
+                        f"({_MAX_V2_ARCHIVE_MEMBERS})"
+                    )
+                # Reject anything that isn't a plain file or directory.
+                if (member.issym() or member.islnk() or member.isblk()
+                        or member.ischr() or member.isfifo() or member.isdev()):
+                    raise RuntimeError(
+                        f"[import_project] Archive contains unsafe entry: "
+                        f"'{member.name}'"
+                    )
+                # Absolute paths and drive-letter paths are rejected outright.
+                if (member.name.startswith("/") or member.name.startswith("\\")
+                        or (len(member.name) >= 2 and member.name[1] == ":")):
+                    raise RuntimeError(
+                        f"[import_project] Unsafe archive member (absolute path): "
+                        f"'{member.name}'"
+                    )
+                # Only accept members under the "project/" prefix; silently
+                # skip anything else (archive may include top-level metadata).
+                if not member.name.startswith("project/"):
+                    continue
+                relative = member.name[len("project/"):]
+                if not relative:
+                    continue
+                # Strict containment check: resolve the target and verify it
+                # is underneath new_root_resolved. This is the ONE line of
+                # defence that blocks path traversal even against pathological
+                # "legit-looking" names that slip past os.path.normpath.
+                target = (new_root / relative).resolve()
+                try:
+                    target.relative_to(new_root_resolved)
+                except ValueError:
+                    raise RuntimeError(
+                        f"[import_project] Archive member escapes project root: "
+                        f"'{member.name}'"
+                    )
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    continue
+                # Enforce per-file and total size caps before extraction.
+                size = int(member.size or 0)
+                if size > _MAX_V2_MEMBER_BYTES:
+                    raise RuntimeError(
+                        f"[import_project] Archive member '{member.name}' "
+                        f"exceeds per-file size cap ({_MAX_V2_MEMBER_BYTES} bytes)"
+                    )
+                total_bytes += size
+                if total_bytes > _MAX_V2_ARCHIVE_BYTES:
+                    raise RuntimeError(
+                        f"[import_project] Archive exceeds total size cap "
+                        f"({_MAX_V2_ARCHIVE_BYTES} bytes)"
+                    )
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                extracted = tar.extractfile(member)
+                if extracted is None:
+                    continue
+                with open(target, "wb") as f:
+                    shutil.copyfileobj(extracted, f, length=1 << 20)
+    except Exception:
+        # Any failure during extraction leaves a partial tree behind —
+        # clean it up so retry can succeed and disk isn't leaked.
+        shutil.rmtree(new_root, ignore_errors=True)
+        raise
 
     # Load the extracted manifest, rewrite id+name to avoid collisions, and
     # register the project with the manager.

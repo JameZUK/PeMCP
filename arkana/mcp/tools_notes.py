@@ -2,19 +2,10 @@
 import asyncio
 import json
 from typing import Dict, Any, Optional, List
-from arkana.config import state, logger, Context, analysis_cache, ANGR_AVAILABLE
+from arkana.config import state, logger, Context, ANGR_AVAILABLE
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.constants import MAX_TOOL_LIMIT
 from arkana.state import MAX_HYPOTHESIS_EVIDENCE
-
-
-def _persist_notes_to_cache() -> None:
-    """Persist current notes to the disk cache (best-effort)."""
-    if state.pe_data is None:
-        return
-    sha = (state.pe_data.get("file_hashes") or {}).get("sha256")
-    if sha:
-        analysis_cache.update_session_data(sha, notes=state.get_all_notes_snapshot())
 
 
 @tool_decorator
@@ -100,7 +91,6 @@ async def add_note(
         status=status if category == "hypothesis" else None,
         evidence=evidence_list,
     )
-    _persist_notes_to_cache()
     await ctx.info(f"Note added: {note['id']}")
     return {"status": "success", "note": note}
 
@@ -191,7 +181,6 @@ async def update_note(
     if updated is None:
         return {"status": "not_found", "message": f"No note found with ID '{note_id}'."}
 
-    _persist_notes_to_cache()
     return {"status": "success", "note": updated}
 
 
@@ -219,7 +208,6 @@ async def delete_note(
     if not deleted:
         return {"status": "not_found", "message": f"No note found with ID '{note_id}'."}
 
-    _persist_notes_to_cache()
     await ctx.info(f"Note deleted: {note_id}")
     return {"status": "success", "message": f"Note '{note_id}' deleted."}
 
@@ -333,7 +321,6 @@ async def update_hypothesis(
     if updated is None:
         return {"status": "error", "message": f"Failed to update note '{note_id}'."}
 
-    _persist_notes_to_cache()
     await ctx.info(f"Hypothesis updated: {note_id}")
     return {"status": "success", "note": updated}
 
@@ -568,8 +555,6 @@ async def auto_note_function(
             except Exception as e:
                 batch_results.append({"address": addr, "error": str(e)[:200]})
 
-        _persist_notes_to_cache()
-
         response: Dict[str, Any] = {
             "batch_results": batch_results,
             "total": len(batch_results),
@@ -585,5 +570,4 @@ async def auto_note_function(
         raise ValueError("Either 'function_address' or 'address' must be provided.")
 
     result = await asyncio.to_thread(_auto_note_single, function_address, custom_summary)
-    _persist_notes_to_cache()
     return result

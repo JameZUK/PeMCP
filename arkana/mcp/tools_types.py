@@ -6,20 +6,11 @@ from typing import Dict, Any, Optional, List
 
 _VALID_FIELD_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
-from arkana.config import state, logger, Context, analysis_cache
+from arkana.config import state, logger, Context
 from arkana.constants import MAX_STRUCT_FIELDS, MAX_ENUM_VALUES
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp.tools_struct import _parse_fields, _STRUCT_TYPES
 from arkana.mcp._refinery_helpers import _get_data_from_hex_or_file_with_offset
-
-
-def _persist_types_to_cache() -> None:
-    """Persist current custom types to the disk cache (best-effort)."""
-    if state.pe_data is None:
-        return
-    sha = (state.pe_data.get("file_hashes") or {}).get("sha256")
-    if sha:
-        analysis_cache.update_session_data(sha, custom_types=state.get_all_types_snapshot())
 
 
 def _validate_field_types(fields: list) -> None:
@@ -143,7 +134,6 @@ async def create_struct(
     size = _compute_struct_size(fields)
 
     entry = state.create_struct(name, fields, size)
-    _persist_types_to_cache()
     return {"status": "success", "struct": entry}
 
 
@@ -207,7 +197,6 @@ async def create_enum(
         seen_values[v] = k
 
     entry = state.create_enum(name, values, size)
-    _persist_types_to_cache()
     return {"status": "success", "enum": entry}
 
 
@@ -331,5 +320,4 @@ async def delete_custom_type(
     deleted = state.delete_custom_type(name)
     if not deleted:
         return {"status": "not_found", "message": f"No custom type '{name}' found."}
-    _persist_types_to_cache()
     return {"status": "success", "message": f"Custom type '{name}' deleted."}

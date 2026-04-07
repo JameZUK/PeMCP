@@ -1467,6 +1467,7 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
 
         if session_key not in _session_registry:
             _start_session_reaper()  # Lazy start on first session creation
+            _start_overlay_flush_loop()  # Lazy start of background overlay flusher
             new_state = AnalyzerState()
             # Inherit server-level config from the default state
             new_state.allowed_paths = _default_state.allowed_paths
@@ -1603,6 +1604,61 @@ def _start_session_reaper():
     _reaper_started = True
     _reaper_thread = threading.Thread(target=_session_reaper_loop, daemon=True, name="session-reaper")
     _reaper_thread.start()
+
+
+# Background overlay flush — persists user-mutable state (notes, artifacts,
+# renames, types, triage, coverage, sandbox) to the active project's overlay
+# at a fixed cadence so a crash/SIGKILL between mutations and close_file
+# doesn't lose work. Without this loop, mutations only persisted on
+# close_file/close_project. The interval is intentionally generous (30s) so
+# the loop is essentially free under normal load.
+OVERLAY_FLUSH_INTERVAL_SECONDS = 30
+_overlay_flush_thread = None
+_overlay_flush_started = False
+
+
+def _overlay_flush_loop() -> None:
+    """Daemon loop that flushes dirty overlays every OVERLAY_FLUSH_INTERVAL_SECONDS.
+
+    Iterates the session registry plus the default state and calls
+    ``flush_overlay()`` on any state with ``_overlay_dirty=True``. Errors are
+    logged but never propagated — best-effort persistence.
+    """
+    while True:
+        time.sleep(OVERLAY_FLUSH_INTERVAL_SECONDS)
+        try:
+            with _registry_lock:
+                states = [*list(_session_registry.values()), _default_state]
+            for st in states:
+                try:
+                    if not st.is_overlay_dirty():
+                        continue
+                    flushed = st.flush_overlay()
+                    if flushed:
+                        logger.debug("overlay-flush: persisted dirty overlay for session %s",
+                                     st._state_uuid[:8])
+                except Exception:
+                    logger.debug("overlay-flush: per-state error", exc_info=True)
+        except Exception:
+            logger.warning("overlay-flush: iteration error", exc_info=True)
+
+
+def _start_overlay_flush_loop() -> None:
+    """Lazily start the background overlay flush daemon.
+
+    Called from get_or_create_session_state alongside the session reaper.
+    Idempotent — second call is a no-op if the thread is already running.
+    Must be called under _registry_lock.
+    """
+    assert _registry_lock.locked(), "_start_overlay_flush_loop must be called under _registry_lock"
+    global _overlay_flush_thread, _overlay_flush_started
+    if _overlay_flush_started and _overlay_flush_thread is not None and _overlay_flush_thread.is_alive():
+        return
+    _overlay_flush_started = True
+    _overlay_flush_thread = threading.Thread(
+        target=_overlay_flush_loop, daemon=True, name="overlay-flush",
+    )
+    _overlay_flush_thread.start()
 
 
 def get_all_session_states() -> list:

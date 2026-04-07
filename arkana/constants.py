@@ -3,6 +3,7 @@ Pure constants — no optional-library imports, no side effects.
 
 Safe to import from anywhere without triggering heavyweight library loads.
 """
+import re
 from pathlib import Path
 
 __all__ = [
@@ -165,14 +166,17 @@ MAX_ARTIFACT_DIR_SIZE = 256 * 1024 * 1024          # 256 MB total per directory 
 ARTIFACT_DIR_DEPTH_LIMIT = 10                      # max recursion depth when walking directory artifacts
 
 # --- Projects ---
-import re as _re
 try:
     PROJECTS_DIR = Path.home() / ".arkana" / "projects"
 except RuntimeError:
     PROJECTS_DIR = Path("/tmp") / ".arkana" / "projects"
 PROJECT_ID_LEN = 16                                # uuid4().hex[:16]
 MAX_PROJECT_NAME_LEN = 100
-PROJECT_NAME_RE = _re.compile(r"^[\w\-. ]{1,100}$")
+# ASCII-only character class — unicode ``\w`` allowed RTL-override and
+# confusables, enabling visual spoofing of project names across the
+# find_by_name deduplication path. Explicit charset keeps names printable
+# and round-trips cleanly through filesystem/HTML/cookie contexts.
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-. ]{1,100}$")
 MAX_PROJECTS = 1000
 MAX_BINARIES_PER_PROJECT = 50
 

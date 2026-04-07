@@ -286,43 +286,34 @@ class TestSha256Validation:
         with pytest.raises(ValueError):
             cache.put("invalid", {"data": 1}, "/test.exe")
 
-    def test_cache_update_session_rejects_invalid_sha(self, cache):
-        with pytest.raises(ValueError):
-            cache.update_session_data("bad-hash", notes=[])
-
     def test_cache_remove_rejects_invalid_sha(self, cache):
         with pytest.raises(ValueError):
             cache.remove_entry_by_hash("not-a-sha256")
 
 
 # ---------------------------------------------------------------------------
-# Session data update (outside-lock I/O)
+# V2 wrapper: user state lives in project overlays
 # ---------------------------------------------------------------------------
 
-class TestCacheUpdateSessionData:
+class TestCacheV2WrapperFormat:
     """Cache wrapper v2: user-mutable state lives in project overlays, not the
-    cache. ``update_session_data`` no-ops on v2 wrappers (returns True silently),
-    and ``get_session_metadata`` returns empty fields. Legacy v1 wrappers are
-    only encountered during the migration path in ProjectManager._migrate_*."""
+    cache. ``cache.put()`` strips user state, ``cache.get_session_metadata()``
+    returns empty fields, and there is no read-modify-write update path —
+    writes go through ``Project.save_overlay`` instead."""
 
-    def test_update_v2_wrapper_is_noop(self, cache, sample_pe_data):
+    def test_put_v2_wrapper_strips_user_state(self, cache, sample_pe_data):
         sha = "a" * 64
         cache.put(sha, sample_pe_data, "/test.exe")
-        # Returns True (silently no-ops) for v2 wrappers
-        assert cache.update_session_data(sha, notes=[{"id": "n1", "text": "test"}]) is True
-        # And the wrapper carries no user-state fields
         meta = cache.get_session_metadata(sha)
         assert meta is not None
         assert meta["notes"] == []
         assert meta["_cache_format_version"] == 2
 
-    def test_update_nonexistent_entry(self, cache):
-        assert cache.update_session_data("b" * 64, notes=[]) is False
-
-    def test_update_disabled_cache(self, cache_dir):
-        c = AnalysisCache(enabled=False)
-        assert c.update_session_data("a" * 64, notes=[]) is False
-
     def test_get_session_metadata_disabled(self, cache_dir):
         c = AnalysisCache(enabled=False)
         assert c.get_session_metadata("a" * 64) is None
+
+    def test_update_session_data_removed(self, cache):
+        # The deprecated update_session_data method has been removed entirely
+        # — users who still reference it will see AttributeError.
+        assert not hasattr(cache, "update_session_data")

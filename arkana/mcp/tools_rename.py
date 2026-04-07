@@ -1,26 +1,26 @@
 """MCP tools for managing function/variable renames and address labels."""
 from typing import Dict, Any, Optional, List
 
-from arkana.config import state, logger, Context, analysis_cache
+from arkana.config import state, logger, Context
 from arkana.constants import MAX_BATCH_RENAMES
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.mcp._rename_helpers import normalize_address
 
 
 def _persist_renames_to_cache() -> None:
-    """Persist current renames to the disk cache AND sync to BSim DB (best-effort)."""
+    """Sync function renames to the BSim signature DB (best-effort).
+
+    User rename state now lives in project overlays (persisted on
+    flush_overlay / close_file), not in the cache wrapper — so this helper
+    exists only to mirror renames into the BSim DB so transfer_annotations
+    can carry them across malware variants. No-op when BSim isn't available
+    or the binary isn't indexed.
+    """
     if state.pe_data is None:
         return
     sha = (state.pe_data.get("file_hashes") or {}).get("sha256")
-    if sha:
-        analysis_cache.update_session_data(sha, renames=state.get_all_renames_snapshot())
-    else:
-        logger.debug("Skipping rename persistence: file SHA256 unavailable")
+    if not sha:
         return
-
-    # Sync function renames to BSim signature DB so transfer_annotations
-    # can carry them over to variants of the same malware.  Best-effort —
-    # if the binary isn't indexed or BSim isn't available, this is a no-op.
     try:
         func_renames = state.renames.get("functions", {})
         if func_renames:

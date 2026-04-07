@@ -345,14 +345,6 @@ class AnalysisCache:
             entry_dir.mkdir(parents=True, exist_ok=True)
             entry_path = self._entry_path(sha256)
 
-            # Record mtime before write so we can detect concurrent
-            # update_session_data() modifications inside the lock.
-            pre_write_mtime = None
-            try:
-                pre_write_mtime = entry_path.stat().st_mtime if entry_path.exists() else None
-            except OSError:
-                pass
-
             # M-10: Use NamedTemporaryFile to avoid .tmp collisions between
             # concurrent put() calls for different SHA256 values that share
             # the same entry_dir.
@@ -364,8 +356,6 @@ class AnalysisCache:
                 fd.close()  # close the raw fd; gzip.open re-opens by path
                 with gzip.open(tmp, "wt", encoding="utf-8") as gz:
                     json.dump(wrapper, gz)
-                # tmp.replace moved into lock block below to prevent
-                # clobbering concurrent update_session_data() writes.
             except Exception:
                 tmp.unlink(missing_ok=True)
                 raise
@@ -374,13 +364,10 @@ class AnalysisCache:
             return False
 
         # v2 cache: user state lives in project overlays, not the cache
-        # wrapper, so there is no session-data merge race to worry about.
-        # Concurrent put() calls just race on the final atomic replace,
-        # which is the intended last-writer-wins semantics for derived data.
+        # wrapper, so concurrent put() calls just race on the final atomic
+        # replace — intended last-writer-wins semantics for derived data.
         with self._lock:
             try:
-                # pre_write_mtime kept for log/diagnostic purposes only.
-                _ = pre_write_mtime
                 tmp.replace(entry_path)  # atomic on POSIX only (see _save_meta)
 
                 file_size = entry_path.stat().st_size
@@ -508,84 +495,6 @@ class AnalysisCache:
             "custom_types": wrapper.get("custom_types", {"structs": {}, "enums": {}}),
             "triage_status": wrapper.get("triage_status", {}),
         }
-
-    def update_session_data(self, sha256: str,
-                            notes: Optional[list] = None,
-                            tool_history: Optional[list] = None,
-                            artifacts: Optional[list] = None,
-                            renames: Optional[dict] = None,
-                            custom_types: Optional[dict] = None,
-                            triage_status: Optional[dict] = None) -> bool:
-        """**DEPRECATED for v2.** Update user-mutable state for an existing entry.
-
-        v2 cache: user state is stored in project overlays via
-        ``Project.save_overlay``, not in the cache wrapper. This method is a
-        no-op when the wrapper is v2 and is retained only so that legacy
-        callers (and the v1 migration path) keep working.
-        """
-        if not self.enabled:
-            return False
-
-        sha256 = _validate_sha256(sha256)
-        entry_path = self._entry_path(sha256)
-        if not entry_path.exists():
-            return False
-        # Quick peek: v2 wrappers don't carry user state, so we no-op silently.
-        # Only v1 wrappers (legacy) need the read-modify-write cycle below.
-        try:
-            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                head = json.load(f)
-            cmeta = (head.get("_cache_meta") or {}) if isinstance(head, dict) else {}
-            if cmeta.get("cache_format_version") == CACHE_FORMAT_VERSION:
-                return True
-        except (gzip.BadGzipFile, json.JSONDecodeError, OSError):
-            return False
-
-        # Hold lock through the full read-modify-write cycle to prevent
-        # concurrent updates from clobbering each other (e.g. add_note +
-        # rename_function racing).  Session data updates are infrequent
-        # so the slightly longer lock hold is acceptable.
-        with self._lock:
-            if not entry_path.exists():
-                return False
-
-            try:
-                with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                    wrapper = json.load(f)
-            except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
-                logger.error("Failed to read session data for %s...: %s", sha256[:12], e)
-                return False
-
-            # Modify wrapper in memory
-            if notes is not None:
-                wrapper["notes"] = notes
-            if tool_history is not None:
-                wrapper["tool_history"] = tool_history
-            if artifacts is not None:
-                wrapper["artifacts"] = artifacts
-            if renames is not None:
-                wrapper["renames"] = renames
-            if custom_types is not None:
-                wrapper["custom_types"] = custom_types
-            if triage_status is not None:
-                wrapper["triage_status"] = triage_status
-
-            # Write atomically using streaming gzip
-            # M-10: Use NamedTemporaryFile to avoid .tmp collisions
-            fd = tempfile.NamedTemporaryFile(
-                dir=str(entry_path.parent), suffix='.tmp', delete=False,
-            )
-            tmp = Path(fd.name)
-            fd.close()
-            try:
-                with gzip.open(tmp, "wt", encoding="utf-8") as gz:
-                    json.dump(wrapper, gz)
-                tmp.replace(entry_path)
-                return True
-            except (TypeError, ValueError, OSError) as e:
-                logger.error("Failed to write session data for %s...: %s", sha256[:12], e)
-                tmp.unlink(missing_ok=True)
-                return False
 
     # ------------------------------------------------------------------
     #  Management helpers (exposed via MCP tools)
