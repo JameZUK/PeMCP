@@ -1185,10 +1185,20 @@ def compare_indexed_binaries(
 
     total_a = len(funcs_a)
     total_b = len(funcs_b)
-    shared = len(pair_scores)
+    # Each pair_scores entry corresponds to a unique A function (we picked
+    # the single best B match per A above), so |matched_A| == len(pair_scores).
+    # Multiple A functions may pick the SAME B function, so |matched_B| is a
+    # set count, not a list count. The shared-function count is the smaller
+    # of the two — that's the number of "actually shared" function pairs you
+    # could form without re-using either side. Without this normalisation
+    # the jaccard formula goes >1.0 when |A| >> |B| and many A funcs collide
+    # onto the same B match.
+    matched_a = len(pair_scores)
+    matched_b = len({p["b_address"] for p in pair_scores})
+    shared = min(matched_a, matched_b)
     union = max(total_a + total_b - shared, 1)
-    jaccard = shared / union if union else 0.0
-    avg_sim = (sum(p["score"] for p in pair_scores) / shared) if shared else 0.0
+    jaccard = shared / union
+    avg_sim = (sum(p["score"] for p in pair_scores) / matched_a) if matched_a else 0.0
 
     return {
         "available": True,
@@ -1197,6 +1207,8 @@ def compare_indexed_binaries(
         "threshold": threshold,
         "metrics": score_key,
         "shared_function_count": shared,
+        "matched_a_count": matched_a,
+        "matched_b_count": matched_b,
         "jaccard": round(jaccard, 4),
         "avg_similarity": round(avg_sim, 4),
         "total_functions_a": total_a,

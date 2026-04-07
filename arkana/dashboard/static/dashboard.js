@@ -226,6 +226,31 @@ function showToast(message, type) {
         }
     }
 
+    // Apply the "(opening…)" transition overlay to the status row's
+    // filename element. The htmx-polled #global-status partial re-renders
+    // the canonical filename every ~3s; during the brief window between
+    // an OPEN-project click and the new binary's pe_data being ready, the
+    // partial would show the OLD filename next to the NEW project name.
+    // While ``window._arkanaOpening`` is set we overwrite the filename
+    // text portion with "(opening…)" so the user gets immediate feedback.
+    function applyOpeningOverlay() {
+        if (!window._arkanaOpening) return;
+        var statusFn = document.getElementById('status-filename');
+        if (!statusFn) return;
+        var fnTextEl = statusFn.querySelector('.status-filename-text');
+        if (fnTextEl) fnTextEl.textContent = '(opening\u2026)';
+    }
+
+    // Re-apply the overlay every time htmx swaps the global-status partial
+    // — without this hook the partial would flash the canonical filename
+    // for a few frames before SSE caught up. Listening on document covers
+    // every htmx swap regardless of which page we're on.
+    document.addEventListener('htmx:afterSwap', function (evt) {
+        if (evt && evt.target && evt.target.id === 'global-status') {
+            applyOpeningOverlay();
+        }
+    });
+
     function refreshPageElements() {
         if (!window.htmx) return;
         // Refresh whichever htmx-polled elements exist on the current page
@@ -259,50 +284,13 @@ function showToast(message, type) {
             lastActiveProjectId = newProjId;
         }
 
-        // Update nav filename indicator. When an on-disk project is bound,
-        // prefix the filename with "▶ {project_name} / " so the user always
-        // sees which project they're working in.
-        var fnEl = document.getElementById('nav-filename');
-        if (fnEl) {
-            var oldText = fnEl.textContent;
-            var label = data.filename || '';
-            // Transition window: openProject() in projects.js sets this flag
-            // when the user clicks OPEN; cleared on the post-redirect page
-            // load. While set, we hide the stale filename so the nav reads
-            // "▶ new_project (opening…)" instead of the misleading
-            // "▶ new_project / old_binary.exe".
-            if (window._arkanaOpening && proj && proj.id) {
-                label = '(opening\u2026)';
-            }
-            if (proj && proj.name && !proj.scratch) {
-                label = '\u25B6 ' + proj.name + (label ? ' / ' + label : '');
-            }
-            fnEl.textContent = label;
-            // Re-run nav overflow detection when filename changes
-            if (fnEl.textContent !== oldText && window._navRedistribute) {
-                window._navRedistribute();
-            }
-        }
-
-        // Render resource usage (CPU/MEM/THR) on the right side of the
-        // top nav. Pulled out of the global-status partial so the values
-        // get as much room as they need without competing with tabs.
-        var resEl = document.getElementById('nav-resources');
-        var ru = data.resource_usage;
-        if (resEl && ru) {
-            var memLevel = ru.memory_level || 'normal';
-            var memBadge = memLevel === 'critical' ? 'badge-failed'
-                : memLevel === 'high' ? 'badge-overtime' : 'badge-dim';
-            resEl.innerHTML =
-                '<span class="badge ' + memBadge + '">MEM</span>' +
-                '<span class="nav-res-value mono">' + Math.round(ru.rss_mb || 0) + '&nbsp;MB</span>' +
-                '<span class="badge badge-dim">CPU</span>' +
-                '<span class="nav-res-value mono">' + (ru.cpu_percent || 0).toFixed(1) + '%</span>' +
-                '<span class="badge badge-dim">THR</span>' +
-                '<span class="nav-res-value mono">' + (ru.thread_count || 0) + '</span>';
-        } else if (resEl) {
-            resEl.innerHTML = '';
-        }
+        // Re-apply the "(opening…)" overlay on the status row's filename
+        // element if a project transition is in progress. The htmx-polled
+        // partial renders the canonical filename every 3s; this overlay
+        // sits ON TOP of it during the brief window between openProject()
+        // click and the new binary's pe_data being ready, so the user
+        // doesn't see the stale filename.
+        applyOpeningOverlay();
 
         // Toast: tool completed
         var currentTool = data.active_tool || null;

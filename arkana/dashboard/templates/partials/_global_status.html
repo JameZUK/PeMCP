@@ -1,9 +1,19 @@
-{# Resource usage (CPU/MEM/THR) is rendered in the top nav by dashboard.js
-   handleStateUpdate() — moved out of this partial so the values get as much
-   room as they need on the right edge of the nav without competing with
-   tab buttons. The status bar still shows active tools + background tasks. #}
-{% if data.active_tool or data.active_tools or data.background_tasks %}
+{# Status row beneath the top nav. Layout (left → right):
+     [filename / project]   [active tools + background tasks]   [CPU / MEM / THR]
+   Filename and resource block always render when data is present so the row
+   has a consistent shape. The middle activity block fills available space. #}
 <div class="global-status-inner">
+    {% if data.filename or data.active_project %}
+    <div class="gs-item gs-filename" id="status-filename">
+        {% if data.active_project and data.active_project.name and not data.active_project.scratch %}
+        <span class="status-project-marker">&#9654;</span>
+        <span class="status-project-name">{{ data.active_project.name }}</span>
+        {% if data.filename %}<span class="dim"> / </span><span class="status-filename-text">{{ data.filename }}</span>{% endif %}
+        {% elif data.filename %}
+        <span class="status-filename-text">{{ data.filename }}</span>
+        {% endif %}
+    </div>
+    {% endif %}
     {% if data.active_tools and data.active_tools | length > 1 %}
     {# Multiple concurrent tools — show badges only (progress is shared/ambiguous) #}
     <div class="gs-item gs-active-tool">
@@ -59,5 +69,14 @@
     </div>
     {% endif %}
     {% endfor %}
+    {% if data.resource_usage %}
+    <div class="gs-item gs-resource">
+        <span class="badge {% if data.resource_usage.memory_level == 'critical' %}badge-failed{% elif data.resource_usage.memory_level == 'high' %}badge-overtime{% else %}badge-dim{% endif %}">MEM</span>
+        <span class="gs-resource-value mono">{{ data.resource_usage.rss_mb | round(0) | int }}&nbsp;MB</span>
+        <span class="badge badge-dim">CPU</span>
+        <span class="gs-resource-value mono">{{ data.resource_usage.cpu_percent | round(1) }}%</span>
+        <span class="badge badge-dim">THR</span>
+        <span class="gs-resource-value mono">{{ data.resource_usage.thread_count }}</span>
+    </div>
+    {% endif %}
 </div>
-{% endif %}

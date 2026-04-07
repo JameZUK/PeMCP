@@ -193,46 +193,59 @@ body {
     text-shadow: 0 0 8px var(--primary);
 }
 
-.nav-filename {
-    /* Sits on the LEFT now (right after .nav-brand). Wider cap and a hard
-       ellipsis so long auto-generated project names truncate cleanly
-       without pushing the tabs to the right. */
-    margin-right: 16px;
+/* Status row beneath the top nav — three-region flex layout:
+     [filename / project]   [active tools + bg tasks]   [CPU / MEM / THR]
+   Filename anchors LEFT, resource block anchors RIGHT (margin-left: auto on
+   the resource block absorbs all slack), activity items sit between them. */
+.gs-filename {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: 11px;
     letter-spacing: 1px;
-    max-width: 320px;
+    max-width: 50%;
+    min-width: 0;
+    flex-shrink: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.status-project-marker {
+    color: var(--primary);
+    flex-shrink: 0;
+}
+.status-project-name {
+    color: var(--primary);
+    font-weight: bold;
     overflow: hidden;
     text-overflow: ellipsis;
-    white-space: nowrap;
-    flex-shrink: 1;
     min-width: 0;
 }
-
-.nav-resources {
-    /* Resource block sits on the far RIGHT of the nav (last flex item).
-       ``.nav-links`` is ``flex: 1 1 0`` so it absorbs all slack and pushes
-       us against the right edge automatically — no margin-auto needed.
-       flex-shrink: 0 keeps the values from being squeezed when the nav
-       overflows; long project names hide via ``.nav-filename`` truncation
-       instead. */
+.status-filename-text {
+    color: var(--primary-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+.gs-resource {
     display: flex;
     align-items: center;
     gap: 4px;
-    margin-left: 12px;
+    margin-left: auto;     /* push to the far right of the row */
     flex-shrink: 0;
     font-size: 11px;
     white-space: nowrap;
 }
-.nav-resources .badge {
+.gs-resource .badge {
     padding: 1px 5px;
     font-size: 9px;
     letter-spacing: 1px;
 }
-.nav-res-value {
+.gs-resource-value {
     margin-right: 6px;
     color: var(--primary);
 }
-.nav-res-value:last-child {
+.gs-resource-value:last-child {
     margin-right: 0;
 }
 
@@ -1655,9 +1668,14 @@ details[open] > .import-dll-header::before {
 }
 
 .global-status-inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 14px;
     border: 1px solid var(--primary-muted);
     background: var(--bg-surface);
     margin-top: 8px;
+    padding: 6px 12px;
     animation: pulse-glow 2s ease-in-out infinite;
 }
 
@@ -1665,12 +1683,7 @@ details[open] > .import-dll-header::before {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 6px 12px;
     font-size: 12px;
-}
-
-.gs-item + .gs-item {
-    border-top: 1px solid var(--primary-ghost);
 }
 
 .gs-tool-name {
@@ -2278,10 +2291,9 @@ button.btn-analysis:hover {
     .nav-title { font-size: 13px; letter-spacing: 1px; }
     .nav-search input { width: 100px; }
     .nav-search input:focus-visible { width: 140px; }
-    /* Hide filename and resource block on phones — both compete with tab
-       buttons for the very limited horizontal space. */
-    .nav-filename { display: none; }
-    .nav-resources { display: none; }
+    /* Status row: tighten filename cap and let activity items wrap. */
+    .gs-filename { max-width: 65%; }
+    .gs-resource { font-size: 10px; }
     .stats-grid { grid-template-columns: 1fr; }
     .stats-grid-sm { grid-template-columns: 1fr; }
     .file-identity-name { flex-direction: column; gap: 4px; }

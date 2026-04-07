@@ -13,9 +13,11 @@ from arkana.mcp._bsim_features import (
     _jaccard_similarity,
     _normalized_distance,
     _row_to_features,
+    compare_indexed_binaries,
     compute_similarity,
     get_db_path,
     init_db,
+    is_binary_indexed,
     list_indexed_binaries,
     query_similar_functions,
     store_binary_features,
@@ -619,3 +621,190 @@ class TestSerializationRoundTrip:
         assert len(results) >= 1
         # Should match with high score (VEX histogram stored separately)
         assert results[0]["scores"]["combined"] > 0.7
+
+
+# ===================================================================
+#  Indexed-binary lookup + project comparison helpers
+# ===================================================================
+
+class TestIsBinaryIndexed:
+
+    def test_present(self, tmp_path):
+        db = tmp_path / "indexed.db"
+        init_db(db)
+        store_binary_features(
+            "a" * 64, "x.exe", "x86", 100, [_make_features()], db,
+        )
+        assert is_binary_indexed("a" * 64, db) is True
+
+    def test_absent(self, tmp_path):
+        db = tmp_path / "indexed.db"
+        init_db(db)
+        assert is_binary_indexed("b" * 64, db) is False
+
+    def test_case_insensitive(self, tmp_path):
+        db = tmp_path / "indexed.db"
+        init_db(db)
+        store_binary_features(
+            "c" * 64, "x.exe", "x86", 100, [_make_features()], db,
+        )
+        assert is_binary_indexed(("c" * 64).upper(), db) is True
+
+    def test_missing_db(self, tmp_path):
+        db = tmp_path / "no.db"
+        assert is_binary_indexed("a" * 64, db) is False
+
+
+class TestCompareIndexedBinaries:
+    """The hand-rolled jaccard math used to overcount when many A functions
+    chose the same B function — this class pins the fix so we never ship a
+    jaccard > 1.0 again."""
+
+    def test_self_compare_rejected(self, tmp_path):
+        db = tmp_path / "cmp.db"
+        init_db(db)
+        store_binary_features(
+            "a" * 64, "x.exe", "x86", 100, [_make_features()], db,
+        )
+        result = compare_indexed_binaries("a" * 64, "a" * 64, db_path=db)
+        assert result["available"] is False
+        assert "itself" in result["error"]
+
+    def test_missing_binary_returns_error(self, tmp_path):
+        db = tmp_path / "cmp.db"
+        init_db(db)
+        store_binary_features(
+            "a" * 64, "x.exe", "x86", 100, [_make_features()], db,
+        )
+        result = compare_indexed_binaries("a" * 64, "b" * 64, db_path=db)
+        assert result["available"] is False
+        assert "not indexed" in result["error"]
+        assert result["missing_sha256"] == "b" * 64
+
+    def test_identical_binaries_score_high(self, tmp_path):
+        """Two binaries with the same function set should produce a high
+        jaccard score (close to 1.0)."""
+        db = tmp_path / "cmp.db"
+        init_db(db)
+        funcs = [
+            _make_features(address=0x401000, block_count=5, edge_count=6,
+                           api_names=["CreateFileW"]),
+            _make_features(address=0x402000, block_count=10, edge_count=12,
+                           api_names=["RegSetValueExW"]),
+            _make_features(address=0x403000, block_count=3, edge_count=3,
+                           api_names=["VirtualAlloc"]),
+        ]
+        store_binary_features("a" * 64, "v1.exe", "x86", 100, funcs, db)
+        store_binary_features("b" * 64, "v2.exe", "x86", 100, funcs, db)
+        result = compare_indexed_binaries(
+            "a" * 64, "b" * 64, threshold=0.5, db_path=db,
+        )
+        assert result["available"] is True
+        assert 0.0 <= result["jaccard"] <= 1.0
+        assert result["jaccard"] == pytest.approx(1.0, abs=0.05)
+        assert result["shared_function_count"] == 3
+        assert result["matched_a_count"] == 3
+        assert result["matched_b_count"] == 3
+
+    def test_jaccard_never_exceeds_one_under_many_to_one_match(self, tmp_path):
+        """Regression test for the live-data bug:
+        With 5769 A functions and 51 B functions and threshold=0.7, many A
+        functions all chose the same B function, so the old formula
+        ``shared = len(pair_scores)`` returned 5347 — 100x larger than B's
+        function count — and jaccard came out at 11.30. Recreate the same
+        topology in miniature: A has many duplicates of the same feature,
+        B has a single matching function. Every A function should find the
+        same B function. shared must be capped at min(matched_a, matched_b)
+        and jaccard must stay ≤ 1.0.
+        """
+        db = tmp_path / "cmp.db"
+        init_db(db)
+
+        # Many copies of the SAME function in A — they will all collapse
+        # onto B's single matching function.
+        a_funcs = [
+            _make_features(
+                address=0x401000 + i * 0x100,
+                block_count=5, edge_count=6,
+                api_names=["CreateFileW"],
+                vex_histogram={"Ist_Put": 8},
+                string_hashes=[1234],
+                constants=[0xCAFE],
+            )
+            for i in range(20)
+        ]
+        # B has just one matching function plus a couple of unrelated ones.
+        b_funcs = [
+            _make_features(
+                address=0x500000,
+                block_count=5, edge_count=6,
+                api_names=["CreateFileW"],
+                vex_histogram={"Ist_Put": 8},
+                string_hashes=[1234],
+                constants=[0xCAFE],
+            ),
+            _make_features(address=0x510000, block_count=99, edge_count=200,
+                           api_names=["WSACleanup"]),
+            _make_features(address=0x520000, block_count=80, edge_count=150,
+                           api_names=["socket"]),
+        ]
+
+        store_binary_features("a" * 64, "many.exe", "x86", 1000, a_funcs, db)
+        store_binary_features("b" * 64, "few.exe", "x86", 1000, b_funcs, db)
+
+        result = compare_indexed_binaries(
+            "a" * 64, "b" * 64, threshold=0.5, db_path=db,
+        )
+        assert result["available"] is True
+        # Critical assertion: jaccard MUST stay within [0.0, 1.0] even when
+        # many-to-one collapsing occurs.
+        assert 0.0 <= result["jaccard"] <= 1.0, (
+            f"jaccard escaped [0,1]: got {result['jaccard']} "
+            f"(matched_a={result['matched_a_count']}, "
+            f"matched_b={result['matched_b_count']}, "
+            f"shared={result['shared_function_count']})"
+        )
+        # matched_a should be high (~20), matched_b should be 1 — collapse
+        # is happening exactly as we'd expect.
+        assert result["matched_a_count"] >= 5
+        assert result["matched_b_count"] == 1
+        # shared should be min(matched_a, matched_b) — the conservative,
+        # set-style count we want.
+        assert result["shared_function_count"] == 1
+
+    def test_no_overlap(self, tmp_path):
+        """Two completely different binaries should produce a 0.0 jaccard."""
+        db = tmp_path / "cmp.db"
+        init_db(db)
+        store_binary_features("a" * 64, "left.exe", "x86", 100, [
+            _make_features(address=0x401000, block_count=5, edge_count=6,
+                           api_names=["CreateFileW"]),
+        ], db)
+        store_binary_features("b" * 64, "right.exe", "x86", 100, [
+            _make_features(address=0x501000, block_count=80, edge_count=150,
+                           api_names=["WSACleanup"]),
+        ], db)
+        result = compare_indexed_binaries(
+            "a" * 64, "b" * 64, threshold=0.7, db_path=db,
+        )
+        assert result["available"] is True
+        assert result["shared_function_count"] == 0
+        assert result["jaccard"] == 0.0
+
+    def test_top_match_limit_respected(self, tmp_path):
+        db = tmp_path / "cmp.db"
+        init_db(db)
+        funcs = [
+            _make_features(address=0x401000 + i * 0x100,
+                           block_count=5, edge_count=6,
+                           api_names=["CreateFileW"])
+            for i in range(15)
+        ]
+        store_binary_features("a" * 64, "v1.exe", "x86", 100, funcs, db)
+        store_binary_features("b" * 64, "v2.exe", "x86", 100, funcs, db)
+        result = compare_indexed_binaries(
+            "a" * 64, "b" * 64, threshold=0.5,
+            top_match_limit=5, db_path=db,
+        )
+        assert result["available"] is True
+        assert len(result["top_matches"]) == 5
