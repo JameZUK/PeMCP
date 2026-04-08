@@ -272,8 +272,18 @@ async def open_project(
             ),
             "expected_filename": member.original_filename,
         }
-    # Bind project ahead of open_file so resolution finds the active project.
-    state.bind_project(proj)
+    # CRITICAL: do NOT call ``state.bind_project(proj)`` here. ``open_file``
+    # below will flush the *currently bound* project's overlay before
+    # resetting in-memory state — if we pre-bind the new project, that
+    # cleanup writes the old in-memory state to the NEW project's overlay
+    # file, wiping its existing notes/artifacts/etc. Instead we touch
+    # ``last_opened`` so ``open_file``'s ``lookup_by_sha`` resolution
+    # picks this project naturally (it sorts by ``last_opened`` desc), and
+    # ``open_file`` does the binding itself after the flush + reset.
+    try:
+        proj.touch_last_opened()
+    except Exception as _touch_err:
+        logger.debug("open_project: touch_last_opened failed: %s", _touch_err)
     from arkana.mcp.tools_pe import open_file as _open_file_tool
     result = await _open_file_tool(ctx, binary_path, force_switch=force_switch)
     if isinstance(result, dict):

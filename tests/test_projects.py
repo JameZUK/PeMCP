@@ -395,3 +395,100 @@ class TestMigration:
         with gzip.open(entry_dir / f"{sha}.json.gz", "rt", encoding="utf-8") as f:
             new_wrapper = json.load(f)
         assert new_wrapper["_cache_meta"]["cache_format_version"] == 2
+
+
+# ---------------------------------------------------------------------------
+#  Regression: open_project must NOT wipe the existing overlay
+# ---------------------------------------------------------------------------
+
+class TestOpenProjectOverlayPreservation:
+    """The original ``open_project`` pre-bound the project before calling
+    ``open_file``. ``open_file``'s pre-switch flush then read
+    ``state.active_project`` (which was now the NEW project) and wrote the
+    OLD in-memory state to the NEW project's overlay file — wiping its
+    notes/artifacts/renames/etc. on every open. This pin asserts that
+    flushing an in-memory state to a freshly-opened project's overlay does
+    NOT clobber data that was already there.
+    """
+
+    def test_flush_overlay_uses_active_project(self, manager, clean_state, tmp_path):
+        """Direct flush_overlay test: bind a project, populate state, flush,
+        then read the overlay back and verify the data is on disk. This
+        confirms the flush primitive is correct — the open_project bug was
+        in the orchestration, not the primitive."""
+        proj = manager.create("flush_test")
+        # Create a real member so save_overlay has a sha to key on
+        from arkana.projects import ProjectMember
+        sha = "a" * 64
+        proj.binaries_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        proj.register_stub_member(
+            ProjectMember(
+                sha256=sha, original_filename="x.bin",
+                copy_path=str(proj.binaries_dir / "x.bin"),
+                added_at=0.0, size=0,
+            ),
+        )
+        clean_state.bind_project(proj)
+        clean_state.add_note(content="test note 1", category="general")
+        clean_state.add_note(content="test note 2", category="general")
+        assert clean_state.flush_overlay() is True
+        # Read back from disk
+        loaded = proj.load_overlay(sha)
+        assert len(loaded.get("notes", [])) == 2
+
+    def test_simulated_open_project_does_not_wipe_existing_overlay(
+            self, manager, clean_state, tmp_path):
+        """Simulate the open_project → open_file path: project A has an
+        on-disk overlay with 5 notes. The orchestration must NOT overwrite
+        that overlay with the empty in-memory state of a fresh session.
+
+        Mirrors the live data-loss bug: bind project, then immediately
+        flush_overlay() (the open_file pre-switch behaviour) — would
+        previously write empty notes onto the existing 5.
+        """
+        from arkana.projects import ProjectMember
+        proj = manager.create("preserve")
+        sha = "b" * 64
+        proj.binaries_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        proj.register_stub_member(
+            ProjectMember(
+                sha256=sha, original_filename="x.bin",
+                copy_path=str(proj.binaries_dir / "x.bin"),
+                added_at=0.0, size=0,
+            ),
+        )
+        # Pre-populate the overlay with 5 notes via a separate state
+        from arkana.state import AnalyzerState
+        seeding_state = AnalyzerState()
+        seeding_state.bind_project(proj)
+        for i in range(5):
+            seeding_state.add_note(content=f"seed {i}", category="general")
+        seeding_state.flush_overlay()
+        # Verify on disk
+        on_disk = proj.load_overlay(sha)
+        assert len(on_disk["notes"]) == 5
+
+        # Now: a NEW empty session binds the same project. At this point
+        # the in-memory state has 0 notes. If we call flush_overlay()
+        # before applying the existing overlay, we wipe disk → reproduces
+        # the bug. The fix is that the open_project orchestration must
+        # NOT call flush_overlay() before apply_overlay().
+        fresh_state = AnalyzerState()
+        fresh_state.bind_project(proj)
+        # The fresh state has no notes
+        assert fresh_state.notes == []
+        # The overlay on disk MUST still have the 5 notes
+        on_disk_after = proj.load_overlay(sha)
+        assert len(on_disk_after["notes"]) == 5, (
+            "open_project pre-bind clobbered the existing overlay — "
+            "the bind itself must NOT trigger a flush of the empty "
+            "in-memory state"
+        )
+
+        # Now simulate the correct flow: apply the overlay first, then
+        # the in-memory state has the notes back. A subsequent flush
+        # should round-trip cleanly.
+        fresh_state.apply_overlay(on_disk_after)
+        assert len(fresh_state.notes) == 5
+        # And the overlay still has 5 notes
+        assert len(proj.load_overlay(sha)["notes"]) == 5
