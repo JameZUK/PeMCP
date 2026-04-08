@@ -762,3 +762,450 @@ class TestDashboardExecutorShutdown:
         from arkana.dashboard.app import _api_error_response
         resp = _api_error_response("test_endpoint", ValueError("x"))
         assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+#  Locate cache rehash on hit (defends against cached-then-replaced binary)
+# ---------------------------------------------------------------------------
+
+class TestLocateCacheRehash:
+    """``_locate_cache_get`` re-hashes the cached path on every hit so a
+    file replaced (with different content) at the cached path within the
+    TTL window is not silently served. Critical: the previous version
+    only checked path existence, leaking the wrong binary for a sha256."""
+
+    def _hash(self, data: bytes) -> str:
+        import hashlib
+        return hashlib.sha256(data).hexdigest()
+
+    def setup_method(self):
+        # Reset the module-level cache between tests so cross-test
+        # contamination can't mask a failure.
+        from arkana.dashboard import app as app_mod
+        with app_mod._locate_cache_lock:
+            app_mod._locate_cache.clear()
+
+    def test_cache_hit_returns_path_when_content_unchanged(self, tmp_path):
+        from arkana.dashboard.app import _locate_cache_put, _locate_cache_get
+        f = tmp_path / "x.bin"
+        data = b"hello arkana"
+        f.write_bytes(data)
+        sha = self._hash(data)
+        _locate_cache_put(sha, str(f))
+        assert _locate_cache_get(sha) == str(f)
+
+    def test_cache_hit_evicted_when_content_replaced(self, tmp_path):
+        from arkana.dashboard.app import _locate_cache_put, _locate_cache_get
+        f = tmp_path / "x.bin"
+        original = b"original content"
+        f.write_bytes(original)
+        sha_original = self._hash(original)
+        _locate_cache_put(sha_original, str(f))
+        # Replace the file with different content at the same path.
+        f.write_bytes(b"replaced content")
+        # Cache hit must NOT return the path — content drift is detected.
+        assert _locate_cache_get(sha_original) is None
+
+    def test_cache_hit_evicted_when_path_deleted(self, tmp_path):
+        from arkana.dashboard.app import _locate_cache_put, _locate_cache_get
+        f = tmp_path / "x.bin"
+        f.write_bytes(b"data")
+        sha = self._hash(b"data")
+        _locate_cache_put(sha, str(f))
+        f.unlink()
+        assert _locate_cache_get(sha) is None
+
+    def test_cache_hit_evicted_after_ttl(self, tmp_path, monkeypatch):
+        from arkana.dashboard import app as app_mod
+        from arkana.dashboard.app import _locate_cache_put, _locate_cache_get
+        f = tmp_path / "x.bin"
+        data = b"ttl test"
+        f.write_bytes(data)
+        sha = self._hash(data)
+        # Tighten TTL to a value we can race past.
+        monkeypatch.setattr(app_mod, "_LOCATE_CACHE_TTL_S", 0.05)
+        _locate_cache_put(sha, str(f))
+        import time as _t
+        _t.sleep(0.1)
+        assert _locate_cache_get(sha) is None
+
+
+# ---------------------------------------------------------------------------
+#  _build_directory_tarball TOCTOU defence
+# ---------------------------------------------------------------------------
+
+class TestBuildDirectoryTarballTOCTOU:
+    """The directory tarball helper opens the source dir with O_NOFOLLOW
+    and walks via dir_fd, so a swap of the leaf or any parent symlink
+    cannot redirect the archive contents."""
+
+    def test_leaf_symlink_rejected(self, tmp_path):
+        from arkana.dashboard.app import _build_directory_tarball
+        target = tmp_path / "real"
+        target.mkdir()
+        (target / "secret.txt").write_text("ok")
+        link = tmp_path / "link"
+        link.symlink_to(target)
+        with pytest.raises(RuntimeError, match="symlinked directory"):
+            _build_directory_tarball(str(link), "bundle")
+
+    def test_nonexistent_path_rejected(self, tmp_path):
+        from arkana.dashboard.app import _build_directory_tarball
+        with pytest.raises(RuntimeError, match="no longer exists"):
+            _build_directory_tarball(str(tmp_path / "missing"), "bundle")
+
+    def test_file_path_rejected(self, tmp_path):
+        from arkana.dashboard.app import _build_directory_tarball
+        f = tmp_path / "not-a-dir.txt"
+        f.write_text("x")
+        with pytest.raises(RuntimeError, match="not a directory"):
+            _build_directory_tarball(str(f), "bundle")
+
+    def test_real_directory_succeeds_and_skips_inner_symlinks(self, tmp_path):
+        from arkana.dashboard.app import _build_directory_tarball, _unlink_quiet
+        import tarfile
+        src = tmp_path / "real_dir"
+        src.mkdir()
+        (src / "a.txt").write_text("alpha")
+        (src / "b.txt").write_text("bravo")
+        # Inner symlink to /etc/passwd — must NOT end up in the archive.
+        (src / "evil_link").symlink_to("/etc/passwd")
+        out_path = _build_directory_tarball(str(src), "bundle")
+        try:
+            with tarfile.open(out_path, "r:gz") as tf:
+                names = tf.getnames()
+            assert any(n.endswith("a.txt") for n in names)
+            assert any(n.endswith("b.txt") for n in names)
+            assert not any("evil_link" in n for n in names)
+            assert not any("passwd" in n for n in names)
+        finally:
+            _unlink_quiet(out_path)
+
+
+# ---------------------------------------------------------------------------
+#  Project comparison endpoint bounds
+# ---------------------------------------------------------------------------
+
+class TestProjectComparisonBounds:
+    """The PROJECTS sub-tab on the Similarity page can be triggered by any
+    authenticated user against arbitrary project pairs. The cap and budget
+    machinery must protect the dashboard executor from being pinned by a
+    huge pair grid or a hostile binary pair."""
+
+    def test_threshold_nan_clamps_to_default(self, manager, clean_state):
+        from arkana.dashboard.state_api import get_project_comparison_data
+        manager.create("alpha")
+        manager.create("beta")
+        a = next(p.id for p in manager.list() if p.name == "alpha")
+        b = next(p.id for p in manager.list() if p.name == "beta")
+        result = get_project_comparison_data(a, b, threshold=float("nan"))
+        assert result["available"] is True
+        assert result["threshold"] == 0.7
+
+    def test_threshold_inf_clamps_to_default(self, manager, clean_state):
+        from arkana.dashboard.state_api import get_project_comparison_data
+        manager.create("alpha")
+        manager.create("beta")
+        a = next(p.id for p in manager.list() if p.name == "alpha")
+        b = next(p.id for p in manager.list() if p.name == "beta")
+        result = get_project_comparison_data(a, b, threshold=float("inf"))
+        assert result["threshold"] == 0.7
+
+    def test_threshold_negative_clamps_to_zero(self, manager, clean_state):
+        from arkana.dashboard.state_api import get_project_comparison_data
+        manager.create("alpha")
+        manager.create("beta")
+        a = next(p.id for p in manager.list() if p.name == "alpha")
+        b = next(p.id for p in manager.list() if p.name == "beta")
+        result = get_project_comparison_data(a, b, threshold=-5.0)
+        assert result["threshold"] == 0.0
+
+    def test_threshold_above_one_clamps_to_one(self, manager, clean_state):
+        from arkana.dashboard.state_api import get_project_comparison_data
+        manager.create("alpha")
+        manager.create("beta")
+        a = next(p.id for p in manager.list() if p.name == "alpha")
+        b = next(p.id for p in manager.list() if p.name == "beta")
+        result = get_project_comparison_data(a, b, threshold=99.0)
+        assert result["threshold"] == 1.0
+
+    def test_threshold_string_with_whitespace_parsed(self, manager, clean_state):
+        from arkana.dashboard.state_api import get_project_comparison_data
+        manager.create("alpha")
+        manager.create("beta")
+        a = next(p.id for p in manager.list() if p.name == "alpha")
+        b = next(p.id for p in manager.list() if p.name == "beta")
+        result = get_project_comparison_data(a, b, threshold="  0.5  ")
+        assert result["threshold"] == 0.5
+
+    def test_threshold_garbage_string_falls_back(self, manager, clean_state):
+        from arkana.dashboard.state_api import get_project_comparison_data
+        manager.create("alpha")
+        manager.create("beta")
+        a = next(p.id for p in manager.list() if p.name == "alpha")
+        b = next(p.id for p in manager.list() if p.name == "beta")
+        result = get_project_comparison_data(a, b, threshold="not a number")
+        assert result["threshold"] == 0.7
+
+    def test_self_compare_rejected(self, manager, clean_state):
+        from arkana.dashboard.state_api import get_project_comparison_data
+        manager.create("alpha")
+        a = next(p.id for p in manager.list() if p.name == "alpha")
+        result = get_project_comparison_data(a, a)
+        assert result["available"] is False
+        assert "different" in result["error"]
+
+    def test_pair_grid_cap_refused(self, manager, clean_state, tmp_path,
+                                   monkeypatch):
+        """Two projects whose pair-grid product exceeds the cap should be
+        refused outright with the actual size in the error."""
+        from arkana.dashboard import state_api
+        monkeypatch.setattr(state_api, "MAX_PROJECT_COMPARE_PAIRS", 4)
+
+        # Build two projects with 3 stub members each → 9 pairs > cap of 4.
+        from arkana.projects import ProjectMember
+        proj_a = manager.create("compare_a")
+        proj_b = manager.create("compare_b")
+        for i, project in enumerate((proj_a, proj_b)):
+            for j in range(3):
+                sha = f"{i}{j}{'a' * 62}"[:64]
+                stub_path = project.binaries_dir / f"stub_{sha[:8]}.bin"
+                project.binaries_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+                project.register_stub_member(
+                    ProjectMember(
+                        sha256=sha,
+                        original_filename=f"stub_{j}.bin",
+                        copy_path=str(stub_path),
+                        added_at=0.0,
+                        size=0,
+                    ),
+                    make_primary=(j == 0),
+                )
+
+        result = state_api.get_project_comparison_data(proj_a.id, proj_b.id)
+        assert result["available"] is False
+        assert "exceeds the dashboard cap" in result["error"]
+        assert result["pair_count"] == 9
+        assert result["max_pair_count"] == 4
+
+
+# ---------------------------------------------------------------------------
+#  Project.snapshot_members + register_stub_member
+# ---------------------------------------------------------------------------
+
+class TestProjectSnapshotMembers:
+    """The public snapshot helpers replace the previous reach-into-private-
+    `_lock` pattern across the dashboard layer. Verify they return stable
+    snapshots and don't expose mutable references back into the manifest."""
+
+    def _make_member(self, project, sha_prefix="a"):
+        from arkana.projects import ProjectMember
+        sha = (sha_prefix * 64)[:64]
+        stub_path = project.binaries_dir / f"stub_{sha[:8]}.bin"
+        project.binaries_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        return ProjectMember(
+            sha256=sha,
+            original_filename=f"stub_{sha[:8]}.bin",
+            copy_path=str(stub_path),
+            added_at=1234.0,
+            size=42,
+            mode="pe",
+        )
+
+    def test_snapshot_returns_list_of_dicts(self, manager, clean_state):
+        proj = manager.create("snap")
+        proj.register_stub_member(self._make_member(proj, "a"))
+        members = proj.snapshot_members()
+        assert isinstance(members, list)
+        assert len(members) == 1
+        m = members[0]
+        assert m["sha256"].startswith("a")
+        assert m["filename"].startswith("stub_")
+        assert m["copy_path"].endswith(".bin")
+        assert m["mode"] == "pe"
+
+    def test_snapshot_does_not_alias_internal_state(self, manager, clean_state):
+        proj = manager.create("snap")
+        proj.register_stub_member(self._make_member(proj, "b"))
+        members = proj.snapshot_members()
+        members[0]["filename"] = "MUTATED"
+        # The internal manifest should be untouched.
+        again = proj.snapshot_members()
+        assert again[0]["filename"] != "MUTATED"
+
+    def test_snapshot_with_presence(self, manager, clean_state):
+        proj = manager.create("snap")
+        proj.register_stub_member(self._make_member(proj, "c"))
+        members, primary, last_active = proj.snapshot_members_with_presence()
+        assert len(members) == 1
+        assert primary == ("c" * 64)[:64]
+        assert last_active == ("c" * 64)[:64]
+
+    def test_register_stub_member_rejects_external_path(self, manager,
+                                                        clean_state, tmp_path):
+        """``register_stub_member`` MUST refuse a copy_path outside the
+        project's binaries/ directory — defends against future callers
+        passing arbitrary paths into the manifest."""
+        from arkana.projects import ProjectMember
+        proj = manager.create("snap")
+        bad_member = ProjectMember(
+            sha256="d" * 64,
+            original_filename="external.bin",
+            copy_path=str(tmp_path / "outside.bin"),
+            added_at=0.0,
+            size=0,
+        )
+        with pytest.raises(ValueError, match="binaries/"):
+            proj.register_stub_member(bad_member)
+
+    def test_register_stub_member_accepts_internal_path(self, manager,
+                                                        clean_state):
+        proj = manager.create("snap")
+        proj.register_stub_member(self._make_member(proj, "e"))
+        assert len(proj.snapshot_members()) == 1
+
+
+# ---------------------------------------------------------------------------
+#  Bulk artifact batch helpers
+# ---------------------------------------------------------------------------
+
+class TestBulkArtifactBatch:
+    """Bulk artifact ops were rewritten to single-pass O(L+N) under one
+    lock acquisition. Pin the new behaviour."""
+
+    def test_delete_batch_removes_only_matching_ids(self, clean_state):
+        from arkana.state import set_current_state
+        st = clean_state
+        set_current_state(st)
+        st.register_artifact(
+            path="/tmp/a", sha256="a" * 64, md5="a" * 32, size=1,
+            source_tool="test", description="a",
+        )
+        st.register_artifact(
+            path="/tmp/b", sha256="b" * 64, md5="b" * 32, size=1,
+            source_tool="test", description="b",
+        )
+        st.register_artifact(
+            path="/tmp/c", sha256="c" * 64, md5="c" * 32, size=1,
+            source_tool="test", description="c",
+        )
+        snap = st.get_all_artifacts_snapshot()
+        assert len(snap) == 3
+        ids = [snap[0]["id"], snap[2]["id"]]
+        results = st.delete_artifacts_batch(ids)
+        assert results[ids[0]] is True
+        assert results[ids[1]] is True
+        remaining = st.get_all_artifacts_snapshot()
+        assert len(remaining) == 1
+        assert remaining[0]["id"] == snap[1]["id"]
+
+    def test_delete_batch_unknown_ids_return_false(self, clean_state):
+        from arkana.state import set_current_state
+        st = clean_state
+        set_current_state(st)
+        st.register_artifact(
+            path="/tmp/a", sha256="a" * 64, md5="a" * 32, size=1,
+            source_tool="test", description="a",
+        )
+        results = st.delete_artifacts_batch(["does_not_exist", "also_no"])
+        assert results == {"does_not_exist": False, "also_no": False}
+        assert len(st.get_all_artifacts_snapshot()) == 1
+
+    def test_update_metadata_batch_applies_to_listed_ids(self, clean_state):
+        from arkana.state import set_current_state
+        st = clean_state
+        set_current_state(st)
+        st.register_artifact(
+            path="/tmp/a", sha256="a" * 64, md5="a" * 32, size=1,
+            source_tool="test", description="a",
+        )
+        st.register_artifact(
+            path="/tmp/b", sha256="b" * 64, md5="b" * 32, size=1,
+            source_tool="test", description="b",
+        )
+        ids = [a["id"] for a in st.get_all_artifacts_snapshot()]
+        results = st.update_artifacts_metadata_batch(
+            ids, tags=["malware", "loader"], replace_tags=True,
+        )
+        assert all(v is not None for v in results.values())
+        for a in st.get_all_artifacts_snapshot():
+            assert "malware" in a["tags"]
+            assert "loader" in a["tags"]
+
+    def test_update_metadata_batch_with_no_changes_returns_none(self, clean_state):
+        from arkana.state import set_current_state
+        st = clean_state
+        set_current_state(st)
+        st.register_artifact(
+            path="/tmp/a", sha256="a" * 64, md5="a" * 32, size=1,
+            source_tool="test", description="a",
+        )
+        ids = [a["id"] for a in st.get_all_artifacts_snapshot()]
+        # No description / tags / notes given → all-None patch.
+        results = st.update_artifacts_metadata_batch(ids)
+        assert all(v is None for v in results.values())
+
+
+# ---------------------------------------------------------------------------
+#  Project membership cache invalidation
+# ---------------------------------------------------------------------------
+
+class TestProjectMembershipCache:
+    """The cache short-circuits the O(P*M) walk for ~10s, but must
+    invalidate when the projects index file changes (create/rename/delete)
+    so freshly-created projects appear immediately in the BSim panel."""
+
+    def setup_method(self):
+        from arkana.dashboard import state_api
+        with state_api._project_membership_lock:
+            state_api._project_membership_cache["expires"] = 0.0
+            state_api._project_membership_cache["index_mtime"] = None
+            state_api._project_membership_cache["map"] = {}
+            state_api._project_membership_cache["rebuilding"] = False
+
+    def test_cache_invalidates_on_new_project(self, manager, clean_state):
+        from arkana.dashboard.state_api import _project_membership_for_shas
+        # Initial state: no projects.
+        assert _project_membership_for_shas([("a" * 64)]) == {("a" * 64): []}
+        # Create a project containing that sha.
+        proj = manager.create("invalidation")
+        from arkana.projects import ProjectMember
+        sha = "a" * 64
+        stub = proj.binaries_dir / "x.bin"
+        proj.binaries_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        proj.register_stub_member(
+            ProjectMember(
+                sha256=sha,
+                original_filename="x.bin",
+                copy_path=str(stub),
+                added_at=0.0,
+                size=0,
+            ),
+        )
+        # The membership cache must reflect the new project on the next
+        # call (mtime invalidation, not the 10s TTL).
+        result = _project_membership_for_shas([sha])
+        assert len(result[sha]) == 1
+        assert result[sha][0]["name"] == "invalidation"
+
+    def test_cache_seed_with_no_index_file(self, manager, clean_state):
+        """Empty-projects start state should not freeze the cache forever."""
+        from arkana.dashboard.state_api import _project_membership_for_shas
+        # Seed call with no projects.
+        result = _project_membership_for_shas([("z" * 64)])
+        assert result == {("z" * 64): []}
+        # Add a project; should appear on the next call.
+        proj = manager.create("seed_test")
+        from arkana.projects import ProjectMember
+        proj.binaries_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        proj.register_stub_member(
+            ProjectMember(
+                sha256="z" * 64,
+                original_filename="z.bin",
+                copy_path=str(proj.binaries_dir / "z.bin"),
+                added_at=0.0,
+                size=0,
+            ),
+        )
+        result = _project_membership_for_shas([("z" * 64)])
+        assert len(result["z" * 64]) == 1

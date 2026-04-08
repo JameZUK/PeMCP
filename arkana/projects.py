@@ -404,7 +404,29 @@ class Project:
         synthesized a stub binary path inside ``binaries/`` and need to land
         the manifest entry under the project's lock without reaching into
         the private ``_lock`` attribute themselves.
+
+        Containment check: ``member.copy_path`` MUST resolve inside this
+        project's ``binaries_dir``. Defends against future callers passing
+        an arbitrary path that would point the manifest at an external file
+        — the project would then track a binary outside its own directory
+        tree, breaking export/import and the cache wrapper invariants.
         """
+        if member.copy_path:
+            try:
+                resolved = Path(member.copy_path).resolve()
+                allowed_root = self.binaries_dir.resolve()
+                if not (resolved == allowed_root or resolved.is_relative_to(allowed_root)):
+                    raise ValueError(
+                        f"register_stub_member: copy_path {member.copy_path!r} "
+                        f"is not under the project's binaries/ directory"
+                    )
+            except (OSError, ValueError) as exc:
+                if isinstance(exc, ValueError) and "binaries/" in str(exc):
+                    raise
+                raise ValueError(
+                    f"register_stub_member: cannot validate copy_path "
+                    f"{member.copy_path!r}: {exc}"
+                ) from exc
         with self._lock:
             self.manifest.members[member.sha256] = member.to_dict()
             if make_primary:

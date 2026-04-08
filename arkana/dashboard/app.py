@@ -175,6 +175,19 @@ _locate_cache_lock = threading.Lock()
 
 
 def _locate_cache_get(sha256: str) -> Optional[str]:
+    """Return the cached path for *sha256* if still valid, else None.
+
+    Cache validity requires THREE conditions:
+      1. Entry hasn't expired (TTL).
+      2. The cached path still exists on disk.
+      3. The file at the cached path still hashes to *sha256*.
+
+    The third check defends against the cache returning a stale-replaced
+    binary: if a file at the cached path is replaced (not deleted) with
+    different content during the TTL window, we'd serve the wrong binary
+    for a sha256 lookup. Re-hashing on hit is cheap (~50ms for a 5MB
+    binary) compared to the cold-path 20K-entry walk it short-circuits.
+    """
     now = time.time()
     with _locate_cache_lock:
         entry = _locate_cache.get(sha256)
@@ -184,10 +197,25 @@ def _locate_cache_get(sha256: str) -> Optional[str]:
         if now >= expiry:
             del _locate_cache[sha256]
             return None
-    # Verify the cached path still exists — a stale entry should fall
-    # through to the cold path so the user doesn't get stuck on a
-    # deleted file.
-    if not os.path.isfile(path):
+    # Verify the cached path still exists AND still has the expected
+    # content. Both checks happen outside the cache lock so concurrent
+    # readers don't serialize on the disk I/O.
+    try:
+        if not os.path.isfile(path):
+            raise OSError("not a file")
+        st = os.stat(path)
+        if st.st_size > _LOCATE_MAX_FILE_BYTES:
+            raise OSError("file too large to verify")
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            while True:
+                chunk = f.read(_LOCATE_HASH_CHUNK)
+                if not chunk:
+                    break
+                h.update(chunk)
+        if h.hexdigest() != sha256:
+            raise OSError("content drift")
+    except OSError:
         with _locate_cache_lock:
             _locate_cache.pop(sha256, None)
         return None
@@ -231,42 +259,129 @@ def _build_directory_tarball(src_path: str, arcname: str) -> str:
     responsible for unlinking the result (use ``_unlink_quiet`` as a
     BackgroundTask). Symlinks are NOT followed (``dereference=False``).
 
-    Pre-validates *src_path* against TOCTOU swaps:
-      - Refuses if the path is a symlink (a directory artifact registered
-        as a real dir could be replaced with a symlink to ``/etc`` between
-        registration and download).
-      - Refuses if it isn't a directory.
-      - Resolves the path before walking so a parent-symlink swap also
-        gets caught.
+    TOCTOU defence: opens the directory once with ``O_DIRECTORY|O_NOFOLLOW``
+    and walks it via ``os.fwalk(dir_fd=dir_fd)``. Once the fd is held, all
+    subsequent operations are anchored to that inode regardless of what
+    happens to the path on disk between checks. This blocks both the
+    leaf-symlink-swap attack (caught at ``os.open`` because of
+    ``O_NOFOLLOW``) AND the parent-symlink-swap attack (the kernel can't
+    redirect an already-open fd). The previous version checked
+    ``Path.is_symlink()`` then re-resolved the string for ``tarfile.add``,
+    leaving a tiny window for a parent rename.
     """
-    src = Path(src_path)
+    # Reject leaf symlinks BEFORE the open. Linux returns ENOTDIR (not
+    # ELOOP) for ``O_NOFOLLOW|O_DIRECTORY`` on a symlink-to-directory in
+    # most kernels, which would land in the wrong error branch below.
+    # An explicit ``lstat`` is unambiguous and produces a clear error.
     try:
-        if src.is_symlink():
-            raise RuntimeError(
-                f"Refusing to tarball symlinked directory: {src_path}"
-            )
-        resolved_src = src.resolve(strict=True)
-        if not resolved_src.is_dir():
-            raise RuntimeError(
-                f"Directory artifact path is not a directory: {src_path}"
-            )
+        lst = os.lstat(src_path)
     except FileNotFoundError as exc:
         raise RuntimeError(
             f"Directory artifact path no longer exists: {src_path}"
         ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot stat directory artifact path {src_path}: {exc}"
+        ) from exc
+    import stat as _stat
+    if _stat.S_ISLNK(lst.st_mode):
+        raise RuntimeError(
+            f"Refusing to tarball symlinked directory: {src_path}"
+        )
+    if not _stat.S_ISDIR(lst.st_mode):
+        raise RuntimeError(
+            f"Directory artifact path is not a directory: {src_path}"
+        )
 
-    fd = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
-    tmp_path = fd.name
-    fd.close()
+    try:
+        # O_NOFOLLOW + O_DIRECTORY is belt-and-braces on top of the
+        # explicit lstat above. Once the fd is held, all subsequent
+        # operations are anchored to that inode regardless of what
+        # happens to the path string on disk.
+        dir_fd = os.open(
+            src_path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+    except FileNotFoundError as exc:
+        # Could only happen if the path was unlinked between lstat and
+        # open — extremely narrow window.
+        raise RuntimeError(
+            f"Directory artifact path no longer exists: {src_path}"
+        ) from exc
+    except OSError as exc:
+        # Anything else (parent symlink swap, EACCES, ENOTDIR from a
+        # parent rename) — refuse and surface the error.
+        raise RuntimeError(
+            f"Cannot open directory artifact: {src_path}: {exc}"
+        ) from exc
+
+    fd_temp = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
+    tmp_path = fd_temp.name
+    fd_temp.close()
     try:
         with tarfile.open(tmp_path, mode="w:gz", dereference=False) as tf:
-            tf.add(str(resolved_src), arcname=arcname, recursive=True)
+            # Walk the open directory descriptor instead of the path
+            # string. follow_symlinks=False makes os.fwalk leave symlinked
+            # subdirs out of the recursion entirely. We add each file via
+            # an open file descriptor anchored to the walked dir_fd, so
+            # nothing tarfile reads ever crosses a symlink.
+            for dirpath, _dirnames, filenames, walk_dir_fd in os.fwalk(
+                dir_fd=dir_fd, follow_symlinks=False,
+            ):
+                # Build the arcname relative to the original arcname root.
+                rel_dir = os.path.relpath(dirpath, src_path) if dirpath != src_path else "."
+                arc_dir = arcname if rel_dir == "." else os.path.join(arcname, rel_dir)
+                # Add the directory entry itself first so tar preserves
+                # empty dirs and per-dir mode bits.
+                dir_info = tf.gettarinfo(arcname=arc_dir, fileobj=None,
+                                         name=os.path.basename(dirpath))
+                if dir_info is None:
+                    dir_info = tarfile.TarInfo(name=arc_dir)
+                    dir_info.type = tarfile.DIRTYPE
+                    dir_info.mode = 0o755
+                else:
+                    dir_info.name = arc_dir
+                tf.addfile(dir_info)
+                for fname in filenames:
+                    try:
+                        file_fd = os.open(
+                            fname,
+                            os.O_RDONLY | os.O_NOFOLLOW,
+                            dir_fd=walk_dir_fd,
+                        )
+                    except OSError:
+                        # Symlink or vanished file — skip silently.
+                        continue
+                    try:
+                        info = tarfile.TarInfo(name=os.path.join(arc_dir, fname))
+                        st = os.fstat(file_fd)
+                        info.size = st.st_size
+                        info.mode = st.st_mode & 0o777
+                        info.mtime = int(st.st_mtime)
+                        info.uid = st.st_uid
+                        info.gid = st.st_gid
+                        with os.fdopen(file_fd, "rb", closefd=True) as fobj:
+                            tf.addfile(info, fobj)
+                    except Exception:
+                        try:
+                            os.close(file_fd)
+                        except OSError:
+                            pass
+                        raise
     except Exception:
         try:
             os.unlink(tmp_path)
         except OSError:
             pass
+        try:
+            os.close(dir_fd)
+        except OSError:
+            pass
         raise
+    try:
+        os.close(dir_fd)
+    except OSError:
+        pass
     return tmp_path
 
 
@@ -391,9 +506,10 @@ def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
         ``state.allowed_paths`` itself (which is the source of truth) and
         ``state.samples_path`` (operator-configured at startup).
         Untrusted roots (env-var fallbacks) must (a) sit under the
-        allowlist when one is configured and (b) have at least two path
-        components so a misconfigured ``ARKANA_OUTPUT=/`` doesn't let the
-        helper walk the whole filesystem on every stub-open call.
+        allowlist when one is configured and (b) have at least three path
+        components so a misconfigured ``ARKANA_OUTPUT=/etc`` (or
+        ``/etc/foo``, ``/var/lib``) doesn't let the helper walk a
+        system tree on every stub-open call.
         """
         if not p:
             return
@@ -407,9 +523,12 @@ def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
         if not rp.is_dir():
             return
         if not trusted:
-            # Reject too-shallow roots ("/", "/home", "/var", etc.) — even
-            # an allowlisted shallow root is a footgun for a recursive walk.
-            if len(rp.parts) < 3:
+            # Reject too-shallow roots ("/", "/home", "/etc", "/etc/foo",
+            # "/var/lib"). The threshold is 4 parts so the first three
+            # match Path("/")=("/"), Path("/etc")=("/", "etc"),
+            # Path("/etc/foo")=("/", "etc", "foo") all get refused, while
+            # legitimate paths like ``/home/user/output`` (4 parts) pass.
+            if len(rp.parts) < 4:
                 logger.debug("locate_binary: skipping shallow env root %s", rp)
                 return
             if not _is_under_allowlist(rp):

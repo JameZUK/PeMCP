@@ -521,15 +521,24 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
 
     # Translate SIGTERM into KeyboardInterrupt so the existing cleanup
     # path (finally block) runs identically for both Ctrl-C and container
-    # stop / kill signals.  A watchdog ensures the process exits within 5s
-    # even if asyncio's executor shutdown hangs on a stuck thread.
+    # stop / kill signals. A watchdog ensures the process exits within
+    # _SIGTERM_WATCHDOG_S even if asyncio's executor shutdown hangs on a
+    # stuck thread.
+    #
+    # The 15-second ceiling matches the normal-exit watchdog in the
+    # finally: block — the previous 5s budget could fire mid-write during
+    # the final overlay flush on a heavily-loaded disk, losing exactly
+    # the work the final flush was added to preserve. 15s is generous
+    # enough for the largest realistic overlay (a few MB of notes/
+    # artifacts gzipped) while still keeping ``docker stop`` responsive.
+    _SIGTERM_WATCHDOG_S = 15
     _sigterm_watchdog_started = False
     def _sigterm_handler(signum, frame):
         nonlocal _sigterm_watchdog_started
         if not _sigterm_watchdog_started:
             _sigterm_watchdog_started = True
             def _watchdog():
-                time.sleep(5)
+                time.sleep(_SIGTERM_WATCHDOG_S)
                 os._exit(1)
             threading.Thread(target=_watchdog, daemon=True).start()
         raise KeyboardInterrupt

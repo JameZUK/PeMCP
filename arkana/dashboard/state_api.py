@@ -3304,13 +3304,21 @@ def get_bsim_db_stats() -> Dict[str, Any]:
 # {sha256: [{id, name}]} reverse-index ONCE and cache it for a few seconds.
 # Invalidated by mtime on the projects index file (cheap stat) so creates/
 # deletes/renames flush the cache the next call.
+#
+# ``index_mtime`` uses ``None`` as the "no file yet" sentinel rather than
+# ``0.0``. The seed value below is also ``None`` so a freshly-created
+# project (which transitions ``None → real_mtime``) is detected as a
+# change on the next call. Using ``0.0`` for both made the cache appear
+# fresh forever in the empty-projects case.
 _PROJECT_MEMBERSHIP_TTL_S = 10.0
 _project_membership_cache: Dict[str, Any] = {
     "expires": 0.0,
-    "index_mtime": 0.0,
-    "map": {},  # sha256_lower → [{id, name}, ...]
+    "index_mtime": None,  # ``None`` ⇒ no INDEX_FILE yet (sentinel)
+    "map": {},            # sha256_lower → [{id, name}, ...]
+    "rebuilding": False,  # double-rebuild guard
 }
 _project_membership_lock = threading.Lock()
+_project_membership_rebuild = threading.Condition(_project_membership_lock)
 
 
 def _build_full_project_membership() -> Dict[str, List[Dict[str, str]]]:
@@ -3346,23 +3354,58 @@ def _build_full_project_membership() -> Dict[str, List[Dict[str, str]]]:
 
 
 def _get_project_membership_map() -> Dict[str, List[Dict[str, str]]]:
-    """Return the cached full membership map, refreshing on TTL or mtime."""
+    """Return the cached full membership map, refreshing on TTL or mtime.
+
+    Uses a Condition variable to coordinate concurrent rebuilds: if a
+    second reader hits the cache while it's being rebuilt by a first
+    reader, the second waits on the condition rather than launching its
+    own duplicate ``_build_full_project_membership()`` walk. Both readers
+    then return the same fresh map.
+
+    ``index_mtime`` is ``None`` when ``INDEX_FILE`` doesn't exist yet.
+    Comparing the current ``None`` against a previously-cached real mtime
+    (or vice-versa) correctly invalidates — using ``0.0`` for both was
+    the bug that hid newly-created projects until the 10s TTL fired.
+    """
     try:
         from arkana.projects import INDEX_FILE
-        index_mtime = INDEX_FILE.stat().st_mtime if INDEX_FILE.exists() else 0.0
+        index_mtime = (
+            INDEX_FILE.stat().st_mtime if INDEX_FILE.exists() else None
+        )
     except Exception:
-        index_mtime = 0.0
+        index_mtime = None
     now = time.time()
-    with _project_membership_lock:
+    with _project_membership_rebuild:
         if (now < _project_membership_cache["expires"]
                 and index_mtime == _project_membership_cache["index_mtime"]):
             return _project_membership_cache["map"]
-    fresh = _build_full_project_membership()
-    with _project_membership_lock:
-        _project_membership_cache["map"] = fresh
-        _project_membership_cache["expires"] = now + _PROJECT_MEMBERSHIP_TTL_S
-        _project_membership_cache["index_mtime"] = index_mtime
-    return fresh
+        # Cache is stale. If another thread is already rebuilding, wait
+        # for it instead of duplicating the O(P*M) walk.
+        if _project_membership_cache["rebuilding"]:
+            while _project_membership_cache["rebuilding"]:
+                _project_membership_rebuild.wait(timeout=5.0)
+            # The rebuilder updated the cache; return its result.
+            return _project_membership_cache["map"]
+        _project_membership_cache["rebuilding"] = True
+    fresh: Dict[str, List[Dict[str, str]]] = {}
+    rebuild_failed = False
+    try:
+        fresh = _build_full_project_membership()
+    except Exception:
+        # Don't poison the cache on rebuild error — keep the previous map
+        # (if any) and let the next call retry. Logged via the underlying
+        # function's exception handlers.
+        rebuild_failed = True
+        logger.warning("project membership rebuild failed", exc_info=True)
+    finally:
+        with _project_membership_rebuild:
+            if not rebuild_failed:
+                _project_membership_cache["map"] = fresh
+                _project_membership_cache["expires"] = time.time() + _PROJECT_MEMBERSHIP_TTL_S
+                _project_membership_cache["index_mtime"] = index_mtime
+            _project_membership_cache["rebuilding"] = False
+            _project_membership_rebuild.notify_all()
+    return _project_membership_cache["map"] if rebuild_failed else fresh
 
 
 def _project_membership_for_shas(sha256_list: List[str]) -> Dict[str, List[Dict[str, str]]]:
@@ -3679,6 +3722,7 @@ def get_project_comparison_data(project_a_id: str,
             "available": True,
             "project_a": {"id": proj_a.id, "name": proj_a.name, "member_count": len(members_a)},
             "project_b": {"id": proj_b.id, "name": proj_b.name, "member_count": len(members_b)},
+            "threshold": threshold,
             "pairs": [],
             "aggregate": {
                 "pair_count": 0, "indexed_pair_count": 0, "total_shared": 0,

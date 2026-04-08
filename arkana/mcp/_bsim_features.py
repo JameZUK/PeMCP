@@ -13,12 +13,23 @@ import json
 import math
 import sqlite3
 import threading
+import time
 import zlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from arkana.config import logger
-from arkana.constants import BSIM_DB_DIR, BSIM_DEFAULT_THRESHOLD, BSIM_MIN_BLOCKS_FOR_MATCH
+from arkana.constants import (
+    BSIM_DB_DIR,
+    BSIM_DEFAULT_THRESHOLD,
+    BSIM_MIN_BLOCKS_FOR_MATCH,
+    BSIM_COMPARE_BLOCK_TOLERANCE,
+    BSIM_COMPARE_BLOCK_TOLERANCE_PCT,
+    BSIM_COMPARE_INNER_DEADLINE_CHECK,
+    BSIM_COMPARE_MAX_CANDIDATES,
+    BSIM_COMPARE_MAX_FUNCS_PER_SIDE,
+    BSIM_COMPARE_TIME_BUDGET_S,
+)
 from arkana.mcp._category_maps import CATEGORIZED_IMPORTS_DB
 
 # ---------------------------------------------------------------------------
@@ -1034,16 +1045,6 @@ def list_indexed_binaries(db_path: Optional[Path] = None) -> List[Dict[str, Any]
         conn.close()
 
 
-# Bounds on compare_indexed_binaries — defends against pathological inputs
-# (e.g. 50K-function binaries) that would otherwise hold a dashboard worker
-# thread for many minutes. Tunable via env vars for the rare cases that
-# need them.
-BSIM_COMPARE_MAX_CANDIDATES = 200          # cap candidate list size per fa
-BSIM_COMPARE_BLOCK_TOLERANCE = 5           # absolute ±k blocks (was ±50%)
-BSIM_COMPARE_MAX_FUNCS_PER_SIDE = 50000    # refuse comparison above this
-BSIM_COMPARE_TIME_BUDGET_S = 30.0          # per-pair wallclock cap
-
-
 def is_binary_indexed(sha256: str, db_path: Optional[Path] = None,
                       conn: Optional[sqlite3.Connection] = None) -> bool:
     """Quick check whether *sha256* has any rows in the BSim DB.
@@ -1160,8 +1161,6 @@ def compare_indexed_binaries(
       - ``top_matches``: list of ``{a_addr, a_name, b_addr, b_name, score}``
       - ``truncated``: bool — present when the time budget was hit
     """
-    import time as _time
-
     sha_a = sha_a.lower()
     sha_b = sha_b.lower()
     if sha_a == sha_b:
@@ -1211,101 +1210,151 @@ def compare_indexed_binaries(
                     ),
                 }
 
-        # Pull all functions for each binary in one shot.
-        def _load_funcs(sha: str) -> List[Dict[str, Any]]:
-            cur = c.execute(
+        def _row_to_func(row: sqlite3.Row) -> Dict[str, Any]:
+            feats = _row_to_features(row)
+            feats["_addr_int"] = int(row["address"])
+            feats["_block_count"] = int(row["block_count"] or 0)
+            feats["_instr_count"] = int(row["instruction_count"] or 0)
+            return feats
+
+        # Side B is materialised in full so we can build the block-count
+        # bucket index. Side A is iterated lazily via the cursor below so
+        # we don't pay 100MB+ of feature dicts upfront on the 50K ceiling.
+        funcs_b = [
+            _row_to_func(row) for row in c.execute(
                 "SELECT f.* FROM functions f "
                 "JOIN binaries b ON f.binary_id = b.id "
                 "WHERE b.sha256 = ?",
-                (sha,),
+                (sha_b,),
             )
-            out = []
-            for row in cur:
-                feats = _row_to_features(row)
-                feats["_addr_int"] = int(row["address"])
-                feats["_block_count"] = int(row["block_count"] or 0)
-                feats["_instr_count"] = int(row["instruction_count"] or 0)
-                out.append(feats)
-            return out
+        ]
+        total_b = len(funcs_b)
+        # Note: total_a is computed by counting iterations of the streaming
+        # cursor below. We need a separate count for the empty-binary path.
+        total_a_pre = int(meta[sha_a].get("function_count") or 0)
 
-        funcs_a = _load_funcs(sha_a)
-        funcs_b = _load_funcs(sha_b)
+        if not funcs_b or total_a_pre == 0:
+            return {
+                "available": True,
+                "binary_a": meta[sha_a],
+                "binary_b": meta[sha_b],
+                "shared_function_count": 0,
+                "matched_a_count": 0,
+                "matched_b_count": 0,
+                "jaccard": 0.0,
+                "avg_similarity": 0.0,
+                "total_functions_a": total_a_pre,
+                "total_functions_b": total_b,
+                "top_matches": [],
+                "note": "One or both binaries have no indexed functions",
+            }
+
+        # Pre-bucket B by block count for cheap O(1) shortlist filtering.
+        b_by_blocks: Dict[int, List[Dict[str, Any]]] = {}
+        for fb in funcs_b:
+            b_by_blocks.setdefault(fb["_block_count"], []).append(fb)
+
+        pair_scores: List[Dict[str, Any]] = []
+        score_key = metrics if metrics else "combined"
+        deadline = time.monotonic() + BSIM_COMPARE_TIME_BUDGET_S
+        truncated = False
+        total_a = 0  # counted as we stream the cursor
+
+        # Stream A row-by-row from sqlite. Avoids materialising all of A
+        # upfront (the old version held ~100MB of feature dicts at the 50K
+        # ceiling before scoring even started).
+        a_cursor = c.execute(
+            "SELECT f.* FROM functions f "
+            "JOIN binaries b ON f.binary_id = b.id "
+            "WHERE b.sha256 = ?",
+            (sha_a,),
+        )
+
+        for a_row in a_cursor:
+            total_a += 1
+            if time.monotonic() > deadline:
+                truncated = True
+                break
+            fa = _row_to_func(a_row)
+            fa_blocks = fa["_block_count"]
+            # Block-count tolerance: floor of ±BSIM_COMPARE_BLOCK_TOLERANCE
+            # absolute, scaled up by BSIM_COMPARE_BLOCK_TOLERANCE_PCT for
+            # large functions so a 200-block fn still matches a 220-block
+            # variant (was a hard ±5 absolute window, which biased recall
+            # against larger functions).
+            tolerance = max(
+                BSIM_COMPARE_BLOCK_TOLERANCE,
+                math.ceil(fa_blocks * BSIM_COMPARE_BLOCK_TOLERANCE_PCT),
+            )
+            # Centred bucket iteration: visit fa_blocks first, then ±1, ±2,
+            # ... so the BSIM_COMPARE_MAX_CANDIDATES cap retains the
+            # closest-block matches when it fires. The old order
+            # ``range(lo, hi+1)`` truncated from the high end first.
+            candidates: List[Dict[str, Any]] = []
+            bucket = b_by_blocks.get(fa_blocks)
+            if bucket:
+                candidates.extend(bucket)
+            if len(candidates) < BSIM_COMPARE_MAX_CANDIDATES:
+                for offset in range(1, tolerance + 1):
+                    for bk in (fa_blocks - offset, fa_blocks + offset):
+                        if bk < 0:
+                            continue
+                        bucket = b_by_blocks.get(bk)
+                        if not bucket:
+                            continue
+                        candidates.extend(bucket)
+                        if len(candidates) >= BSIM_COMPARE_MAX_CANDIDATES:
+                            break
+                    if len(candidates) >= BSIM_COMPARE_MAX_CANDIDATES:
+                        break
+            if len(candidates) > BSIM_COMPARE_MAX_CANDIDATES:
+                candidates = candidates[:BSIM_COMPARE_MAX_CANDIDATES]
+            if not candidates:
+                continue
+            best = None
+            best_score = 0.0
+            # Per-iteration deadline check granularity: the inner candidate
+            # loop is the dominant cost, so check time.monotonic() every
+            # BSIM_COMPARE_INNER_DEADLINE_CHECK candidates instead of only
+            # between fa iterations. A single hostile fa with 200 candidates
+            # × ~50ms each would otherwise burn ~10s before the next outer
+            # check, blowing past the per-pair budget.
+            for i, fb in enumerate(candidates):
+                if i and (i % BSIM_COMPARE_INNER_DEADLINE_CHECK) == 0:
+                    if time.monotonic() > deadline:
+                        truncated = True
+                        break
+                scores = compute_similarity(fa, fb, metrics=score_key)
+                score = scores.get(score_key, scores.get("combined", 0.0))
+                if score > best_score:
+                    best_score = score
+                    best = (fb, scores)
+            if truncated:
+                break
+            if best is None or best_score < threshold:
+                continue
+            fb, scores = best
+            pair_scores.append({
+                "a_address": hex(fa["_addr_int"]),
+                "a_name": fa.get("name") or f"sub_{fa['_addr_int']:x}",
+                "b_address": hex(fb["_addr_int"]),
+                "b_name": fb.get("name") or f"sub_{fb['_addr_int']:x}",
+                "score": round(best_score, 4),
+                "scores": {k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
+            })
     finally:
         if owns:
             c.close()
 
-    if not funcs_a or not funcs_b:
-        return {
-            "available": True,
-            "binary_a": meta[sha_a],
-            "binary_b": meta[sha_b],
-            "shared_function_count": 0,
-            "matched_a_count": 0,
-            "matched_b_count": 0,
-            "jaccard": 0.0,
-            "avg_similarity": 0.0,
-            "total_functions_a": len(funcs_a),
-            "total_functions_b": len(funcs_b),
-            "top_matches": [],
-            "note": "One or both binaries have no indexed functions",
-        }
-
-    # For each function in A, find the best-scoring counterpart in B.
-    # Pre-bucket B by block count for cheap O(1) shortlist filtering. The
-    # tolerance is a strict ±k absolute window (default 5), NOT a ±50%
-    # relative window — the relative formula collapsed to ``[0, hi]`` for
-    # any function with ≤4 blocks, which is most of any binary, defeating
-    # the bucket entirely and producing O(|A|*|B|) scoring.
-    b_by_blocks: Dict[int, List[Dict[str, Any]]] = {}
-    for fb in funcs_b:
-        b_by_blocks.setdefault(fb["_block_count"], []).append(fb)
-
-    pair_scores: List[Dict[str, Any]] = []
-    score_key = metrics if metrics else "combined"
-    deadline = _time.monotonic() + BSIM_COMPARE_TIME_BUDGET_S
-    truncated = False
-
-    for fa in funcs_a:
-        if _time.monotonic() > deadline:
-            truncated = True
-            break
-        fa_blocks = fa["_block_count"]
-        lo = max(0, fa_blocks - BSIM_COMPARE_BLOCK_TOLERANCE)
-        hi = fa_blocks + BSIM_COMPARE_BLOCK_TOLERANCE
-        candidates: List[Dict[str, Any]] = []
-        for bk in range(lo, hi + 1):
-            bucket = b_by_blocks.get(bk)
-            if bucket:
-                candidates.extend(bucket)
-                if len(candidates) >= BSIM_COMPARE_MAX_CANDIDATES:
-                    candidates = candidates[:BSIM_COMPARE_MAX_CANDIDATES]
-                    break
-        if not candidates:
-            continue
-        best = None
-        best_score = 0.0
-        for fb in candidates:
-            scores = compute_similarity(fa, fb, metrics=score_key)
-            score = scores.get(score_key, scores.get("combined", 0.0))
-            if score > best_score:
-                best_score = score
-                best = (fb, scores)
-        if best is None or best_score < threshold:
-            continue
-        fb, scores = best
-        pair_scores.append({
-            "a_address": hex(fa["_addr_int"]),
-            "a_name": fa.get("name") or f"sub_{fa['_addr_int']:x}",
-            "b_address": hex(fb["_addr_int"]),
-            "b_name": fb.get("name") or f"sub_{fb['_addr_int']:x}",
-            "score": round(best_score, 4),
-            "scores": {k: round(v, 4) if isinstance(v, float) else v for k, v in scores.items()},
-        })
-
     pair_scores.sort(key=lambda p: p["score"], reverse=True)
 
-    total_a = len(funcs_a)
-    total_b = len(funcs_b)
+    # If the streaming loop was cut short before reading all of A, the
+    # `total_functions_a` field would be misleading. Fall back to the
+    # metadata count from the binaries table — that's the canonical total
+    # regardless of how far we got.
+    if truncated and total_a < total_a_pre:
+        total_a = total_a_pre
+
     # Each pair_scores entry corresponds to a unique A function (we picked
     # the single best B match per A above), so |matched_A| == len(pair_scores).
     # Multiple A functions may pick the SAME B function, so |matched_B| is a

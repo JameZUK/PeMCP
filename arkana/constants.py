@@ -203,6 +203,17 @@ MAX_PROJECT_ARCHIVE_MEMBER_BYTES = 1024 * 1024 * 1024   # 1 GB per file
 MAX_PROJECT_COMPARE_PAIRS = 500                        # M*N pair grid cap
 PROJECT_COMPARE_TIME_BUDGET_S = 120.0                  # overall wallclock cap
 
+# --- compare_indexed_binaries (per-pair) bounds ---
+# Per-pair caps inside the BSim function-vs-function comparison. Must be
+# tight enough that a single hostile pair can't pin the dashboard executor
+# for the entire PROJECT_COMPARE_TIME_BUDGET_S.
+BSIM_COMPARE_MAX_FUNCS_PER_SIDE = 50000   # refuse pair if either side > this
+BSIM_COMPARE_MAX_CANDIDATES = 200          # candidate cap per fa
+BSIM_COMPARE_BLOCK_TOLERANCE = 5           # absolute ±k blocks (floor)
+BSIM_COMPARE_BLOCK_TOLERANCE_PCT = 0.10    # +10% relative window for big fns
+BSIM_COMPARE_TIME_BUDGET_S = 30.0          # per-pair wallclock cap
+BSIM_COMPARE_INNER_DEADLINE_CHECK = 32     # check deadline every N candidates
+
 # --- Rename / Annotation Limits ---
 MAX_BATCH_RENAMES = 50
 
