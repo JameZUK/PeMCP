@@ -15,6 +15,26 @@ function escapeHtml(s) {
         .replace(/'/g, '&#39;');
 }
 
+// Shared cross-page namespace. Pages set window._arkana.state /
+// window._arkana.opening / etc. instead of polluting the top-level
+// window namespace with ad-hoc _arkana* globals.
+window._arkana = window._arkana || {state: null, opening: false};
+
+// Shared "epoch → relative" formatter — used by projects.js for the
+// project card "Last opened" field, and any future page that needs to
+// render relative timestamps. Returns "just now" / "5 min ago" / "2 hr
+// ago" / "3 days ago" / a localized date string for older epochs.
+function formatRelative(epoch) {
+    if (!epoch) return '—';
+    var d = new Date(Number(epoch) * 1000);
+    var diff = Date.now() - d.getTime();
+    if (diff < 60000) return 'just now';
+    if (diff < 3600000) return Math.floor(diff / 60000) + ' min ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + ' hr ago';
+    if (diff < 7 * 86400000) return Math.floor(diff / 86400000) + ' days ago';
+    return d.toLocaleDateString();
+}
+
 // CSRF token helper — reads from <meta name="csrf-token">
 function getCsrfToken() {
     var meta = document.querySelector('meta[name="csrf-token"]');
@@ -37,7 +57,7 @@ function fetchJSON(url, options) {
 // Pages call this on user navigation/scroll/etc. so reopening a project
 // can land the user back where they left off.
 function saveDashboardState(key, value) {
-    var st = window._arkanaState || {};
+    var st = window._arkana.state || {};
     var proj = st.active_project;
     if (!proj || !proj.id || proj.scratch) return;
     fetch('/dashboard/api/projects/dashboard-state', {
@@ -66,7 +86,7 @@ document.addEventListener('DOMContentLoaded', function() {
     _initNavOverflow();
     // Persist last_tab from the active nav link, so reopening a project
     // can route the user back to whichever tab they last visited.
-    // Wait briefly so window._arkanaState (populated by SSE state poll) is
+    // Wait briefly so window._arkana.state (populated by SSE state poll) is
     // available — saveDashboardState no-ops if no project is bound.
     setTimeout(function () {
         var active = document.querySelector('.nav-link.active');
@@ -231,10 +251,10 @@ function showToast(message, type) {
     // the canonical filename every ~3s; during the brief window between
     // an OPEN-project click and the new binary's pe_data being ready, the
     // partial would show the OLD filename next to the NEW project name.
-    // While ``window._arkanaOpening`` is set we overwrite the filename
+    // While ``window._arkana.opening`` is set we overwrite the filename
     // text portion with "(opening…)" so the user gets immediate feedback.
     function applyOpeningOverlay() {
-        if (!window._arkanaOpening) return;
+        if (!window._arkana.opening) return;
         var statusFn = document.getElementById('status-filename');
         if (!statusFn) return;
         var fnTextEl = statusFn.querySelector('.status-filename-text');
@@ -266,8 +286,7 @@ function showToast(message, type) {
     function handleStateUpdate(data) {
         // Cache state on window so saveDashboardState() can find the active
         // project without an extra round-trip.
-        var prevState = window._arkanaState;
-        window._arkanaState = data;
+        window._arkana.state = data;
 
         // Detect active-project transition. The backend's bind_project()
         // happens many seconds before the new binary's filepath/sha256 are

@@ -17,6 +17,10 @@ from arkana.state import (
     _default_state, _session_registry, _registry_lock,
     TASK_RUNNING, TASK_OVERTIME, TASK_COMPLETED, TASK_FAILED,
 )
+from arkana.constants import (
+    MAX_PROJECT_COMPARE_PAIRS,
+    PROJECT_COMPARE_TIME_BUDGET_S,
+)
 
 
 # M7-v10: Shared phase detection helper using canonical tool sets
@@ -3294,42 +3298,88 @@ def get_bsim_db_stats() -> Dict[str, Any]:
         conn.close()
 
 
-def _project_membership_for_shas(sha256_list: List[str]) -> Dict[str, List[Dict[str, str]]]:
-    """Build a {sha256: [{id, name}, ...]} map for the given sha256s.
+# Project membership cache — `_project_membership_for_shas` walks every
+# project's member list per call, which is fine for one-shot use but the
+# dashboard polls the BSim DB and triage tabs every ~10s. We build a full
+# {sha256: [{id, name}]} reverse-index ONCE and cache it for a few seconds.
+# Invalidated by mtime on the projects index file (cheap stat) so creates/
+# deletes/renames flush the cache the next call.
+_PROJECT_MEMBERSHIP_TTL_S = 10.0
+_project_membership_cache: Dict[str, Any] = {
+    "expires": 0.0,
+    "index_mtime": 0.0,
+    "map": {},  # sha256_lower → [{id, name}, ...]
+}
+_project_membership_lock = threading.Lock()
 
-    Used to enrich BSim results with the projects each indexed binary
-    belongs to. Snapshots ``project_manager.list()`` once and walks every
-    project's members dict in O(P*M) — much cheaper than calling
-    ``lookup_by_sha`` per row when you already have a batch of sha256s.
-    Returns an empty dict if the projects layer is unavailable.
+
+def _build_full_project_membership() -> Dict[str, List[Dict[str, str]]]:
+    """Walk every project once and return ``{sha256: [{id, name}, ...]}``.
+
+    O(P * M) where P = projects, M = members per project. Used by
+    ``_project_membership_for_shas`` as the underlying source — the
+    cache wraps this so dashboard polls don't pay the walk cost on
+    every request.
     """
-    if not sha256_list:
-        return {}
     try:
         from arkana.projects import project_manager
     except ImportError:
         return {}
-    wanted = {s.lower() for s in sha256_list if s}
-    if not wanted:
-        return {}
-    out: Dict[str, List[Dict[str, str]]] = {sha: [] for sha in wanted}
+    full: Dict[str, List[Dict[str, str]]] = {}
     try:
         projects = project_manager.list(sort_by="name")
     except Exception:
-        return out
+        return full
     for proj in projects:
         try:
-            with proj._lock:
-                member_shas = list(proj.manifest.members.keys())
-                pid = proj.manifest.id
-                pname = proj.manifest.name
+            members = proj.snapshot_members()
+            pid = proj.id
+            pname = proj.name
         except Exception:
             continue
-        for sha in member_shas:
-            sha_l = (sha or "").lower()
-            if sha_l in wanted:
-                out.setdefault(sha_l, []).append({"id": pid, "name": pname})
-    return out
+        entry = {"id": pid, "name": pname}
+        for member in members:
+            sha_l = (member.get("sha256") or "").lower()
+            if sha_l:
+                full.setdefault(sha_l, []).append(entry)
+    return full
+
+
+def _get_project_membership_map() -> Dict[str, List[Dict[str, str]]]:
+    """Return the cached full membership map, refreshing on TTL or mtime."""
+    try:
+        from arkana.projects import INDEX_FILE
+        index_mtime = INDEX_FILE.stat().st_mtime if INDEX_FILE.exists() else 0.0
+    except Exception:
+        index_mtime = 0.0
+    now = time.time()
+    with _project_membership_lock:
+        if (now < _project_membership_cache["expires"]
+                and index_mtime == _project_membership_cache["index_mtime"]):
+            return _project_membership_cache["map"]
+    fresh = _build_full_project_membership()
+    with _project_membership_lock:
+        _project_membership_cache["map"] = fresh
+        _project_membership_cache["expires"] = now + _PROJECT_MEMBERSHIP_TTL_S
+        _project_membership_cache["index_mtime"] = index_mtime
+    return fresh
+
+
+def _project_membership_for_shas(sha256_list: List[str]) -> Dict[str, List[Dict[str, str]]]:
+    """Build a ``{sha256: [{id, name}, ...]}`` map for the given sha256s.
+
+    Backed by the in-memory cache from ``_get_project_membership_map`` so
+    dashboard polls of the BSim DB / triage tabs don't pay the O(P*M) walk
+    on every request. Cache is invalidated by mtime on the projects index
+    file plus a 10s TTL ceiling.
+    """
+    if not sha256_list:
+        return {}
+    wanted = {s.lower() for s in sha256_list if s}
+    if not wanted:
+        return {}
+    full = _get_project_membership_map()
+    return {sha: list(full.get(sha, [])) for sha in wanted}
 
 
 def get_bsim_indexed_binaries() -> Dict[str, Any]:
@@ -3374,14 +3424,16 @@ def get_bsim_triage_data(cache_only: bool = False) -> Dict[str, Any]:
     if not sha256:
         return {"available": False, "error": "No file loaded"}
 
-    # Check cache
+    # Check cache. Project membership is enriched AFTER fetch (not stored
+    # in the cached payload) so a project rename/create/delete during the
+    # TTL window is reflected immediately on the next read.
     now = time.time()
     with _cache_lock:
         cached = _bsim_triage_cache.get(sha256)
     if cached is not None:
         expire_time, result = cached
         if now < expire_time:
-            return result
+            return _enrich_triage_with_projects(result)
 
     if cache_only:
         return {"available": False, "cached": False}
@@ -3492,12 +3544,10 @@ def get_bsim_triage_data(cache_only: bool = False) -> Dict[str, Any]:
     results.sort(key=lambda r: r.get("avg_similarity", 0) * r.get("avg_confidence", 0) * r.get("shared_function_count", 0), reverse=True)
     results = results[:20]
 
-    # Enrich each match with the projects (if any) that contain its binary
-    # — lets the dashboard show "this match is in project X" without an
-    # extra per-row API call. Single batched lookup over all sha256s.
-    membership = _project_membership_for_shas([r["binary_sha256"] for r in results])
-    for r in results:
-        r["projects"] = membership.get((r["binary_sha256"] or "").lower(), [])
+    # NOTE: project membership is NOT stored in the cached payload — it's
+    # enriched on every read via ``_enrich_triage_with_projects`` so a
+    # project create/rename/delete during the TTL window is reflected
+    # immediately on the next call.
 
     result = {
         "available": True,
@@ -3508,14 +3558,38 @@ def get_bsim_triage_data(cache_only: bool = False) -> Dict[str, Any]:
         "results": results,
     }
 
-    # Cache the result
+    # Cache the result WITHOUT the projects field — see _enrich_triage_with_projects
     with _cache_lock:
         if len(_bsim_triage_cache) >= 4:
             oldest = min(_bsim_triage_cache, key=lambda k: _bsim_triage_cache[k][0])
             del _bsim_triage_cache[oldest]
         _bsim_triage_cache[sha256] = (time.time() + _BSIM_TRIAGE_TTL, result)
 
-    return result
+    return _enrich_triage_with_projects(result)
+
+
+def _enrich_triage_with_projects(triage_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Add a ``projects: [{id, name}]`` field to every entry in
+    ``triage_result['results']`` based on the current project membership.
+
+    Called on EVERY triage read (cached and uncached) so a project create/
+    rename/delete during the cache TTL window is immediately reflected in
+    the next response. The underlying ``_project_membership_for_shas`` call
+    is itself memoised with a short TTL + index-mtime invalidation, so this
+    enrichment is essentially free on the hot path.
+    """
+    results = triage_result.get("results") or []
+    if not results:
+        return triage_result
+    membership = _project_membership_for_shas([r["binary_sha256"] for r in results])
+    enriched_results = []
+    for r in results:
+        r_copy = dict(r)
+        r_copy["projects"] = membership.get((r["binary_sha256"] or "").lower(), [])
+        enriched_results.append(r_copy)
+    enriched = dict(triage_result)
+    enriched["results"] = enriched_results
+    return enriched
 
 
 def get_bsim_triage_function_matches(binary_sha256: str) -> Dict[str, Any]:
@@ -3571,13 +3645,22 @@ def get_project_comparison_data(project_a_id: str,
     """
     if project_a_id == project_b_id:
         return {"available": False, "error": "Pick two different projects"}
+    # Threshold validation: clamp NaN/inf and bound to [0, 1].
+    try:
+        threshold = float(threshold)
+    except (TypeError, ValueError):
+        threshold = 0.7
+    if not math.isfinite(threshold):
+        threshold = 0.7
+    threshold = max(0.0, min(threshold, 1.0))
     try:
         from arkana.projects import project_manager
     except ImportError:
         return {"available": False, "error": "projects module unavailable"}
     try:
         from arkana.mcp._bsim_features import (
-            compare_indexed_binaries, is_binary_indexed,
+            compare_indexed_binaries, is_binaries_indexed_batch,
+            get_db_path, _get_connection,
         )
     except ImportError:
         return {"available": False, "error": "BSim module unavailable"}
@@ -3589,17 +3672,8 @@ def get_project_comparison_data(project_a_id: str,
     if proj_b is None:
         return {"available": False, "error": f"Project {project_b_id} not found"}
 
-    # Snapshot members under each project's lock so we have stable lists
-    # for the duration of the comparison.
-    def _snapshot(project) -> List[Dict[str, Any]]:
-        with project._lock:
-            return [
-                {"sha256": sha, "filename": d.get("original_filename") or "(unnamed)"}
-                for sha, d in project.manifest.members.items()
-            ]
-
-    members_a = _snapshot(proj_a)
-    members_b = _snapshot(proj_b)
+    members_a = proj_a.snapshot_members()
+    members_b = proj_b.snapshot_members()
     if not members_a or not members_b:
         return {
             "available": True,
@@ -3613,86 +3687,136 @@ def get_project_comparison_data(project_a_id: str,
             "unindexed_members": [],
         }
 
-    # Pre-compute index status so we can short-circuit pair lookups and
-    # build the unindexed-member hint list in one place.
-    indexed_a = {m["sha256"]: is_binary_indexed(m["sha256"]) for m in members_a}
-    indexed_b = {m["sha256"]: is_binary_indexed(m["sha256"]) for m in members_b}
-    unindexed: List[Dict[str, str]] = []
-    for m in members_a:
-        if not indexed_a.get(m["sha256"]):
-            unindexed.append({
-                "sha256": m["sha256"], "filename": m["filename"],
-                "project": proj_a.name,
-            })
-    for m in members_b:
-        if not indexed_b.get(m["sha256"]):
-            unindexed.append({
-                "sha256": m["sha256"], "filename": m["filename"],
-                "project": proj_b.name,
-            })
+    # Hard pair-count cap. M*N pairs of compare_indexed_binaries can pin a
+    # dashboard worker thread for many minutes — refuse outright when the
+    # caller picks two huge projects rather than silently truncating.
+    pair_grid_size = len(members_a) * len(members_b)
+    if pair_grid_size > MAX_PROJECT_COMPARE_PAIRS:
+        return {
+            "available": False,
+            "error": (
+                f"Comparing {len(members_a)} × {len(members_b)} = {pair_grid_size} "
+                f"pairs exceeds the dashboard cap of {MAX_PROJECT_COMPARE_PAIRS}. "
+                f"Pick smaller projects or compare members individually."
+            ),
+            "pair_count": pair_grid_size,
+            "max_pair_count": MAX_PROJECT_COMPARE_PAIRS,
+        }
 
-    pairs: List[Dict[str, Any]] = []
-    indexed_pair_count = 0
-    total_shared = 0
-    sum_jaccard = 0.0
-    sum_similarity = 0.0
-    max_jaccard = 0.0
-    for ma in members_a:
-        for mb in members_b:
-            entry = {
-                "a_sha256": ma["sha256"],
-                "a_filename": ma["filename"],
-                "b_sha256": mb["sha256"],
-                "b_filename": mb["filename"],
-                "available": False,
-                "shared_function_count": 0,
-                "jaccard": 0.0,
-                "avg_similarity": 0.0,
-            }
-            if not indexed_a.get(ma["sha256"]) or not indexed_b.get(mb["sha256"]):
-                entry["error"] = "one or both binaries not indexed"
+    # Open ONE sqlite connection and reuse it across the entire pair grid.
+    # The previous implementation paid a connect/close cost per pair.
+    db = get_db_path()
+    if not db.exists():
+        return {"available": False, "error": "BSim DB does not exist"}
+
+    conn = _get_connection(db)
+    try:
+        # Batched index check — one IN(...) query for both sides instead
+        # of 2*(M+N) connection-open/close round-trips.
+        all_shas = [m["sha256"] for m in members_a] + [m["sha256"] for m in members_b]
+        index_map = is_binaries_indexed_batch(all_shas, conn=conn)
+        indexed_a = {m["sha256"]: index_map.get(m["sha256"].lower(), False)
+                     for m in members_a}
+        indexed_b = {m["sha256"]: index_map.get(m["sha256"].lower(), False)
+                     for m in members_b}
+
+        unindexed: List[Dict[str, str]] = []
+        for m in members_a:
+            if not indexed_a.get(m["sha256"]):
+                unindexed.append({
+                    "sha256": m["sha256"], "filename": m["filename"],
+                    "project": proj_a.name,
+                })
+        for m in members_b:
+            if not indexed_b.get(m["sha256"]):
+                unindexed.append({
+                    "sha256": m["sha256"], "filename": m["filename"],
+                    "project": proj_b.name,
+                })
+
+        pairs: List[Dict[str, Any]] = []
+        indexed_pair_count = 0
+        total_shared = 0
+        sum_jaccard = 0.0
+        sum_similarity = 0.0
+        max_jaccard = 0.0
+        # Project-level wallclock budget — each pair can also burn its own
+        # per-pair budget inside compare_indexed_binaries. The overall cap
+        # protects against death-by-many-small-pairs.
+        deadline = time.monotonic() + PROJECT_COMPARE_TIME_BUDGET_S
+        truncated = False
+
+        for ma in members_a:
+            if time.monotonic() > deadline:
+                truncated = True
+                break
+            for mb in members_b:
+                if time.monotonic() > deadline:
+                    truncated = True
+                    break
+                entry = {
+                    "a_sha256": ma["sha256"],
+                    "a_filename": ma["filename"],
+                    "b_sha256": mb["sha256"],
+                    "b_filename": mb["filename"],
+                    "available": False,
+                    "shared_function_count": 0,
+                    "jaccard": 0.0,
+                    "avg_similarity": 0.0,
+                }
+                if not indexed_a.get(ma["sha256"]) or not indexed_b.get(mb["sha256"]):
+                    entry["error"] = "one or both binaries not indexed"
+                    pairs.append(entry)
+                    continue
+                try:
+                    result = compare_indexed_binaries(
+                        ma["sha256"], mb["sha256"],
+                        threshold=threshold,
+                        top_match_limit=top_match_limit,
+                        conn=conn,
+                    )
+                except Exception as exc:
+                    logger.debug("project comparison failed for pair", exc_info=True)
+                    entry["error"] = f"comparison failed: {exc}"
+                    pairs.append(entry)
+                    continue
+                if not result.get("available"):
+                    entry["error"] = result.get("error", "comparison unavailable")
+                    pairs.append(entry)
+                    continue
+                entry["available"] = True
+                entry["shared_function_count"] = result.get("shared_function_count", 0)
+                entry["jaccard"] = result.get("jaccard", 0.0)
+                entry["avg_similarity"] = result.get("avg_similarity", 0.0)
+                entry["total_functions_a"] = result.get("total_functions_a", 0)
+                entry["total_functions_b"] = result.get("total_functions_b", 0)
+                # matched_a/matched_b counts are how the UI surfaces asymmetric
+                # collapses (e.g. "20 A funcs collapsed onto 1 B func").
+                entry["matched_a_count"] = result.get("matched_a_count", 0)
+                entry["matched_b_count"] = result.get("matched_b_count", 0)
+                # Prune top_matches from zero-shared pairs to keep payload
+                # size sane. Empty lists save ~80 bytes per zero pair which
+                # adds up across a 500-pair grid.
+                if entry["shared_function_count"] > 0:
+                    entry["top_matches"] = result.get("top_matches", [])
+                indexed_pair_count += 1
+                total_shared += entry["shared_function_count"]
+                sum_jaccard += entry["jaccard"]
+                sum_similarity += entry["avg_similarity"]
+                if entry["jaccard"] > max_jaccard:
+                    max_jaccard = entry["jaccard"]
                 pairs.append(entry)
+            else:
                 continue
-            try:
-                result = compare_indexed_binaries(
-                    ma["sha256"], mb["sha256"],
-                    threshold=threshold,
-                    top_match_limit=top_match_limit,
-                )
-            except Exception as exc:
-                logger.debug("project comparison failed for pair", exc_info=True)
-                entry["error"] = f"comparison failed: {exc}"
-                pairs.append(entry)
-                continue
-            if not result.get("available"):
-                entry["error"] = result.get("error", "comparison unavailable")
-                pairs.append(entry)
-                continue
-            entry["available"] = True
-            entry["shared_function_count"] = result.get("shared_function_count", 0)
-            entry["jaccard"] = result.get("jaccard", 0.0)
-            entry["avg_similarity"] = result.get("avg_similarity", 0.0)
-            entry["total_functions_a"] = result.get("total_functions_a", 0)
-            entry["total_functions_b"] = result.get("total_functions_b", 0)
-            # matched_a/matched_b counts are how the UI surfaces asymmetric
-            # collapses (e.g. "20 A funcs collapsed onto 1 B func"). Without
-            # forwarding them here they end up as None on every pair row.
-            entry["matched_a_count"] = result.get("matched_a_count", 0)
-            entry["matched_b_count"] = result.get("matched_b_count", 0)
-            entry["top_matches"] = result.get("top_matches", [])
-            indexed_pair_count += 1
-            total_shared += entry["shared_function_count"]
-            sum_jaccard += entry["jaccard"]
-            sum_similarity += entry["avg_similarity"]
-            if entry["jaccard"] > max_jaccard:
-                max_jaccard = entry["jaccard"]
-            pairs.append(entry)
+            break  # outer loop hit deadline
+    finally:
+        conn.close()
 
     pairs.sort(key=lambda p: (p["jaccard"], p["shared_function_count"]), reverse=True)
     avg_jaccard = (sum_jaccard / indexed_pair_count) if indexed_pair_count else 0.0
     avg_similarity = (sum_similarity / indexed_pair_count) if indexed_pair_count else 0.0
 
-    return {
+    result_payload: Dict[str, Any] = {
         "available": True,
         "project_a": {"id": proj_a.id, "name": proj_a.name, "member_count": len(members_a)},
         "project_b": {"id": proj_b.id, "name": proj_b.name, "member_count": len(members_b)},
@@ -3708,6 +3832,13 @@ def get_project_comparison_data(project_a_id: str,
         },
         "unindexed_members": unindexed,
     }
+    if truncated:
+        result_payload["truncated"] = True
+        result_payload["note"] = (
+            f"Hit {PROJECT_COMPARE_TIME_BUDGET_S}s overall time budget; "
+            f"{len(pairs)}/{pair_grid_size} pairs analysed."
+        )
+    return result_payload
 
 
 def get_bsim_db_health() -> Dict[str, Any]:

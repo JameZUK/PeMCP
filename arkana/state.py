@@ -721,6 +721,86 @@ class AnalyzerState:
                     return True
         return False
 
+    def delete_artifacts_batch(self, artifact_ids: List[str]) -> Dict[str, bool]:
+        """Delete many artifacts in one locked pass — replaces N×O(L) scans
+        with one O(L+N) sweep where L = total artifact count.
+
+        Returns ``{artifact_id: True/False}`` for every input id, where
+        True means the id was found and removed. Used by the dashboard's
+        bulk delete endpoint to avoid an O(L*N) lock-acquire-and-scan
+        pattern that pinned the artifact lock under heavy bulk operations.
+        """
+        wanted = set(artifact_ids)
+        if not wanted:
+            return {}
+        result: Dict[str, bool] = {aid: False for aid in artifact_ids}
+        with self._artifacts_lock:
+            kept: List[Dict[str, Any]] = []
+            removed_any = False
+            for art in self.artifacts:
+                aid = art.get("id")
+                if aid in wanted:
+                    result[aid] = True
+                    wanted.discard(aid)
+                    removed_any = True
+                    continue
+                kept.append(art)
+            if removed_any:
+                self.artifacts = kept
+                self._maybe_promote_scratch()
+        return result
+
+    def update_artifacts_metadata_batch(self, artifact_ids: List[str], *,
+                                        description: Optional[str] = None,
+                                        tags: Optional[List[str]] = None,
+                                        notes: Optional[str] = None,
+                                        replace_tags: bool = False
+                                        ) -> Dict[str, Optional[Dict[str, Any]]]:
+        """Apply the same metadata patch to many artifacts in one locked pass.
+
+        Returns ``{artifact_id: updated_dict_or_None}``. Patch semantics
+        mirror ``update_artifact_metadata`` (per-id description/tags/notes).
+        Uses an id-indexed dict built once under the lock so total cost
+        is O(L + N) instead of O(L*N).
+        """
+        if description is None and tags is None and notes is None:
+            return {aid: None for aid in artifact_ids}
+        wanted = set(artifact_ids)
+        if not wanted:
+            return {}
+        result: Dict[str, Optional[Dict[str, Any]]] = {aid: None for aid in artifact_ids}
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._artifacts_lock:
+            # Build a single id→artifact index, then patch each requested
+            # id once. The artifacts list itself isn't reordered.
+            index = {a.get("id"): a for a in self.artifacts}
+            updated_any = False
+            for aid in artifact_ids:
+                art = index.get(aid)
+                if art is None:
+                    continue
+                if description is not None:
+                    art["description"] = description
+                if notes is not None:
+                    art["notes"] = notes
+                if tags is not None:
+                    if replace_tags:
+                        art["tags"] = list(dict.fromkeys(tags))
+                    else:
+                        existing = list(art.get("tags") or [])
+                        seen = set(existing)
+                        for t in tags:
+                            if t not in seen:
+                                existing.append(t)
+                                seen.add(t)
+                        art["tags"] = existing
+                art["modified_at"] = now_iso
+                result[aid] = dict(art)
+                updated_any = True
+            if updated_any:
+                self._maybe_promote_scratch()
+        return result
+
     def get_artifacts(self, source_tool: Optional[str] = None) -> List[Dict[str, Any]]:
         """Thread-safe filtered read of artifacts. Returns copies."""
         with self._artifacts_lock:
@@ -1610,13 +1690,9 @@ def _start_session_reaper():
 # renames, types, triage, coverage, sandbox) to the active project's overlay
 # at a fixed cadence so a crash/SIGKILL between mutations and close_file
 # doesn't lose work. Without this loop, mutations only persisted on
-# close_file/close_project. The interval is intentionally generous (30s) so
-# the loop is essentially free under normal load.
-OVERLAY_FLUSH_INTERVAL_SECONDS = 30
-_overlay_flush_thread = None
-_overlay_flush_started = False
-
-
+# close_file/close_project. Cadence is set by OVERLAY_FLUSH_INTERVAL_SECONDS
+# in arkana/constants.py and is intentionally generous (30s) so the loop is
+# essentially free under normal load.
 def _overlay_flush_loop() -> None:
     """Daemon loop that flushes dirty overlays every OVERLAY_FLUSH_INTERVAL_SECONDS.
 
@@ -1624,6 +1700,7 @@ def _overlay_flush_loop() -> None:
     ``flush_overlay()`` on any state with ``_overlay_dirty=True``. Errors are
     logged but never propagated — best-effort persistence.
     """
+    from arkana.constants import OVERLAY_FLUSH_INTERVAL_SECONDS
     while True:
         time.sleep(OVERLAY_FLUSH_INTERVAL_SECONDS)
         try:
@@ -1641,6 +1718,13 @@ def _overlay_flush_loop() -> None:
                     logger.debug("overlay-flush: per-state error", exc_info=True)
         except Exception:
             logger.warning("overlay-flush: iteration error", exc_info=True)
+
+
+# Module-level vars defined AFTER the loop function so they mirror the
+# session-reaper layout (lines above) — keeps the two daemon-thread
+# patterns visually identical for future maintainers.
+_overlay_flush_thread = None
+_overlay_flush_started = False
 
 
 def _start_overlay_flush_loop() -> None:

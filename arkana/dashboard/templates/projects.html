@@ -26,15 +26,18 @@
 </div>
 
 {% set _active_id = data.active_project_id if data else '' %}
-{% set _active_proj = none %}
+{# Use a Jinja namespace so the loop's `_ns.proj = …` assignment survives
+   the loop's local scope (a plain `{% set %}` inside `{% for %}` does
+   not propagate up in Jinja2). #}
+{% set _ns = namespace(proj=none) %}
 {% if data and data.projects and _active_id %}
-    {% for _p in data.projects %}{% if _p.id == _active_id %}{% set _active_proj = _p %}{% endif %}{% endfor %}
+    {% for _p in data.projects %}{% if _p.id == _active_id %}{% set _ns.proj = _p %}{% endif %}{% endfor %}
 {% endif %}
-<div class="panel active-project-panel{% if not _active_proj %} hidden{% endif %}" id="active-project-panel">
+<div class="panel active-project-panel{% if not _ns.proj %} hidden{% endif %}" id="active-project-panel">
     <div class="panel-header">ACTIVE PROJECT</div>
     <div id="active-project-banner">
-    {% if _active_proj %}
-        {% with p=_active_proj %}
+    {% if _ns.proj %}
+        {% with p=_ns.proj %}
         <div class="project-card active"
              data-project-id="{{ p.id }}"
              data-project-name="{{ p.name }}"

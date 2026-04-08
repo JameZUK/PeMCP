@@ -2,22 +2,28 @@
 import asyncio
 import contextvars
 import functools
+import hashlib
 import hmac
 import json
 import logging
 import os
 import re
 import secrets
+import tarfile
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 from starlette.applications import Starlette
+from starlette.background import BackgroundTask
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from starlette.responses import (
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response,
+)
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 from starlette.middleware import Middleware
@@ -155,6 +161,53 @@ _LOCATE_MAX_WALK = 20000     # cap directory walks (defends against pathological
 _LOCATE_HASH_CHUNK = 1 << 20  # 1 MiB streaming hash chunk
 _LOCATE_MAX_FILE_BYTES = 512 * 1024 * 1024  # don't hash candidates above this size
 
+# Result cache for ``_locate_binary_for_stub`` — short-circuits the 20K-entry
+# rglob walk for sha256s we recently resolved. Not strictly required for
+# correctness (the helper is bounded), but a successful resolve costs ~500ms
+# of disk I/O on a populated samples dir, and the dashboard hits the helper
+# repeatedly when expanding the projects grid or opening many migrated stubs
+# in a row. Cache lifetime is short so a deleted/moved file becomes stale
+# fast and the helper falls back to the cold path.
+_LOCATE_CACHE_TTL_S = 300.0  # 5 minutes
+_LOCATE_CACHE_MAX_ENTRIES = 256
+_locate_cache: Dict[str, Tuple[float, str]] = {}  # sha256 → (expiry_epoch, path)
+_locate_cache_lock = threading.Lock()
+
+
+def _locate_cache_get(sha256: str) -> Optional[str]:
+    now = time.time()
+    with _locate_cache_lock:
+        entry = _locate_cache.get(sha256)
+        if entry is None:
+            return None
+        expiry, path = entry
+        if now >= expiry:
+            del _locate_cache[sha256]
+            return None
+    # Verify the cached path still exists — a stale entry should fall
+    # through to the cold path so the user doesn't get stuck on a
+    # deleted file.
+    if not os.path.isfile(path):
+        with _locate_cache_lock:
+            _locate_cache.pop(sha256, None)
+        return None
+    return path
+
+
+def _locate_cache_put(sha256: str, path: str) -> None:
+    if not sha256 or not path:
+        return
+    with _locate_cache_lock:
+        # Bounded LRU-ish: drop the oldest entry when full. Cache is small
+        # enough that linear scan for min is cheaper than ordered structures.
+        if len(_locate_cache) >= _LOCATE_CACHE_MAX_ENTRIES:
+            try:
+                oldest_sha = min(_locate_cache, key=lambda k: _locate_cache[k][0])
+                _locate_cache.pop(oldest_sha, None)
+            except (KeyError, ValueError):
+                pass
+        _locate_cache[sha256] = (time.time() + _LOCATE_CACHE_TTL_S, path)
+
 # Bulk-action caps for /api/artifacts/bulk — defend against authenticated
 # CPU DoS where a huge id/tag list multiplies into N×N work under lock.
 _MAX_BULK_ARTIFACT_IDS = 500
@@ -176,16 +229,38 @@ def _build_directory_tarball(src_path: str, arcname: str) -> str:
 
     Streams via tarfile rather than buffering bytes in memory. Caller is
     responsible for unlinking the result (use ``_unlink_quiet`` as a
-    BackgroundTask). Symlinks are NOT followed.
+    BackgroundTask). Symlinks are NOT followed (``dereference=False``).
+
+    Pre-validates *src_path* against TOCTOU swaps:
+      - Refuses if the path is a symlink (a directory artifact registered
+        as a real dir could be replaced with a symlink to ``/etc`` between
+        registration and download).
+      - Refuses if it isn't a directory.
+      - Resolves the path before walking so a parent-symlink swap also
+        gets caught.
     """
-    import tarfile
-    import tempfile as _tempfile
-    fd = _tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
+    src = Path(src_path)
+    try:
+        if src.is_symlink():
+            raise RuntimeError(
+                f"Refusing to tarball symlinked directory: {src_path}"
+            )
+        resolved_src = src.resolve(strict=True)
+        if not resolved_src.is_dir():
+            raise RuntimeError(
+                f"Directory artifact path is not a directory: {src_path}"
+            )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Directory artifact path no longer exists: {src_path}"
+        ) from exc
+
+    fd = tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False)
     tmp_path = fd.name
     fd.close()
     try:
         with tarfile.open(tmp_path, mode="w:gz", dereference=False) as tf:
-            tf.add(src_path, arcname=arcname, recursive=True)
+            tf.add(str(resolved_src), arcname=arcname, recursive=True)
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -259,23 +334,67 @@ def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
 
     Bounds: ``_LOCATE_MAX_WALK`` directory entries scanned per call,
     ``_LOCATE_MAX_HASH`` files hashed, ``_LOCATE_MAX_FILE_BYTES`` per file.
-    """
-    import hashlib
 
+    Path safety: env-var roots (``ARKANA_EXPORT_DIR`` and friends) MUST be
+    inside ``state.allowed_paths`` when an allowlist is configured, and
+    are always rejected if their resolved path has fewer than two
+    components (e.g. ``/`` or ``/home``) — otherwise a misconfigured env
+    var would let an authenticated user trigger a 20K-entry walk over the
+    whole filesystem on every stub-open call.
+    """
     if not sha256 or not original_filename:
         return ""
     sha256 = sha256.lower()
+    # Fast path: short-circuit on the recent-resolution cache.
+    cached = _locate_cache_get(sha256)
+    if cached:
+        return cached
     target_basename = os.path.basename(original_filename)
     if not target_basename:
         return ""
     target_lower = target_basename.lower()
+
+    allowed_paths_list = list(getattr(state, "allowed_paths", None) or [])
+    allowed_paths_resolved = set()
+    for ap in allowed_paths_list:
+        try:
+            allowed_paths_resolved.add(str(Path(str(ap)).resolve()))
+        except (OSError, ValueError):
+            pass
+
+    def _is_under_allowlist(rp: Path) -> bool:
+        """True if *rp* is inside any configured allowed_paths root.
+
+        When no allowlist is configured (stdio mode), this returns True so
+        the helper still works in development. When an allowlist IS set,
+        env-var roots must be contained by it.
+        """
+        if not allowed_paths_resolved:
+            return True
+        for ap in allowed_paths_resolved:
+            try:
+                if rp == Path(ap) or rp.is_relative_to(Path(ap)):
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
 
     # Build search roots from state — both allowed_paths (path sandbox) and
     # samples_path (the explicit "where my samples live" hint).
     roots: List[Path] = []
     seen_roots: set = set()
 
-    def _add_root(p: object) -> None:
+    def _add_root(p: object, *, trusted: bool = False) -> None:
+        """Add *p* to the walk roots after resolution + safety checks.
+
+        ``trusted=True`` skips the depth and allowlist gate — used for
+        ``state.allowed_paths`` itself (which is the source of truth) and
+        ``state.samples_path`` (operator-configured at startup).
+        Untrusted roots (env-var fallbacks) must (a) sit under the
+        allowlist when one is configured and (b) have at least two path
+        components so a misconfigured ``ARKANA_OUTPUT=/`` doesn't let the
+        helper walk the whole filesystem on every stub-open call.
+        """
         if not p:
             return
         try:
@@ -287,15 +406,25 @@ def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
             return
         if not rp.is_dir():
             return
+        if not trusted:
+            # Reject too-shallow roots ("/", "/home", "/var", etc.) — even
+            # an allowlisted shallow root is a footgun for a recursive walk.
+            if len(rp.parts) < 3:
+                logger.debug("locate_binary: skipping shallow env root %s", rp)
+                return
+            if not _is_under_allowlist(rp):
+                logger.debug("locate_binary: env root %s outside allowlist", rp)
+                return
         seen_roots.add(key)
         roots.append(rp)
 
-    for p in (getattr(state, "allowed_paths", None) or []):
-        _add_root(p)
-    _add_root(getattr(state, "samples_path", None))
+    for p in allowed_paths_list:
+        _add_root(p, trusted=True)
+    _add_root(getattr(state, "samples_path", None), trusted=True)
     # Also probe well-known export/output dirs — extracted artifacts (e.g.
     # decrypted payloads) often live here, and migrated projects sometimes
-    # reference them as their primary binary.
+    # reference them as their primary binary. NOT trusted: rejected if not
+    # under the allowlist or if too shallow.
     for env_var in ("ARKANA_EXPORT_DIR", "ARKANA_HOST_EXPORT", "ARKANA_OUTPUT"):
         _add_root(os.environ.get(env_var))
 
@@ -326,7 +455,9 @@ def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
         direct = root / target_basename
         try:
             if direct.is_file() and _hash(direct) == sha256:
-                return str(direct.resolve())
+                resolved = str(direct.resolve())
+                _locate_cache_put(sha256, resolved)
+                return resolved
         except OSError:
             pass
 
@@ -364,7 +495,9 @@ def _locate_binary_for_stub(state, sha256: str, original_filename: str) -> str:
         candidates.extend(others[: _LOCATE_MAX_HASH - len(candidates)])
     for cand in candidates:
         if _hash(cand) == sha256:
-            return str(cand.resolve())
+            resolved = str(cand.resolve())
+            _locate_cache_put(sha256, resolved)
+            return resolved
     return ""
 
 
@@ -2367,8 +2500,6 @@ def _create_routes(dashboard_token: str) -> list:
         """
         if not _is_authenticated(request, dashboard_token):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        from starlette.responses import FileResponse
-        from starlette.background import BackgroundTask
         aid = request.query_params.get("id", "")
         if not aid:
             return JSONResponse({"error": "id required"}, status_code=400)

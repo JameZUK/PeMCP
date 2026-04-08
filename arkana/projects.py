@@ -397,6 +397,21 @@ class Project:
             self.manifest.dashboard_state[key] = value
         self.save_manifest()
 
+    def register_stub_member(self, member: ProjectMember,
+                             make_primary: bool = True) -> None:
+        """Add *member* to the project's manifest and (optionally) mark it as
+        primary + last-active. Used by archive importers that have already
+        synthesized a stub binary path inside ``binaries/`` and need to land
+        the manifest entry under the project's lock without reaching into
+        the private ``_lock`` attribute themselves.
+        """
+        with self._lock:
+            self.manifest.members[member.sha256] = member.to_dict()
+            if make_primary:
+                self.manifest.primary_sha256 = member.sha256
+                self.manifest.last_active_sha256 = member.sha256
+        self.save_manifest()
+
     # ---- artifact storage helpers ----
     def member_present(self, sha256: str) -> bool:
         """True if the member's binary copy actually exists on disk.
@@ -412,6 +427,61 @@ class Project:
             return False
         cp = d.get("copy_path") or ""
         return bool(cp) and Path(cp).is_file()
+
+    def snapshot_members(self) -> List[Dict[str, Any]]:
+        """Return a stable snapshot of every member as a list of dicts.
+
+        Public alternative to dashboard code reaching into ``project._lock``
+        directly. The snapshot is a fresh list of fresh dicts, so callers
+        can iterate without holding the lock and without risk of seeing a
+        concurrent ``add_binary``/``remove_binary`` mutate the underlying
+        manifest mid-iteration. Each dict carries the same fields the
+        manifest stores: ``sha256``, ``filename``, ``size``, ``mode``,
+        ``copy_path``, ``added_at`` (and ``mtime`` if present).
+        """
+        with self._lock:
+            return [
+                {
+                    "sha256": sha,
+                    "filename": d.get("original_filename") or "(unnamed)",
+                    "size": int(d.get("size", 0) or 0),
+                    "mode": d.get("mode", "unknown"),
+                    "copy_path": d.get("copy_path") or "",
+                    "added_at": float(d.get("added_at", 0.0) or 0.0),
+                    "mtime": d.get("mtime"),
+                }
+                for sha, d in self.manifest.members.items()
+            ]
+
+    def snapshot_members_with_presence(self) -> Tuple[List[Dict[str, Any]], str, str]:
+        """Snapshot members AND the primary/last_active sha256s under one lock.
+
+        Returns ``(members, primary_sha256, last_active_sha256)``. Used by
+        ``_project_card_detail`` so the dashboard's grid build can stat each
+        ``copy_path`` outside the lock without paying the per-member
+        ``member_present()`` round-trip-with-lock cost. Stat happens at the
+        call site, not here, because we don't want to hold the lock during
+        I/O.
+        """
+        with self._lock:
+            members = [
+                (sha, dict(d)) for sha, d in self.manifest.members.items()
+            ]
+            primary = self.manifest.primary_sha256 or ""
+            last_active = self.manifest.last_active_sha256 or ""
+        # Convert to the same shape as snapshot_members() for consistency.
+        out = [
+            {
+                "sha256": sha,
+                "filename": d.get("original_filename") or "(unnamed)",
+                "size": int(d.get("size", 0) or 0),
+                "mode": d.get("mode", "unknown"),
+                "copy_path": d.get("copy_path") or "",
+                "added_at": float(d.get("added_at", 0.0) or 0.0),
+            }
+            for sha, d in members
+        ]
+        return out, primary, last_active
 
     def adopt_binary_into_stub(self, sha256: str, source_path: str) -> ProjectMember:
         """Materialise a stub member (created by migration) by copying the

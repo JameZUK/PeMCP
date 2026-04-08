@@ -1034,20 +1034,88 @@ def list_indexed_binaries(db_path: Optional[Path] = None) -> List[Dict[str, Any]
         conn.close()
 
 
-def is_binary_indexed(sha256: str, db_path: Optional[Path] = None) -> bool:
-    """Quick check whether *sha256* has any rows in the BSim DB."""
-    db = db_path or get_db_path()
-    if not db.exists():
-        return False
-    sha256 = sha256.lower()
-    conn = _get_connection(db)
+# Bounds on compare_indexed_binaries — defends against pathological inputs
+# (e.g. 50K-function binaries) that would otherwise hold a dashboard worker
+# thread for many minutes. Tunable via env vars for the rare cases that
+# need them.
+BSIM_COMPARE_MAX_CANDIDATES = 200          # cap candidate list size per fa
+BSIM_COMPARE_BLOCK_TOLERANCE = 5           # absolute ±k blocks (was ±50%)
+BSIM_COMPARE_MAX_FUNCS_PER_SIDE = 50000    # refuse comparison above this
+BSIM_COMPARE_TIME_BUDGET_S = 30.0          # per-pair wallclock cap
+
+
+def is_binary_indexed(sha256: str, db_path: Optional[Path] = None,
+                      conn: Optional[sqlite3.Connection] = None) -> bool:
+    """Quick check whether *sha256* has any rows in the BSim DB.
+
+    Accepts an optional pre-opened connection for callers (e.g. project
+    comparison) that need to check many binaries in a row without paying
+    the connect/close cost per call. Falls back to opening its own
+    connection when ``conn`` is None.
+    """
+    if conn is None:
+        db = db_path or get_db_path()
+        if not db.exists():
+            return False
+        c = _get_connection(db)
+        owns = True
+    else:
+        c = conn
+        owns = False
     try:
-        row = conn.execute(
-            "SELECT 1 FROM binaries WHERE sha256 = ? LIMIT 1", (sha256,)
+        row = c.execute(
+            "SELECT 1 FROM binaries WHERE sha256 = ? LIMIT 1",
+            (sha256.lower(),),
         ).fetchone()
         return row is not None
     finally:
-        conn.close()
+        if owns:
+            c.close()
+
+
+def is_binaries_indexed_batch(sha256_list: List[str],
+                              db_path: Optional[Path] = None,
+                              conn: Optional[sqlite3.Connection] = None) -> Dict[str, bool]:
+    """Batch ``is_binary_indexed`` for many sha256s in one query.
+
+    Returns a ``{sha256: bool}`` map covering every input sha256 (False for
+    those not in the DB). Replaces N round-trips with one ``IN (...)``
+    query — meaningful when the project comparison view checks 100+ members
+    at a time.
+    """
+    if not sha256_list:
+        return {}
+    wanted = {s.lower() for s in sha256_list if s}
+    if not wanted:
+        return {}
+    out: Dict[str, bool] = {sha: False for sha in wanted}
+    if conn is None:
+        db = db_path or get_db_path()
+        if not db.exists():
+            return out
+        c = _get_connection(db)
+        owns = True
+    else:
+        c = conn
+        owns = False
+    try:
+        # SQLite has no IN-list parameter binding, but `?, ?, ?` works
+        # fine for any reasonable number of items. Bind the wanted set
+        # in chunks to stay under SQLITE_MAX_VARIABLE_NUMBER (default 999).
+        wanted_list = list(wanted)
+        chunk = 500
+        for i in range(0, len(wanted_list), chunk):
+            sub = wanted_list[i:i + chunk]
+            placeholders = ",".join("?" * len(sub))
+            for row in c.execute(
+                f"SELECT sha256 FROM binaries WHERE sha256 IN ({placeholders})",
+                sub,
+            ):
+                out[row["sha256"]] = True
+        return out
+    finally:
+        if owns:
+            c.close()
 
 
 def compare_indexed_binaries(
@@ -1057,6 +1125,7 @@ def compare_indexed_binaries(
     metrics: str = "combined",
     top_match_limit: int = 50,
     db_path: Optional[Path] = None,
+    conn: Optional[sqlite3.Connection] = None,
 ) -> Dict[str, Any]:
     """Compare two BSim-indexed binaries function-by-function from the DB.
 
@@ -1066,33 +1135,54 @@ def compare_indexed_binaries(
     the results into a per-pair similarity report suitable for the
     project comparison view.
 
+    Bounded by:
+      - ``BSIM_COMPARE_MAX_FUNCS_PER_SIDE`` — refuse before extraction
+      - ``BSIM_COMPARE_BLOCK_TOLERANCE`` — strict ±k blocks (NOT ±50%) so
+        small functions don't pull in the entire B function set
+      - ``BSIM_COMPARE_MAX_CANDIDATES`` — cap candidate list per fa
+      - ``BSIM_COMPARE_TIME_BUDGET_S`` — wallclock cap; remaining funcs
+        skipped if exceeded
+
+    The optional ``conn`` parameter lets project-level comparison reuse a
+    single sqlite connection across many pair calls instead of opening a
+    fresh one each time.
+
     Returns
     -------
     dict with keys:
       - ``available``: bool — both binaries are indexed
       - ``error``: str — present only when one or both binaries are missing
       - ``binary_a`` / ``binary_b``: ``{sha256, filename, function_count}``
-      - ``shared_function_count``: int — A→B matches above threshold
-      - ``jaccard``: float — |shared| / |union(A, B)|
+      - ``shared_function_count``: int — min(matched_a, matched_b)
+      - ``matched_a_count`` / ``matched_b_count``: int
+      - ``jaccard``: float — shared / |union(A, B)|, always in [0, 1]
       - ``avg_similarity``: float — mean of best-match scores
       - ``top_matches``: list of ``{a_addr, a_name, b_addr, b_name, score}``
+      - ``truncated``: bool — present when the time budget was hit
     """
-    db = db_path or get_db_path()
-    if not db.exists():
-        return {"available": False, "error": "BSim DB does not exist"}
+    import time as _time
 
     sha_a = sha_a.lower()
     sha_b = sha_b.lower()
     if sha_a == sha_b:
         return {"available": False, "error": "Cannot compare a binary against itself"}
 
-    conn = _get_connection(db)
+    if conn is None:
+        db = db_path or get_db_path()
+        if not db.exists():
+            return {"available": False, "error": "BSim DB does not exist"}
+        c = _get_connection(db)
+        owns = True
+    else:
+        c = conn
+        owns = False
+
     try:
         # Pull metadata for both binaries upfront so we can short-circuit
         # cleanly if either is unindexed.
         meta = {}
         for sha in (sha_a, sha_b):
-            row = conn.execute(
+            row = c.execute(
                 "SELECT sha256, filename, function_count, architecture "
                 "FROM binaries WHERE sha256 = ? LIMIT 1",
                 (sha,),
@@ -1105,9 +1195,25 @@ def compare_indexed_binaries(
                 }
             meta[sha] = dict(row)
 
+        # Refuse comparison entirely if either side is too large — protects
+        # the dashboard executor from runaway feature scoring on huge
+        # binaries (e.g. stripped Go binaries with 50K+ functions).
+        for sha, m in meta.items():
+            fc = int(m.get("function_count") or 0)
+            if fc > BSIM_COMPARE_MAX_FUNCS_PER_SIDE:
+                return {
+                    "available": False,
+                    "error": (
+                        f"Binary {sha[:12]} has {fc} indexed functions, "
+                        f"exceeding the comparison cap "
+                        f"({BSIM_COMPARE_MAX_FUNCS_PER_SIDE}). Comparing "
+                        f"binaries this size would block the dashboard."
+                    ),
+                }
+
         # Pull all functions for each binary in one shot.
         def _load_funcs(sha: str) -> List[Dict[str, Any]]:
-            cur = conn.execute(
+            cur = c.execute(
                 "SELECT f.* FROM functions f "
                 "JOIN binaries b ON f.binary_id = b.id "
                 "WHERE b.sha256 = ?",
@@ -1125,7 +1231,8 @@ def compare_indexed_binaries(
         funcs_a = _load_funcs(sha_a)
         funcs_b = _load_funcs(sha_b)
     finally:
-        conn.close()
+        if owns:
+            c.close()
 
     if not funcs_a or not funcs_b:
         return {
@@ -1133,32 +1240,46 @@ def compare_indexed_binaries(
             "binary_a": meta[sha_a],
             "binary_b": meta[sha_b],
             "shared_function_count": 0,
+            "matched_a_count": 0,
+            "matched_b_count": 0,
             "jaccard": 0.0,
             "avg_similarity": 0.0,
+            "total_functions_a": len(funcs_a),
+            "total_functions_b": len(funcs_b),
             "top_matches": [],
             "note": "One or both binaries have no indexed functions",
         }
 
     # For each function in A, find the best-scoring counterpart in B.
-    # Pre-bucket B by block count for cheap O(1) shortlist filtering before
-    # the expensive feature scoring.
+    # Pre-bucket B by block count for cheap O(1) shortlist filtering. The
+    # tolerance is a strict ±k absolute window (default 5), NOT a ±50%
+    # relative window — the relative formula collapsed to ``[0, hi]`` for
+    # any function with ≤4 blocks, which is most of any binary, defeating
+    # the bucket entirely and producing O(|A|*|B|) scoring.
     b_by_blocks: Dict[int, List[Dict[str, Any]]] = {}
     for fb in funcs_b:
         b_by_blocks.setdefault(fb["_block_count"], []).append(fb)
 
     pair_scores: List[Dict[str, Any]] = []
     score_key = metrics if metrics else "combined"
+    deadline = _time.monotonic() + BSIM_COMPARE_TIME_BUDGET_S
+    truncated = False
 
     for fa in funcs_a:
+        if _time.monotonic() > deadline:
+            truncated = True
+            break
         fa_blocks = fa["_block_count"]
-        # Block-count tolerance: allow ±50% or absolute ±2 (whichever wider)
-        lo = max(0, min(fa_blocks // 2, fa_blocks - 2))
-        hi = max(fa_blocks * 2, fa_blocks + 2)
+        lo = max(0, fa_blocks - BSIM_COMPARE_BLOCK_TOLERANCE)
+        hi = fa_blocks + BSIM_COMPARE_BLOCK_TOLERANCE
         candidates: List[Dict[str, Any]] = []
         for bk in range(lo, hi + 1):
             bucket = b_by_blocks.get(bk)
             if bucket:
                 candidates.extend(bucket)
+                if len(candidates) >= BSIM_COMPARE_MAX_CANDIDATES:
+                    candidates = candidates[:BSIM_COMPARE_MAX_CANDIDATES]
+                    break
         if not candidates:
             continue
         best = None
@@ -1200,7 +1321,7 @@ def compare_indexed_binaries(
     jaccard = shared / union
     avg_sim = (sum(p["score"] for p in pair_scores) / matched_a) if matched_a else 0.0
 
-    return {
+    result = {
         "available": True,
         "binary_a": meta[sha_a],
         "binary_b": meta[sha_b],
@@ -1215,6 +1336,12 @@ def compare_indexed_binaries(
         "total_functions_b": total_b,
         "top_matches": pair_scores[:top_match_limit],
     }
+    if truncated:
+        result["truncated"] = True
+        result["note"] = (
+            f"Hit {BSIM_COMPARE_TIME_BUDGET_S}s time budget; results are partial."
+        )
+    return result
 
 
 def _safe_json_loads(raw, default):

@@ -987,7 +987,7 @@
             // Default project A to the active project (if any) so the
             // common "compare current project against another" workflow
             // is one click instead of two.
-            var st = window._arkanaState || {};
+            var st = (window._arkana && window._arkana.state) || {};
             var active = st.active_project;
             if (active && active.id && !active.scratch) {
                 selA.value = active.id;

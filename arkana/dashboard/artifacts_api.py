@@ -163,11 +163,13 @@ def delete_artifact_data(artifact_id: str) -> Dict[str, Any]:
 
 
 def bulk_delete_artifacts(artifact_ids: List[str]) -> Dict[str, Any]:
-    """Delete multiple artifacts at once. Returns per-id status."""
+    """Delete multiple artifacts at once. Returns per-id status.
+
+    Uses the O(L+N) batch helper instead of N individual delete calls,
+    each of which would scan the artifact list under ``_artifacts_lock``.
+    """
     st = get_current_state()
-    results = {}
-    for aid in artifact_ids:
-        results[aid] = st.delete_artifact(aid)
+    results = st.delete_artifacts_batch(artifact_ids)
     return {
         "status": "success",
         "deleted_count": sum(1 for v in results.values() if v),
@@ -177,15 +179,16 @@ def bulk_delete_artifacts(artifact_ids: List[str]) -> Dict[str, Any]:
 
 def bulk_tag_artifacts(artifact_ids: List[str], tags: List[str],
                        replace_tags: bool = False) -> Dict[str, Any]:
-    """Apply tags to multiple artifacts at once."""
+    """Apply tags to multiple artifacts at once.
+
+    Uses the O(L+N) batch helper instead of N individual update calls,
+    each of which would scan the artifact list under ``_artifacts_lock``.
+    """
     st = get_current_state()
-    updated = 0
-    for aid in artifact_ids:
-        result = st.update_artifact_metadata(
-            aid, tags=tags, replace_tags=replace_tags,
-        )
-        if result is not None:
-            updated += 1
+    results = st.update_artifacts_metadata_batch(
+        artifact_ids, tags=tags, replace_tags=replace_tags,
+    )
+    updated = sum(1 for v in results.values() if v is not None)
     return {"status": "success", "updated_count": updated}
 
 

@@ -228,7 +228,7 @@
         offsetInput.value = initOffset;
         jumpTo(parseOffset(initOffset));
     } else {
-        var st = window._arkanaState || {};
+        var st = (window._arkana && window._arkana.state) || {};
         var dashState = (st.active_project && st.active_project.dashboard_state) || {};
         var savedOffset = dashState.hex_offset;
         if (savedOffset && Number(savedOffset) > 0) {

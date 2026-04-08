@@ -291,25 +291,16 @@ class AnalysisCache:
         logger.info("Cache HIT for %s...", sha256[:12])
         return pe_data
 
-    def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str,
-            notes: Optional[list] = None, tool_history: Optional[list] = None,
-            artifacts: Optional[list] = None,
-            renames: Optional[dict] = None,
-            custom_types: Optional[dict] = None,
-            triage_status: Optional[dict] = None) -> bool:
+    def put(self, sha256: str, pe_data: Dict[str, Any], original_filepath: str) -> bool:
         """
         Store a ``pe_data`` dict in the cache.  Returns True on success.
 
         v2 cache format: user-mutable state (notes, artifacts, renames,
         custom types, triage flags) is **not** stored here — it lives in
-        project overlays. The user-state parameters are accepted for
-        backward compatibility but ignored when writing v2 wrappers.
-        The gzip compression runs outside the lock to avoid blocking
-        concurrent callers during the (potentially slow) compression step.
+        project overlays. The gzip compression runs outside the lock to
+        avoid blocking concurrent callers during the (potentially slow)
+        compression step.
         """
-        # Suppress unused-arg warnings for the now-ignored user-state params.
-        del notes, tool_history, artifacts, renames, custom_types, triage_status
-
         if not self.enabled:
             return False
 

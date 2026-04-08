@@ -4,6 +4,7 @@ import sys
 import signal
 import logging
 import threading
+import time
 import argparse
 
 from dataclasses import dataclass, field
@@ -527,9 +528,8 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
         nonlocal _sigterm_watchdog_started
         if not _sigterm_watchdog_started:
             _sigterm_watchdog_started = True
-            import time as _time
             def _watchdog():
-                _time.sleep(5)
+                time.sleep(5)
                 os._exit(1)
             threading.Thread(target=_watchdog, daemon=True).start()
         raise KeyboardInterrupt
@@ -597,17 +597,34 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
         if state.pe_object:
             state.pe_object.close()
             logger.info("MCP: Closed pre-loaded object upon server exit.")
+        # Final overlay flush — push any pending dirty session state to
+        # disk BEFORE the watchdog can fire. The background flush daemon
+        # only wakes every OVERLAY_FLUSH_INTERVAL_SECONDS, so a dirty
+        # overlay added in the last 30s before shutdown would otherwise
+        # be lost. Best-effort: per-state try/except so one slow flush
+        # doesn't block the others.
+        try:
+            from arkana.state import get_all_session_states
+            for st in get_all_session_states():
+                try:
+                    if hasattr(st, "is_overlay_dirty") and st.is_overlay_dirty():
+                        st.flush_overlay()
+                except Exception:
+                    logger.debug("Final flush: per-state error", exc_info=True)
+        except Exception:
+            logger.debug("Final flush: skipped", exc_info=True)
         # Watchdog: ensure the process actually exits even if a daemon
         # thread (uvicorn dashboard, angr background, qiling subprocess
         # joiner, …) leaves the interpreter spinning during shutdown.
         # ``sys.exit`` raises SystemExit which runs atexit handlers and
         # joins non-daemon threads — historically that has hung in the
-        # field on stuck angr/uvicorn shutdowns. The 5-second ceiling
-        # mirrors the SIGTERM watchdog above so the user always gets a
-        # responsive ``docker stop`` and a healthy MCP restart.
-        import time as _time
+        # field on stuck angr/uvicorn shutdowns. The 15-second ceiling is
+        # generous enough to absorb a slow final overlay flush on a
+        # heavily-loaded disk; the existing SIGTERM watchdog (5s) is
+        # tighter for the docker-stop case where the operator is actively
+        # waiting.
         def _exit_watchdog():
-            _time.sleep(5)
+            time.sleep(15)
             os._exit(1 if server_exc else 0)
         threading.Thread(target=_exit_watchdog, daemon=True).start()
         sys.exit(1 if server_exc else 0)

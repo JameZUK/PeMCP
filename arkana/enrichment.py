@@ -674,18 +674,11 @@ def _save_enrichment_cache(state: AnalyzerState) -> None:
 
         sha = serializable.get("file_hashes", {}).get("sha256")
         if sha and state.filepath:
-            # M5-v8: Pass session data directly to put() instead of calling
-            # put() then update_session_data() — avoids redundant gzip
-            # decompress + recompress cycle (double I/O).
-            analysis_cache.put(
-                sha, serializable, state.filepath,
-                notes=state.get_all_notes_snapshot(),
-                tool_history=state.get_tool_history_snapshot(),
-                artifacts=state.get_all_artifacts_snapshot(),
-                renames=state.get_all_renames_snapshot(),
-                custom_types=state.get_all_types_snapshot(),
-                triage_status=state.get_all_triage_snapshot(),
-            )
+            # v2 cache format stores derived analysis only — user state
+            # (notes/tool_history/artifacts/renames/custom_types/triage)
+            # lives in project overlays now and is flushed by the
+            # background _overlay_flush_loop daemon.
+            analysis_cache.put(sha, serializable, state.filepath)
 
     except Exception as e:
         logger.warning("Enrichment: cache save failed: %s", e)

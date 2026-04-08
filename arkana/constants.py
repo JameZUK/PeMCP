@@ -180,6 +180,29 @@ PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_\-. ]{1,100}$")
 MAX_PROJECTS = 1000
 MAX_BINARIES_PER_PROJECT = 50
 
+# Background overlay flush daemon — wakes every N seconds to persist any
+# session state with `_overlay_dirty=True`. Without this loop, mutations
+# only persist on close_file/close_project, so a SIGKILL between mutations
+# and close loses work. The interval is intentionally generous so the
+# loop is essentially free under normal load.
+OVERLAY_FLUSH_INTERVAL_SECONDS = 30
+
+# --- Project archive (v2) import safety caps ---
+# Defends against decompression bombs / zip bombs in user-supplied
+# .arkana_project.tar.gz archives. All three are tunable via env vars
+# (ARKANA_MAX_PROJECT_ARCHIVE_*).
+MAX_PROJECT_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024     # 4 GB total
+MAX_PROJECT_ARCHIVE_MEMBERS = 50000                     # max member count
+MAX_PROJECT_ARCHIVE_MEMBER_BYTES = 1024 * 1024 * 1024   # 1 GB per file
+
+# --- Project comparison (BSim) bounds ---
+# The Similarity → PROJECTS sub-tab can pin a dashboard worker thread for
+# many minutes if the user picks two huge projects. The pair-count cap is
+# the hard ceiling (refused outright); the time budget is the soft cap
+# inside the loop.
+MAX_PROJECT_COMPARE_PAIRS = 500                        # M*N pair grid cap
+PROJECT_COMPARE_TIME_BUDGET_S = 120.0                  # overall wallclock cap
+
 # --- Rename / Annotation Limits ---
 MAX_BATCH_RENAMES = 50
 

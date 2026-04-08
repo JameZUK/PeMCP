@@ -55,39 +55,26 @@ def _project_card_summary(project) -> Dict[str, Any]:
 def _project_card_detail(project) -> Dict[str, Any]:
     """Return the full project card including a per-member breakdown.
 
-    Snapshots the members dict and presence map under a single ``project._lock``
-    acquisition so the per-member ``stat()`` calls happen exactly once each
-    rather than re-locking per iteration.
+    Uses ``Project.snapshot_members_with_presence`` for the lock-once
+    snapshot, then runs the per-member ``os.path.isfile`` check OUTSIDE
+    the lock so disk I/O doesn't block other readers.
     """
     summary = _project_card_summary(project)
-    # Snapshot members under one lock acquisition. ``member_present`` is
-    # batched into a single pass instead of N separate locked calls.
-    with project._lock:
-        members_snapshot = list(project.manifest.members.items())
-        primary_sha = project.manifest.primary_sha256
-        last_active_sha = project.manifest.last_active_sha256
-    presence_map: Dict[str, bool] = {}
-    for sha, d in members_snapshot:
-        cp = d.get("copy_path") or ""
-        presence_map[sha] = bool(cp) and os.path.isfile(cp)
+    members_snapshot, primary_sha, last_active_sha = project.snapshot_members_with_presence()
     summary["members"] = [
         {
-            "sha256": sha,
-            "filename": d.get("original_filename"),
-            "size": d.get("size", 0),
-            "mode": d.get("mode", "unknown"),
-            "added_at": d.get("added_at", 0.0),
-            "present": presence_map.get(sha, False),
-            "is_primary": (sha == primary_sha),
-            "is_last_active": (sha == last_active_sha),
+            "sha256": m["sha256"],
+            "filename": m["filename"],
+            "size": m["size"],
+            "mode": m["mode"],
+            "added_at": m["added_at"],
+            "present": bool(m["copy_path"]) and os.path.isfile(m["copy_path"]),
+            "is_primary": (m["sha256"] == primary_sha),
+            "is_last_active": (m["sha256"] == last_active_sha),
         }
-        for sha, d in members_snapshot
+        for m in members_snapshot
     ]
     return summary
-
-
-# Backwards-compat alias — older code/tests imported _project_card.
-_project_card = _project_card_detail
 
 
 def get_projects_list_data(filter: str = "", tag: str = "",
@@ -346,11 +333,7 @@ def import_archive_data(archive_path: str) -> Dict[str, Any]:
                     size=int(top_manifest.get("original_file_size") or 0),
                     mode=top_manifest.get("mode", "unknown"),
                 )
-                with project._lock:
-                    project.manifest.members[sha256] = member.to_dict()
-                    project.manifest.primary_sha256 = sha256
-                    project.manifest.last_active_sha256 = sha256
-                    project.save_manifest()
+                project.register_stub_member(member, make_primary=True)
                 # Save the wrapper's user state as the project's overlay
                 overlay = {
                     "notes": wrapper.get("notes") or [],
@@ -361,8 +344,8 @@ def import_archive_data(archive_path: str) -> Dict[str, Any]:
                     "triage_status": wrapper.get("triage_status") or {},
                 }
                 project.save_overlay(sha256, overlay)
-                with project_manager._lock:
-                    project_manager._save_index()
+                # NOTE: project_manager.create() above already calls
+                # _save_index() — no second save needed.
                 return {
                     "status": "success",
                     "import_version": 1,

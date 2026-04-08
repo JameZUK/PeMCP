@@ -130,17 +130,9 @@
         tagSelect.innerHTML = keep;
     }
 
-    function formatRelative(epoch) {
-        if (!epoch) return "—";
-        var d = new Date(Number(epoch) * 1000);
-        var now = Date.now();
-        var diff = now - d.getTime();
-        if (diff < 60000) return "just now";
-        if (diff < 3600000) return Math.floor(diff / 60000) + " min ago";
-        if (diff < 86400000) return Math.floor(diff / 3600000) + " hr ago";
-        if (diff < 7 * 86400000) return Math.floor(diff / 86400000) + " days ago";
-        return d.toLocaleDateString();
-    }
+    // formatRelative() lives in dashboard.js as a top-level helper so any
+    // page that loads dashboard.js (every page) can reuse it. We rely on
+    // it via the global scope.
 
     // Format any [data-epoch] elements rendered server-side. Called on
     // initial load (server-rendered cards have raw epoch in their text)
@@ -288,7 +280,8 @@
         applyOptimisticActive(pid);
         // Tell the nav handler in dashboard.js to render "(opening…)"
         // instead of the stale filename until the new binary loads.
-        window._arkanaOpening = true;
+        window._arkana = window._arkana || {};
+        window._arkana.opening = true;
 
         var body = { project_id: pid };
         if (sha256) body.binary_sha256 = sha256;
@@ -312,7 +305,8 @@
         }).catch(function (e) {
             // Roll back optimistic state so the user can retry without
             // a stale OPENING badge stuck on the failed card.
-            window._arkanaOpening = false;
+            window._arkana = window._arkana || {};
+            window._arkana.opening = false;
             reloadGrid();
             showToast("Open failed: " + e.message, "error");
         });
@@ -321,9 +315,10 @@
     // When the SSE-fed dashboard.js notices the active project actually
     // changed on the backend, refresh our card grid so badges and the
     // "▶ ACTIVE" indicator land on the correct card. Also clear the
-    // _arkanaOpening flag so the nav stops showing "(opening…)".
+    // _arkana.opening flag so the nav stops showing "(opening…)".
     document.addEventListener("arkana-active-project-changed", function () {
-        window._arkanaOpening = false;
+        window._arkana = window._arkana || {};
+        window._arkana.opening = false;
         // The redirect target may already be loading; harmless to reload
         // grid in either case.
         reloadGrid();

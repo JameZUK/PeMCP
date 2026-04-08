@@ -3157,10 +3157,12 @@ button.view-toggle-btn.active {
     padding: 12px;
 }
 #active-project-banner .project-card {
-    /* Full-width row, brighter than the grid cells. */
+    /* Full-width row, brighter than the grid cells. Uses CRT theme
+       variables (with rgba fallbacks) so dark/light theme variants pick
+       up the right glow without touching this rule. */
     width: 100%;
     border: 2px solid var(--primary);
-    background: rgba(0, 60, 0, 0.25);
+    background: var(--primary-tint, rgba(0, 60, 0, 0.25));
     box-shadow: 0 0 12px var(--primary-glow, rgba(0, 255, 0, 0.4));
     padding: 14px 16px;
 }
@@ -3293,9 +3295,10 @@ button.view-toggle-btn.active {
 }
 
 .badge-opening {
-    background: rgba(255, 200, 0, 0.2);
-    border: 1px solid rgba(255, 200, 0, 0.7);
-    color: #fc0;
+    /* Uses --warning when the theme defines it; falls back to amber. */
+    background: var(--warning-tint, rgba(255, 200, 0, 0.2));
+    border: 1px solid var(--warning, rgba(255, 200, 0, 0.7));
+    color: var(--warning, #fc0);
     padding: 1px 6px;
     font-size: 10px;
     font-weight: bold;

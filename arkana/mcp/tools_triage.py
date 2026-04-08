@@ -9,7 +9,7 @@ import datetime
 from typing import Dict, Any, Optional, List, Tuple
 
 from arkana.config import (
-    state, logger, Context, analysis_cache,
+    state, logger, Context,
     ANGR_AVAILABLE, CAPA_AVAILABLE, FLOSS_AVAILABLE,
     STRINGSIFTER_AVAILABLE, YARA_AVAILABLE,
     PYELFTOOLS_AVAILABLE,

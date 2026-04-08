@@ -15,7 +15,14 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 
 from arkana.config import state, logger, Context, analysis_cache
-from arkana.constants import MAX_TOTAL_ARTIFACT_EXPORT_SIZE, MAX_ARTIFACT_FILE_SIZE, DEFAULT_MAX_FILE_SIZE_MB
+from arkana.constants import (
+    MAX_TOTAL_ARTIFACT_EXPORT_SIZE,
+    MAX_ARTIFACT_FILE_SIZE,
+    DEFAULT_MAX_FILE_SIZE_MB,
+    MAX_PROJECT_ARCHIVE_BYTES,
+    MAX_PROJECT_ARCHIVE_MEMBERS,
+    MAX_PROJECT_ARCHIVE_MEMBER_BYTES,
+)
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
 from arkana.cache import CACHE_DIR
 from arkana.utils import _safe_env_int
@@ -40,10 +47,20 @@ _MAX_IMPORT_DIR_SIZE = _safe_env_int("ARKANA_MAX_IMPORT_DIR_SIZE_MB", _safe_env_
 # Maximum decompressed analysis.json.gz size (256 MB)
 _MAX_ANALYSIS_DECOMPRESSED_SIZE = 256 * 1024 * 1024
 
-# v2 archive limits — defends against decompression bombs / zip bombs
-_MAX_V2_ARCHIVE_BYTES = _safe_env_int("ARKANA_MAX_PROJECT_ARCHIVE_MB", 4096) * 1024 * 1024  # 4 GB total
-_MAX_V2_ARCHIVE_MEMBERS = _safe_env_int("ARKANA_MAX_PROJECT_ARCHIVE_MEMBERS", 50000)
-_MAX_V2_MEMBER_BYTES = _safe_env_int("ARKANA_MAX_PROJECT_ARCHIVE_MEMBER_MB", 1024) * 1024 * 1024  # 1 GB per file
+# v2 archive limits — defaults from arkana/constants.py, overridable via env.
+# Defends against decompression bombs / zip bombs in user-supplied archives.
+_MAX_V2_ARCHIVE_BYTES = _safe_env_int(
+    "ARKANA_MAX_PROJECT_ARCHIVE_MB",
+    MAX_PROJECT_ARCHIVE_BYTES // (1024 * 1024),
+) * 1024 * 1024
+_MAX_V2_ARCHIVE_MEMBERS = _safe_env_int(
+    "ARKANA_MAX_PROJECT_ARCHIVE_MEMBERS",
+    MAX_PROJECT_ARCHIVE_MEMBERS,
+)
+_MAX_V2_MEMBER_BYTES = _safe_env_int(
+    "ARKANA_MAX_PROJECT_ARCHIVE_MEMBER_MB",
+    MAX_PROJECT_ARCHIVE_MEMBER_BYTES // (1024 * 1024),
+) * 1024 * 1024
 
 # Regex for sanitizing binary filenames
 _SAFE_FILENAME_RE = re.compile(r'[^a-zA-Z0-9._\-]')
