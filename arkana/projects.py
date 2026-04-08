@@ -1119,16 +1119,26 @@ class ProjectManager:
         *suggested_name* is used if provided; otherwise an unnamed placeholder
         is set and ``name_locked`` is False so the caller (or
         ``auto_name_sample`` integration) can rename later.
+
+        **Atomicity:** name collision resolution and project creation happen
+        under a single ``self._lock`` (RLock) acquisition, so two concurrent
+        promotions cannot both end up with the same suffixed name. If any
+        ``add_binary`` call fails partway through, the half-built project is
+        deleted from disk and the original exception is re-raised — the
+        caller never sees a half-promoted project on disk.
         """
-        # Build initial name (validation may suffix on collision)
-        if suggested_name:
-            try:
-                base_name = _validate_project_name(suggested_name)
-            except ValueError:
-                base_name = f"unnamed_{uuid.uuid4().hex[:6]}"
-            with self._lock:
-                if self.find_by_name(base_name):
-                    # Auto-suffix with first sha8 of primary, or counter
+        # Phase 1: name selection + project creation atomically.
+        with self._lock:
+            if suggested_name:
+                try:
+                    base_name = _validate_project_name(suggested_name)
+                except ValueError:
+                    base_name = f"unnamed_{uuid.uuid4().hex[:6]}"
+                # Walk candidates until find_by_name returns None — both the
+                # check and the subsequent create() run under the same RLock,
+                # so concurrent promoters can't pick the same suffix.
+                candidate = base_name
+                if self.find_by_name(candidate):
                     primary = scratch.primary_sha256 or ""
                     suffix = primary[:8] if primary else uuid.uuid4().hex[:6]
                     candidate = f"{base_name}_{suffix}"
@@ -1136,43 +1146,73 @@ class ProjectManager:
                     while self.find_by_name(candidate):
                         candidate = f"{base_name}_{suffix}_{counter}"
                         counter += 1
-                    base_name = candidate
-            project = self.create(name=base_name, name_locked=False, tags=tags)
-        else:
-            project = self.create(name=None, name_locked=False, tags=tags)
+                project = self.create(name=candidate, name_locked=False, tags=tags)
+            else:
+                project = self.create(name=None, name_locked=False, tags=tags)
 
-        # Copy members from scratch
-        for sha256, member in scratch.members.items():
+        # Phase 2: copy members. If any member fails, roll back the project.
+        # We track which members were successfully added so an error message
+        # carries the full picture instead of just the last failure.
+        added: List[str] = []
+        try:
+            for sha256, member in scratch.members.items():
+                try:
+                    self.add_binary(
+                        project,
+                        member.copy_path,
+                        declared_sha256=sha256,
+                        declared_size=member.size,
+                        mode=member.mode,
+                    )
+                    added.append(sha256)
+                except FileNotFoundError as e:
+                    raise RuntimeError(
+                        f"Scratch member {sha256[:12]} source path "
+                        f"{member.copy_path} no longer exists "
+                        f"({len(added)} of {len(scratch.members)} members "
+                        "already added — rolling back promotion)"
+                    ) from e
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to add scratch member {sha256[:12]} during "
+                        f"promotion: {e} ({len(added)} of "
+                        f"{len(scratch.members)} members already added — "
+                        "rolling back promotion)"
+                    ) from e
+
+            # Phase 3: restore primary/last_active selection.
+            with project._lock:
+                if (scratch.primary_sha256
+                        and scratch.primary_sha256 in project.manifest.members):
+                    project.manifest.primary_sha256 = scratch.primary_sha256
+                if (scratch.last_active_sha256
+                        and scratch.last_active_sha256 in project.manifest.members):
+                    project.manifest.last_active_sha256 = scratch.last_active_sha256
+                project.save_manifest()
+
+            with self._lock:
+                self._save_index()
+
+            logger.info(
+                "Scratch %s promoted to project %s (%s)",
+                scratch.id, project.id, project.name,
+            )
+            return project
+        except Exception:
+            # Rollback: delete the half-built project so the user sees a
+            # clean failure rather than a project with missing binaries.
+            logger.warning(
+                "Promotion failed for scratch %s — rolling back project %s (%s)",
+                scratch.id, project.id, project.name,
+            )
             try:
-                self.add_binary(
-                    project,
-                    member.copy_path,
-                    declared_sha256=sha256,
-                    declared_size=member.size,
-                    mode=member.mode,
+                self.delete(project)
+            except Exception as cleanup_err:
+                logger.error(
+                    "Rollback of failed promotion left project %s on disk: %s",
+                    project.id, cleanup_err,
                 )
-            except FileNotFoundError:
-                logger.warning(
-                    "Scratch member %s source path %s no longer exists; skipping during promotion",
-                    sha256[:12], member.copy_path,
-                )
-                continue
-            except Exception as e:
-                logger.warning("Failed to add scratch member %s during promotion: %s", sha256[:12], e)
-
-        # Restore primary/last_active selection from scratch
-        with project._lock:
-            if scratch.primary_sha256 and scratch.primary_sha256 in project.manifest.members:
-                project.manifest.primary_sha256 = scratch.primary_sha256
-            if scratch.last_active_sha256 and scratch.last_active_sha256 in project.manifest.members:
-                project.manifest.last_active_sha256 = scratch.last_active_sha256
-            project.save_manifest()
-
-        with self._lock:
-            self._save_index()
-
-        logger.info("Scratch %s promoted to project %s (%s)", scratch.id, project.id, project.name)
-        return project
+            raise
 
 
 # ---------------------------------------------------------------------------

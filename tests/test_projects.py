@@ -294,6 +294,96 @@ class TestLazyPromotion:
 
 
 # ---------------------------------------------------------------------------
+#  promote_scratch atomicity & rollback
+# ---------------------------------------------------------------------------
+
+class TestPromoteScratchAtomicity:
+    """``promote_scratch`` must be atomic across name selection + creation
+    (no two concurrent promoters can pick the same suffixed name) and must
+    roll back the half-built project if any ``add_binary`` call fails."""
+
+    def test_collision_check_and_create_under_one_lock(self, manager, sample_binary):
+        """When ``promote_scratch`` walks the suffix candidates and finds a
+        free one, no other thread can race in and steal that name between
+        the check and the create — both happen under the same RLock.
+        Two consecutive promotions of the same suggested_name must produce
+        DIFFERENT names (the second gets a suffix), not collide."""
+        from arkana.projects import ScratchProject
+        path, sha = sample_binary
+        s1 = ScratchProject()
+        s1.add_member(sha, "sample.bin", path, size=66)
+        p1 = manager.promote_scratch(s1, suggested_name="my_inv")
+        # second promotion of the same suggested_name with a different sha
+        # should auto-suffix.
+        s2 = ScratchProject()
+        # different sha so the second project doesn't share members with p1
+        s2.add_member("ff" * 32, "sample.bin", path, size=66)
+        p2 = manager.promote_scratch(s2, suggested_name="my_inv")
+        assert p1.id != p2.id
+        assert p1.name == "my_inv"
+        assert p2.name != p1.name
+        assert "my_inv" in p2.name
+
+    def test_partial_failure_rolls_back_project(self, manager, tmp_path):
+        """If ``add_binary`` raises mid-loop, the half-built project must
+        be deleted from disk and the original exception must be re-raised
+        (wrapped in a RuntimeError that mentions how many members were
+        already added)."""
+        from arkana.projects import ScratchProject, ProjectMember, PROJECTS_DIR
+        s = ScratchProject()
+        # First member: real file → will succeed.
+        good = tmp_path / "good.bin"
+        good.write_bytes(b"hello world")
+        good_sha = "11" * 32
+        s.add_member(good_sha, "good.bin", str(good), size=11)
+        # Second member: pointing at a path that doesn't exist → FileNotFoundError
+        bad_sha = "22" * 32
+        s.members[bad_sha] = ProjectMember(
+            sha256=bad_sha,
+            original_filename="ghost.bin",
+            copy_path="/nonexistent/path/that/does/not/exist.bin",
+            added_at=0.0,
+            size=42,
+            mode="auto",
+        )
+
+        before_projects = set(PROJECTS_DIR.iterdir()) if PROJECTS_DIR.exists() else set()
+        with pytest.raises(RuntimeError, match="rolling back promotion"):
+            manager.promote_scratch(s, suggested_name="will_fail")
+
+        # The project must NOT be in the manager and the directory must be gone.
+        assert manager.find_by_name("will_fail") is None
+        after_projects = set(PROJECTS_DIR.iterdir()) if PROJECTS_DIR.exists() else set()
+        assert after_projects == before_projects, (
+            f"promote_scratch left a project on disk after rollback: "
+            f"{after_projects - before_projects}"
+        )
+
+    def test_caller_exception_is_chained(self, manager, tmp_path):
+        """The RuntimeError raised on rollback should chain the original
+        exception so debugging is easier."""
+        from arkana.projects import ScratchProject, ProjectMember
+        s = ScratchProject()
+        bad_sha = "33" * 32
+        s.members[bad_sha] = ProjectMember(
+            sha256=bad_sha,
+            original_filename="ghost.bin",
+            copy_path="/nonexistent/ghost.bin",
+            added_at=0.0,
+            size=0,
+            mode="auto",
+        )
+        try:
+            manager.promote_scratch(s, suggested_name="chain_test")
+        except RuntimeError as e:
+            # __cause__ should carry the original FileNotFoundError
+            assert e.__cause__ is not None
+            assert isinstance(e.__cause__, (FileNotFoundError, OSError))
+            return
+        pytest.fail("Expected RuntimeError to be raised")
+
+
+# ---------------------------------------------------------------------------
 #  Same-binary in two projects
 # ---------------------------------------------------------------------------
 

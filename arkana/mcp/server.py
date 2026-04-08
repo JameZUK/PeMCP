@@ -511,8 +511,20 @@ def _check_pe_object(tool_name: str, *, require_headers: bool = False) -> None:
     is deferred to the first tool call that actually needs directory
     structures, so cached opens stay fast (~1s) while tools that walk
     imports/exports/resources still get the data they need on first use.
+
+    Concurrency: the lazy ``full_load()`` runs OUTSIDE ``_pe_lock`` because
+    it can take seconds for a packed binary. We snapshot ``(pe_object,
+    needs_full_load)`` under the lock first, then run ``full_load()`` on
+    the captured reference, then re-acquire the lock and only clear the
+    flag if ``state.pe_object is still the same object`` we loaded. If a
+    concurrent ``close_pe()`` + ``open_file()`` swapped in a new pe_object
+    while we were loading, that new object's needs-full-load flag is
+    preserved untouched.
     """
-    pe = state.pe_object
+    # Snapshot under the lock — pe_object and needs_full_load must agree.
+    with state._pe_lock:
+        pe = state.pe_object
+        needs_full_load = bool(getattr(state, "_pe_object_needs_full_load", False))
     if pe is None:
         raise RuntimeError(
             f"[{tool_name}] PE object is not available. The file may have been "
@@ -528,7 +540,7 @@ def _check_pe_object(tool_name: str, *, require_headers: bool = False) -> None:
             )
         # Lazy full_load() — first tool that needs directories pays the
         # parse cost; subsequent tools see the already-fully-parsed object.
-        if getattr(state, "_pe_object_needs_full_load", False):
+        if needs_full_load:
             try:
                 pe.full_load()
             except Exception as exc:
@@ -536,8 +548,14 @@ def _check_pe_object(tool_name: str, *, require_headers: bool = False) -> None:
                     "[%s] pefile full_load() failed; some PE directories may "
                     "be unavailable: %s", tool_name, exc,
                 )
-            finally:
-                state._pe_object_needs_full_load = False
+            # Re-acquire lock and clear the flag ONLY if state.pe_object
+            # still points at the object we loaded. If a concurrent
+            # close_pe + open_file swapped in a new pe_object during our
+            # full_load(), its needs_full_load flag must be left alone so
+            # the next tool call promotes the NEW object.
+            with state._pe_lock:
+                if state.pe_object is pe:
+                    state._pe_object_needs_full_load = False
 
 
 def _check_angr_ready(tool_name: str, *, require_cfg: bool = True) -> None:

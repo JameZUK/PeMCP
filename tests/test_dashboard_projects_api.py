@@ -1367,3 +1367,46 @@ class TestPeFastLoadDeferredPromote:
         # Should not raise — best-effort.
         mcp_server._check_pe_object("test_tool", require_headers=True)
         assert clean_state._pe_object_needs_full_load is False
+
+    def test_check_pe_object_concurrent_swap_preserves_new_flag(
+        self, clean_state, monkeypatch
+    ):
+        """Race scenario: while ``_check_pe_object`` is running ``full_load()``
+        on the captured pe_object, a concurrent ``close_pe()`` + new
+        ``open_file()`` swaps in a NEW pe_object whose own ``needs_full_load``
+        flag is True. The first thread's ``finally`` clause must NOT clear
+        the new object's flag — the next tool call must still promote it.
+        """
+        from arkana.mcp import server as mcp_server
+
+        new_pe_object = object()  # sentinel — different identity than the original
+
+        class FakePE:
+            OPTIONAL_HEADER = object()
+            FILE_HEADER = object()
+            def __init__(self, state_ref):
+                self._state = state_ref
+                self.full_loaded = False
+            def full_load(self):
+                # Mid-load, simulate a concurrent close + open: the state's
+                # pe_object is swapped to a new object with its own flag set.
+                self._state.pe_object = new_pe_object
+                self._state._pe_object_needs_full_load = True
+                self.full_loaded = True
+
+        original_pe = FakePE(clean_state)
+        clean_state.pe_object = original_pe
+        clean_state._pe_object_needs_full_load = True
+        clean_state.pe_data = {"file_hashes": {"sha256": "a" * 64}}
+        clean_state.filepath = "/a"
+        monkeypatch.setattr(mcp_server, "state", clean_state)
+
+        mcp_server._check_pe_object("race_test", require_headers=True)
+
+        assert original_pe.full_loaded, "full_load() should have run on the captured pe_object"
+        assert clean_state.pe_object is new_pe_object, "swap should have stuck"
+        assert clean_state._pe_object_needs_full_load is True, (
+            "the new pe_object's needs_full_load flag must NOT have been "
+            "cleared by the first thread's finally clause — otherwise the "
+            "next tool call would silently get an unparsed pe_object"
+        )
