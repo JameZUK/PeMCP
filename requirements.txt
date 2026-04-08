@@ -19,7 +19,7 @@ nampa>=0.1
 flare-floss>=3.0
 # NOTE: capa version must match bundled capa-rules version (v9.3.0).
 # Rules use syntax features from their matching capa release.
-flare-capa>=9.3,<9.4
+flare-capa>=9.3,<9.5
 
 # --- String Analysis & Ranking ---
 # PyPI package name is "stringsifter", NOT "flare-stringsifter"
