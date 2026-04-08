@@ -278,7 +278,16 @@ class TestFlossTaskInfraRegistration(unittest.TestCase):
 
     def test_cleanup_after_failure(self):
         """Cancel event and thread ref cleaned up even on exception."""
+        # Hold the worker at a barrier so the test can observe the thread
+        # registered in _background_threads BEFORE the exception fires and
+        # the try/finally self-cleanup runs. Without the barrier the worker
+        # can finish (raise → cleanup) before this test reads the dict —
+        # which is exactly what flaked on Python 3.10/3.11 but not 3.12,
+        # where thread scheduling happens to be slower on the worker side.
+        barrier = threading.Event()
+
         def failing_floss(*args, **kwargs):
+            barrier.wait(timeout=5)
             raise RuntimeError("FLOSS exploded")
 
         with patch("arkana.mcp.tools_pe._parse_floss_analysis", side_effect=failing_floss):
@@ -286,6 +295,8 @@ class TestFlossTaskInfraRegistration(unittest.TestCase):
             _start_floss_background_task(self.st, ("data", 6))
             thread = self.st._background_threads.get("floss-deep-analysis")
             assert thread is not None
+            # Release the worker so it raises and the finally block runs.
+            barrier.set()
             thread.join(timeout=5)
 
         # Infra cleaned up
