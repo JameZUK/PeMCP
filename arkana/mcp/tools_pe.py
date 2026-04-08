@@ -464,25 +464,31 @@ async def open_file(
         # so that the active project is bound BEFORE state mutation hooks fire
         # for any restored data. Resolution priority:
         #   1. If state already has a non-scratch project containing this
-        #      sha256, keep it bound (multi-binary in-project switch).
-        #   2. Else if any other project contains this sha256, bind to the
-        #      most recently opened of those.
+        #      sha256 AND it's the most-recently-opened of all candidates,
+        #      keep it bound (multi-binary in-project switch).
+        #   2. Else if any project contains this sha256, bind to the
+        #      most-recently-opened of those. (open_project() touches
+        #      last_opened on the target project so this picks it.)
         #   3. Else create a ScratchProject (in-memory) — promoted to disk
         #      on the first state mutation via state._maybe_promote_scratch.
         try:
             from arkana.projects import project_manager, ScratchProject
             _resolved_project = None
             _current_project = state.get_active_project()
-            if (_current_project is not None
-                    and not getattr(_current_project, "is_scratch", False)
-                    and hasattr(_current_project, "has_member")
-                    and _current_project.has_member(_file_sha256)):
-                _resolved_project = _current_project
-            else:
-                _matches = project_manager.lookup_by_sha(_file_sha256)
-                if _matches:
-                    _matches.sort(key=lambda p: p.manifest.last_opened, reverse=True)
-                    _resolved_project = _matches[0]
+            _matches = project_manager.lookup_by_sha(_file_sha256)
+            if _matches:
+                _matches.sort(key=lambda p: p.manifest.last_opened, reverse=True)
+                _most_recent = _matches[0]
+                # Stick with the currently bound project ONLY if it's the
+                # most-recently-opened candidate. Otherwise the user (or
+                # ``open_project()``) has signalled a switch by touching a
+                # different project's ``last_opened``, and we honour it.
+                if (_current_project is not None
+                        and not getattr(_current_project, "is_scratch", False)
+                        and _current_project.id == _most_recent.id):
+                    _resolved_project = _current_project
+                else:
+                    _resolved_project = _most_recent
             if _resolved_project is None:
                 # No existing project owns this binary — start a scratch one.
                 _scratch = ScratchProject()
