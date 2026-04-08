@@ -1966,11 +1966,11 @@ def _create_routes(dashboard_token: str) -> list:
                 {"error": "project_a and project_b are required"},
                 status_code=400,
             )
-        try:
-            threshold = float(request.query_params.get("threshold", "0.7"))
-        except ValueError:
-            threshold = 0.7
-        threshold = max(0.0, min(threshold, 1.0))
+        # Pass the raw threshold string through — ``get_project_comparison_data``
+        # does the float coercion + NaN/inf guard + [0,1] clamp itself, so we
+        # don't need a duplicate parser here that would silently turn ``nan``
+        # into 0.0 via ``max(0.0, min(nan, 1.0))``.
+        threshold = request.query_params.get("threshold", "0.7")
         try:
             data = await _dash_to_thread(
                 get_project_comparison_data, pa, pb, threshold,
