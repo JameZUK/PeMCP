@@ -522,6 +522,26 @@ async def open_file(
                 state.bind_project(_resolved_project)
                 _resolved_project.set_last_active(_file_sha256)
                 _resolved_project.touch_last_opened()
+                # Switch ``abs_path`` to the project's canonical binary copy
+                # so the MCP client sees a consistent location regardless of
+                # whether the user opened via ``open_project()`` or
+                # ``open_file("/samples/x.exe")``. The cache lookup uses
+                # ``abs_path`` for the ``filepath`` field of the cached dict
+                # — without this swap, the response shows the user-supplied
+                # path while the project layer tracks the project copy, and
+                # downstream tools that rely on ``state.filepath`` see two
+                # different paths for the same content.
+                try:
+                    _project_member = _resolved_project.get_member(_file_sha256)
+                    if _project_member is not None:
+                        _project_copy_path = _project_member.copy_path
+                        if _project_copy_path and os.path.isfile(_project_copy_path):
+                            abs_path = _project_copy_path
+                except Exception as _path_err:
+                    logger.debug(
+                        "Project: could not switch to project copy path: %s",
+                        _path_err,
+                    )
         except Exception as _proj_err:
             logger.warning("Project resolution failed: %s", _proj_err, exc_info=True)
             # If project resolution fails entirely, proceed without a project.
@@ -585,13 +605,23 @@ async def open_file(
                         state.pe_data = cached
                         state._pe_data_shared = False
                     state.loaded_from_cache = True
-                    # Still need a pe_object for tools that access it directly
+                    # Still need a pe_object for tools that access it directly.
+                    # Use fast_load=True (headers + sections only) on the cache
+                    # hit path — full directory parse can take 10-15s for a
+                    # packed binary and is unnecessary up-front because the
+                    # cached pe_data dict already has all the parsed directory
+                    # info. ``_check_pe_object`` lazy-promotes to a full load
+                    # on first access by tools that actually need directories.
                     if mode == "shellcode" or mode in ("elf", "macho"):
                         state.pe_object = MockPE(_raw_file_data)
                     else:
                         state.pe_object = await asyncio.to_thread(
-                            lambda: pefile.PE(data=_raw_file_data, fast_load=False)
+                            lambda: pefile.PE(data=_raw_file_data, fast_load=True)
                         )
+                        # Mark this object as needing a deferred full_load(),
+                        # which ``_check_pe_object`` runs on first tool that
+                        # passes ``require_headers=True``.
+                        state._pe_object_needs_full_load = True
                     _loaded_from_cache = True
 
                     # Project overlay restoration is performed once for both

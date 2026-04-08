@@ -134,6 +134,12 @@ class AnalyzerState:
         self._pe_data_shared: bool = False  # True when pe_data is a shared reference from _default_state
         self.pe_object: Optional[Any] = None  # pefile.PE or MockPE
         self._inherited_pe_object: bool = False  # True if pe_object was inherited from _default_state
+        # Cache-hit fast-load deferred-promote flag. When True, ``pe_object``
+        # was constructed with ``fast_load=True`` (headers + sections only)
+        # and tools that need directory parsing should call
+        # ``state.pe_object.full_load()`` first. ``_check_pe_object`` does
+        # this lazily on the first call with ``require_headers=True``.
+        self._pe_object_needs_full_load: bool = False
         self.pefile_version: Optional[str] = None
         self.loaded_from_cache: bool = False
 
@@ -1445,6 +1451,11 @@ class AnalyzerState:
 
     def close_pe(self):
         with self._pe_lock:
+            # Always clear the deferred-promote flag, even if pe_object is
+            # None — defends against the order-dependent case where the
+            # flag was set by a previous open but pe_object failed to
+            # construct (or was already cleared by reset_angr/cleanup).
+            self._pe_object_needs_full_load = False
             if self.pe_object:
                 # Close the PE object only if we own it.  Sessions that
                 # inherited the reference at creation time must NOT close

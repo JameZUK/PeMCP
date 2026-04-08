@@ -1209,3 +1209,87 @@ class TestProjectMembershipCache:
         )
         result = _project_membership_for_shas([("z" * 64)])
         assert len(result["z" * 64]) == 1
+
+
+# ---------------------------------------------------------------------------
+#  Cache-hit fast_load deferred-promote (perf fix)
+# ---------------------------------------------------------------------------
+
+class TestPeFastLoadDeferredPromote:
+    """Cache-hit ``open_file`` builds ``pe_object`` with ``fast_load=True``
+    (headers + sections only) and sets ``_pe_object_needs_full_load=True``
+    on state. ``_check_pe_object(require_headers=True)`` lazy-promotes via
+    ``pe_object.full_load()`` on the first call that actually needs the
+    directories. Without this, every cache hit paid the 10-15s full-parse
+    cost up front."""
+
+    def test_state_default_flag_is_false(self, clean_state):
+        assert clean_state._pe_object_needs_full_load is False
+
+    def test_close_pe_resets_flag(self, clean_state):
+        clean_state._pe_object_needs_full_load = True
+        clean_state.close_pe()
+        assert clean_state._pe_object_needs_full_load is False
+
+    def test_check_pe_object_promotes_lazily(self, clean_state, monkeypatch):
+        """When the flag is set, _check_pe_object should call full_load()
+        and clear the flag, even if full_load() raises (best-effort)."""
+        from arkana.mcp import server as mcp_server
+        promote_calls = []
+
+        class FakePE:
+            OPTIONAL_HEADER = object()  # truthy
+            FILE_HEADER = object()
+            def full_load(self):
+                promote_calls.append(True)
+
+        clean_state.pe_object = FakePE()
+        clean_state._pe_object_needs_full_load = True
+        clean_state.pe_data = {"file_hashes": {"sha256": "x" * 64}}
+        clean_state.filepath = "/x"
+        # Patch state inside the mcp.server module (it imports state directly)
+        monkeypatch.setattr(mcp_server, "state", clean_state)
+        mcp_server._check_pe_object("test_tool", require_headers=True)
+        assert promote_calls == [True]
+        assert clean_state._pe_object_needs_full_load is False
+
+    def test_check_pe_object_skips_promote_when_flag_unset(self, clean_state,
+                                                            monkeypatch):
+        from arkana.mcp import server as mcp_server
+        promote_calls = []
+
+        class FakePE:
+            OPTIONAL_HEADER = object()
+            FILE_HEADER = object()
+            def full_load(self):
+                promote_calls.append(True)
+
+        clean_state.pe_object = FakePE()
+        clean_state._pe_object_needs_full_load = False
+        clean_state.pe_data = {"file_hashes": {"sha256": "y" * 64}}
+        clean_state.filepath = "/y"
+        monkeypatch.setattr(mcp_server, "state", clean_state)
+        mcp_server._check_pe_object("test_tool", require_headers=True)
+        assert promote_calls == []
+
+    def test_check_pe_object_swallows_full_load_exception(self, clean_state,
+                                                           monkeypatch):
+        """If pefile.full_load() raises (corrupt directory), the helper
+        should log and clear the flag — NOT propagate the exception, so
+        tools that don't strictly need the directory still work."""
+        from arkana.mcp import server as mcp_server
+
+        class FakePE:
+            OPTIONAL_HEADER = object()
+            FILE_HEADER = object()
+            def full_load(self):
+                raise RuntimeError("simulated corrupt directory")
+
+        clean_state.pe_object = FakePE()
+        clean_state._pe_object_needs_full_load = True
+        clean_state.pe_data = {"file_hashes": {"sha256": "z" * 64}}
+        clean_state.filepath = "/z"
+        monkeypatch.setattr(mcp_server, "state", clean_state)
+        # Should not raise — best-effort.
+        mcp_server._check_pe_object("test_tool", require_headers=True)
+        assert clean_state._pe_object_needs_full_load is False

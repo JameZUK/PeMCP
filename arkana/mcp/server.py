@@ -504,6 +504,13 @@ def _check_pe_object(tool_name: str, *, require_headers: bool = False) -> None:
     When *require_headers* is True, also validates that OPTIONAL_HEADER and
     FILE_HEADER are present (i.e. this is a real PE, not an ELF/Mach-O/shellcode
     loaded via MockPE with stub headers).
+
+    Cache-hit fast-load promotion: when ``state._pe_object_needs_full_load``
+    is True, ``open_file`` constructed pe_object with ``fast_load=True``
+    (headers + sections only — directories not yet parsed). The full-load
+    is deferred to the first tool call that actually needs directory
+    structures, so cached opens stay fast (~1s) while tools that walk
+    imports/exports/resources still get the data they need on first use.
     """
     pe = state.pe_object
     if pe is None:
@@ -519,6 +526,18 @@ def _check_pe_object(tool_name: str, *, require_headers: bool = False) -> None:
                 "The loaded file (ELF, Mach-O, or shellcode) does not have PE structures. "
                 "Use format-specific tools (elf_analyze, macho_analyze) instead."
             )
+        # Lazy full_load() — first tool that needs directories pays the
+        # parse cost; subsequent tools see the already-fully-parsed object.
+        if getattr(state, "_pe_object_needs_full_load", False):
+            try:
+                pe.full_load()
+            except Exception as exc:
+                logger.warning(
+                    "[%s] pefile full_load() failed; some PE directories may "
+                    "be unavailable: %s", tool_name, exc,
+                )
+            finally:
+                state._pe_object_needs_full_load = False
 
 
 def _check_angr_ready(tool_name: str, *, require_cfg: bool = True) -> None:
