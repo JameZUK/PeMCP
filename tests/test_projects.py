@@ -302,12 +302,19 @@ class TestPromoteScratchAtomicity:
     (no two concurrent promoters can pick the same suffixed name) and must
     roll back the half-built project if any ``add_binary`` call fails."""
 
-    def test_collision_check_and_create_under_one_lock(self, manager, sample_binary):
-        """When ``promote_scratch`` walks the suffix candidates and finds a
-        free one, no other thread can race in and steal that name between
-        the check and the create — both happen under the same RLock.
-        Two consecutive promotions of the same suggested_name must produce
-        DIFFERENT names (the second gets a suffix), not collide."""
+    def test_duplicate_name_auto_suffix(self, manager, sample_binary):
+        """Two promotions of the same ``suggested_name`` must end up with
+        DIFFERENT names — the second walks the suffix candidates and picks
+        ``{suggested}_{sha8}`` (or a numeric suffix on further collision).
+
+        This verifies the suffix-walking logic. The atomicity of the
+        check+create sequence (that no concurrent thread can race in and
+        steal a candidate name between ``find_by_name`` and ``create``) is
+        enforced structurally by the ``with self._lock:`` block in
+        ``promote_scratch`` itself and is covered by code review, not by
+        this test — adding a concurrency stress test here would require
+        wiring a ThreadPoolExecutor and is out of scope for a unit test.
+        """
         from arkana.projects import ScratchProject
         path, sha = sample_binary
         s1 = ScratchProject()

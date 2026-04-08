@@ -136,7 +136,12 @@ VT_API_URL_FILE_REPORT = "https://www.virustotal.com/api/v3/files/"
 PEID_USERDB_URL = "https://raw.githubusercontent.com/JameZUK/Arkana/refs/heads/main/userdb.txt"
 
 # --- Capa ---
-CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.3.0.zip"
+# When bumping this URL, update the ``# NOTE:`` block in requirements.txt to
+# match — the runtime compatibility matrix for ``flare-capa`` vs bundled rules
+# is documented there. Existing users automatically re-download when the URL
+# string changes thanks to the ``.capa_rules_url`` marker file written by
+# ``arkana.resources.ensure_capa_rules_exist``.
+CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.4.0.zip"
 CAPA_RULES_DEFAULT_DIR_NAME = "capa_rules_store"
 CAPA_RULES_SUBDIR_NAME = "rules"
 

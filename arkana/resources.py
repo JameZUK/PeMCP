@@ -83,10 +83,39 @@ def ensure_peid_db_exists(url: str, local_path: str, verbose: bool = False) -> b
 
 def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bool = False) -> Optional[str]:
     final_rules_target_path = os.path.join(rules_base_dir, CAPA_RULES_SUBDIR_NAME)
+    # Marker file records the URL the current rules were extracted from. When
+    # ``CAPA_RULES_ZIP_URL`` changes (e.g. bumping from v9.3.0 → v9.4.0), the
+    # stored marker no longer matches and we wipe + re-download. Without this
+    # check, users who already have v9.3.0 extracted would never pick up the
+    # new rules — the cache-hit fast path below would return the stale dir.
+    url_marker_path = os.path.join(rules_base_dir, ".capa_rules_url")
 
     if os.path.isdir(final_rules_target_path) and os.listdir(final_rules_target_path):
-        if verbose: logger.info("Capa rules already available at: %s", final_rules_target_path)
-        return final_rules_target_path
+        stored_url = ""
+        try:
+            if os.path.isfile(url_marker_path):
+                with open(url_marker_path, "r", encoding="utf-8") as f:
+                    stored_url = f.read().strip()
+        except OSError:
+            stored_url = ""
+        if stored_url == rules_zip_url:
+            if verbose:
+                logger.info("Capa rules already available at: %s", final_rules_target_path)
+            return final_rules_target_path
+        # URL changed (or marker missing from a pre-marker install). Wipe the
+        # stale rules dir so the download+extract path below can replace it.
+        logger.info(
+            "Capa rules URL changed (stored=%r, expected=%r) — wiping stale "
+            "rules at %s and re-downloading.",
+            stored_url or "<none>", rules_zip_url, final_rules_target_path,
+        )
+        try:
+            shutil.rmtree(final_rules_target_path)
+        except OSError as e:
+            logger.warning(
+                "Failed to remove stale capa rules at %s: %s — attempting "
+                "extraction anyway.", final_rules_target_path, e,
+            )
 
     if not REQUESTS_AVAILABLE:
         logger.error("'requests' library not found. Cannot download capa rules.")
@@ -214,6 +243,17 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
 
         if os.path.isdir(final_rules_target_path) and os.listdir(final_rules_target_path):
             logger.info("Capa rules now correctly organized at: %s", final_rules_target_path)
+            # Record the URL so the cache-hit check above can detect future
+            # URL bumps and trigger re-download automatically.
+            try:
+                with open(url_marker_path, "w", encoding="utf-8") as f:
+                    f.write(rules_zip_url)
+            except OSError as e_marker:
+                logger.warning(
+                    "Failed to write capa rules version marker at %s: %s — "
+                    "future URL bumps will not auto-invalidate this cache.",
+                    url_marker_path, e_marker,
+                )
             return final_rules_target_path
         else:
             logger.error("Capa rules were processed, but the final target directory '%s' is still not found or is empty.", final_rules_target_path)

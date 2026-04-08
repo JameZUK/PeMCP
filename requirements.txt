@@ -17,8 +17,14 @@ nampa>=0.1
 
 # --- FLARE Tools (Capabilities & Advanced Strings) ---
 flare-floss>=3.0
-# NOTE: capa version must match bundled capa-rules version (v9.3.0).
-# Rules use syntax features from their matching capa release.
+# NOTE: the bundled capa-rules version is pinned in arkana/constants.py via
+# CAPA_RULES_ZIP_URL (currently v9.4.0). capa 9.3.x and 9.4.x are both
+# backward-compatible with the v9.4.0 rule set — the capa 9.4.0 release
+# notes document no breaking rule-syntax changes, and the Rule.from_yaml
+# loader has no minimum-capa-version check. Bumping either capa or the
+# rules URL independently is safe; they do not need to be in lockstep.
+# When bumping CAPA_RULES_ZIP_URL, existing users auto-invalidate via the
+# ``.capa_rules_url`` marker file written by ensure_capa_rules_exist.
 flare-capa>=9.3,<9.5
 
 # --- String Analysis & Ranking ---
