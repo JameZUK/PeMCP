@@ -347,16 +347,32 @@ class TestPromoteScratchAtomicity:
             mode="auto",
         )
 
-        before_projects = set(PROJECTS_DIR.iterdir()) if PROJECTS_DIR.exists() else set()
+        # Snapshot the project SUBDIRS (not files) before the attempt.
+        # We compare subdirs only because ``index.json`` is a metadata file
+        # that ``_save_index()`` writes/updates on every create/delete — it
+        # is expected to exist after the rollback completes, so a naive
+        # ``set(iterdir())`` comparison would fire on every clean test
+        # environment where ``index.json`` didn't exist yet at snapshot time.
+        def _project_subdirs() -> set:
+            if not PROJECTS_DIR.exists():
+                return set()
+            return {p for p in PROJECTS_DIR.iterdir() if p.is_dir()}
+
+        before_subdirs = _project_subdirs()
+        before_count = len(manager.list())
         with pytest.raises(RuntimeError, match="rolling back promotion"):
             manager.promote_scratch(s, suggested_name="will_fail")
 
-        # The project must NOT be in the manager and the directory must be gone.
+        # 1. The project must NOT be findable by name.
         assert manager.find_by_name("will_fail") is None
-        after_projects = set(PROJECTS_DIR.iterdir()) if PROJECTS_DIR.exists() else set()
-        assert after_projects == before_projects, (
-            f"promote_scratch left a project on disk after rollback: "
-            f"{after_projects - before_projects}"
+        # 2. The manager's project count must be unchanged.
+        assert len(manager.list()) == before_count
+        # 3. No new project SUBDIRECTORY survived the rollback.
+        after_subdirs = _project_subdirs()
+        new_subdirs = after_subdirs - before_subdirs
+        assert not new_subdirs, (
+            f"promote_scratch left a project subdir on disk after rollback: "
+            f"{new_subdirs}"
         )
 
     def test_caller_exception_is_chained(self, manager, tmp_path):
