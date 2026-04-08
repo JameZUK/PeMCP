@@ -2356,11 +2356,22 @@ def _create_routes(dashboard_token: str) -> list:
                     status_code=409,
                 )
 
-        # Bind the project on the active state, then call open_file via the
-        # MCP tool helper. The module-level _NoopCtx satisfies the tool's
-        # ctx.info/warning/error/report_progress interface.
-        active_state = _get_active_state()
-        active_state.bind_project(proj)
+        # CRITICAL: do NOT call ``active_state.bind_project(proj)`` here.
+        # ``open_file`` (called below) will flush the *currently bound*
+        # project's overlay before resetting in-memory state — if we
+        # pre-bind the new project, that cleanup writes the OLD project's
+        # in-memory state (notes/renames/artifacts) into the NEW project's
+        # overlay file, silently wiping the new project's existing data.
+        # This is the same data-loss bug fixed in tools_projects.open_project
+        # by commit 84c400e — the dashboard equivalent missed the fix.
+        # Instead, touch the target project's last_opened so open_file's
+        # ``lookup_by_sha`` resolution picks it naturally (it sorts by
+        # ``last_opened`` desc), then open_file does the binding itself
+        # after the flush + reset.
+        try:
+            await _dash_to_thread(proj.touch_last_opened)
+        except Exception as touch_err:
+            logger.debug("api_projects_open: touch_last_opened failed: %s", touch_err)
 
         try:
             result = await _open_file_tool(_NoopCtx(), binary_path, force_switch=True)

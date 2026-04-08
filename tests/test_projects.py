@@ -582,3 +582,74 @@ class TestOpenProjectOverlayPreservation:
         assert len(fresh_state.notes) == 5
         # And the overlay still has 5 notes
         assert len(proj.load_overlay(sha)["notes"]) == 5
+
+    def test_dashboard_api_projects_open_does_not_pre_bind_project(self):
+        """Regression guard for the dashboard equivalent of the
+        ``open_project`` data-loss bug fixed in commit 84c400e.
+
+        ``arkana/dashboard/app.py:api_projects_open`` previously called
+        ``active_state.bind_project(proj)`` *before* calling
+        ``_open_file_tool``. The MCP tool then ran its file-switch
+        cleanup, which called ``state.flush_overlay()`` to "save current
+        work" — but ``active_project`` was already swapped to the new
+        project, so the OLD project's in-memory notes/renames/artifacts
+        were silently written into the NEW project's overlay file, wiping
+        whatever was there.
+
+        The fix is structural: do NOT pre-bind. Let ``open_file``'s own
+        ``lookup_by_sha`` resolution discover and bind the project after
+        the flush + reset has happened. ``proj.touch_last_opened()`` is
+        the only thing the dashboard route needs to do to nudge the
+        resolution toward the right project.
+
+        This test parses ``dashboard/app.py`` with ``ast`` and asserts
+        that the body of ``api_projects_open`` does NOT contain any
+        ``.bind_project(...)`` call. It's a structural regression guard
+        rather than a behavioural test because the dashboard route is
+        deeply tied to Starlette and would need a full TestClient
+        harness to exercise end-to-end — overkill for a one-line
+        regression.
+        """
+        import ast
+        from pathlib import Path
+
+        app_path = (
+            Path(__file__).resolve().parent.parent
+            / "arkana" / "dashboard" / "app.py"
+        )
+        source = app_path.read_text()
+        tree = ast.parse(source)
+
+        # Find the inner ``api_projects_open`` function. The dashboard
+        # routes are defined inside ``create_dashboard_app`` so it's a
+        # nested function, not at module top level — walk the whole tree.
+        target_funcs = [
+            node for node in ast.walk(tree)
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name == "api_projects_open"
+        ]
+        assert len(target_funcs) == 1, (
+            f"expected exactly one api_projects_open in dashboard/app.py, "
+            f"found {len(target_funcs)}"
+        )
+        target = target_funcs[0]
+
+        # Walk the function body looking for any ``.bind_project(...)``
+        # call. The only allowed binding pattern is the implicit one
+        # inside ``_open_file_tool`` (which we don't traverse here).
+        bind_calls: list = []
+        for node in ast.walk(target):
+            if isinstance(node, ast.Call):
+                func = node.func
+                # Match ``X.bind_project(...)`` (Attribute access)
+                if isinstance(func, ast.Attribute) and func.attr == "bind_project":
+                    bind_calls.append(node)
+
+        assert not bind_calls, (
+            "api_projects_open must NOT call bind_project on the active "
+            "state before invoking open_file — that triggers the data-loss "
+            "bug where the new project's overlay is overwritten with the "
+            "old project's in-memory state. Use proj.touch_last_opened() "
+            "instead and let open_file's lookup_by_sha bind it after the "
+            f"flush + reset. Found {len(bind_calls)} bind_project call(s)."
+        )

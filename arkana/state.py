@@ -175,21 +175,24 @@ class AnalyzerState:
         self._background_threads: Dict[str, threading.Thread] = {}  # task_id -> thread ref
         self._analysis_generation: int = 0  # Incremented on open_file/close_file
 
-        # Notes (persisted per-binary via cache)
+        # Notes (persisted per-binary via the active project's overlay)
         self._notes_lock = threading.Lock()
         self._notes_counter: int = 0
         self.notes: List[Dict[str, Any]] = []
 
-        # Tool History (per-session, saved to cache on close)
+        # Tool History (per-session, flushed to project overlay on close_file
+        # and by the background _overlay_flush_loop daemon every 30s)
         self._history_lock = threading.Lock()
         self.tool_history: deque = deque(maxlen=MAX_TOOL_HISTORY)
 
-        # Artifacts (extracted files, persisted per-binary via cache)
+        # Artifacts (extracted files, persisted per-binary via project overlay)
         self._artifacts_lock = threading.Lock()
         self._artifacts_counter: int = 0
         self.artifacts: List[Dict[str, Any]] = []
 
-        # Renames (persisted per-binary via cache)
+        # Renames (persisted per-binary via project overlay; also mirrored
+        # into the BSim signature DB by _sync_renames_to_bsim for cross-
+        # variant transfer_annotations)
         self._renames_lock = threading.Lock()
         self.renames: Dict[str, Any] = {
             "functions": {},   # addr_hex -> new_name
@@ -197,18 +200,19 @@ class AnalyzerState:
             "labels": {},      # addr_hex -> {"name": str, "category": str}
         }
 
-        # Triage status (persisted per-binary via cache)
+        # Triage status (persisted per-binary via project overlay)
         self._triage_lock = threading.Lock()
         self.triage_status: Dict[str, str] = {}  # addr_hex -> "unreviewed"|"suspicious"|"clean"|"flagged"
 
-        # Custom types (persisted per-binary via cache)
+        # Custom types (persisted per-binary via project overlay)
         self._types_lock = threading.Lock()
         self.custom_types: Dict[str, Any] = {
             "structs": {},   # name -> {"fields": [...], "size": int, "created_at": str}
             "enums": {},     # name -> {"values": {name: int}, "size": int, "created_at": str}
         }
 
-        # Previous session context (populated from cache on open_file)
+        # Previous session context (populated from the project overlay's
+        # tool_history field on open_file → apply_overlay)
         self.previous_session_history: List[Dict[str, Any]] = []
 
         # Cached analysis results for progressive disclosure tools.
