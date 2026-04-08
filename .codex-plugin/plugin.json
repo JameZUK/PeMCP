@@ -1,0 +1,29 @@
+{
+  "name": "Arkana",
+  "version": "0.1.0",
+  "description": "Your entire malware analysis lab, behind one AI prompt. 294 MCP tools for binary analysis (PE/ELF/Mach-O/shellcode) with angr, capa, FLOSS, YARA, Binary Refinery, Qiling, Speakeasy, oletools, and GoReSym integrations. Includes a 65-tool emulation debugger, multi-binary project workspaces, BSim function similarity, partial CFG acceptance, and a built-in dashboard.",
+  "author": {
+    "name": "JameZUK",
+    "url": "https://github.com/JameZUK"
+  },
+  "homepage": "https://github.com/JameZUK/Arkana",
+  "repository": "https://github.com/JameZUK/Arkana",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "binary-analysis",
+    "malware-analysis",
+    "reverse-engineering",
+    "pe",
+    "elf",
+    "macho",
+    "angr",
+    "capa",
+    "floss",
+    "yara",
+    "qiling",
+    "speakeasy",
+    "binary-refinery"
+  ],
+  "mcpServers": "./.mcp.json"
+}

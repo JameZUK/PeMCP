@@ -122,6 +122,45 @@ jobs:
           python -c "from arkana.state import AnalyzerState; print('state OK')"
           python -c "from arkana.cache import AnalysisCache; print('cache OK')"
 
+      - name: Validate Codex / MCP plugin manifests
+        run: |
+          python -c "
+          import json
+          import sys
+
+          errors = []
+
+          # 1. .codex-plugin/plugin.json — Codex CLI marketplace metadata
+          with open('.codex-plugin/plugin.json') as f:
+              codex = json.load(f)
+          for required in ('name', 'version', 'description', 'repository', 'mcpServers'):
+              if required not in codex:
+                  errors.append(f'.codex-plugin/plugin.json missing required field: {required}')
+          if codex.get('name') != 'Arkana':
+              errors.append(f'.codex-plugin/plugin.json name must be \"Arkana\", got {codex.get(\"name\")!r}')
+          if codex.get('mcpServers') != './.mcp.json':
+              errors.append(f'.codex-plugin/plugin.json mcpServers must point at ./.mcp.json, got {codex.get(\"mcpServers\")!r}')
+
+          # 2. .mcp.json — standard MCP client config (Claude Desktop / Codex / etc.)
+          with open('.mcp.json') as f:
+              mcp = json.load(f)
+          servers = mcp.get('mcpServers') or {}
+          if 'arkana' not in servers:
+              errors.append('.mcp.json missing mcpServers.arkana entry')
+          else:
+              entry = servers['arkana']
+              if not entry.get('command'):
+                  errors.append('.mcp.json arkana entry missing command')
+              if not isinstance(entry.get('args'), list):
+                  errors.append('.mcp.json arkana entry args must be a list')
+
+          if errors:
+              for e in errors:
+                  print(f'  - {e}', file=sys.stderr)
+              sys.exit(1)
+          print('Plugin manifests valid (.codex-plugin/plugin.json + .mcp.json)')
+          "
+
   docker-build:
     runs-on: ubuntu-latest
     steps:
