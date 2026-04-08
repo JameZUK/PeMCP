@@ -597,6 +597,19 @@ def _start_mcp_server(args: argparse.Namespace, cfg: _ResolvedConfig, log_level:
         if state.pe_object:
             state.pe_object.close()
             logger.info("MCP: Closed pre-loaded object upon server exit.")
+        # Watchdog: ensure the process actually exits even if a daemon
+        # thread (uvicorn dashboard, angr background, qiling subprocess
+        # joiner, …) leaves the interpreter spinning during shutdown.
+        # ``sys.exit`` raises SystemExit which runs atexit handlers and
+        # joins non-daemon threads — historically that has hung in the
+        # field on stuck angr/uvicorn shutdowns. The 5-second ceiling
+        # mirrors the SIGTERM watchdog above so the user always gets a
+        # responsive ``docker stop`` and a healthy MCP restart.
+        import time as _time
+        def _exit_watchdog():
+            _time.sleep(5)
+            os._exit(1 if server_exc else 0)
+        threading.Thread(target=_exit_watchdog, daemon=True).start()
         sys.exit(1 if server_exc else 0)
 
 

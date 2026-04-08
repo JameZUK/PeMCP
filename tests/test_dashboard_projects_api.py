@@ -685,3 +685,80 @@ class TestProjectNameRegex:
         from arkana.constants import PROJECT_NAME_RE
         assert PROJECT_NAME_RE.match("a" * 100)
         assert PROJECT_NAME_RE.match("a" * 101) is None
+
+
+# ---------------------------------------------------------------------------
+#  Dashboard executor shutdown handling (regression test)
+# ---------------------------------------------------------------------------
+
+class TestDashboardExecutorShutdown:
+    """The dashboard daemon thread can outlive the MCP main thread by
+    several seconds during interpreter shutdown. Previously the executor
+    was registered with atexit and would be shut down mid-flight, causing
+    every htmx poll to dump a traceback with ``RuntimeError: cannot
+    schedule new futures after shutdown``. This class pins the fix:
+
+      1. The atexit registration is gone (verified by attribute check).
+      2. ``DashboardShutdownError`` exists and is raised by ``_dash_to_thread``
+         when the executor is in the shutdown state.
+      3. ``_api_error_response`` translates that error into a 503 instead of
+         a 500 traceback.
+    """
+
+    def test_no_atexit_registration(self):
+        """The executor should NOT be in the atexit handler chain — leaving
+        it registered creates the half-shutdown window the bug exploits."""
+        import atexit
+        from arkana.dashboard import app
+        # We can't trivially introspect atexit's registered callbacks across
+        # Python versions, but we CAN sanity-check that the module no longer
+        # imports atexit. This guards against re-introduction.
+        import inspect
+        src = inspect.getsource(app)
+        # Allow the word in comments but not as a top-level import.
+        assert "\nimport atexit" not in src, (
+            "import atexit was reintroduced into dashboard/app.py — the "
+            "atexit-registered shutdown caused production bug 2026-04-07"
+        )
+
+    def test_dashboard_shutdown_error_exists(self):
+        from arkana.dashboard.app import DashboardShutdownError
+        assert issubclass(DashboardShutdownError, RuntimeError)
+
+    def test_dash_to_thread_translates_runtime_error(self):
+        """When the executor is shut down, ``_dash_to_thread`` should raise
+        DashboardShutdownError instead of leaking a generic RuntimeError."""
+        import asyncio
+        from concurrent.futures import ThreadPoolExecutor
+        from arkana.dashboard import app as app_mod
+        from arkana.dashboard.app import _dash_to_thread, DashboardShutdownError
+
+        # Swap in a fresh executor that we can shut down without
+        # affecting the real dashboard executor used by other tests.
+        old_executor = app_mod._dashboard_executor
+        try:
+            tmp_executor = ThreadPoolExecutor(max_workers=1)
+            tmp_executor.shutdown(wait=True)
+            app_mod._dashboard_executor = tmp_executor
+
+            async def _run():
+                with pytest.raises(DashboardShutdownError):
+                    await _dash_to_thread(lambda: 42)
+
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(_run())
+            finally:
+                loop.close()
+        finally:
+            app_mod._dashboard_executor = old_executor
+
+    def test_api_error_response_returns_503_for_shutdown_error(self):
+        from arkana.dashboard.app import _api_error_response, DashboardShutdownError
+        resp = _api_error_response("test_endpoint", DashboardShutdownError("x"))
+        assert resp.status_code == 503
+
+    def test_api_error_response_still_returns_500_for_other_errors(self):
+        from arkana.dashboard.app import _api_error_response
+        resp = _api_error_response("test_endpoint", ValueError("x"))
+        assert resp.status_code == 500

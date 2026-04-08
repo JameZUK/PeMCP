@@ -1,5 +1,4 @@
 """Starlette ASGI app for the Arkana dashboard."""
-import atexit
 import asyncio
 import contextvars
 import functools
@@ -104,22 +103,51 @@ from arkana.utils import _safe_env_int
 
 logger = logging.getLogger("Arkana.dashboard")
 
+class DashboardShutdownError(RuntimeError):
+    """Raised when the dashboard executor has been shut down (process is
+    exiting). Routes should return a 503 instead of a 500 traceback."""
+
+
 # --- Dedicated dashboard thread pool ---
 # Prevents dashboard requests from being starved when MCP tools or background
 # tasks saturate the default executor (which has only min(32, cpu+4) threads).
+#
+# NOTE: We deliberately do NOT register an atexit handler to shut this down.
+# The dashboard runs in a daemon thread that may still be processing htmx
+# polls when the main MCP thread exits and atexit fires. If we shut the
+# executor down at that point, every in-flight and subsequent request blows
+# up with ``RuntimeError: cannot schedule new futures after shutdown`` until
+# Python finally kills the daemon thread — and that window can be many
+# seconds long when the interpreter is hung waiting on uvicorn's event loop.
+# By leaving the executor alone, the OS reclaims it when the process truly
+# exits and we never serve a half-shutdown error.
 _dashboard_executor = ThreadPoolExecutor(
     max_workers=_safe_env_int("ARKANA_DASHBOARD_THREADS", DASHBOARD_THREAD_POOL_SIZE, min_val=1, max_val=32),
     thread_name_prefix="arkana-dash",
 )
-atexit.register(_dashboard_executor.shutdown, wait=False)
 
 
 async def _dash_to_thread(func, /, *args, **kwargs):
-    """Like asyncio.to_thread() but uses the dashboard's dedicated thread pool."""
+    """Like asyncio.to_thread() but uses the dashboard's dedicated thread pool.
+
+    Resilient to a shut-down executor: raises ``DashboardShutdownError``
+    instead of letting ``RuntimeError`` from the bottom of
+    ``ThreadPoolExecutor.submit`` propagate up to the route handlers as an
+    unhandled 500. Routes catch this in their existing ``except Exception``
+    blocks and return a clean 503 via ``_api_error_response``.
+    """
     loop = asyncio.get_running_loop()
     ctx = contextvars.copy_context()
     func_call = functools.partial(ctx.run, func, *args, **kwargs)
-    return await loop.run_in_executor(_dashboard_executor, func_call)
+    try:
+        return await loop.run_in_executor(_dashboard_executor, func_call)
+    except RuntimeError as exc:
+        # ``cannot schedule new futures after shutdown`` is the only
+        # RuntimeError ThreadPoolExecutor.submit() raises. Re-raise as a
+        # domain-specific error the routes can detect.
+        if "shutdown" in str(exc):
+            raise DashboardShutdownError("dashboard executor is shut down") from exc
+        raise
 
 
 _LOCATE_MAX_HASH = 8         # never hash more than this many candidates per call
@@ -506,7 +534,18 @@ _CSP_VALUE = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-in
 
 
 def _api_error_response(endpoint: str, exc: Exception, status_code: int = 500) -> JSONResponse:
-    """Return a sanitized JSON error response — logs full details, returns generic message."""
+    """Return a sanitized JSON error response — logs full details, returns generic message.
+
+    Promotes ``DashboardShutdownError`` to a 503 with a brief message
+    instead of logging the full traceback every poll. The dashboard hits
+    this state when the parent MCP process is in the middle of exiting.
+    """
+    if isinstance(exc, DashboardShutdownError):
+        logger.debug("%s: dashboard shutting down", endpoint)
+        return JSONResponse(
+            {"error": "Dashboard is shutting down"},
+            status_code=503,
+        )
     logger.error("%s error: %s", endpoint, exc, exc_info=True)
     return JSONResponse({"error": f"Internal server error in {endpoint}"}, status_code=status_code)
 
