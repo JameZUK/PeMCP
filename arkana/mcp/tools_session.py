@@ -86,9 +86,10 @@ async def get_session_summary(
     history_limit: int = 30,
 ) -> Dict[str, Any]:
     """
-    [Phase: context] Returns a comprehensive summary of the current session and any
-    prior session data for the loaded file. Includes file info, notes, tool history,
-    angr status, analysis phase, and suggested next tools.
+    [Phase: context] Returns a comprehensive summary of the current session,
+    pulling notes/history/renames from the active project's overlay for the
+    loaded binary. Includes file info, notes, tool history, angr status,
+    analysis phase, and suggested next tools.
 
     ---compact: full session state — notes, history, angr status, phase, next-tool suggestions
 

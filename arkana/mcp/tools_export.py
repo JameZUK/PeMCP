@@ -1,30 +1,24 @@
 """MCP tools for exporting and importing Arkana project archives."""
 import datetime
-import gzip
 import hashlib
 import io
 import json
 import os
-import re
 import shutil
 import tarfile
 import tempfile
 import time
 
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 
-from arkana.config import state, logger, Context, analysis_cache
+from arkana.config import state, logger, Context
 from arkana.constants import (
-    MAX_TOTAL_ARTIFACT_EXPORT_SIZE,
-    MAX_ARTIFACT_FILE_SIZE,
-    DEFAULT_MAX_FILE_SIZE_MB,
     MAX_PROJECT_ARCHIVE_BYTES,
     MAX_PROJECT_ARCHIVE_MEMBERS,
     MAX_PROJECT_ARCHIVE_MEMBER_BYTES,
 )
 from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_response_size
-from arkana.cache import CACHE_DIR
 from arkana.utils import _safe_env_int
 
 try:
@@ -34,18 +28,6 @@ except ImportError:
 
 # Extension for project archives (import accepts both old and new extensions)
 PROJECT_EXTENSION = ".arkana_project.tar.gz"
-
-# Directory for imported binaries when no explicit path is given
-IMPORT_DIR = Path.home() / ".arkana" / "imported"
-
-# Maximum size of a single imported binary (default 256 MB)
-_MAX_IMPORT_BINARY_SIZE = _safe_env_int("ARKANA_MAX_FILE_SIZE_MB", _safe_env_int("PEMCP_MAX_FILE_SIZE_MB", DEFAULT_MAX_FILE_SIZE_MB)) * 1024 * 1024
-
-# Maximum total size of all imported binaries (default 1 GB)
-_MAX_IMPORT_DIR_SIZE = _safe_env_int("ARKANA_MAX_IMPORT_DIR_SIZE_MB", _safe_env_int("PEMCP_MAX_IMPORT_DIR_SIZE_MB", 1024)) * 1024 * 1024
-
-# Maximum decompressed analysis.json.gz size (256 MB)
-_MAX_ANALYSIS_DECOMPRESSED_SIZE = 256 * 1024 * 1024
 
 # v2 archive limits — defaults from arkana/constants.py, overridable via env.
 # Defends against decompression bombs / zip bombs in user-supplied archives.
@@ -62,16 +44,12 @@ _MAX_V2_MEMBER_BYTES = _safe_env_int(
     MAX_PROJECT_ARCHIVE_MEMBER_BYTES // (1024 * 1024),
 ) * 1024 * 1024
 
-# Regex for sanitizing binary filenames
-_SAFE_FILENAME_RE = re.compile(r'[^a-zA-Z0-9._\-]')
-
 
 # ---------------------------------------------------------------------------
 #  v2 project-level export/import (multi-binary, project-aware)
 # ---------------------------------------------------------------------------
 
 EXPORT_VERSION_V2 = 2
-EXPORT_VERSION_V1 = 1
 
 
 def _export_project_v2(project, output_path: str) -> Dict[str, Any]:
@@ -272,195 +250,89 @@ def _import_project_v2(abs_path: str, top_manifest: Dict[str, Any]) -> Dict[str,
 async def export_project(
     ctx: Context,
     output_path: str,
-    include_binary: bool = True,
+    include_binary: bool = True,  # noqa: ARG001 — kept for API stability; v2 always bundles project binaries
 ) -> Dict[str, Any]:
     """
-    [Phase: utility] Export the current session as a portable project archive
-    (.arkana_project.tar.gz). Includes analysis data, notes, tool history,
-    and optionally the original binary.
+    [Phase: utility] Export the active project as a portable v2 archive
+    (.arkana_project.tar.gz). Bundles every binary in the project together
+    with overlays, artifacts, notes and renames.
 
-    ---compact: export session as portable .tar.gz archive | includes notes/history/binary | needs: file
+    ---compact: export active project as v2 .tar.gz | bundles binaries/overlays/notes | needs: project
 
-    When to use: When sharing analysis with others or preserving a checkpoint
-    of your work. The archive can be imported with import_project().
+    When to use: When sharing analysis with others or preserving a checkpoint.
+    The archive can be re-imported with import_project().
 
     Args:
         ctx: The MCP Context object.
         output_path: (str) Path for the output archive file.
-        include_binary: (bool) If True (default), include the original binary file.
+        include_binary: (bool) Ignored. Kept for backwards compatibility with
+            the old single-binary v1 export API. v2 archives always bundle
+            every binary in the active project.
 
     Returns:
         A dictionary with export status, archive path, and size.
     """
-    # v2 path: when an on-disk project is active, archive the entire project
-    # tree (multi-binary, all overlays, all artifacts).
+    # If a binary is loaded but the active project is still a ScratchProject,
+    # promote it to a real on-disk project so we have a tree to archive.
     try:
         active = state.get_active_project() if hasattr(state, "get_active_project") else None
     except Exception:
         active = None
-    if active is not None and not getattr(active, "is_scratch", False):
-        return _export_project_v2(active, output_path)
 
-    _check_pe_loaded("export_project")
-
-    # Ensure output path ends with proper extension
-    if not output_path.endswith(PROJECT_EXTENSION):
-        if output_path.endswith(".tar.gz"):
-            output_path = output_path[:-7] + PROJECT_EXTENSION
-        else:
-            output_path = output_path + PROJECT_EXTENSION
-
-    abs_output = str(Path(output_path).resolve())
-    state.check_path_allowed(abs_output)
-
-    hashes = (state.pe_data.get("file_hashes") or {})
-    sha256 = hashes.get("sha256", "unknown")
-    original_filename = os.path.basename(state.filepath) if state.filepath else "unknown"
-
-    # H3-v10: Snapshot once, reuse for both manifest counts and wrapper data
-    artifacts_snapshot = state.get_all_artifacts_snapshot()
-    notes_snapshot = state.get_all_notes_snapshot()
-    history_snapshot = state.get_tool_history_snapshot()
-    renames_snapshot = state.get_all_renames_snapshot()
-    types_snapshot = state.get_all_types_snapshot()
-
-    # Build manifest
-    manifest = {
-        "arkana_version": ARKANA_VERSION,
-        "export_version": 1,
-        "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "sha256": sha256,
-        "original_filename": original_filename,
-        "mode": state.pe_data.get("mode", "unknown"),
-        "binary_included": include_binary and state.filepath is not None and os.path.isfile(state.filepath),
-        "notes_count": len(notes_snapshot),
-        "tool_history_count": len(history_snapshot),
-        "artifacts_count": len(artifacts_snapshot),
-        "renames_count": sum(len(v) for v in renames_snapshot.values()),
-        "custom_types_count": sum(len(v) for v in types_snapshot.values()),
-    }
-
-    # Build the cache wrapper (same format as disk cache)
-    wrapper = {
-        "_cache_meta": {
-            "cache_format_version": 1,
-            "arkana_version": ARKANA_VERSION,
-            "sha256": sha256,
-            "original_filename": original_filename,
-            "original_file_size": os.path.getsize(state.filepath) if state.filepath and os.path.isfile(state.filepath) else None,
-            "mode": state.pe_data.get("mode", "unknown"),
-        },
-        "pe_data": {k: v for k, v in state.pe_data.items() if k != "filepath"},
-        "notes": notes_snapshot,
-        "tool_history": history_snapshot,
-        "artifacts": artifacts_snapshot,
-        "renames": renames_snapshot,
-        "custom_types": types_snapshot,
-    }
-
-    await ctx.info(f"Creating project archive: {abs_output}")
-
-    # Create the tar.gz archive
-    output_dir = os.path.dirname(abs_output)
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-
-    artifacts_included = 0
-    artifacts_total_size = 0
-
-    with tarfile.open(abs_output, "w:gz") as tar:
-        # Add manifest.json
-        manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
-        manifest_info = tarfile.TarInfo(name="manifest.json")
-        manifest_info.size = len(manifest_bytes)
-        tar.addfile(manifest_info, io.BytesIO(manifest_bytes))
-
-        # Add analysis.json.gz (gzip-compressed wrapper)
-        wrapper_json = json.dumps(wrapper).encode("utf-8")
-        if len(wrapper_json) > 256 * 1024 * 1024:
+    if active is not None and getattr(active, "is_scratch", False):
+        try:
+            state._maybe_promote_scratch()
+        except Exception as e:
             raise RuntimeError(
-                f"Serialised analysis data is too large ({len(wrapper_json) // (1024 * 1024)} MB). "
-                "Maximum supported size is 256 MB. Try exporting without the binary or reducing analysis scope."
+                f"[export_project] Failed to promote scratch project: {e}"
             )
-        wrapper_gz = gzip.compress(wrapper_json)
-        analysis_info = tarfile.TarInfo(name="analysis.json.gz")
-        analysis_info.size = len(wrapper_gz)
-        tar.addfile(analysis_info, io.BytesIO(wrapper_gz))
+        try:
+            active = state.get_active_project()
+        except Exception:
+            active = None
 
-        # Optionally add the binary
-        if manifest["binary_included"]:
-            binary_path = state.filepath
-            binary_name = f"binary/{original_filename}"
-            if os.path.islink(binary_path):
-                logger.warning("Skipping symlinked binary: %s", binary_path)
-            else:
-                tar.add(binary_path, arcname=binary_name)
-                await ctx.info(f"Binary included: {original_filename}")
+    if active is None or getattr(active, "is_scratch", False):
+        # Promotion didn't fire (no binary loaded, or no scratch members).
+        _check_pe_loaded("export_project")
+        raise RuntimeError(
+            "[export_project] No project is active. Open or create a "
+            "project (open_project / create_project) before exporting."
+        )
 
-        # Add artifact files
-        for artifact in artifacts_snapshot:
-            art_path = artifact.get("path", "")
-            art_size = artifact.get("size", 0)
-            if not art_path or not os.path.isfile(art_path):
-                logger.warning("Artifact file not found, skipping: %s", art_path)
-                continue
-            if artifacts_total_size + art_size > MAX_TOTAL_ARTIFACT_EXPORT_SIZE:
-                logger.warning(
-                    "Artifact export size limit reached (%d MB). Skipping: %s",
-                    MAX_TOTAL_ARTIFACT_EXPORT_SIZE // (1024 * 1024), art_path,
-                )
-                continue
-            if os.path.islink(art_path):
-                logger.warning("Skipping symlinked artifact: %s", art_path)
-                continue
-            arcname = f"artifacts/{os.path.basename(art_path)}"
-            tar.add(art_path, arcname=arcname)
-            artifacts_included += 1
-            artifacts_total_size += art_size
-
-    archive_size = os.path.getsize(abs_output)
-    await ctx.info(f"Project exported: {archive_size / 1024:.1f} KB")
-
-    return {
-        "status": "success",
-        "archive_path": abs_output,
-        "archive_size_kb": round(archive_size / 1024, 1),
-        "binary_included": manifest["binary_included"],
-        "notes_count": manifest["notes_count"],
-        "tool_history_count": manifest["tool_history_count"],
-        "artifacts_count": artifacts_included,
-        "artifacts_total_size_kb": round(artifacts_total_size / 1024, 1),
-        "sha256": sha256,
-    }
+    await ctx.info(f"Creating project archive: {output_path}")
+    result = _export_project_v2(active, output_path)
+    archive_size_kb = result.get("archive_size_kb")
+    if archive_size_kb is not None:
+        await ctx.info(f"Project exported: {archive_size_kb:.1f} KB")
+    return result
 
 
 @tool_decorator
 async def import_project(
     ctx: Context,
     project_path: str,
-    load_binary: bool = True,
+    load_binary: bool = True,  # noqa: ARG001 — kept for API stability; v2 archives carry their own binary
 ) -> Dict[str, Any]:
     """
-    [Phase: load] Import a previously exported project archive
-    (.arkana_project.tar.gz). Restores analysis data, notes, and tool history.
+    [Phase: load] Import a previously exported v2 project archive
+    (.arkana_project.tar.gz). Restores the entire project tree, including
+    binaries, overlays, artifacts, and notes.
 
-    ---compact: import project archive | restores notes, history, optionally loads binary
+    ---compact: import v2 project archive | restores binaries/notes/artifacts/overlays as a new project
 
     When to use: When resuming analysis from a shared archive or a previous
-    checkpoint. Optionally extracts and loads the embedded binary.
-
-    Next steps: open_file() to load the restored binary, then
-    get_analysis_digest() to review what was learned in the exported session.
+    checkpoint. The archive's project is registered under a fresh ID; call
+    ``open_project(name)`` afterwards to activate it.
 
     Args:
         ctx: The MCP Context object.
-        project_path: (str) Path to the .arkana_project.tar.gz archive.
-        load_binary: (bool) If True (default) and the archive includes a binary,
-            extract it and load it.
+        project_path: (str) Path to the .arkana_project.tar.gz archive (v2).
+        load_binary: (bool) Ignored. Kept for backwards compatibility with the
+            old single-binary v1 import API. v2 archives always contain the
+            project's binaries; activate them with open_project + open_file.
 
     Returns:
-        A dictionary with import status, restored file info, note count,
-        and history count.
+        A dictionary with import status, project id/name, and member count.
     """
     abs_path = str(Path(project_path).resolve())
     state.check_path_allowed(abs_path)
@@ -470,264 +342,45 @@ async def import_project(
 
     await ctx.info(f"Importing project archive: {abs_path}")
 
-    # v2 detection: peek at the top-level manifest.json to check export_version.
-    # v2 archives wrap an entire project tree; v1 archives are single-binary
-    # session exports. We dispatch early so the v1 logic stays unchanged.
+    # Peek the top-level manifest.json to identify the archive format. Only
+    # v2 (project-level) archives are supported — v1 single-binary session
+    # exports were retired with the cache → project overlay split.
     try:
         with tarfile.open(abs_path, "r:gz") as _peek:
             try:
                 _mf_member = _peek.extractfile("manifest.json")
-                if _mf_member is not None:
-                    _peek_manifest = json.loads(_mf_member.read().decode("utf-8"))
-                    if isinstance(_peek_manifest, dict) and _peek_manifest.get("export_version") == EXPORT_VERSION_V2:
-                        return _import_project_v2(abs_path, _peek_manifest)
             except KeyError:
-                pass
-    except (tarfile.TarError, json.JSONDecodeError, OSError) as _peek_err:
-        logger.debug("import_project: v2 peek failed (will try v1): %s", _peek_err)
-
-    manifest = None
-    wrapper = None
-    binary_data = None
-    binary_name = None
-    artifact_files = {}  # basename -> bytes
-
-    # Extract archive contents
-    with tarfile.open(abs_path, "r:gz") as tar:
-        # Security: validate member names to prevent path traversal
-        for member in tar.getmembers():
-            # C1: Reject symlinks, hardlinks, and device/FIFO entries to prevent
-            # traversal attacks and host-level side effects (H4).
-            if member.issym() or member.islnk() or member.isblk() or member.ischr() or member.isfifo():
+                _mf_member = None
+            if _mf_member is None:
                 raise RuntimeError(
-                    f"[import_project] Archive contains unsafe entry: '{member.name}' "
-                    f"(type: {'symlink' if member.issym() else 'hardlink' if member.islnk() else 'device/fifo'}). "
-                    "Archive may have been tampered with."
+                    "[import_project] Archive missing manifest.json — not a "
+                    "valid Arkana project archive."
                 )
-            norm = os.path.normpath(member.name)
-            if (member.name.startswith("/") or norm.startswith("/")
-                    or norm.startswith("..") or norm.startswith(os.sep + "..")):
+            try:
+                top_manifest = json.loads(_mf_member.read().decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
                 raise RuntimeError(
-                    f"[import_project] Unsafe archive member: '{member.name}'. "
-                    "Archive may have been tampered with."
+                    f"[import_project] Cannot parse archive manifest.json: {e}"
                 )
+    except (tarfile.TarError, OSError) as e:
+        raise RuntimeError(f"[import_project] Failed to read archive: {e}")
 
-        # Read manifest
-        try:
-            manifest_file = tar.extractfile("manifest.json")
-            if manifest_file:
-                manifest = json.loads(manifest_file.read().decode("utf-8"))
-        except (KeyError, json.JSONDecodeError) as e:
-            raise RuntimeError(f"[import_project] Invalid archive: cannot read manifest.json: {e}")
+    if not isinstance(top_manifest, dict):
+        raise RuntimeError("[import_project] Invalid manifest.json contents")
 
-        if not manifest:
-            raise RuntimeError("[import_project] Invalid archive: missing manifest.json")
-
-        export_version = manifest.get("export_version", 0)
-        if export_version != 1:
-            raise RuntimeError(
-                f"[import_project] Unsupported export version: {export_version}. "
-                f"This version of Arkana supports export version 1."
-            )
-
-        # Read analysis data (with decompression bomb guard)
-        try:
-            analysis_file = tar.extractfile("analysis.json.gz")
-            if analysis_file:
-                analysis_gz = analysis_file.read()
-                # H3: Use streaming decompression to prevent decompression bombs.
-                # Read only up to the limit + 1 byte to detect oversize without
-                # decompressing the entire payload into memory.
-                import io as _io
-                with gzip.open(_io.BytesIO(analysis_gz), "rb") as _gz:
-                    decompressed = _gz.read(_MAX_ANALYSIS_DECOMPRESSED_SIZE + 1)
-                if len(decompressed) > _MAX_ANALYSIS_DECOMPRESSED_SIZE:
-                    raise RuntimeError(
-                        f"[import_project] analysis.json.gz decompresses to "
-                        f"{len(decompressed) / (1024*1024):.1f} MB — exceeds "
-                        f"{_MAX_ANALYSIS_DECOMPRESSED_SIZE // (1024*1024)} MB limit. "
-                        "Archive may contain a decompression bomb."
-                    )
-                wrapper = json.loads(decompressed.decode("utf-8"))
-                del decompressed  # free memory
-        except (KeyError, gzip.BadGzipFile, json.JSONDecodeError) as e:
-            raise RuntimeError(f"[import_project] Invalid archive: cannot read analysis.json.gz: {e}")
-
-        if not wrapper:
-            raise RuntimeError("[import_project] Invalid archive: missing analysis.json.gz")
-
-        # Read binary if present and requested
-        if manifest.get("binary_included") and load_binary:
-            binary_prefix = "binary/"
-            for member in tar.getmembers():
-                if member.name.startswith(binary_prefix) and member.isfile():
-                    # C6: Reject members with subdirectories beyond the prefix
-                    relative = member.name[len(binary_prefix):]
-                    if "/" in relative or "\\" in relative:
-                        raise RuntimeError(
-                            f"[import_project] Binary member has subdirectories: '{member.name}'. "
-                            "Archive may have been tampered with."
-                        )
-                    raw_name = os.path.basename(relative)
-                    if not raw_name:
-                        continue
-                    # Enforce size limit BEFORE reading into memory
-                    if member.size > _MAX_IMPORT_BINARY_SIZE:
-                        raise RuntimeError(
-                            f"[import_project] Embedded binary too large "
-                            f"({member.size / (1024*1024):.1f} MB). "
-                            f"Maximum allowed is {_MAX_IMPORT_BINARY_SIZE // (1024*1024)} MB."
-                        )
-                    # Sanitize filename to prevent path traversal via special chars
-                    binary_name = _SAFE_FILENAME_RE.sub('_', raw_name)
-                    if not binary_name or binary_name.startswith('.'):
-                        binary_name = f"imported_{binary_name}"
-                    bf = tar.extractfile(member)
-                    if bf:
-                        binary_data = bf.read()
-                    break
-
-        # Read artifact files (C6: deduplicate colliding basenames)
-        artifact_prefix = "artifacts/"
-        seen_basenames: set = set()
-        artifact_name_map: dict = {}  # original_basename -> deduped_basename
-        for member in tar.getmembers():
-            if member.name.startswith(artifact_prefix) and member.isfile():
-                relative = member.name[len(artifact_prefix):]
-                if "/" in relative or "\\" in relative:
-                    logger.warning("Skipping artifact with subdirectory: %s", member.name)
-                    continue
-                art_basename = os.path.basename(relative)
-                if not art_basename:
-                    continue
-                # Deduplicate collisions by appending counter
-                original_basename = art_basename
-                counter = 1
-                while art_basename in seen_basenames:
-                    name, ext = os.path.splitext(original_basename)
-                    art_basename = f"{name}_{counter}{ext}"
-                    counter += 1
-                seen_basenames.add(art_basename)
-                artifact_name_map[original_basename] = art_basename
-                if member.size > MAX_ARTIFACT_FILE_SIZE:
-                    logger.warning("Skipping oversized artifact %s (%d bytes)", art_basename, member.size)
-                    continue
-                af = tar.extractfile(member)
-                if af:
-                    artifact_files[art_basename] = af.read()
-
-    sha256 = manifest.get("sha256", "").lower()
-
-    # Validate sha256 is a valid hex string to prevent path injection
-    import re as _re
-    if sha256 and not _re.fullmatch(r"[0-9a-f]{64}", sha256):
-        sha256 = ""
-
-    # Store the analysis data in the cache
-    if sha256 and len(sha256) == 64:
-        cache_entry_dir = CACHE_DIR / sha256[:2]
-        cache_entry_dir.mkdir(parents=True, exist_ok=True, mode=0o700)  # M1-v10
-        cache_entry_path = cache_entry_dir / f"{sha256}.json.gz"
-
-        # Write the wrapper directly as a cache entry (atomic write)
-        tmp_fd = tempfile.NamedTemporaryFile(
-            dir=str(cache_entry_dir), suffix=".tmp", delete=False,
-        )
-        tmp_path = Path(tmp_fd.name)
-        try:
-            tmp_fd.close()
-            with gzip.open(tmp_path, "wt", encoding="utf-8") as gz:
-                json.dump(wrapper, gz)
-            tmp_path.replace(cache_entry_path)
-        except Exception:
-            tmp_path.unlink(missing_ok=True)
-            raise
-
-        # Update cache metadata via public API
-        import time as _time
-        analysis_cache.insert_raw_entry(sha256, {
-            "original_filename": manifest.get("original_filename", "imported"),
-            "cached_at": _time.time(),
-            "last_accessed": _time.time(),
-            "size_bytes": cache_entry_path.stat().st_size,
-            "mode": manifest.get("mode", "unknown"),
-        })
-
-        await ctx.info(f"Analysis data imported into cache (SHA256: {sha256[:16]}...)")
-
-    result: Dict[str, Any] = {
-        "status": "success",
-        "sha256": sha256,
-        "original_filename": manifest.get("original_filename"),
-        "mode": manifest.get("mode"),
-        "notes_count": manifest.get("notes_count", 0),
-        "tool_history_count": manifest.get("tool_history_count", 0),
-        "artifacts_count": manifest.get("artifacts_count", 0),
-        "binary_included": manifest.get("binary_included", False),
-    }
-
-    # Extract binary and load it
-    if binary_data and binary_name:
-        # Enforce per-file size limit
-        if len(binary_data) > _MAX_IMPORT_BINARY_SIZE:
-            raise RuntimeError(
-                f"[import_project] Embedded binary is too large "
-                f"({len(binary_data) / (1024*1024):.1f} MB). "
-                f"Maximum allowed is {_MAX_IMPORT_BINARY_SIZE // (1024*1024)} MB. "
-                "Set ARKANA_MAX_FILE_SIZE_MB to change this limit."
-            )
-        # Enforce total import directory size limit
-        IMPORT_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)  # M1-v10
-        existing_size = sum(f.stat().st_size for f in IMPORT_DIR.iterdir() if f.is_file())
-        if existing_size + len(binary_data) > _MAX_IMPORT_DIR_SIZE:
-            raise RuntimeError(
-                f"[import_project] Import directory would exceed size limit "
-                f"({_MAX_IMPORT_DIR_SIZE // (1024*1024)} MB). "
-                "Remove old imports or set ARKANA_MAX_IMPORT_DIR_SIZE_MB to change this limit."
-            )
-        binary_path = IMPORT_DIR / binary_name
-        binary_path.write_bytes(binary_data)
-
-        result["binary_extracted_to"] = str(binary_path)
-        result["hint"] = f"Binary extracted to {binary_path}. Call open_file('{binary_path}') to load it (will use the imported cache)."
-        await ctx.info(f"Binary extracted to: {binary_path}")
-    elif not manifest.get("binary_included"):
-        result["hint"] = (
-            "No binary was included in the archive. Notes and history are "
-            "cached by SHA256 — they will be restored when the matching "
-            "binary is opened with open_file."
+    export_version = top_manifest.get("export_version")
+    if export_version != EXPORT_VERSION_V2:
+        raise RuntimeError(
+            f"[import_project] Unsupported archive format (export_version="
+            f"{export_version!r}). Only v2 project archives are supported. "
+            "v1 session archives were retired when user state moved out of "
+            "the cache and into project overlays."
         )
 
-    # Extract artifact files
-    if artifact_files:
-        artifacts_dir = IMPORT_DIR / "artifacts"
-        artifacts_dir.mkdir(parents=True, exist_ok=True, mode=0o700)  # M1-v10
-        extracted_artifacts = 0
-        for art_basename, art_data in artifact_files.items():
-            art_dest = artifacts_dir / art_basename
-            art_dest.write_bytes(art_data)
-            extracted_artifacts += 1
-
-        # Update artifact metadata paths using dedup name map
-        wrapper_artifacts = wrapper.get("artifacts", [])
-        for art_meta in wrapper_artifacts:
-            old_basename = os.path.basename(art_meta.get("path", ""))
-            deduped = artifact_name_map.get(old_basename, old_basename)
-            if deduped and deduped in artifact_files:
-                art_meta["path"] = str(artifacts_dir / deduped)
-        wrapper["artifacts"] = wrapper_artifacts
-
-        # Re-write the updated wrapper to cache
-        if sha256 and len(sha256) == 64:
-            cache_entry_path = CACHE_DIR / sha256[:2] / f"{sha256}.json.gz"
-            if cache_entry_path.exists():
-                with gzip.open(cache_entry_path, "wt", encoding="utf-8") as f:
-                    json.dump(wrapper, f)
-
-        result["artifacts_extracted"] = extracted_artifacts
-        result["artifacts_dir"] = str(artifacts_dir)
-        await ctx.info(f"Extracted {extracted_artifacts} artifact(s) to: {artifacts_dir}")
-
+    result = _import_project_v2(abs_path, top_manifest)
+    name = result.get("project_name")
+    if name:
+        await ctx.info(f"Project '{name}' imported successfully.")
     return result
 
 

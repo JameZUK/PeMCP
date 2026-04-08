@@ -618,6 +618,12 @@ async def release_angr_memory(ctx: Context) -> Dict[str, Any]:
 
     response = {
         "status": "released" if had_angr else "no_angr_loaded",
+        # Preserved in-memory: derived analysis (pe_data) and the live
+        # AnalyzerState mirrors of overlay-backed data (notes, renames,
+        # custom_types, artifacts, triage_status, tool_history). The overlay
+        # itself lives on disk under the active project at
+        # ~/.arkana/projects/{id}/overlay/{sha256}.json.gz, so a subsequent
+        # close_file/open_file round-trip will restore everything from there.
         "preserved": ["filepath", "pe_data", "notes", "renames", "custom_types",
                        "tool_history", "artifacts", "triage_status"],
         "cleared": ["angr_project", "angr_cfg", "decompile_cache", "result_cache",

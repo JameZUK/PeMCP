@@ -7,7 +7,7 @@ from arkana.mcp.server import tool_decorator, _check_pe_loaded, _check_mcp_respo
 from arkana.mcp._rename_helpers import normalize_address
 
 
-def _persist_renames_to_cache() -> None:
+def _sync_renames_to_bsim() -> None:
     """Sync function renames to the BSim signature DB (best-effort).
 
     User rename state now lives in project overlays (persisted on
@@ -63,7 +63,7 @@ async def rename_function(
         raise ValueError("Name too long (max 200 chars)")
     address = normalize_address(address)
     entry = state.rename_function(address, new_name.strip())
-    _persist_renames_to_cache()
+    _sync_renames_to_bsim()
     return {"status": "success", "rename": entry}
 
 
@@ -101,7 +101,7 @@ async def rename_variable(
         raise ValueError("Name too long (max 200 chars)")
     function_address = normalize_address(function_address)
     entry = state.rename_variable(function_address, old_name.strip(), new_name.strip())
-    _persist_renames_to_cache()
+    _sync_renames_to_bsim()
     return {"status": "success", "rename": entry}
 
 
@@ -140,7 +140,7 @@ async def add_label(
         raise ValueError("Label name too long (max 200 chars)")
     address = normalize_address(address)
     entry = state.add_label(address, label_name.strip(), category)
-    _persist_renames_to_cache()
+    _sync_renames_to_bsim()
     return {"status": "success", "label": entry}
 
 
@@ -199,7 +199,7 @@ async def delete_rename(
     deleted = state.delete_rename(address, rename_type)
     if not deleted:
         return {"status": "not_found", "message": f"No {rename_type} rename found at {address}."}
-    _persist_renames_to_cache()
+    _sync_renames_to_bsim()
     return {"status": "success", "message": f"{rename_type.capitalize()} rename at {address} deleted."}
 
 
@@ -300,7 +300,7 @@ async def batch_rename(
         except Exception as e:
             apply_errors.append(f"Error applying {rtype} at {addr}: {e}")
 
-    _persist_renames_to_cache()
+    _sync_renames_to_bsim()
     result = {"status": "success", "applied": applied, "total_requested": len(renames)}
     if apply_errors:
         result["errors"] = apply_errors

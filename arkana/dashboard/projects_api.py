@@ -7,12 +7,10 @@ return JSON-serialisable dicts ready for the Starlette route handlers in
 """
 from __future__ import annotations
 
-import gzip
 import json
 import logging
 import os
 import tarfile
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -261,11 +259,11 @@ def list_importable_archives() -> Dict[str, Any]:
 
 
 def import_archive_data(archive_path: str) -> Dict[str, Any]:
-    """Import a single .arkana_project.tar.gz archive into a new project.
+    """Import a v2 .arkana_project.tar.gz archive into a new project.
 
-    Delegates to the existing tools_export.import_project tool's logic but
-    extracted as a sync helper for the dashboard route. Both v1 (legacy
-    single-binary) and v2 (project-level) archive formats are supported.
+    Sync wrapper around ``tools_export._import_project_v2`` for the dashboard
+    route. Only v2 (project-level) archives are accepted — v1 single-binary
+    session exports were retired with the cache → project overlay split.
     """
     st = get_current_state()
     abs_path = str(Path(archive_path).resolve())
@@ -281,80 +279,23 @@ def import_archive_data(archive_path: str) -> Dict[str, Any]:
                 top_manifest = json.loads(mf.read().decode("utf-8"))
             except KeyError:
                 return {"error": "Archive missing manifest.json"}
-            export_version = top_manifest.get("export_version", 1)
-            if export_version == 2:
-                from arkana.mcp.tools_export import _import_project_v2
-                return _import_project_v2(abs_path, top_manifest)
-            else:
-                # v1 archives just register a single project from the wrapper
-                # — we replicate the minimal projection here for the dashboard
-                # path so the import doesn't depend on the MCP tool's full
-                # ctx machinery.
-                try:
-                    af = tf.extractfile("analysis.json.gz")
-                    if af is None:
-                        return {"error": "v1 archive missing analysis.json.gz"}
-                    wrapper_bytes = gzip.decompress(af.read())
-                    wrapper = json.loads(wrapper_bytes.decode("utf-8"))
-                except Exception as e:
-                    return {"error": f"v1 archive read failed: {e}"}
-                sha256 = top_manifest.get("sha256") or wrapper.get("_cache_meta", {}).get("sha256")
-                original_filename = top_manifest.get("original_filename") or wrapper.get("_cache_meta", {}).get("original_filename") or "imported"
-                if not sha256:
-                    return {"error": "v1 archive missing sha256"}
-                # Skip if a project already contains this binary
-                existing = project_manager.lookup_by_sha(sha256)
-                if existing:
-                    return {
-                        "status": "already_imported",
-                        "project_id": existing[0].id,
-                        "project_name": existing[0].name,
-                    }
-                stem = os.path.splitext(original_filename)[0] or "imported"
-                base_name = f"{stem}_{sha256[:8]}"
-                name = base_name
-                counter = 2
-                while project_manager.find_by_name(name):
-                    name = f"{base_name}_{counter}"
-                    counter += 1
-                project = project_manager.create(name=name, name_locked=False, tags=["imported"])
-                # Stub member (binary file is in the archive but we don't
-                # extract it here — opening the original binary later will
-                # adopt it via adopt_binary_into_stub).
-                from arkana.projects import ProjectMember, _safe_filename
-                stub_name = f"{sha256[:16]}_{_safe_filename(original_filename)}"
-                stub_path = project.binaries_dir / stub_name
-                project.binaries_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-                member = ProjectMember(
-                    sha256=sha256,
-                    original_filename=original_filename,
-                    copy_path=str(stub_path),
-                    added_at=time.time(),
-                    size=int(top_manifest.get("original_file_size") or 0),
-                    mode=top_manifest.get("mode", "unknown"),
-                )
-                project.register_stub_member(member, make_primary=True)
-                # Save the wrapper's user state as the project's overlay
-                overlay = {
-                    "notes": wrapper.get("notes") or [],
-                    "tool_history": wrapper.get("tool_history") or [],
-                    "artifacts": wrapper.get("artifacts") or [],
-                    "renames": wrapper.get("renames") or {},
-                    "custom_types": wrapper.get("custom_types") or {},
-                    "triage_status": wrapper.get("triage_status") or {},
-                }
-                project.save_overlay(sha256, overlay)
-                # NOTE: project_manager.create() above already calls
-                # _save_index() — no second save needed.
-                return {
-                    "status": "success",
-                    "import_version": 1,
-                    "project_id": project.id,
-                    "project_name": project.name,
-                    "member_count": 1,
-                }
     except (tarfile.TarError, OSError) as e:
         return {"error": f"Failed to read archive: {e}"}
+    if not isinstance(top_manifest, dict):
+        return {"error": "Invalid manifest.json contents"}
+    export_version = top_manifest.get("export_version")
+    if export_version != 2:
+        return {
+            "error": (
+                f"Unsupported archive format (export_version={export_version!r}). "
+                "Only v2 project archives are supported."
+            )
+        }
+    from arkana.mcp.tools_export import _import_project_v2
+    try:
+        return _import_project_v2(abs_path, top_manifest)
+    except Exception as e:
+        return {"error": f"Import failed: {e}"}
 
 
 def save_dashboard_state(project_id: str, key: str, value: Any) -> Dict[str, Any]:

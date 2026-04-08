@@ -296,24 +296,35 @@ class TestSha256Validation:
 # ---------------------------------------------------------------------------
 
 class TestCacheV2WrapperFormat:
-    """Cache wrapper v2: user-mutable state lives in project overlays, not the
-    cache. ``cache.put()`` strips user state, ``cache.get_session_metadata()``
-    returns empty fields, and there is no read-modify-write update path —
-    writes go through ``Project.save_overlay`` instead."""
+    """Cache wrapper v2: user-mutable state lives in project overlays, not
+    the cache. ``cache.put()`` writes a v2 wrapper that contains only
+    derived analysis data — there is no read-modify-write user-state path,
+    writes go through ``Project.save_overlay`` instead.
 
-    def test_put_v2_wrapper_strips_user_state(self, cache, sample_pe_data):
+    The legacy ``cache.get_session_metadata`` and ``cache.insert_raw_entry``
+    helpers, plus ``cache.update_session_data``, were removed when the v1
+    wrapper format was retired.
+    """
+
+    def test_put_v2_wrapper_writes_v2_format(self, cache, sample_pe_data):
+        from arkana.cache import CACHE_FORMAT_VERSION
         sha = "a" * 64
         cache.put(sha, sample_pe_data, "/test.exe")
-        meta = cache.get_session_metadata(sha)
-        assert meta is not None
-        assert meta["notes"] == []
-        assert meta["_cache_format_version"] == 2
+        # Read the wrapper directly to verify the format version.
+        entry = cache._entry_path(sha)
+        assert entry.exists()
+        import gzip as _gz
+        import json as _json
+        with _gz.open(entry, "rt", encoding="utf-8") as f:
+            wrapper = _json.load(f)
+        assert wrapper["_cache_meta"]["cache_format_version"] == CACHE_FORMAT_VERSION
+        # No user-mutable fields written into the cache.
+        for k in ("notes", "tool_history", "artifacts", "renames",
+                  "custom_types", "triage_status"):
+            assert k not in wrapper
 
-    def test_get_session_metadata_disabled(self, cache_dir):
-        c = AnalysisCache(enabled=False)
-        assert c.get_session_metadata("a" * 64) is None
-
-    def test_update_session_data_removed(self, cache):
-        # The deprecated update_session_data method has been removed entirely
-        # — users who still reference it will see AttributeError.
+    def test_legacy_helpers_removed(self, cache):
+        # Helpers retired with the v1 format — referencing them must raise.
+        assert not hasattr(cache, "get_session_metadata")
+        assert not hasattr(cache, "insert_raw_entry")
         assert not hasattr(cache, "update_session_data")

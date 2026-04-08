@@ -45,11 +45,11 @@ META_FILE = CACHE_DIR / "meta.json"
 DEFAULT_MAX_CACHE_SIZE_MB = 500
 # v2 (Arkana projects): user-mutable state (notes, artifacts, renames,
 # custom_types, triage_status) lives in project overlays, not the cache.
-# v1 wrappers are still readable by ``get()`` and are migrated to v2 +
-# projects on first run by ``arkana.projects.ProjectManager``.
+# v1 cache wrappers are no longer accepted by ``get()`` — the legacy
+# upgrade is performed once at startup by
+# ``ProjectManager._migrate_legacy_cache_if_needed`` (which reads v1 files
+# directly via gzip), then every wrapper on disk should be v2.
 CACHE_FORMAT_VERSION = 2
-# Versions accepted by ``get()`` (backward compat with v1 during migration).
-_CACHE_FORMAT_READABLE = {1, 2}
 
 
 _SHA256_RE = re.compile(r'^[0-9a-f]{64}$')
@@ -222,7 +222,7 @@ class AnalysisCache:
         # --- Validate cache metadata (no lock needed, local data) ---
         cmeta = wrapper.get("_cache_meta", {})
 
-        if cmeta.get("cache_format_version") not in _CACHE_FORMAT_READABLE:
+        if cmeta.get("cache_format_version") != CACHE_FORMAT_VERSION:
             logger.info("Cache format mismatch for %s..., ignoring.", sha256[:12])
             return None
 
@@ -449,45 +449,6 @@ class AnalysisCache:
         self._save_meta(meta)
 
     # ------------------------------------------------------------------
-    #  Session data helpers (notes + tool history)
-    # ------------------------------------------------------------------
-
-    def get_session_metadata(self, sha256: str) -> Optional[Dict[str, Any]]:
-        """Read user-mutable state from a cache entry without loading pe_data.
-
-        v2 cache wrappers do **not** contain user state (it lives in project
-        overlays). This method only returns non-empty data when the on-disk
-        wrapper is v1 — used by the migration path in
-        ``arkana.projects.ProjectManager`` to extract legacy state into
-        project overlays. Returns ``None`` on miss / read error.
-        """
-        if not self.enabled:
-            return None
-
-        sha256 = _validate_sha256(sha256)
-        entry_path = self._entry_path(sha256)
-
-        if not entry_path.exists():
-            return None
-
-        try:
-            with gzip.open(entry_path, "rt", encoding="utf-8") as f:
-                wrapper = json.load(f)
-        except (gzip.BadGzipFile, json.JSONDecodeError, OSError) as e:
-            logger.warning("Cache session metadata read error for %s...: %s", sha256[:12], e)
-            return None
-
-        return {
-            "_cache_format_version": (wrapper.get("_cache_meta") or {}).get("cache_format_version"),
-            "notes": wrapper.get("notes", []),
-            "tool_history": wrapper.get("tool_history", []),
-            "artifacts": wrapper.get("artifacts", []),
-            "renames": wrapper.get("renames", {"functions": {}, "variables": {}, "labels": {}}),
-            "custom_types": wrapper.get("custom_types", {"structs": {}, "enums": {}}),
-            "triage_status": wrapper.get("triage_status", {}),
-        }
-
-    # ------------------------------------------------------------------
     #  Management helpers (exposed via MCP tools)
     # ------------------------------------------------------------------
 
@@ -548,20 +509,6 @@ class AnalysisCache:
                     for sha, e in meta.items()
                 },
             }
-
-    def insert_raw_entry(self, sha256: str, meta_entry: Dict[str, Any]) -> None:
-        """Insert or update cache metadata for a pre-written entry.
-
-        Used by ``import_project`` to register an entry whose ``.json.gz``
-        file has already been written to the cache directory.  Acquires
-        ``_lock``, loads meta, updates the entry, and saves.
-        """
-        sha256 = _validate_sha256(sha256)
-        with self._lock:
-            meta = self._load_meta()
-            meta[sha256] = meta_entry
-            self._save_meta(meta)
-            self._evict_if_needed(meta)
 
     def remove_entry_by_hash(self, sha256: str) -> bool:
         """Remove a single entry by hash.  Returns True if it existed."""
