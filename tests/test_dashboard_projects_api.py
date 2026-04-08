@@ -652,6 +652,80 @@ class TestImportProjectV2Safety:
         # No new project directory should remain on disk
         assert after == before
 
+    def test_member_copy_paths_rewritten_into_new_project(
+        self, manager, tmp_path
+    ):
+        """A v2 archive carries copy_path strings from the *source* project
+        (e.g. ``/.../projects/{old_id}/binaries/x.exe``). After import, every
+        member's copy_path must point inside the *new* project's binaries
+        dir, otherwise filepath displays and adopt_binary_into_stub will
+        cross-pollute or fail when the source project is later deleted.
+        """
+        import json as _json
+        from arkana.mcp.tools_export import _import_project_v2
+
+        # Build an archive that mimics what _export_project_v2 would produce:
+        #   manifest.json (top wrapper)
+        #   project/manifest.json (per-project, members[].copy_path under
+        #                          a different project root)
+        #   project/binaries/{name}  (the actual binary bytes)
+        old_root = "/app/home/.arkana/projects/aaaaaaaaaaaaaaaa"
+        binary_name = "deadbeef_sample.exe"
+        binary_bytes = b"MZ" + b"\x00" * 510
+        import hashlib as _h
+        sha = _h.sha256(binary_bytes).hexdigest()
+        proj_manifest = {
+            "id": "aaaaaaaaaaaaaaaa",
+            "name": "src_proj",
+            "name_locked": False,
+            "created_at": 1.0,
+            "last_opened": 1.0,
+            "primary_sha256": sha,
+            "last_active_sha256": sha,
+            "tags": [],
+            "members": {
+                sha: {
+                    "sha256": sha,
+                    "original_filename": "sample.exe",
+                    "copy_path": f"{old_root}/binaries/{binary_name}",
+                    "added_at": 1.0,
+                    "size": len(binary_bytes),
+                    "mode": "pe",
+                }
+            },
+            "manifest_version": 1,
+        }
+        arch = tmp_path / "src_proj.tar.gz"
+        self._build_archive(str(arch), [
+            {"name": "manifest.json",
+             "data": _json.dumps({"export_version": 2,
+                                  "project_name": "src_proj"}).encode()},
+            {"name": "project/manifest.json",
+             "data": _json.dumps(proj_manifest).encode()},
+            {"name": f"project/binaries/{binary_name}",
+             "data": binary_bytes},
+        ])
+        result = _import_project_v2(
+            str(arch),
+            {"export_version": 2, "project_name": "src_proj"},
+        )
+        new_id = result["project_id"]
+        proj = manager.get(new_id)
+        assert proj is not None
+        member = proj.get_member(sha)
+        assert member is not None
+        # The rewritten copy_path MUST live under the new project's
+        # binaries dir, NOT the source project's old root.
+        new_copy_path = Path(member.copy_path).resolve()
+        new_binaries_dir = (proj.root / "binaries").resolve()
+        assert new_copy_path.parent == new_binaries_dir, (
+            f"copy_path {member.copy_path} did not get rewritten into the "
+            f"new project's binaries dir {new_binaries_dir}"
+        )
+        # And the file at the rewritten path must be the actual binary.
+        assert new_copy_path.is_file()
+        assert new_copy_path.read_bytes() == binary_bytes
+
 
 # ---------------------------------------------------------------------------
 #  PROJECT_NAME_RE — ASCII-only enforcement (security: confusable names)

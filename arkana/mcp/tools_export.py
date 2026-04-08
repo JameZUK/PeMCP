@@ -226,6 +226,57 @@ def _import_project_v2(abs_path: str, top_manifest: Dict[str, Any]) -> Dict[str,
     proj_manifest_data["name"] = name
     proj_manifest_data["created_at"] = time.time()
     proj_manifest_data["last_opened"] = time.time()
+    # Rewrite each member's ``copy_path`` to point at the new project's
+    # binaries dir. The archive's manifest carries copy_path strings from
+    # the *source* project (e.g. /app/.../projects/{old_id}/binaries/...);
+    # if we leave them as-is, every dashboard / MCP filepath display will
+    # point at the source project on disk. The actual binary files were
+    # already extracted into ``new_root/binaries/`` by the tar loop above,
+    # so we just need to relocate the manifest pointers.
+    new_binaries_dir = new_root / "binaries"
+    members = proj_manifest_data.get("members") or {}
+    for sha, member in members.items():
+        if not isinstance(member, dict):
+            continue
+        old_copy = member.get("copy_path") or ""
+        old_basename = os.path.basename(old_copy) if old_copy else ""
+        # Prefer the basename from the original copy_path so the rewrite
+        # matches whatever the source project chose (e.g. ``{sha8}_name.exe``).
+        # Fall back to original_filename if copy_path is missing.
+        candidate_name = old_basename or member.get("original_filename") or sha[:16]
+        candidate_path = new_binaries_dir / candidate_name
+        if candidate_path.is_file():
+            member["copy_path"] = str(candidate_path)
+            continue
+        # Fallback: pick whichever file in the new binaries dir matches the
+        # member's sha256, in case the archive used a different naming scheme.
+        rewritten = False
+        if new_binaries_dir.is_dir():
+            for entry in new_binaries_dir.iterdir():
+                if not entry.is_file():
+                    continue
+                try:
+                    if entry.stat().st_size != int(member.get("size") or 0):
+                        # Size pre-filter — full sha256 below.
+                        if member.get("size"):
+                            continue
+                except OSError:
+                    continue
+                try:
+                    h = hashlib.sha256(entry.read_bytes()).hexdigest()
+                except OSError:
+                    continue
+                if h == sha:
+                    member["copy_path"] = str(entry)
+                    rewritten = True
+                    break
+        if not rewritten:
+            # Last-resort: leave the manifest pointing at the would-be path
+            # under the new binaries dir so a future ``adopt_binary_into_stub``
+            # can re-materialise it. Better than leaving it pointing at the
+            # source project (which is what triggered the original bug).
+            member["copy_path"] = str(candidate_path)
+    proj_manifest_data["members"] = members
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(proj_manifest_data, f, indent=2)
 
