@@ -277,17 +277,22 @@ RUN python -c "import unicorn; print('main env unicorn', unicorn.__version__); a
 
 # --- Pre-populate capa rules (avoids runtime download + write permission issues) ---
 # Downloaded at build time so the container never needs write access to /app.
+# KEEP THIS URL IN SYNC WITH arkana/constants.py:CAPA_RULES_ZIP_URL so the
+# marker file we write here matches what runtime code expects to find.
 RUN python <<'PYEOF' && rm -f /tmp/capa-rules.zip
 import urllib.request, zipfile, shutil, os, pathlib
-urllib.request.urlretrieve(
-    "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.3.0.zip",
-    "/tmp/capa-rules.zip")
+RULES_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.4.0.zip"
+urllib.request.urlretrieve(RULES_URL, "/tmp/capa-rules.zip")
 zipfile.ZipFile("/tmp/capa-rules.zip").extractall("/tmp")
 top = next(p for p in pathlib.Path("/tmp").iterdir() if p.name.startswith("capa-rules") and p.is_dir())
 # The archive may have rules at top level or in a rules/ subdir — handle both
 source = top / "rules" if (top / "rules").is_dir() else top
 os.makedirs("/app/capa_rules_store", exist_ok=True)
 shutil.move(str(source), "/app/capa_rules_store/rules")
+# Write the marker file so ``ensure_capa_rules_exist`` sees these rules as
+# the current version and skips the "no marker → adopt" fallback path.
+with open("/app/capa_rules_store/.capa_rules_url", "w") as _f:
+    _f.write(RULES_URL)
 if top.exists():
     shutil.rmtree(str(top))
 PYEOF

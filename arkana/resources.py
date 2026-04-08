@@ -84,10 +84,14 @@ def ensure_peid_db_exists(url: str, local_path: str, verbose: bool = False) -> b
 def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bool = False) -> Optional[str]:
     final_rules_target_path = os.path.join(rules_base_dir, CAPA_RULES_SUBDIR_NAME)
     # Marker file records the URL the current rules were extracted from. When
-    # ``CAPA_RULES_ZIP_URL`` changes (e.g. bumping from v9.3.0 → v9.4.0), the
-    # stored marker no longer matches and we wipe + re-download. Without this
-    # check, users who already have v9.3.0 extracted would never pick up the
-    # new rules — the cache-hit fast path below would return the stale dir.
+    # ``CAPA_RULES_ZIP_URL`` changes (e.g. bumping from v9.3.0 → v9.4.0) AND
+    # we have an existing marker recording the OLD URL, we know the rules are
+    # stale and we wipe + re-download. Without the marker we cannot
+    # distinguish "legacy pre-marker install" from "stale after bump", so we
+    # conservatively adopt the existing rules as-is rather than risk wiping
+    # perfectly good content. Pre-baked rules (e.g. Docker image populated at
+    # build time) land in this adopt path because the Dockerfile doesn't
+    # write the marker.
     url_marker_path = os.path.join(rules_base_dir, ".capa_rules_url")
 
     if os.path.isdir(final_rules_target_path) and os.listdir(final_rules_target_path):
@@ -98,16 +102,48 @@ def ensure_capa_rules_exist(rules_base_dir: str, rules_zip_url: str, verbose: bo
                     stored_url = f.read().strip()
         except OSError:
             stored_url = ""
+
         if stored_url == rules_zip_url:
+            # Marker matches — fast path.
             if verbose:
                 logger.info("Capa rules already available at: %s", final_rules_target_path)
             return final_rules_target_path
-        # URL changed (or marker missing from a pre-marker install). Wipe the
-        # stale rules dir so the download+extract path below can replace it.
+
+        if not stored_url:
+            # No marker file: this can mean
+            #   (a) pre-populated rules baked into a container image at build
+            #       time (Dockerfile downloads + extracts to a root-owned
+            #       read-only directory that the app user cannot write), OR
+            #   (b) a legacy install from before the marker feature existed.
+            # In both cases, the rules on disk are probably fine. Adopt them
+            # as the current version and best-effort write the marker so the
+            # next URL bump triggers the proper wipe+re-download path. The
+            # marker write is allowed to fail silently in containerised
+            # scenarios — the rules still work, and a future image rebuild
+            # will bake in the new version.
+            logger.info(
+                "Capa rules present at %s with no version marker — adopting "
+                "as current (%s).",
+                final_rules_target_path, rules_zip_url,
+            )
+            try:
+                with open(url_marker_path, "w", encoding="utf-8") as f:
+                    f.write(rules_zip_url)
+            except OSError as e_marker:
+                logger.debug(
+                    "Could not write capa rules marker at %s: %s — likely a "
+                    "read-only install dir (image-baked rules). Proceeding "
+                    "with existing rules; future URL bumps will require a "
+                    "rebuild to take effect.",
+                    url_marker_path, e_marker,
+                )
+            return final_rules_target_path
+
+        # Marker exists but does not match the current URL → rules are stale.
         logger.info(
             "Capa rules URL changed (stored=%r, expected=%r) — wiping stale "
             "rules at %s and re-downloading.",
-            stored_url or "<none>", rules_zip_url, final_rules_target_path,
+            stored_url, rules_zip_url, final_rules_target_path,
         )
         try:
             shutil.rmtree(final_rules_target_path)

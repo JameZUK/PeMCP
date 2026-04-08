@@ -136,11 +136,23 @@ VT_API_URL_FILE_REPORT = "https://www.virustotal.com/api/v3/files/"
 PEID_USERDB_URL = "https://raw.githubusercontent.com/JameZUK/Arkana/refs/heads/main/userdb.txt"
 
 # --- Capa ---
-# When bumping this URL, update the ``# NOTE:`` block in requirements.txt to
-# match — the runtime compatibility matrix for ``flare-capa`` vs bundled rules
-# is documented there. Existing users automatically re-download when the URL
-# string changes thanks to the ``.capa_rules_url`` marker file written by
-# ``arkana.resources.ensure_capa_rules_exist``.
+# When bumping this URL, ALSO bump the matching URL in Dockerfile (around
+# line 283 — the pre-bake step) so containerised installs pick up the new
+# rules on the next image build. The Dockerfile also writes the marker file
+# alongside the rules, so the runtime's ``ensure_capa_rules_exist`` sees a
+# matching marker and uses the fast-path on container boot.
+#
+# Runtime invalidation story:
+#  - Non-containerised installs (developer running Python directly): the
+#    marker file lives in a user-writable directory, so bumping this URL
+#    triggers automatic wipe + re-download on the next capa call.
+#  - Containerised installs: ``/app/capa_rules_store/`` is root-owned and
+#    read-only to the app user; the only way to get new rules is a
+#    ``docker build`` that re-runs the pre-bake step. Runtime will log a
+#    best-effort adoption message on first call but cannot rewrite the
+#    baked marker.
+#
+# See also the compatibility block in ``requirements.txt``.
 CAPA_RULES_ZIP_URL = "https://github.com/mandiant/capa-rules/archive/refs/tags/v9.4.0.zip"
 CAPA_RULES_DEFAULT_DIR_NAME = "capa_rules_store"
 CAPA_RULES_SUBDIR_NAME = "rules"
