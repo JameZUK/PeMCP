@@ -1025,13 +1025,16 @@ async def open_file(
             if timing:
                 result["timing"] = timing
 
-        # Include session context when loading from cache with prior data
-        cached_notes = getattr(state, "notes", []) or []
+        # Include session context when prior overlay data was restored.
+        # ``state.notes`` is populated from the active project's overlay
+        # during ``apply_overlay`` (called earlier in the open_file flow),
+        # not from the analysis cache.
+        restored_notes = getattr(state, "notes", []) or []
         prev_history = getattr(state, "previous_session_history", []) or []
-        if cached_notes or prev_history:
+        if restored_notes or prev_history:
             result["session_context"] = {
-                "notes_count": len(cached_notes),
-                "recent_notes": cached_notes[-5:],
+                "notes_count": len(restored_notes),
+                "recent_notes": restored_notes[-5:],
                 "previous_tools_run": [h["tool_name"] for h in prev_history[-20:]],
                 "previous_tools_count": len(prev_history),
                 "last_analyzed": prev_history[-1]["timestamp"] if prev_history else None,
@@ -1131,7 +1134,7 @@ async def close_file(ctx: Context, force_switch: bool = False) -> Dict[str, Any]
     Closes the currently loaded file and clears all analysis data from memory.
     After calling this, a new file must be opened with open_file before using analysis tools.
 
-    ---compact: close file and clear analysis state | persists notes/history to cache | needs: file
+    ---compact: close file, flush overlay to active project, clear in-memory state | needs: file
 
     Args:
         ctx: The MCP Context object.

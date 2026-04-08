@@ -91,7 +91,7 @@ async def create_struct(
     [Phase: deep-dive] Define a named struct type with typed fields. The struct
     can then be applied to binary data at any offset using apply_type_at_offset.
 
-    ---compact: define named struct type with typed fields | persists to cache | needs: file
+    ---compact: define named struct type with typed fields | persists to project overlay | needs: file
 
     Uses the same field types as parse_binary_struct: uint8, int8, uint16_le/be,
     int16_le/be, uint32_le/be, int32_le/be, uint64_le/be, int64_le/be, cstring,

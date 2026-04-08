@@ -20,8 +20,9 @@ async def add_note(
     evidence: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
-    [Phase: context] Add a note to the currently loaded file. Notes persist in
-    the analysis cache and are restored when the same file is reopened later.
+    [Phase: context] Add a note to the currently loaded file. Notes persist
+    in the active project's overlay and are restored when the same binary is
+    reopened (via open_file or open_project) within that project.
 
     ---compact: add persistent note | categories: general, function, ioc, hypothesis, conclusion | needs: file
 

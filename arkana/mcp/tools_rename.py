@@ -41,7 +41,8 @@ async def rename_function(
 ) -> Dict[str, Any]:
     """
     [Phase: context] Rename a function at the given address. The name persists
-    in the analysis cache and is applied in decompilation and function map output.
+    in the active project's overlay and is applied in decompilation and
+    function map output.
 
     ---compact: rename function at address | persists across sessions | needs: file
 
