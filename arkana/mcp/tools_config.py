@@ -289,7 +289,7 @@ def _get_environment_info() -> Dict[str, Any]:
 
 
 @tool_decorator
-async def get_current_datetime(ctx: Context) -> Dict[str,str]:
+async def get_current_datetime(ctx: Context) -> Dict[str, Any]:
     """
     [Phase: utility] Retrieves the current date and time in UTC and the server's
     local timezone. Does not require a file to be loaded.
@@ -702,7 +702,7 @@ async def get_resource_usage(ctx: Context) -> Dict[str, Any]:
 
 
 @tool_decorator
-async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, str]:
+async def set_api_key(ctx: Context, key_name: str, key_value: str) -> Dict[str, Any]:
     """
     [Phase: utility] Stores an API key in the user's persistent configuration
     (~/.arkana/config.json). Saved securely (owner-only permissions) and

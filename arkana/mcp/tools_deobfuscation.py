@@ -159,7 +159,7 @@ async def deobfuscate_base64(ctx: Context, data_hex: str) -> Dict[str, Any]:
         return {"error": f"Base64 deobfuscation failed: {str(e)[:200]}"}
 
 @tool_decorator
-async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> Dict[str, Optional[str]]:
+async def deobfuscate_xor_single_byte(ctx: Context, data_hex: str, key: int) -> Dict[str, Any]:
     """
     [Phase: deep-dive] Decrypts hex-encoded data using a single-byte XOR key (0-255).
 

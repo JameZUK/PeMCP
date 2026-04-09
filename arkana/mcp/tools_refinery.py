@@ -307,7 +307,9 @@ async def refinery_decrypt(
     else:
         kwargs["key"] = key
     if iv_hex:
-        kwargs["iv"] = _hex_to_bytes(iv_hex)
+        # Stream ciphers (ChaCha, Salsa, etc.) use 'nonce' not 'iv'
+        iv_key = "nonce" if algo in _STREAM_CIPHERS else "iv"
+        kwargs[iv_key] = _hex_to_bytes(iv_hex)
     if mode:
         kwargs["mode"] = mode.upper()
     if padding:
