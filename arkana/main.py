@@ -1,4 +1,5 @@
 """Main entry point: argument parsing, CLI mode, and MCP server startup."""
+import faulthandler
 import os
 import sys
 import signal
@@ -6,6 +7,15 @@ import logging
 import threading
 import time
 import argparse
+
+# Enable faulthandler early so that segfaults, stuck threads, and deadlocks
+# are diagnosable.  ``faulthandler.enable()`` dumps tracebacks to stderr on
+# SIGSEGV/SIGABRT/etc.  On non-Windows, SIGUSR1 dumps *all* thread stacks —
+# send ``kill -USR1 <pid>`` (or ``docker kill -s USR1 <container>``) to
+# diagnose a hung process without needing py-spy or gdb.
+faulthandler.enable()
+if hasattr(signal, "SIGUSR1"):
+    faulthandler.register(signal.SIGUSR1, all_threads=True, chain=False)
 
 from dataclasses import dataclass, field
 from pathlib import Path

@@ -10,6 +10,7 @@ import copy
 import datetime
 import logging
 import os
+import sys
 import time
 import threading
 import uuid
@@ -1423,20 +1424,29 @@ class AnalyzerState:
             logger.warning("Failed to promote scratch project: %s", e, exc_info=True)
             return
 
+        # Bind the real project under lock, then flush overlay OUTSIDE lock
+        # to avoid blocking other threads during I/O.
         with self._project_lock:
             self.active_project = real_project
-            # Snapshot of current state goes straight to the new overlay so
-            # nothing is lost between scratch existence and the next flush.
+        sha = real_project.manifest.last_active_sha256
+        if sha:
             try:
-                if real_project.manifest.last_active_sha256:
-                    overlay = self.snapshot_overlay()
-                    real_project.save_overlay(real_project.manifest.last_active_sha256, overlay)
+                overlay = self.snapshot_overlay()
+                real_project.save_overlay(sha, overlay)
+                with self._project_lock:
                     self._overlay_dirty = False
             except Exception as e:
                 logger.warning("Failed to flush overlay after promotion: %s", e, exc_info=True)
 
     def flush_overlay(self) -> bool:
-        """Persist current overlay to the active project (if any). Returns True on flush."""
+        """Persist current overlay to the active project (if any). Returns True on flush.
+
+        Snapshot and dirty-flag update happen under ``_project_lock``, but the
+        actual I/O (gzip + write) is done **outside** the lock to avoid
+        blocking every thread that calls ``mark_overlay_dirty()`` or
+        ``_maybe_promote_scratch()`` during the write.
+        """
+        # Phase 1: snapshot under lock
         with self._project_lock:
             project = self.active_project
             if project is None or getattr(project, "is_scratch", False):
@@ -1444,14 +1454,21 @@ class AnalyzerState:
             sha = project.manifest.last_active_sha256
             if not sha:
                 return False
-            try:
-                overlay = self.snapshot_overlay()
-                project.save_overlay(sha, overlay)
-                self._overlay_dirty = False
-                return True
-            except Exception as e:
-                logger.warning("Failed to flush overlay for %s: %s", sha[:12], e)
-                return False
+            overlay = self.snapshot_overlay()
+
+        # Phase 2: I/O outside lock — other threads can proceed with mutations
+        try:
+            project.save_overlay(sha, overlay)
+        except Exception as e:
+            logger.warning("Failed to flush overlay for %s: %s", sha[:12], e)
+            return False
+
+        # Phase 3: mark clean under lock (best-effort — a concurrent mutation
+        # may have re-dirtied between phase 1 and now; that's fine, the next
+        # flush cycle will pick it up)
+        with self._project_lock:
+            self._overlay_dirty = False
+        return True
 
     def close_pe(self):
         with self._pe_lock:
@@ -1563,6 +1580,7 @@ def get_or_create_session_state(session_key: str) -> AnalyzerState:
         if session_key not in _session_registry:
             _start_session_reaper()  # Lazy start on first session creation
             _start_overlay_flush_loop()  # Lazy start of background overlay flusher
+            _start_lock_watchdog()  # Lazy start of lock-health watchdog
             new_state = AnalyzerState()
             # Inherit server-level config from the default state
             new_state.allowed_paths = _default_state.allowed_paths
@@ -1758,6 +1776,66 @@ def _start_overlay_flush_loop() -> None:
         target=_overlay_flush_loop, daemon=True, name="overlay-flush",
     )
     _overlay_flush_thread.start()
+
+
+_LOCK_WATCHDOG_INTERVAL = int(os.environ.get("ARKANA_LOCK_WATCHDOG_INTERVAL", "60"))
+_LOCK_ACQUIRE_TIMEOUT = 5.0  # seconds — if we can't acquire within this, something is stuck
+_lock_watchdog_thread = None
+_lock_watchdog_started = False
+
+
+def _lock_watchdog_loop() -> None:
+    """Daemon that periodically probes key locks to detect deadlocks.
+
+    Every ``_LOCK_WATCHDOG_INTERVAL`` seconds, tries to acquire each major
+    lock with a timeout.  If any acquisition fails, dumps all thread stacks
+    via ``faulthandler`` so the deadlock is visible in container logs.
+    """
+    import faulthandler as _fh
+
+    while True:
+        time.sleep(_LOCK_WATCHDOG_INTERVAL)
+        try:
+            with _registry_lock:
+                states = [*list(_session_registry.values()), _default_state]
+        except Exception:
+            continue
+
+        for st in states:
+            locks_to_probe = [
+                ("_project_lock", st._project_lock),
+                ("_task_lock", st._task_lock),
+                ("_pe_lock", st._pe_lock),
+            ]
+            for name, lock in locks_to_probe:
+                acquired = lock.acquire(timeout=_LOCK_ACQUIRE_TIMEOUT)
+                if acquired:
+                    lock.release()
+                else:
+                    logger.critical(
+                        "LOCK WATCHDOG: %s on session %s could not be acquired "
+                        "after %.0fs — possible deadlock. Dumping all thread stacks.",
+                        name, st._state_uuid[:8], _LOCK_ACQUIRE_TIMEOUT,
+                    )
+                    try:
+                        _fh.dump_traceback(file=sys.stderr, all_threads=True)
+                    except Exception:
+                        pass
+                    # Don't spam — one dump per watchdog cycle is enough
+                    break
+
+
+def _start_lock_watchdog() -> None:
+    """Lazily start the lock watchdog daemon. Must be called under _registry_lock."""
+    assert _registry_lock.locked(), "_start_lock_watchdog must be called under _registry_lock"
+    global _lock_watchdog_thread, _lock_watchdog_started
+    if _lock_watchdog_started and _lock_watchdog_thread is not None and _lock_watchdog_thread.is_alive():
+        return
+    _lock_watchdog_started = True
+    _lock_watchdog_thread = threading.Thread(
+        target=_lock_watchdog_loop, daemon=True, name="lock-watchdog",
+    )
+    _lock_watchdog_thread.start()
 
 
 def get_all_session_states() -> list:

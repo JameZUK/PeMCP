@@ -133,6 +133,9 @@ _dashboard_executor = ThreadPoolExecutor(
 )
 
 
+_DASH_THREAD_TIMEOUT = float(os.environ.get("ARKANA_DASH_THREAD_TIMEOUT", "30"))
+
+
 async def _dash_to_thread(func, /, *args, **kwargs):
     """Like asyncio.to_thread() but uses the dashboard's dedicated thread pool.
 
@@ -141,12 +144,25 @@ async def _dash_to_thread(func, /, *args, **kwargs):
     ``ThreadPoolExecutor.submit`` propagate up to the route handlers as an
     unhandled 500. Routes catch this in their existing ``except Exception``
     blocks and return a clean 503 via ``_api_error_response``.
+
+    A 30-second timeout (``ARKANA_DASH_THREAD_TIMEOUT``) prevents a stuck
+    thread from permanently exhausting the dashboard thread pool. On
+    timeout, ``asyncio.TimeoutError`` is raised — callers already handle
+    ``Exception`` in their route guards.
     """
     loop = asyncio.get_running_loop()
     ctx = contextvars.copy_context()
     func_call = functools.partial(ctx.run, func, *args, **kwargs)
     try:
-        return await loop.run_in_executor(_dashboard_executor, func_call)
+        coro = loop.run_in_executor(_dashboard_executor, func_call)
+        return await asyncio.wait_for(coro, timeout=_DASH_THREAD_TIMEOUT)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "_dash_to_thread: %s exceeded %ss timeout — returning error to avoid "
+            "starving the dashboard thread pool",
+            getattr(func, "__name__", func), _DASH_THREAD_TIMEOUT,
+        )
+        raise
     except RuntimeError as exc:
         # ``cannot schedule new futures after shutdown`` is the only
         # RuntimeError ThreadPoolExecutor.submit() raises. Re-raise as a
