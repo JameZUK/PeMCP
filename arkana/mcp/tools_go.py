@@ -3,6 +3,8 @@ import asyncio
 import json
 import os
 import re
+import sys
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from arkana.config import (
     state, logger, Context,
@@ -18,11 +20,13 @@ from arkana.parsers.go_pclntab import (
 )
 from arkana.parsers.go_types import parse_go_types
 
-if PYGORE_AVAILABLE:
-    import pygore
-
 # GoReSym subprocess timeout (seconds)
 _GORESYM_TIMEOUT = 120
+
+# pygore subprocess runner — isolates the CGO Go runtime from the main
+# process so a Go GC crash (lfstack.push on ARM64) doesn't kill Arkana.
+_PYGORE_RUNNER = Path(__file__).resolve().parent.parent.parent / "scripts" / "pygore_runner.py"
+_PYGORE_TIMEOUT = 120  # seconds
 
 
 def _go_string_scan(filepath: str, scan_limit: int = 2 * 1024 * 1024) -> Dict[str, Any]:
@@ -389,138 +393,70 @@ async def _run_goresym(filepath: str) -> Dict[str, Any]:
     return result
 
 
-def _run_pygore(filepath: str, limit: int, func_cap: int, method_cap: int) -> Dict[str, Any]:
-    """Run pygore analysis synchronously (called via asyncio.to_thread).
+async def _run_pygore(filepath: str, limit: int, func_cap: int, method_cap: int) -> Dict[str, Any]:
+    """Run pygore in an isolated subprocess.
+
+    pygore wraps libgore (CGO, Go 1.16 runtime).  On ARM64 the Go 1.16
+    GC has a known ``lfstack.push`` bug that can SIGABRT the process when
+    heap addresses are high.  Running in a subprocess means only the child
+    dies — the parent falls through to the pure-Python gopclntab parser.
 
     Returns parsed result dict with ``analysis_method: "pygore"``.
+    Raises RuntimeError on subprocess failure.
     """
-    f = pygore.GoFile(filepath)
+    cmd = json.dumps({
+        "filepath": filepath,
+        "limit": limit,
+        "func_cap": func_cap,
+        "method_cap": method_cap,
+    })
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(_PYGORE_RUNNER),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
     try:
-        result: Dict[str, Any] = {
-            "analysis_method": "pygore",
-        }
-
-        # Compiler version
-        compiler_version = None
-        try:
-            cv = f.get_compiler_version()
-            compiler_version = _safe_str(cv)
-        except Exception:
-            pass
-        result["go_version"] = compiler_version
-
-        # Build ID
-        build_id = None
-        try:
-            if hasattr(f, 'get_build_id'):
-                bid = f.get_build_id()
-                build_id = _safe_str(bid)
-        except Exception:
-            pass
-        result["build_id"] = build_id
-
-        # Packages
-        packages = []
-        total_pkg_count = 0
-        try:
-            for pkg in f.get_packages():
-                total_pkg_count += 1
-                if len(packages) >= limit:
-                    continue  # keep counting total
-
-                funcs = []
-                for fn in (pkg.functions or []):
-                    funcs.append({
-                        "name": _safe_str(fn.name if hasattr(fn, 'name') else fn),
-                        "offset": _safe_int(fn.offset if hasattr(fn, 'offset') else None),
-                        "end": _safe_int(fn.end if hasattr(fn, 'end') else None),
-                    })
-
-                methods = []
-                for m in (pkg.methods or []):
-                    methods.append({
-                        "receiver": _safe_str(m.receiver if hasattr(m, 'receiver') else None),
-                        "name": _safe_str(m.name if hasattr(m, 'name') else m),
-                        "offset": _safe_int(m.offset if hasattr(m, 'offset') else None),
-                    })
-
-                packages.append({
-                    "name": _safe_str(pkg.name if hasattr(pkg, 'name') else pkg),
-                    "function_count": len(funcs),
-                    "method_count": len(methods),
-                    "functions": funcs[:func_cap],
-                    "methods": methods[:method_cap],
-                })
-        except Exception as e:
-            result["packages_error"] = str(e)[:200]
-        result["packages"] = packages
-
-        # Vendor packages (third-party dependencies)
-        vendor_pkgs = []
-        total_vendor_count = 0
-        vendor_func_cap = max(2, func_cap // 2)
-        try:
-            for pkg in f.get_vendor_packages():
-                total_vendor_count += 1
-                if len(vendor_pkgs) >= limit:
-                    continue
-
-                vendor_funcs = []
-                for fn in (pkg.functions or []):
-                    vendor_funcs.append({
-                        "name": _safe_str(fn.name if hasattr(fn, 'name') else fn),
-                        "offset": _safe_int(fn.offset if hasattr(fn, 'offset') else None),
-                    })
-                vendor_pkgs.append({
-                    "name": _safe_str(pkg.name if hasattr(pkg, 'name') else pkg),
-                    "function_count": len(vendor_funcs),
-                    "functions": vendor_funcs[:vendor_func_cap],
-                })
-        except Exception:
-            pass
-        result["vendor_packages"] = vendor_pkgs
-
-        # Types
-        types = []
-        total_type_count = 0
-        try:
-            for t in f.get_types():
-                total_type_count += 1
-                if len(types) >= limit:
-                    continue
-                types.append({
-                    "name": _safe_str(t.name if hasattr(t, 'name') else t),
-                    "kind": _safe_str(t.kind if hasattr(t, 'kind') else None),
-                })
-        except Exception:
-            pass
-        result["types"] = types
-
-        result["summary"] = {
-            "packages_returned": len(packages),
-            "packages_total": total_pkg_count,
-            "vendor_packages_returned": len(vendor_pkgs),
-            "vendor_packages_total": total_vendor_count,
-            "types_returned": len(types),
-            "types_total": total_type_count,
-            "limit_applied": limit,
-            "funcs_per_package_cap": func_cap,
-        }
-
-        # Validate: a real Go binary should have at least one of: compiler
-        # version, packages, or types.
-        has_go_artifacts = bool(
-            compiler_version
-            or packages
-            or vendor_pkgs
-            or types
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=cmd.encode()),
+            timeout=_PYGORE_TIMEOUT,
         )
-        result["is_go_binary"] = has_go_artifacts
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+            await proc.wait()
+        except ProcessLookupError:
+            pass
+        raise RuntimeError(f"pygore timed out after {_PYGORE_TIMEOUT}s")
 
-        return result
-    finally:
-        if hasattr(f, 'close'):
-            f.close()
+    if proc.returncode != 0:
+        # Non-zero exit — could be SIGABRT from Go runtime crash
+        stderr_text = stderr.decode("utf-8", errors="replace")[:500] if stderr else ""
+        # Try to parse stdout anyway — runner writes JSON even on some errors
+        if stdout:
+            try:
+                data = json.loads(stdout.decode("utf-8", errors="replace"))
+                if "error" in data:
+                    raise RuntimeError(f"pygore error: {data['error']}")
+            except (json.JSONDecodeError, ValueError):
+                pass
+        signal_num = -proc.returncode if proc.returncode < 0 else proc.returncode
+        raise RuntimeError(
+            f"pygore subprocess crashed (exit={signal_num}): {stderr_text}"
+        )
+
+    raw = stdout.decode("utf-8", errors="replace")
+    try:
+        result = json.loads(raw)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(
+            f"pygore returned invalid JSON: {exc} (first 200 chars: {raw[:200]})"
+        )
+
+    if "error" in result:
+        raise RuntimeError(f"pygore error: {result['error']}")
+
+    return result
 
 
 @tool_decorator
@@ -570,12 +506,10 @@ async def go_analyze(
             fallback_reasons.append(f"GoReSym failed: {str(e)[:200]}")
             logger.debug("go_analyze: GoReSym failed, trying next method: %s", e)
 
-    # 2. Try pygore second
-    if result is None and PYGORE_AVAILABLE:
+    # 2. Try pygore second (runs in isolated subprocess to survive Go GC crashes)
+    if result is None and PYGORE_AVAILABLE and _PYGORE_RUNNER.exists():
         try:
-            result = await asyncio.to_thread(
-                _run_pygore, target, limit, func_cap, method_cap,
-            )
+            result = await _run_pygore(target, limit, func_cap, method_cap)
             # pygore parsed but found nothing useful — not a Go binary by its view
             if result and not result.get("is_go_binary"):
                 # Don't treat as final — let string scan try

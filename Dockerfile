@@ -63,7 +63,8 @@ RUN pip install --no-cache-dir \
     Jinja2 \
     rapidfuzz \
     networkx \
-    PyYAML
+    PyYAML \
+    psutil
 
 # --- Install Extended Analysis Libraries (Optional but included in Docker) ---
 RUN pip install --no-cache-dir \
@@ -77,7 +78,8 @@ RUN pip install --no-cache-dir \
     dncil \
     rustbininfo \
     rust-demangler \
-    binary-refinery
+    binary-refinery \
+    oletools
 
 # --- Install speakeasy in an isolated venv (requires unicorn 1.x) ---
 # speakeasy-emulator requires unicorn 1.x (uses internal _uc API removed
@@ -227,6 +229,24 @@ RUN dotnet tool install --tool-path /app/dotnet-tools/ilspy ilspycmd; \
         echo "WARNING: ilspycmd install failed (exit $exit_code) — dotnet_decompile() will be unavailable"; \
     fi
 ENV PATH="${PATH}:/app/dotnet-tools/ilspy"
+
+# --- Install GoReSym (Go binary analysis tool from Mandiant) ---
+# GoReSym extracts Go compiler version, packages, types, and build info from
+# Go binaries.  It is the preferred tier-1 method in go_analyze()'s fallback
+# chain (GoReSym → pygore → gopclntab → string-scan).
+# Only available for linux/amd64 — on ARM64 the fallback chain handles it
+# gracefully (pygore runs in a subprocess, then pure-Python gopclntab parser).
+ARG TARGETARCH
+RUN if [ "${TARGETARCH:-$(dpkg --print-architecture)}" = "amd64" ]; then \
+        wget -q "https://github.com/mandiant/GoReSym/releases/download/v3.3/GoReSym-linux.zip" \
+             -O /tmp/GoReSym.zip && \
+        unzip -q /tmp/GoReSym.zip -d /usr/local/bin/ && \
+        chmod +x /usr/local/bin/GoReSym && \
+        rm /tmp/GoReSym.zip && \
+        echo "  GoReSym v3.3 installed at /usr/local/bin/GoReSym"; \
+    else \
+        echo "  GoReSym skipped (no linux/${TARGETARCH:-$(dpkg --print-architecture)} build available — using pygore/gopclntab fallback)"; \
+    fi
 
 # --- Install Binary Refinery optional sub-dependencies ---
 # These are optional packages that specific refinery units need at runtime.
